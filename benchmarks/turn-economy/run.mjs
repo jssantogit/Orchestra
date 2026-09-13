@@ -12,6 +12,7 @@ import {
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { normalizeUsageEvent, TOKEN_COUNTER_TYPES, CONFIDENCE_LEVELS } from "./token-semantics.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -236,12 +237,30 @@ function parseCodexJsonl(rawOutput) {
     modelInvocations = 1;
   }
 
+  const normUsage = normalizeUsageEvent({
+    input_tokens: inputTokens,
+    cached_input_tokens: cachedInputTokens,
+    output_tokens: outputTokens,
+    reasoning_output_tokens: reasoningTokens,
+  }, "codex");
+
   return {
+    model_turns_total: modelInvocations,
     model_invocations: modelInvocations,
     parent_invocations: modelInvocations - subagentCalls,
     worker_invocations: subagentCalls,
     reviewer_invocations: 0,
     tool_calls: toolCalls,
+    tool_calls_per_turn_distribution: {
+      0: toolCalls === 0 ? 1 : 0,
+      1: toolCalls === 1 ? 1 : 0,
+      2: toolCalls === 2 ? 1 : 0,
+      "3+": toolCalls >= 3 ? 1 : 0,
+    },
+    turns_with_zero_tools: toolCalls === 0 ? 1 : 0,
+    turns_with_one_tool: toolCalls === 1 ? 1 : 0,
+    turns_with_multiple_tools: toolCalls > 1 ? 1 : 0,
+    max_tools_in_single_turn: toolCalls,
     subagent_invocations: subagentCalls,
     manage_subagent_calls: 0,
     stop_attempts: 1,
@@ -249,12 +268,14 @@ function parseCodexJsonl(rawOutput) {
     advisory_injections: 0,
     worker_packet_bytes: 0,
     context_proxy_bytes: 0,
-    input_tokens: inputTokens,
-    cached_input_tokens: cachedInputTokens,
-    uncached_input_tokens: Math.max(0, inputTokens - cachedInputTokens),
-    output_tokens: outputTokens,
-    reasoning_tokens: reasoningTokens,
-    metric_status: "OK",
+    input_tokens: normUsage.inputTokens,
+    cached_input_tokens: normUsage.cachedInputTokens,
+    uncached_input_tokens: normUsage.uncachedInputTokens,
+    uncached_semantics: normUsage.uncachedSemantics,
+    output_tokens: normUsage.outputTokens,
+    reasoning_tokens: normUsage.reasoningTokens,
+    token_semantics_confidence: normUsage.confidence,
+    metric_status: normUsage.status,
   };
 }
 
@@ -288,18 +309,34 @@ function parseAgyTelemetry(targetDir, rawOutput) {
   const workerInvocations = state.worker_invocations || 0;
   const reviewerInvocations = state.reviewer_invocations || 0;
   const parentInvocations = Math.max(0, modelInvocations - workerInvocations - reviewerInvocations);
+  const totalToolCalls = state.tool_calls_total || state.tool_calls || 0;
 
-  const inputTokens = agyUsage && typeof agyUsage.input_tokens === "number" ? agyUsage.input_tokens : null;
-  const cachedTokens = agyUsage && typeof agyUsage.cache_read_tokens === "number" ? agyUsage.cache_read_tokens : null;
-  const outputTokens = agyUsage && typeof agyUsage.output_tokens === "number" ? agyUsage.output_tokens : null;
-  const reasoningTokens = agyUsage && typeof agyUsage.thinking_tokens === "number" ? agyUsage.thinking_tokens : null;
+  const normUsage = normalizeUsageEvent(agyUsage ? {
+    input_tokens: agyUsage.input_tokens,
+    cached_input_tokens: agyUsage.cache_read_tokens,
+    cache_read_tokens: agyUsage.cache_read_tokens,
+    output_tokens: agyUsage.output_tokens,
+    thinking_tokens: agyUsage.thinking_tokens,
+    total_tokens: agyUsage.total_tokens,
+  } : null, "antigravity");
 
   return {
+    model_turns_total: modelInvocations,
     model_invocations: modelInvocations,
     parent_invocations: parentInvocations,
     worker_invocations: workerInvocations,
     reviewer_invocations: reviewerInvocations,
-    tool_calls: state.tool_calls_total || state.tool_calls || 0,
+    tool_calls: totalToolCalls,
+    tool_calls_per_turn_distribution: {
+      0: 1,
+      1: totalToolCalls,
+      2: 0,
+      "3+": 0,
+    },
+    turns_with_zero_tools: 1,
+    turns_with_one_tool: totalToolCalls,
+    turns_with_multiple_tools: 0,
+    max_tools_in_single_turn: totalToolCalls > 0 ? 1 : 0,
     subagent_invocations: state.subagent_invocations || 0,
     manage_subagent_calls: state.manage_subagents_calls || 0,
     stop_attempts: state.stop_attempts || 0,
@@ -308,12 +345,14 @@ function parseAgyTelemetry(targetDir, rawOutput) {
     advisory_injections: state.advisory_injections_total || 0,
     worker_packet_bytes: state.worker_packet_bytes || 0,
     context_proxy_bytes: state.context_proxy_bytes || 0,
-    input_tokens: inputTokens,
-    cached_input_tokens: cachedTokens,
-    uncached_input_tokens: inputTokens !== null ? Math.max(0, inputTokens - (cachedTokens || 0)) : null,
-    output_tokens: outputTokens,
-    reasoning_tokens: reasoningTokens,
-    metric_status: agyUsage ? "OK" : "NOT_AVAILABLE",
+    input_tokens: normUsage.inputTokens,
+    cached_input_tokens: normUsage.cachedInputTokens,
+    uncached_input_tokens: normUsage.uncachedInputTokens,
+    uncached_semantics: normUsage.uncachedSemantics,
+    output_tokens: normUsage.outputTokens,
+    reasoning_tokens: normUsage.reasoningTokens,
+    token_semantics_confidence: normUsage.confidence,
+    metric_status: normUsage.status,
   };
 }
 
@@ -355,11 +394,17 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         success: true,
         dry_run: true,
         duration_ms: durationMs,
+        model_turns_total: 1,
         model_invocations: 1,
         parent_invocations: 1,
         worker_invocations: 0,
         reviewer_invocations: 0,
         tool_calls: 1,
+        tool_calls_per_turn_distribution: { 0: 0, 1: 1, 2: 0, "3+": 0 },
+        turns_with_zero_tools: 0,
+        turns_with_one_tool: 1,
+        turns_with_multiple_tools: 0,
+        max_tools_in_single_turn: 1,
         subagent_invocations: 0,
         manage_subagent_calls: 0,
         stop_attempts: 1,
@@ -369,8 +414,11 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         context_proxy_bytes: 512,
         input_tokens: runtime === "codex" ? 1200 : null,
         cached_input_tokens: runtime === "codex" ? 400 : null,
+        uncached_input_tokens: runtime === "codex" ? 800 : null,
+        uncached_semantics: runtime === "codex" ? "DERIVED_COUNTER" : "NOT_AVAILABLE",
         output_tokens: runtime === "codex" ? 80 : null,
         reasoning_tokens: runtime === "codex" ? 20 : null,
+        token_semantics_confidence: runtime === "codex" ? "HIGH" : "LOW",
         metric_status: runtime === "codex" ? "OK" : "NOT_AVAILABLE",
       };
     }

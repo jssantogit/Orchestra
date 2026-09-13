@@ -1,0 +1,341 @@
+[
+  {
+    "probeId": "probe-a-two-reads",
+    "name": "PROBE A — TWO INDEPENDENT READS",
+    "prompt": "Inspect src/parser.js and src/formatter.js. Use the available file-reading tools. Do not modify anything. Inspect both before responding.",
+    "durationMs": 11661,
+    "conversationId": "47bfdb92-30d0-4ed4-a3fa-3769f8ccdc1b",
+    "status": "SUCCESS",
+    "exitCode": 0,
+    "totalSteps": 5,
+    "modelTurnsCount": 2,
+    "modelTurns": [
+      {
+        "step_index": 1,
+        "tool_calls_count": 2,
+        "tools": [
+          "view_file",
+          "view_file"
+        ],
+        "args": [
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-a-two-reads-MEbOil\\\\src\\\\parser.js\"",
+            "toolAction": "\"Viewing file\"",
+            "toolSummary": "\"View parser.js\""
+          },
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-a-two-reads-MEbOil\\\\src\\\\formatter.js\"",
+            "toolAction": "\"Viewing file\"",
+            "toolSummary": "\"View formatter.js\""
+          }
+        ]
+      },
+      {
+        "step_index": 4,
+        "tool_calls_count": 0,
+        "tools": [],
+        "args": []
+      }
+    ],
+    "toolsPerTurnList": [
+      2,
+      0
+    ],
+    "toolCallDistribution": {
+      "0": 1,
+      "1": 0,
+      "2": 1,
+      "3+": 0
+    },
+    "maxToolsInSingleTurn": 2,
+    "multiToolObserved": true,
+    "totalToolCallsReported": 2,
+    "subagentsCount": 0,
+    "workerInvocations": 0,
+    "reviewerInvocations": 0,
+    "usage": {
+      "input_tokens": 29621,
+      "output_tokens": 1052,
+      "thinking_tokens": 321,
+      "cache_read_tokens": 0,
+      "total_tokens": 30673
+    },
+    "stdoutSample": "{\"conversation_id\":\"47bfdb92-30d0-4ed4-a3fa-3769f8ccdc1b\",\"status\":\"SUCCESS\",\"response\":\"Both [`src/parser.js`](file:///C:/Users/joaop/AppData/Local/Temp/orch-probe-probe-a-two-reads-MEbOil/src/parser.js) and [`src/formatter.js`](file:///C:/Users/joaop/AppData/Local/Temp/orch-probe-probe-a-two-reads-MEbOil/src/formatter.js) have been inspected. No changes were made.\\n\\n### Summary of Inspected Files\\n\\n- **[`src/parser.js`](file:///C:/Users/joaop/AppData/Local/Temp/orch-probe-probe-a-two-reads-M",
+    "stderrSample": ""
+  },
+  {
+    "probeId": "probe-b-search-read",
+    "name": "PROBE B — SEARCH + READ",
+    "prompt": "Find the implementation of formatNumber and inspect the surrounding code. Do not modify anything.",
+    "durationMs": 16553,
+    "conversationId": "ecea477c-1320-460d-a870-4a3a095516b6",
+    "status": "SUCCESS",
+    "exitCode": 0,
+    "totalSteps": 10,
+    "modelTurnsCount": 5,
+    "modelTurns": [
+      {
+        "step_index": 1,
+        "tool_calls_count": 1,
+        "tools": [
+          "grep_search"
+        ],
+        "args": [
+          {
+            "CaseInsensitive": "false",
+            "MatchPerLine": "true",
+            "Query": "\"formatNumber\"",
+            "SearchPath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-b-search-read-UN02DB\"",
+            "toolAction": "\"Grep search for formatNumber\"",
+            "toolSummary": "\"Search for formatNumber\""
+          }
+        ]
+      },
+      {
+        "step_index": 3,
+        "tool_calls_count": 1,
+        "tools": [
+          "view_file"
+        ],
+        "args": [
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-b-search-read-UN02DB\\\\src\\\\formatter.js\"",
+            "EndLine": "60",
+            "StartLine": "1",
+            "toolAction": "\"Viewing formatter.js\"",
+            "toolSummary": "\"View formatter.js\""
+          }
+        ]
+      },
+      {
+        "step_index": 5,
+        "tool_calls_count": 1,
+        "tools": [
+          "view_file"
+        ],
+        "args": [
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-b-search-read-UN02DB\\\\src\\\\calculator.js\"",
+            "EndLine": "65",
+            "StartLine": "1",
+            "toolAction": "\"Viewing calculator.js\"",
+            "toolSummary": "\"View calculator.js\""
+          }
+        ]
+      },
+      {
+        "step_index": 7,
+        "tool_calls_count": 1,
+        "tools": [
+          "view_file"
+        ],
+        "args": [
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-b-search-read-UN02DB\\\\test\\\\formatter.test.js\"",
+            "EndLine": "40",
+            "StartLine": "1",
+            "toolAction": "\"Viewing formatter.test.js\"",
+            "toolSummary": "\"View formatter.test.js\""
+          }
+        ]
+      },
+      {
+        "step_index": 9,
+        "tool_calls_count": 0,
+        "tools": [],
+        "args": []
+      }
+    ],
+    "toolsPerTurnList": [
+      1,
+      1,
+      1,
+      1,
+      0
+    ],
+    "toolCallDistribution": {
+      "0": 1,
+      "1": 4,
+      "2": 0,
+      "3+": 0
+    },
+    "maxToolsInSingleTurn": 1,
+    "multiToolObserved": false,
+    "totalToolCallsReported": 4,
+    "subagentsCount": 0,
+    "workerInvocations": 0,
+    "reviewerInvocations": 0,
+    "usage": {
+      "input_tokens": 64715,
+      "output_tokens": 1795,
+      "thinking_tokens": 723,
+      "cache_read_tokens": 12184,
+      "total_tokens": 66510
+    },
+    "stdoutSample": "{\"conversation_id\":\"ecea477c-1320-460d-a870-4a3a095516b6\",\"status\":\"SUCCESS\",\"response\":\"The implementation of [`formatNumber`](file:///C:/Users/joaop/AppData/Local/Temp/orch-probe-probe-b-search-read-UN02DB/src/formatter.js#L16-L27) is located in [`src/formatter.js`](file:///C:/Users/joaop/AppData/Local/Temp/orch-probe-probe-b-search-read-UN02DB/src/formatter.js#L16-L27).\\n\\n### Implementation\\n\\n```javascript\\n/**\\n * Formats a numeric value into a display string.\\n *\\n * NOTE: There is an int",
+    "stderrSample": ""
+  },
+  {
+    "probeId": "probe-c-parallel-read",
+    "name": "PROBE C — PARALLEL READ POSSIBILITY",
+    "prompt": "Read the first 10 lines of src/parser.js and the first 10 lines of src/formatter.js in parallel if supported. Do not modify anything.",
+    "durationMs": 9092,
+    "conversationId": "6ccb7ce3-b969-47aa-aaf6-945ff997f896",
+    "status": "SUCCESS",
+    "exitCode": 0,
+    "totalSteps": 5,
+    "modelTurnsCount": 2,
+    "modelTurns": [
+      {
+        "step_index": 1,
+        "tool_calls_count": 2,
+        "tools": [
+          "view_file",
+          "view_file"
+        ],
+        "args": [
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-c-parallel-read-Luc7WA\\\\src\\\\parser.js\"",
+            "EndLine": "10",
+            "StartLine": "1",
+            "toolAction": "\"Viewing parser.js\"",
+            "toolSummary": "\"View first 10 lines of parser.js\""
+          },
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-c-parallel-read-Luc7WA\\\\src\\\\formatter.js\"",
+            "EndLine": "10",
+            "StartLine": "1",
+            "toolAction": "\"Viewing formatter.js\"",
+            "toolSummary": "\"View first 10 lines of formatter.js\""
+          }
+        ]
+      },
+      {
+        "step_index": 4,
+        "tool_calls_count": 0,
+        "tools": [],
+        "args": []
+      }
+    ],
+    "toolsPerTurnList": [
+      2,
+      0
+    ],
+    "toolCallDistribution": {
+      "0": 1,
+      "1": 0,
+      "2": 1,
+      "3+": 0
+    },
+    "maxToolsInSingleTurn": 2,
+    "multiToolObserved": true,
+    "totalToolCallsReported": 2,
+    "subagentsCount": 0,
+    "workerInvocations": 0,
+    "reviewerInvocations": 0,
+    "usage": {
+      "input_tokens": 28324,
+      "output_tokens": 688,
+      "thinking_tokens": 252,
+      "cache_read_tokens": 0,
+      "total_tokens": 29012
+    },
+    "stdoutSample": "{\"conversation_id\":\"6ccb7ce3-b969-47aa-aaf6-945ff997f896\",\"status\":\"SUCCESS\",\"response\":\"Here are the first 10 lines of each file:\\n\\n### [`src/parser.js`](file:///C:/Users/joaop/AppData/Local/Temp/orch-probe-probe-c-parallel-read-Luc7WA/src/parser.js#L1-L10)\\n```javascript\\n/**\\n * Input validation and parsing module.\\n */\\n\\n/**\\n * Validates whether the given value is acceptable numeric input.\\n * Rejects:\\n * 1. Non-number and non-string types (null, undefined, boolean, object, array).\\n * 2",
+    "stderrSample": ""
+  },
+  {
+    "probeId": "probe-worker-delegation",
+    "name": "PROBE WORKER — AGY WORKER OBSERVABILITY",
+    "prompt": "According to orchestra routing policy, this task is an IMPLEMENTATION task. Create an implementation scope contract and invoke the flash-worker subagent using invoke_subagent to inspect src/formatter.js and test/formatter.test.js. Do not edit product code directly.",
+    "durationMs": 11602,
+    "conversationId": "75e60a3a-9ec0-4d55-9fc1-01b1d8cdf536",
+    "status": "SUCCESS",
+    "exitCode": 0,
+    "totalSteps": 8,
+    "modelTurnsCount": 4,
+    "modelTurns": [
+      {
+        "step_index": 1,
+        "tool_calls_count": 1,
+        "tools": [
+          "view_file"
+        ],
+        "args": [
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-worker-delegation-a3hgaN\\\\.agents\\\\skills\\\\agy-orchestra\\\\SKILL.md\"",
+            "toolAction": "\"Viewing orchestra skill\"",
+            "toolSummary": "\"Viewing orchestra skill\""
+          }
+        ]
+      },
+      {
+        "step_index": 3,
+        "tool_calls_count": 1,
+        "tools": [
+          "view_file"
+        ],
+        "args": [
+          {
+            "AbsolutePath": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-worker-delegation-a3hgaN\\\\.agents\\\\skills\\\\implementation-contract\\\\SKILL.md\"",
+            "toolAction": "\"Viewing implementation-contract skill\"",
+            "toolSummary": "\"Viewing implementation-contract skill\""
+          }
+        ]
+      },
+      {
+        "step_index": 5,
+        "tool_calls_count": 1,
+        "tools": [
+          "manage_subagents"
+        ],
+        "args": [
+          {
+            "Action": "\"list\"",
+            "toolAction": "\"Listing subagents\"",
+            "toolSummary": "\"List subagents\""
+          }
+        ]
+      },
+      {
+        "step_index": 7,
+        "tool_calls_count": 1,
+        "tools": [
+          "find_by_name"
+        ],
+        "args": [
+          {
+            "Pattern": "\"*\"",
+            "SearchDirectory": "\"C:\\\\Users\\\\joaop\\\\AppData\\\\Local\\\\Temp\\\\orch-probe-probe-worker-delegation-a3hgaN\""
+          }
+        ]
+      }
+    ],
+    "toolsPerTurnList": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "toolCallDistribution": {
+      "0": 0,
+      "1": 4,
+      "2": 0,
+      "3+": 0
+    },
+    "maxToolsInSingleTurn": 1,
+    "multiToolObserved": false,
+    "totalToolCallsReported": 3,
+    "subagentsCount": 0,
+    "workerInvocations": 0,
+    "reviewerInvocations": 0,
+    "usage": {
+      "input_tokens": 53102,
+      "output_tokens": 611,
+      "thinking_tokens": 368,
+      "cache_read_tokens": 12196,
+      "total_tokens": 53713
+    },
+    "stdoutSample": "{\"conversation_id\":\"75e60a3a-9ec0-4d55-9fc1-01b1d8cdf536\",\"status\":\"SUCCESS\",\"response\":\"\",\"duration_seconds\":7.1730482,\"num_turns\":1,\"usage\":{\"input_tokens\":53102,\"output_tokens\":611,\"thinking_tokens\":368,\"cache_read_tokens\":12196,\"total_tokens\":53713}}\n",
+    "stderrSample": ""
+  }
+]

@@ -1,0 +1,40 @@
+{
+  "version": "1.0.0",
+  "evaluatedAt": "2026-09-13T16:20:00Z",
+  "methodology": "Empirical probe suite (Probe A, B, C, Worker delegation) and raw transcript inspection",
+  "codex": {
+    "runtime": "codex",
+    "cliVersion": "0.154.0",
+    "multiToolClassification": "NATIVE_MULTI_TOOL_SUPPORTED",
+    "multiToolSameTurn": true,
+    "parallelToolCalls": false,
+    "maxObservedToolsPerTurn": 12,
+    "workerUsageObservable": false,
+    "workerObservabilityNote": "In 'codex exec --ephemeral' mode, collab thread spawning fails with 'no thread with id'; all tool actions execute on parent agent and usage is aggregated into single turn.completed",
+    "tokenSemanticsConfidence": "HIGH",
+    "tokenBasis": {
+      "inputTokens": "ACCUMULATED_COUNTER",
+      "cachedTokens": "ACCUMULATED_COUNTER",
+      "cachedIsSubsetOfInput": true,
+      "uncachedDerivationFormula": "input_tokens - cached_input_tokens"
+    }
+  },
+  "antigravity": {
+    "runtime": "antigravity",
+    "cliVersion": "1.2.2",
+    "multiToolClassification": "NATIVE_MULTI_TOOL_SUPPORTED",
+    "multiToolSameTurn": true,
+    "parallelToolCalls": true,
+    "maxObservedToolsPerTurn": 2,
+    "workerUsageObservable": true,
+    "workerObservabilityNote": "Observable through 'invoke_subagent' and 'manage_subagents' hooks in telemetry stream; Task 3 had 0 subagents because main agent performed implementation directly",
+    "tokenSemanticsConfidence": "MEDIUM",
+    "tokenBasis": {
+      "inputTokens": "ACCUMULATED_COUNTER",
+      "cacheReadTokens": "PROVIDER_SPECIFIC",
+      "cachedIsSubsetOfInput": false,
+      "uncachedDerivationFormula": "NOT_DERIVABLE",
+      "cacheReadNote": "cache_read_tokens is an independent Gemini context cache counter. Total tokens equals input_tokens + output_tokens exactly. Direct subtraction is invalid and strictly prohibited."
+    }
+  }
+}

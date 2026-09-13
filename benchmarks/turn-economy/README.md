@@ -46,20 +46,45 @@ benchmarks/turn-economy/
 
 ## Metrics & Observability
 
-### Real Tokens vs. Proxies
+### Real Tokens vs. Proxies (Hardened v1)
 
-| Metric | Codex Runtime | Antigravity Runtime | Notes |
-| :--- | :--- | :--- | :--- |
-| `input_tokens` | Exact (JSONL) | `NOT_AVAILABLE` | AGY CLI does not expose live token counts in print mode |
-| `cached_input_tokens` | Exact (JSONL) | `NOT_AVAILABLE` | Provided natively by Codex |
-| `output_tokens` | Exact (JSONL) | `NOT_AVAILABLE` | Provided natively by Codex |
-| `reasoning_tokens` | Exact (JSONL) | `NOT_AVAILABLE` | Extracted from `reasoning_output_tokens` |
-| `context_proxy_bytes` | Calculated | Exact byte count | Size of prompts, tool inputs, outputs, and injected state |
-| `model_invocations` | Exact (JSONL) | Exact (`PreInvocation` hook) | Count of model inferences |
-| `tool_calls` | Exact (JSONL) | Exact (`PostToolUse` hook) | Total tool turns dispatched |
-| `subagent_invocations` | Exact (events) | Exact (`invoke_subagent`) | Subagent instances spawned |
-| `forced_stop_continuations`| N/A | Exact (`Stop` hook) | Turns forced back by Stop Guard |
-| `advisory_injections` | N/A | Exact (`PreInvocation` hook) | Ephemeral system advisories entered into context |
+| Metric | Codex Runtime | Antigravity Runtime | Classification | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| `input_tokens` | Exact (`turn.completed`) | Exact (`agy` JSON output) | `ACCUMULATED_COUNTER` | Session prompt tokens reported by runtime |
+| `cached_input_tokens` | Exact (`turn.completed`) | `PROVIDER_SPECIFIC` | `ACCUMULATED_COUNTER` / `PROVIDER_SPECIFIC` | In Codex: guaranteed subset of input. In AGY: independent Gemini context cache counter |
+| `uncached_input_tokens`| `DERIVED_COUNTER` | `NOT_DERIVABLE` (`null`) | `DERIVED_COUNTER` / `NOT_DERIVABLE` | AGY strictly rejects `input - cached` to prevent negative token counts |
+| `output_tokens` | Exact (`turn.completed`) | Exact (`agy` JSON output) | `ACCUMULATED_COUNTER` | Completion / candidate tokens |
+| `reasoning_tokens` | Exact (`reasoning_output_tokens`) | Exact (`thinking_tokens`) | `ACCUMULATED_COUNTER` | Subset of output tokens dedicated to reasoning |
+| `model_turns_total` | Exact (JSONL) | Exact (`PreInvocation` hook / transcript) | `DIRECT_COUNTER` | Distinct model inferences dispatched |
+| `tool_calls` | Exact (JSONL items) | Exact (`PostToolUse` hook) | `DIRECT_COUNTER` | Total tool operations dispatched |
+| `subagent_invocations` | Exact (events) | Exact (`invoke_subagent` hook) | `DIRECT_COUNTER` | Subagent instances spawned |
+| `forced_stop_continuations`| N/A | Exact (`Stop` hook) | `DIRECT_COUNTER` | Turns forced back by Stop Guard |
+| `advisory_injections` | N/A | Exact (`PreInvocation` hook) | `DIRECT_COUNTER` | Ephemeral system advisories entered into context |
+
+## Formal Definition of Model Turn
+
+- **Antigravity Runtime**: A `MODEL_TURN` is defined as a single discrete model inference triggered by the runtime. Observably, it starts at the `PreInvocation` hook and corresponds to one `PLANNER_RESPONSE` step with `source: "MODEL"`. It consumes the current accumulated prompt context and produces either a terminal textual response (0 tools) or one or more tool calls ($N \ge 1$). Only after all tool calls dispatched in that turn have completed does the next model turn begin.
+- **Codex Runtime**: In `codex exec --json --ephemeral`, Codex packages the execution into an outer macro-turn bounded by `turn.started` and `turn.completed`. While multiple tool execution items (`command_execution`, `apply_patch`) occur inside that macro-turn, `model_invocations` reported in the CLI JSONL counts the outer turn with accumulated usage.
+
+## Token & Cache Semantics Hardening
+
+### The Task 3 Token Anomaly Explained
+In Task 3, AGY reported `input_tokens = 166,925` and `cache_read_tokens = 223,111`, with `total_tokens = 173,236` ($166,925 + 6,311$).
+- In Google Gemini API usage metadata, `totalTokenCount = promptTokenCount + candidatesTokenCount`. `cachedContentTokenCount` is an independent counter that records cache hits across turns and is **not included in promptTokenCount**.
+- The naive formula `uncached = input_tokens - cached_input_tokens` assumed cache hits were a subset of `input_tokens`, resulting in $166,925 - 223,111 = -56,186$, which previously clamped silently to $0$.
+- Under Hardened v1, `uncached_input_tokens` for AGY is explicitly marked `null` with status `NOT_DERIVABLE` to preserve mathematical integrity and prevent corrupted accounting.
+
+## Multi-Tool Capability & Findings
+
+Empirical capability probes (`probe-a-two-reads`, `probe-b-search-read`, `probe-c-parallel-read`, `probe-worker-delegation`) revealed:
+1. **NATIVE_MULTI_TOOL_SUPPORTED**: Antigravity runtime natively supports multiple parallel tool calls emitted in a single model turn. Probe A and Probe C executed two independent `view_file` calls in Turn 1 ($[2, 0]$ distribution, 2 model turns total).
+2. **Sequential Data Dependencies**: When tools require feedback (e.g. `grep_search` to find a symbol followed by `view_file` to inspect the implementation), execution is inherently serialized across multiple model turns ($[1, 1, 1, 1, 0]$ in Probe B).
+3. **Task 3 Subagent Reality**: Task 3 had 0 subagent invocations because the main agent executed all reading, editing, and validation directly without delegating to `flash-worker`. This was an operational choice by the main agent, not a telemetry hook omission.
+
+## Capability Matrix
+
+The consolidated capability matrix is versioned at [`results/capability-matrix.json`](file:///C:/Projects/Orchestra/benchmarks/turn-economy/results/capability-matrix.json).
+The hardened baseline is versioned at [`results/hardened-baseline.json`](file:///C:/Projects/Orchestra/benchmarks/turn-economy/results/hardened-baseline.json).
 
 ## Execution Safety & Quota Warning
 
