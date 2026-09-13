@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    name: Deterministic Policy & Firewall Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Doctor & Health Checks
+        run: |
+          ./scripts/doctor.sh
+
+      - name: Run Codex Policy Tests
+        run: |
+          node --test runtimes/codex/tests/routing-policy.test.mjs
+
+      - name: Run Antigravity Policy Tests
+        run: |
+          node --test runtimes/antigravity/tests/routing-policy.test.mjs
+
+      - name: Run Antigravity Hook Tests
+        run: |
+          node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+
+      - name: Run Cross-Runtime Firewall Tests
+        run: |
+          node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
+
+      - name: Run Installer Tests
+        run: |
+          node --test tests/installers/installers.test.mjs
+
+      - name: Run Cross-Runtime Contamination Check
+        run: |
+          node scripts/contamination-check.mjs

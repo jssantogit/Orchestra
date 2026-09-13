@@ -1,0 +1,46 @@
+{
+  "scope-enforcer": {
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|invoke_subagent|define_subagent|run_command|manage_task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/pre-tool-enforce.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "telemetry-logger": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/post-tool-telemetry.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "guard-rails": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node hooks/pre-invocation-guard.mjs",
+        "timeout": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node hooks/stop-guard.mjs",
+        "timeout": 10
+      }
+    ]
+  }
+}

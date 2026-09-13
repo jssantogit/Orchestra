@@ -1,0 +1,23 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+# Example project-local Codex configuration for AutoEQ Workbench
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
+model_instructions_file = "astra-orchestra/INSTRUCTIONS.md"
+
+[features]
+multi_agent = true
+multi_agent_v2 = true
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 1
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "max"
+
+[[skills.config]]
+name = "orchestra"
+enabled = false
+
+[[skills.config]]
+name = "autoeq-investigation"
+enabled = false

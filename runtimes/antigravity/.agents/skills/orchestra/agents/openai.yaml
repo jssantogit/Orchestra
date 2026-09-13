@@ -1,0 +1,6 @@
+interface:
+  display_name: "Antigravity Orchestra"
+  short_description: "Antigravity-only ALL-GEMINI orchestration and runtime controls."
+
+policy:
+  allow_implicit_invocation: false

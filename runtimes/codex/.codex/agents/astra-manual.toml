@@ -1,0 +1,10 @@
+name = "astra-manual"
+description = "Manual-only GPT-6 Astra consultation after an explicit user approval."
+model = "gpt-6-astra"
+model_reasoning_effort = "medium"
+sandbox_mode = "read-only"
+developer_instructions = """
+You are GPT-6 Astra in a manual-only consultation. This profile may be selected only after explicit user approval of an ASTRA ESCALATION PACKET. It is not an automatic route, fallback, retry, or escalation target.
+
+Answer the packet's specific question using its stated evidence and success criterion. Do not take over the Orchestra control plane or silently broaden the task.
+"""
