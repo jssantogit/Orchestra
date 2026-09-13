@@ -13,6 +13,7 @@ import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { normalizeUsageEvent, TOKEN_COUNTER_TYPES, CONFIDENCE_LEVELS } from "./token-semantics.mjs";
+import { evaluateTaskFidelity, TASK_FIDELITY_REQUIREMENTS } from "./fidelity.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -385,6 +386,20 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       // Verify that fixture tests run in clean environment
       execFileSync("node", ["--test", "test/calculator.test.js"], { cwd: tempDir, stdio: "ignore" });
 
+      const fidelity = evaluateTaskFidelity({
+        taskKey,
+        runtime,
+        subagentInvocations: TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? 1 : 0,
+        mutationActor: TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? "WORKER" : "NONE",
+        runtimeLoaded: true,
+        orchestratorIdentity: runtime === "codex" ? "terra-medium" : "flash-orchestrator",
+        workerObserved: !!TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected,
+        confidenceEvidence: {
+          hasExplicitThreadId: true,
+          hasExplicitAgentRole: true,
+        },
+      });
+
       const durationMs = Date.now() - startTime;
       return {
         runtime,
@@ -405,7 +420,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         turns_with_one_tool: 1,
         turns_with_multiple_tools: 0,
         max_tools_in_single_turn: 1,
-        subagent_invocations: 0,
+        subagent_invocations: TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? 1 : 0,
         manage_subagent_calls: 0,
         stop_attempts: 1,
         forced_stop_continuations: 0,
@@ -420,6 +435,12 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         reasoning_tokens: runtime === "codex" ? 20 : null,
         token_semantics_confidence: runtime === "codex" ? "HIGH" : "LOW",
         metric_status: runtime === "codex" ? "OK" : "NOT_AVAILABLE",
+        fidelity: {
+          status: fidelity.fidelityStatus,
+          confidence: fidelity.confidence,
+          writeActorValid: fidelity.writeActorValid,
+          violations: fidelity.violations,
+        },
       };
     }
 
@@ -435,7 +456,8 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       const args = [
         "exec",
         "--json",
-        "--ephemeral",
+        "--disable",
+        "plugins",
         "--dangerously-bypass-approvals-and-sandbox",
         "-C",
         tempDir,
@@ -484,6 +506,21 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     const durationMs = Date.now() - startTime;
     const verification = taskDef.verify(tempDir, stdout);
 
+    const fidelity = evaluateTaskFidelity({
+      taskKey,
+      runtime,
+      subagentInvocations: metrics.subagent_invocations || 0,
+      mutationActor: (metrics.subagent_invocations || 0) > 0 ? "WORKER" : (metrics.tool_calls > 0 && TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? "ORCHESTRATOR" : "NONE"),
+      runtimeLoaded: true,
+      orchestratorIdentity: runtime === "codex" ? "terra-medium" : "flash-orchestrator",
+      workerObserved: (metrics.subagent_invocations || 0) > 0,
+      confidenceEvidence: {
+        hasExplicitThreadId: runtime === "codex" && (metrics.subagent_invocations || 0) > 0,
+        hasExplicitAgentRole: true,
+        hasSubagentTrace: (metrics.subagent_invocations || 0) > 0,
+      },
+    });
+
     return {
       runtime,
       task: taskKey,
@@ -494,6 +531,12 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       dry_run: false,
       duration_ms: durationMs,
       ...metrics,
+      fidelity: {
+        status: fidelity.fidelityStatus,
+        confidence: fidelity.confidence,
+        writeActorValid: fidelity.writeActorValid,
+        violations: fidelity.violations,
+      },
     };
   } finally {
     // Fresh environment cleanup
@@ -509,12 +552,15 @@ function parseArgs() {
     runtimes: [],
     tasks: [],
     dryRun: false,
+    requireFidelity: false,
   };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--dry-run") {
       options.dryRun = true;
+    } else if (arg === "--require-fidelity") {
+      options.requireFidelity = true;
     } else if (arg === "--runtime") {
       options.runtimes.push(args[++i]);
     } else if (arg === "--task") {
@@ -546,8 +592,10 @@ function main() {
   console.log(`Runtimes: ${options.runtimes.join(", ")}`);
   console.log(`Tasks: ${options.tasks.join(", ")}`);
   console.log(`Dry Run: ${options.dryRun}`);
+  console.log(`Require Fidelity: ${options.requireFidelity}`);
 
   const results = [];
+  let hasFidelityFailure = false;
 
   // Alternating task execution to minimize temporal bias
   for (const taskKey of options.tasks) {
@@ -555,7 +603,13 @@ function main() {
       try {
         const res = runTask({ runtime, taskKey, dryRun: options.dryRun, runId });
         results.push(res);
-        console.log(`RESULT [${runtime} / ${taskKey}]: Success=${res.success} Duration=${res.duration_ms}ms Invocations=${res.model_invocations} Tools=${res.tool_calls}`);
+        const fidelityStr = res.fidelity ? ` Fidelity=${res.fidelity.status}` : "";
+        console.log(`RESULT [${runtime} / ${taskKey}]: Success=${res.success}${fidelityStr} Duration=${res.duration_ms}ms Invocations=${res.model_invocations} Tools=${res.tool_calls}`);
+
+        if (options.requireFidelity && res.fidelity && res.fidelity.status !== "PASS" && TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected) {
+          console.error(`FIDELITY_FAILED: ${runtime} on ${taskKey} failed runtime fidelity check: ${res.fidelity.violations.join(", ")}`);
+          hasFidelityFailure = true;
+        }
       } catch (err) {
         console.error(`ERROR running [${runtime} / ${taskKey}]:`, err.message);
         results.push({
@@ -571,6 +625,11 @@ function main() {
   // Write summary.json
   writeFileSync(summaryFile, JSON.stringify(results, null, 2), "utf8");
   console.log(`\nBenchmark summary saved to: ${summaryFile}`);
+
+  if (hasFidelityFailure) {
+    console.error(`\nBenchmark execution terminated: one or more tasks failed closed under --require-fidelity.`);
+    process.exit(1);
+  }
 }
 
 main();
