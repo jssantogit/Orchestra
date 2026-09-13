@@ -599,14 +599,51 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
   let workerPostMutationTurns = 0;
   let workerSeenMutation = false;
   let duplicateReads = 0;
+  let postMutationRereads = 0;
   const readHistory = new Set();
   let repeatedValidationWithoutMutation = 0;
+  let workerSearchTurns = 0;
+  let workerReadTurns = 0;
+  let workerMutationTurns = 0;
+  let workerValidationTurns = 0;
+  let workerHandoffTurns = 0;
+  let workerMultiToolTurns = 0;
+  let mutationsSinceLastValidation = 0;
+
+  const isTestCmd = (cmd) => {
+    const c = String(cmd || "").replace(/^["']|["']$/g, "").trim();
+    return /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(c) || c.includes("node --test");
+  };
 
   if (workerTurns.length > 0) {
     workerTurns.forEach((t) => {
-      const hasMutation = t.tools.some(
-        (tc) => tc.name === "replace_file_content" || tc.name === "write_to_file"
-      );
+      const toolCount = typeof t.toolCount === "number" ? t.toolCount : (t.tools ? t.tools.length : 0);
+      if (toolCount > 1) {
+        workerMultiToolTurns++;
+      }
+
+      const hasSearch = t.tools.some((tc) => ["find_by_name", "grep_search", "list_dir"].includes(tc.name));
+      const hasMutation = t.tools.some((tc) => ["replace_file_content", "write_to_file"].includes(tc.name));
+      const hasRead = t.tools.some((tc) => ["view_file", "read_url_content"].includes(tc.name));
+      const hasValidation = t.tools.some((tc) => tc.name === "run_command" && isTestCmd(tc.args?.CommandLine || tc.args?.command || tc.args?.cmd));
+      const hasHandoff = t.tools.some((tc) => tc.name === "send_message") || (toolCount === 0 && workerSeenMutation);
+
+      if (hasSearch) workerSearchTurns++;
+      if (hasMutation) {
+        workerMutationTurns++;
+        mutationsSinceLastValidation++;
+      } else if (hasRead) {
+        workerReadTurns++;
+      }
+      if (hasValidation) {
+        workerValidationTurns++;
+        if (mutationsSinceLastValidation === 0) {
+          repeatedValidationWithoutMutation++;
+        }
+        mutationsSinceLastValidation = 0;
+      }
+      if (hasHandoff) workerHandoffTurns++;
+
       if (!workerSeenMutation) {
         if (hasMutation) workerSeenMutation = true;
         else workerPreMutationTurns++;
@@ -617,12 +654,20 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
       t.tools.forEach((tc) => {
         if (tc.name === "view_file") {
           const p = tc.args?.AbsolutePath || tc.args?.path || "";
-          if (readHistory.has(p) && !workerSeenMutation) duplicateReads++;
+          if (workerSeenMutation) {
+            postMutationRereads++;
+          } else {
+            if (readHistory.has(p)) duplicateReads++;
+          }
           readHistory.add(p);
         }
       });
     });
   }
+
+  const workerSerialIndependentToolOpportunities = Math.max(0, workerReadTurns - 1) + Math.max(0, workerMutationTurns - 1);
+  const workerValidationCommands = childValidations.map((v) => v.command);
+  const workerValidationRuns = childValidations.length;
 
   const parentDist = parentMetrics ? parentMetrics.distribution : { 0: 1, 1: parentToolCalls, 2: 0, "3+": 0 };
   const workerDist = workerMetrics ? workerMetrics.distribution : { 0: 0, 1: workerToolCalls, 2: 0, "3+": 0 };
@@ -711,11 +756,23 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     parent_post_handoff_turns: parentPostHandoffTurns,
     worker_pre_mutation_turns: workerPreMutationTurns,
     worker_post_mutation_turns: workerPostMutationTurns,
+    worker_model_turns: workerModelTurns,
+    worker_tool_calls: workerToolCalls,
+    worker_search_turns: workerSearchTurns,
+    worker_read_turns: workerReadTurns,
+    worker_mutation_turns: workerMutationTurns,
+    worker_validation_turns: workerValidationTurns,
+    worker_handoff_turns: workerHandoffTurns,
+    worker_multi_tool_turns: workerMultiToolTurns,
+    worker_serial_independent_tool_opportunities: workerSerialIndependentToolOpportunities,
     tools_per_turn_by_role: {
       ORCHESTRATOR: parentModelTurns > 0 ? Number((parentToolCalls / parentModelTurns).toFixed(2)) : 0,
       WORKER: workerModelTurns > 0 ? Number((workerToolCalls / workerModelTurns).toFixed(2)) : 0,
     },
     duplicate_reads: duplicateReads,
+    post_mutation_rereads: postMutationRereads,
+    worker_validation_commands: workerValidationCommands,
+    worker_validation_runs: workerValidationRuns,
     repeated_validation_without_mutation: repeatedValidationWithoutMutation,
     bookkeeping_model_turns: bookkeepingModelTurns,
     turn_classifications: turnClassifications,
@@ -1087,7 +1144,8 @@ function main() {
         const res = runTask({ runtime, taskKey, dryRun: options.dryRun, runId });
         results.push(res);
         const fidelityStr = res.fidelity ? ` Fidelity=${res.fidelity.status}` : "";
-        console.log(`RESULT [${runtime} / ${taskKey}]: Success=${res.success}${fidelityStr} Duration=${res.duration_ms}ms Invocations=${res.model_invocations} Tools=${res.tool_calls}`);
+        const workerInfo = typeof res.worker_model_turns === "number" ? ` WorkerTurns=${res.worker_model_turns} (pre=${res.worker_pre_mutation_turns}, post=${res.worker_post_mutation_turns}) Tools/Turn=${JSON.stringify(res.worker_per_turn_tool_counts)}` : "";
+        console.log(`RESULT [${runtime} / ${taskKey}]: Success=${res.success}${fidelityStr} Duration=${res.duration_ms}ms Invocations=${res.model_invocations} Tools=${res.tool_calls}${workerInfo}`);
 
         const reqFidelity = TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected;
         if (options.requireFidelity && !options.dryRun && reqFidelity) {

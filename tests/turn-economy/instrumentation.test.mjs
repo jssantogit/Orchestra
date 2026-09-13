@@ -182,3 +182,29 @@ test("instrumentation: post-tool-telemetry records tool turn metrics, subagents 
   assert(state.review_packet_bytes > 0);
   assert(state.context_proxy_bytes > 0);
 });
+
+test("instrumentation: parseAgyTelemetry computes worker turn budget signals and serialization metrics", async () => {
+  const { parseAgyTelemetry } = await import("../../benchmarks/turn-economy/run.mjs");
+  const tempDir = resolve(runtimeRoot, "scratch/test-telemetry-" + Date.now());
+  mkdirSync(resolve(tempDir, ".agents/state"), { recursive: true });
+  writeFileSync(resolve(tempDir, ".agents/state/active-state.json"), JSON.stringify({
+    conversationId: "test-parent-conv",
+    subagent_invocations: 1,
+  }));
+
+  const metrics = parseAgyTelemetry(tempDir, "");
+  assert.equal(typeof metrics.worker_pre_mutation_turns, "number");
+  assert.equal(typeof metrics.worker_post_mutation_turns, "number");
+  assert.equal(typeof metrics.worker_search_turns, "number");
+  assert.equal(typeof metrics.worker_read_turns, "number");
+  assert.equal(typeof metrics.worker_mutation_turns, "number");
+  assert.equal(typeof metrics.worker_validation_turns, "number");
+  assert.equal(typeof metrics.worker_handoff_turns, "number");
+  assert.equal(typeof metrics.worker_multi_tool_turns, "number");
+  assert.equal(typeof metrics.worker_serial_independent_tool_opportunities, "number");
+  assert.equal(typeof metrics.post_mutation_rereads, "number");
+  assert.ok(Array.isArray(metrics.worker_validation_commands));
+  assert.equal(typeof metrics.worker_validation_runs, "number");
+
+  rmSync(tempDir, { recursive: true, force: true });
+});

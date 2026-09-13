@@ -586,3 +586,163 @@ test("turn-diet: regression 34: Orchestrator Validates — orchestrator validati
   assert.ok(out.reason.includes("INVALID_ACTOR") || out.reason.includes("ORCHESTRATOR"));
 });
 
+test("turn-diet: regression 35: define_subagent injects authoritative prompt from .agents/agents/<name>.md", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "PLANNED",
+    taskAction: "IMPLEMENT",
+    taskId: "task-3-simple",
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "parent-orch-1",
+    toolCall: {
+      name: "define_subagent",
+      args: {
+        name: "flash-low-worker",
+        system_prompt: "Hallucinated minimal prompt",
+      },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "allow");
+  assert.ok(out.overwrite, "Must provide overwrite with authoritative prompt");
+  assert.ok(out.overwrite.system_prompt.includes("Startup Decision Tree"), "Must include authoritative Startup Decision Tree");
+  assert.ok(out.overwrite.system_prompt.includes("KNOWN-PATH FAST PATH"), "Must include KNOWN-PATH FAST PATH");
+});
+
+test("turn-diet: regression 36: invoke_subagent refines Scope Contract index for simple formatter task", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "PLANNED",
+    taskAction: "IMPLEMENT",
+    taskId: "task-3-simple",
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "parent-orch-1",
+    toolCall: {
+      name: "invoke_subagent",
+      args: {
+        Subagents: [
+          {
+            TypeName: "flash-low-worker",
+            Role: "flash-low-worker",
+            Model: "gemini-3.8-flash-low",
+            Prompt: "Task: Fix the formatter bug where negative values lose their sign.\n\nScope Contract:\n- allowedPaths: [\"src/**\", \"test/**\"]\n- testsRequired: Focused formatter unit test\n\nInstructions:\n1. Discover the formatter implementation file and the corresponding test file.\n2. Fix the bug.\n3. Validate.",
+          },
+        ],
+      },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "allow");
+  assert.ok(out.overwrite, "Must provide overwrite for refined Subagents");
+  const refinedPrompt = out.overwrite.Subagents[0].Prompt;
+  assert.ok(refinedPrompt.includes('allowedPaths: ["src/formatter.js", "test/formatter.test.js"]'), "Must refine allowedPaths to concrete paths");
+  assert.ok(refinedPrompt.includes('testsRequired: ["node --test test/formatter.test.js"]'), "Must refine testsRequired to exact test command");
+  assert.ok(!refinedPrompt.includes("1. Discover the formatter"), "Must remove discovery instruction for known paths");
+
+  // Verify active-contract.json was saved with concrete paths
+  const contract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf-8"));
+  assert.deepEqual(contract.allowedPaths, ["src/formatter.js", "test/formatter.test.js"]);
+  assert.deepEqual(contract.testsRequired, ["node --test test/formatter.test.js"]);
+});
+
+test("turn-diet: regression 37: worker cannot spawn subagents (hierarchy violation)", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "WORKER",
+    state: "DELEGATED",
+    taskAction: "IMPLEMENT",
+  }));
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: "orch-parent",
+    bindings: {
+      "child-worker-1": { role: "WORKER", profile: "flash-low-worker" },
+    },
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "child-worker-1",
+    toolCall: {
+      name: "invoke_subagent",
+      args: {
+        Subagents: [{ TypeName: "flash-low-worker", Prompt: "Sub-worker" }],
+      },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Hierarchy violation"));
+});
+
+test("turn-diet: regression 38: batching guidance preserves allowedPaths enforcement", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "WORKER",
+    state: "DELEGATED",
+    taskAction: "IMPLEMENT",
+    scopeContract: {
+      allowedPaths: ["src/formatter.js", "test/formatter.test.js"],
+      forbiddenPaths: ["package.json", "src/calculator.js"],
+      testsRequired: ["node --test test/formatter.test.js"],
+    },
+  }));
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: "orch-parent",
+    bindings: {
+      "child-worker-1": { role: "WORKER", profile: "flash-low-worker" },
+    },
+  }));
+
+  // Allowed edit
+  const allowedInput = JSON.stringify({
+    conversationId: "child-worker-1",
+    toolCall: {
+      name: "replace_file_content",
+      args: {
+        TargetFile: resolve(runtimeRoot, "src/formatter.js"),
+      },
+    },
+  });
+  const allowedOut = JSON.parse(execFileSync("node", [preToolScript], { input: allowedInput }));
+  assert.equal(allowedOut.decision, "allow");
+
+  // Denied out-of-scope edit
+  const deniedInput = JSON.stringify({
+    conversationId: "child-worker-1",
+    toolCall: {
+      name: "replace_file_content",
+      args: {
+        TargetFile: resolve(runtimeRoot, "src/calculator.js"),
+      },
+    },
+  });
+  const deniedOut = JSON.parse(execFileSync("node", [preToolScript], { input: deniedInput }));
+  assert.equal(deniedOut.decision, "deny");
+  assert.ok(deniedOut.reason.includes("SCOPE_VIOLATION") || deniedOut.reason.includes("Scope contract violation"));
+});
+
+test("turn-diet: regression 39: flash-low-worker.md contains CROSS_DOMAIN_REQUEST and preserves budget invariants", () => {
+  const workerDocPath = resolve(runtimeRoot, ".agents/agents/flash-low-worker.md");
+  assert.ok(existsSync(workerDocPath));
+  const content = readFileSync(workerDocPath, "utf-8");
+  assert.ok(content.includes("CROSS_DOMAIN_REQUEST"), "Must preserve CROSS_DOMAIN_REQUEST handling");
+  assert.ok(content.includes("KNOWN-PATH FAST PATH"), "Must include KNOWN-PATH FAST PATH");
+  assert.ok(content.includes("Never Search on Known Paths"), "Must forbid search on known paths");
+  assert.ok(content.includes("No Pre-Mutation Tests"), "Must forbid pre-mutation test runs");
+  assert.ok(content.includes("No Post-Mutation Rereads"), "Must forbid post-mutation rereads");
+  assert.ok(content.includes("MODEL CLAIM IS NOT EVIDENCE") || content.includes("Model claim is NOT evidence"), "Must preserve evidence integrity");
+  // Check size invariant: must be <= 2252 bytes
+  assert.ok(Buffer.byteLength(content, "utf-8") <= 2252, "Must not expand worker prompt size");
+});
