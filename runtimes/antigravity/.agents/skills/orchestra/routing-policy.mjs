@@ -3174,15 +3174,18 @@ export function recordMutation(activeState = {}, mutation = {}) {
     activeState.mutationEvents = [];
   }
   for (const p of paths) {
+    const isCP = typeof mutation.isControlPlane === "boolean" ? mutation.isControlPlane : isControlPlanePath(p);
     activeState.mutationEvents.push({
       path: p,
       tool: mutation.tool || (mutation.type === "CREATE" ? "write_to_file" : (mutation.type === "SHELL_MUTATION" ? "run_command" : "replace_file_content")),
       actorRole: authorRole || "UNKNOWN",
       actorId: mutation.actorId || activeState.conversationId || null,
+      conversationId: mutation.conversationId || mutation.actorId || activeState.conversationId || null,
       agentProfile: mutation.agentProfile || activeState.requested_agent || null,
       model: mutation.model || activeState.actual_runtime_model || activeState.configured_model || null,
       confidence: mutation.confidence || (authorRole ? "MEDIUM" : "LOW"),
       evidenceSource: mutation.evidenceSource || "STATE_DERIVED",
+      isControlPlane: isCP,
       timestamp: new Date().toISOString(),
     });
   }

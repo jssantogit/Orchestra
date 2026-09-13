@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-09-13T20:25:00.000Z",
+  "phase": "PRE_TURN_DIET",
+  "label": "AGY Fidelity Hardening v1.1 — Pre-Turn-Diet Baseline (LIVE FIDELITY_PASS)",
+  "baseline_commit": "7d0e0caab099c29a1d4bec1dc674ad5db664fb17",
+  "live_run": {
+    "run_id": "run-1789330967655",
+    "runtime": "antigravity",
+    "task": "simple",
+    "timestamp": "2026-09-13T20:22:46.000Z",
+    "success": true,
+    "outcome": "FIDELITY_PASS",
+    "duration_ms": 112807,
+    "model": "gemini-3.8-flash-medium",
+    "orchestrator_profile": "flash-orchestrator",
+    "worker_profile": "flash-low-worker"
+  },
+  "turn_metrics": {
+    "model_invocations_total": 26,
+    "parent_invocations": 25,
+    "worker_invocations": 1,
+    "reviewer_invocations": 0,
+    "subagent_invocations": 1,
+    "tool_calls_total": 28,
+    "tool_calls_per_turn_distribution": {
+      "0": 1,
+      "1": 28,
+      "2": 0,
+      "3+": 0
+    },
+    "turns_with_zero_tools": 1,
+    "turns_with_one_tool": 28,
+    "turns_with_multiple_tools": 0,
+    "max_tools_in_single_turn": 1,
+    "stop_attempts": 2,
+    "clean_stops": 2,
+    "forced_stop_continuations": 0,
+    "advisory_injections": 0,
+    "worker_packet_bytes": 1032,
+    "context_proxy_bytes": 38029
+  },
+  "token_metrics": {
+    "input_tokens": 242927,
+    "cached_input_tokens": 1100686,
+    "uncached_input_tokens": null,
+    "uncached_semantics": "NOT_DERIVABLE",
+    "output_tokens": 14285,
+    "reasoning_tokens": 10289,
+    "token_semantics_confidence": "MEDIUM",
+    "metric_status": "OK",
+    "note": "cached_input_tokens > input_tokens is physically impossible and marks uncached as NOT_DERIVABLE per token-semantics.mjs."
+  },
+  "fidelity": {
+    "status": "PASS",
+    "confidence": "HIGH",
+    "productMutationActor": "WORKER_PROXY",
+    "violations": []
+  },
+  "what_turn_diet_must_improve": {
+    "orchestrator_model_turns": {
+      "current": 25,
+      "target": "≤4",
+      "gap": "21 excess turns",
+      "notes": "25 parent turns to explore, plan, delegate and accept. Turn Diet target: 2 orchestrator turns (plan+delegate) + 1-2 acceptance turns."
+    },
+    "tool_calls_per_turn": {
+      "current_max": 1,
+      "current_avg": "28/25 ≈ 1.12",
+      "target": "≥2 tools per orchestrator turn",
+      "notes": "Zero parallel tool batching observed (28 turns with 1 tool). Turn Diet must enable parallel view+search, parallel delegate+monitor."
+    },
+    "input_tokens_total": {
+      "current": 242927,
+      "target": "<80000",
+      "gap": ">160k tokens",
+      "notes": "High input token accumulation across 25 turns. Turn Diet prompt compression will drastically reduce context accumulation."
+    },
+    "context_proxy_bytes_per_turn": {
+      "current": 38029,
+      "notes": "Pre-invocation guard advisory payload accumulated across turns. Turn Diet will compact this."
+    },
+    "duration": {
+      "current_ms": 112807,
+      "current_seconds": 112.8,
+      "target_seconds": "<30",
+      "notes": "1.8 minutes for a simple 1-file bugfix. Turn Diet targets sub-30s execution."
+    }
+  },
+  "files_modified_in_v1_1": [
+    "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs",
+    "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs",
+    "runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs",
+    "runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs",
+    "runtimes/antigravity/.agents/hooks/hooks.test.mjs",
+    "benchmarks/turn-economy/fidelity.mjs",
+    "benchmarks/turn-economy/run.mjs",
+    "tests/turn-economy/fidelity.test.mjs"
+  ],
+  "offline_test_suite": {
+    "hook_tests": "63/63 PASS",
+    "fidelity_unit_tests": "16/16 PASS",
+    "turn_economy_tests": "7/7 PASS",
+    "firewall_tests": "4/4 PASS",
+    "installer_tests": "4/4 PASS",
+    "doctor": "HEALTHY",
+    "git_diff_check": "CLEAN",
+    "contamination_check": "PASS"
+  }
+}

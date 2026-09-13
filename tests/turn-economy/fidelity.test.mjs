@@ -316,3 +316,123 @@ test("fidelity: historical baselines remain intact and readable", () => {
   assert.ok(Array.isArray(hardenedData) || typeof hardenedData === "object");
   assert.ok(typeof matrixData === "object");
 });
+
+test("fidelity: negative regression 8: worker spawned but orchestrator edits product yields fidelity FAIL", () => {
+  const evalResult = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "ORCHESTRATOR",
+    orchestratorWorkspaceWrites: 1,
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actorRole: "ORCHESTRATOR",
+        actorId: "orch-conv-main",
+        confidence: "HIGH",
+        evidenceSource: "hook_payload",
+      },
+    ],
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: { hasExplicitAgentRole: true },
+  });
+
+  assert.equal(evalResult.fidelityStatus, "FAIL");
+  assert.equal(evalResult.writeActorValid, false);
+  assert.ok(
+    evalResult.violations.includes("FIDELITY_VIOLATION: ORCHESTRATOR_PRODUCT_WRITE_ALLOWED"),
+    "Orchestrator product write must fail closed"
+  );
+});
+
+test("fidelity: negative regression 9: worker mutations correctly attributed are eligible for PASS", () => {
+  const evalResult = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "WORKER",
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actorRole: "WORKER",
+        actorId: "child-worker-conv",
+        agentProfile: "flash-low-worker",
+        model: "gemini-3.8-flash-low",
+        confidence: "HIGH",
+        evidenceSource: "RUNTIME_IDENTITY",
+      },
+      {
+        path: "test/formatter.test.js",
+        actorRole: "WORKER",
+        actorId: "child-worker-conv",
+        agentProfile: "flash-low-worker",
+        model: "gemini-3.8-flash-low",
+        confidence: "HIGH",
+        evidenceSource: "RUNTIME_IDENTITY",
+      },
+    ],
+    orchestratorWorkspaceWrites: 0,
+    unknownWorkspaceWrites: 0,
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: { hasExplicitAgentRole: true },
+  });
+
+  assert.equal(evalResult.fidelityStatus, "PASS");
+  assert.equal(evalResult.writeActorValid, true);
+  assert.equal(evalResult.observed.productMutationActor, "WORKER");
+  assert.equal(evalResult.observed.orchestratorWorkspaceWrites, 0);
+  assert.equal(evalResult.violations.length, 0);
+});
+
+test("fidelity: negative regression 10: flash-worker naming matches actual agent inventory and policy", () => {
+  const agentsDir = resolve(orchestraRoot, "runtimes/antigravity/.agents/agents");
+  assert.ok(existsSync(resolve(agentsDir, "flash-worker.md")), "flash-worker.md must exist in agent inventory");
+  assert.ok(!existsSync(resolve(agentsDir, "flash-high-worker.md")), "flash-high-worker.md must NOT exist in agent inventory");
+
+  const invRoute = getExpectedRoute("investigation", "antigravity");
+  assert.equal(invRoute.worker, "flash-worker", "Investigation route must specify real profile flash-worker");
+  assert.equal(invRoute.workerModel, "gemini-3.8-flash-high");
+
+  const policyRoute = decideAgyRoute({ taskAction: "INVESTIGATE" });
+  assert.equal(policyRoute.model, "gemini-3.8-flash-high");
+
+  assert.equal(EXPECTED_ROUTES.antigravity.worker.investigation.profile, "flash-worker");
+});
+
+test("fidelity: negative regression 11: AGY child-conversation pattern — worker spawned, parent mutation_events empty => FIDELITY_PASS with WORKER_PROXY", () => {
+  // In AGY multi-agent execution the worker runs in a child conversation context.
+  // The parent post-tool-telemetry hook cannot observe child tool calls, so
+  // mutation_events is empty while subagentInvocations=1 and success=true.
+  // This should yield FIDELITY_PASS — not EXPECTED_WORKER_ABSENT.
+  const result = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "NONE",          // parent sees no direct mutations
+    mutationEvents: [],             // empty — child mutations invisible to parent
+    orchestratorWorkspaceWrites: 0,
+    unknownWorkspaceWrites: 0,
+    controlPlaneWrites: 3,
+    dryRun: false,
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,           // subagent was spawned: subagentInvocations > 0
+    confidenceEvidence: {
+      hasExplicitThreadId: false,
+      hasExplicitAgentRole: false,
+      hasSubagentTrace: true,       // invocation trace is sufficient evidence
+    },
+  });
+
+  assert.equal(result.fidelityStatus, "PASS", "AGY child-conversation pattern must yield FIDELITY_PASS");
+  assert.equal(result.writeActorValid, true);
+  assert.equal(result.observed.productMutationActor, "WORKER_PROXY", "Actor must be WORKER_PROXY when events empty but worker present");
+  assert.equal(result.confidence, "HIGH", "Subagent trace gives HIGH confidence");
+  assert.equal(result.violations.length, 0, "Zero violations expected for normal delegation");
+  assert.equal(result.observed.delegation, true);
+  assert.equal(result.observed.worker, "flash-low-worker");
+});

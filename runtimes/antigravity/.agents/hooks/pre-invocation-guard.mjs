@@ -58,6 +58,38 @@ function main() {
   if (benchmarkRunId) state.benchmarkRunId = benchmarkRunId;
   if (taskId) state.taskId = taskId;
 
+  // Bootstrap role-bindings for root orchestrator if not yet initialized
+  const roleBindingsPath = resolve(dirname(statePath), "role-bindings.json");
+  let roleBindings = { mainConversationId: null, bindings: {}, conversations: {}, pendingSubagents: [] };
+  if (existsSync(roleBindingsPath)) {
+    try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
+  }
+
+  const convId = payload.conversationId || null;
+  if (convId && !roleBindings.mainConversationId) {
+    roleBindings.mainConversationId = convId;
+    if (!roleBindings.bindings) roleBindings.bindings = {};
+    if (!roleBindings.conversations) roleBindings.conversations = {};
+    const orchRecord = {
+      role: "ORCHESTRATOR",
+      profile: "flash-orchestrator",
+      model: payload.modelName || "gemini-3.8-flash-medium",
+      source: "RUNTIME_BOOTSTRAP",
+    };
+    roleBindings.bindings[convId] = orchRecord;
+    roleBindings.conversations[convId] = orchRecord;
+    try {
+      mkdirSync(dirname(roleBindingsPath), { recursive: true });
+      writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
+    } catch {}
+  }
+
+  if (!state.activeRole && !state.role) {
+    state.activeRole = "ORCHESTRATOR";
+    state.agentProfile = "flash-orchestrator";
+    state.orchestratorModel = payload.modelName || "gemini-3.8-flash-medium";
+  }
+
   // Turn Economy: observational counters
   state.preinvocation_count = (state.preinvocation_count || 0) + 1;
   state.model_invocations = state.preinvocation_count;

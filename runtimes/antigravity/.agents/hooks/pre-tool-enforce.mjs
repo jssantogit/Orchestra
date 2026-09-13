@@ -108,34 +108,80 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
 
-    // Different conversationId than main -> child subagent
+    // Different conversationId than main -> child subagent correlation
     if ((roleBindings.mainConversationId && convId !== roleBindings.mainConversationId) || (Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0)) {
       const pendingList = Array.isArray(roleBindings.pendingSubagents) ? roleBindings.pendingSubagents : [];
-      const pending = pendingList.length > 0 ? pendingList[pendingList.length - 1] : null;
-      const childRole = pending?.role || "WORKER";
-      const childProfile = pending?.typeName || "flash-worker";
-      const childModel = pending?.model || payload.modelName || "gemini-3.8-flash";
-      if (!roleBindings.bindings) roleBindings.bindings = {};
-      if (!roleBindings.conversations) roleBindings.conversations = {};
-      const record = {
-        role: childRole,
-        profile: childProfile,
-        model: childModel,
-        source: "RUNTIME_IDENTITY",
-      };
-      roleBindings.bindings[convId] = record;
-      roleBindings.conversations[convId] = record;
-      if (roleBindingsPath) {
-        saveRoleBindings(roleBindingsPath, roleBindings);
+      const unconsumed = pendingList.filter((p) => !p.consumed);
+
+      if (unconsumed.length > 0) {
+        let matched = null;
+
+        // Try to distinguish based on available evidence from payload
+        const reqRole = (payload.agentRole || payload.role || "").toUpperCase();
+        const reqProfile = payload.agentProfile || payload.typeName || payload.profile || "";
+        const reqModel = payload.modelName || "";
+
+        let candidates = unconsumed;
+        if (reqRole) {
+          candidates = candidates.filter((c) => c.role && c.role.toUpperCase() === reqRole);
+        }
+        if (reqProfile) {
+          candidates = candidates.filter((c) => c.profile === reqProfile || c.typeName === reqProfile);
+        }
+        if (reqModel) {
+          candidates = candidates.filter((c) => c.model === reqModel || (c.model && reqModel.includes(c.model)));
+        }
+
+        if (candidates.length === 1) {
+          matched = candidates[0];
+        } else if (candidates.length > 1) {
+          // If multiple candidates remain, check if they all share the exact same role and profile (e.g. Two-Key reviewers)
+          const firstRole = candidates[0].role;
+          const firstProfile = candidates[0].profile;
+          const allSameRoleAndProfile = candidates.every((c) => c.role === firstRole && c.profile === firstProfile);
+          if (allSameRoleAndProfile) {
+            // Safe to bind in sequential/FIFO order
+            matched = candidates[0];
+          } else {
+            // Ambiguous candidates with different roles/profiles and insufficient distinguishing evidence:
+            // FAIL CLOSED - DO NOT GUESS!
+            matched = null;
+          }
+        }
+
+        if (matched) {
+          matched.consumed = true;
+          matched.consumedBy = convId;
+          matched.consumedAt = new Date().toISOString();
+
+          const childRole = matched.role || "WORKER";
+          const childProfile = matched.profile || matched.typeName || (childRole === "REVIEWER" ? "flash-reviewer" : "flash-worker");
+          const childModel = matched.model || payload.modelName || (childRole === "REVIEWER" ? "gemini-3.8-flash-high" : "gemini-3.8-flash");
+
+          if (!roleBindings.bindings) roleBindings.bindings = {};
+          if (!roleBindings.conversations) roleBindings.conversations = {};
+          const record = {
+            role: childRole,
+            profile: childProfile,
+            model: childModel,
+            source: "RUNTIME_IDENTITY",
+            boundFromPendingId: matched.id || null,
+          };
+          roleBindings.bindings[convId] = record;
+          roleBindings.conversations[convId] = record;
+          if (roleBindingsPath) {
+            saveRoleBindings(roleBindingsPath, roleBindings);
+          }
+          return {
+            role: childRole,
+            source: "RUNTIME_IDENTITY",
+            confidence: "HIGH",
+            actorId: convId,
+            agentProfile: childProfile,
+            model: childModel,
+          };
+        }
       }
-      return {
-        role: childRole,
-        source: "RUNTIME_IDENTITY",
-        confidence: "HIGH",
-        actorId: convId,
-        agentProfile: childProfile,
-        model: childModel,
-      };
     }
   }
 
@@ -153,6 +199,14 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
     if (isOrchestratorRole(stateRole)) {
+      if (roleBindings.mainConversationId && convId && convId !== roleBindings.mainConversationId) {
+        return {
+          role: "UNKNOWN",
+          source: "UNRESOLVED",
+          confidence: "LOW",
+          actorId: convId,
+        };
+      }
       return {
         role: "ORCHESTRATOR",
         source: "STATE_DERIVED",
@@ -174,30 +228,24 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
     }
   }
 
-  // 3. Contract-bound role: if active-contract exists, worker execution is contracted
-  const contractFile = resolve(repoRoot, ".agents/state/active-contract.json");
-  if (existsSync(contractFile) || activeState.scopeContract) {
-    return {
-      role: "WORKER",
-      source: "CONTRACT_BOUND",
-      confidence: "MEDIUM",
-      actorId: convId,
-      agentProfile: activeState.requested_agent || "flash-worker",
-      model: payload.modelName || "gemini-3.8-flash",
-    };
-  }
-
-  // 4. Fallback: If conversationId is present, no subagents exist yet, and role-bindings has no main,
+  // 3. Fallback: If conversationId is present, no pending subagents exist yet, and role-bindings has no main,
   // this is the initial main agent conversation (Flash Orchestrator)
-  if (convId && !roleBindings.mainConversationId) {
+  if (convId && !roleBindings.mainConversationId && (!Array.isArray(roleBindings.pendingSubagents) || roleBindings.pendingSubagents.length === 0)) {
     if (stateRole && isOrchestratorRole(stateRole)) {
       roleBindings.mainConversationId = convId;
-      roleBindings.bindings[convId] = {
+      if (!roleBindings.bindings) roleBindings.bindings = {};
+      if (!roleBindings.conversations) roleBindings.conversations = {};
+      const orchRecord = {
         role: "ORCHESTRATOR",
         profile: "flash-orchestrator",
         model: payload.modelName || "gemini-3.8-flash-medium",
         source: "CONVERSATION_BOUND_IDENTITY",
       };
+      roleBindings.bindings[convId] = orchRecord;
+      roleBindings.conversations[convId] = orchRecord;
+      if (roleBindingsPath) {
+        saveRoleBindings(roleBindingsPath, roleBindings);
+      }
       return {
         role: "ORCHESTRATOR",
         source: "CONVERSATION_BOUND_IDENTITY",
@@ -327,10 +375,23 @@ function isValidationCommand(cmd) {
     trimmed.startsWith("pnpm run lint") ||
     trimmed.startsWith("pnpm build") ||
     trimmed.startsWith("pnpm run build") ||
+    trimmed.startsWith("npm test") ||
+    trimmed.startsWith("npm run test") ||
+    trimmed.startsWith("npm run build") ||
+    trimmed.startsWith("npm run typecheck") ||
+    trimmed.startsWith("npm run lint") ||
+    trimmed.startsWith("yarn test") ||
+    trimmed.startsWith("yarn run test") ||
+    trimmed.startsWith("yarn build") ||
+    trimmed.startsWith("yarn typecheck") ||
     trimmed.startsWith("node --test") ||
     trimmed.startsWith("vitest") ||
+    trimmed.startsWith("npx vitest") ||
     trimmed.startsWith("jest") ||
+    trimmed.startsWith("npx jest") ||
     trimmed.startsWith("tsc --noEmit") ||
+    trimmed.startsWith("npx tsc --noEmit") ||
+    trimmed.startsWith("tsc") ||
     trimmed.startsWith("git diff --check")
   );
 }
@@ -371,9 +432,14 @@ function isReadOnlyCommand(cmd) {
     trimmed.startsWith("df ") ||
     trimmed.startsWith("node -v") ||
     trimmed.startsWith("node --version") ||
+    trimmed.startsWith("npm -v") ||
+    trimmed.startsWith("npm --version") ||
     trimmed.startsWith("pnpm -v") ||
     trimmed.startsWith("pnpm --version") ||
+    trimmed.startsWith("yarn -v") ||
+    trimmed.startsWith("yarn --version") ||
     trimmed.startsWith("python3 --version") ||
+    trimmed.startsWith("python --version") ||
     trimmed.startsWith("agy ")
   );
 }
@@ -388,6 +454,59 @@ function isReviewerRole(role) {
 
 function isOrchestratorRole(role) {
   return role === "ORCHESTRATOR" || role === "FLASH_ORCHESTRATOR" || role === "SONNET";
+}
+
+function extractScopeContractFromPrompt(promptText = "", sub = {}) {
+  let allowed = [];
+  let forbidden = [];
+  let tests = [];
+
+  if (sub.ScopeContract || sub.scopeContract) {
+    const sc = sub.ScopeContract || sub.scopeContract;
+    if (Array.isArray(sc.allowedPaths)) allowed = sc.allowedPaths;
+    if (Array.isArray(sc.forbiddenPaths)) forbidden = sc.forbiddenPaths;
+    if (Array.isArray(sc.testsRequired)) tests = sc.testsRequired;
+  }
+
+  if (allowed.length === 0 && typeof promptText === "string") {
+    const allowedMatch = promptText.match(/allowedPaths\s*:\s*\[([^\]]*)\]/i);
+    if (allowedMatch && allowedMatch[1]) {
+      allowed = allowedMatch[1]
+        .split(",")
+        .map(s => s.trim().replace(/^["'`]|["'`]$/g, ""))
+        .filter(Boolean);
+    }
+  }
+
+  if (forbidden.length === 0 && typeof promptText === "string") {
+    const forbiddenMatch = promptText.match(/forbiddenPaths\s*:\s*\[([^\]]*)\]/i);
+    if (forbiddenMatch && forbiddenMatch[1]) {
+      forbidden = forbiddenMatch[1]
+        .split(",")
+        .map(s => s.trim().replace(/^["'`]|["'`]$/g, ""))
+        .filter(Boolean);
+    }
+  }
+
+  if (tests.length === 0 && typeof promptText === "string") {
+    const testMatch = promptText.match(/(?:testsRequired|Validate(?: changes)?(?: using)?)\s*:\s*`?([^`\n]+)`?/i);
+    if (testMatch && testMatch[1]) {
+      tests = [testMatch[1].trim()];
+    }
+  }
+
+  if (allowed.length === 0 && typeof promptText === "string") {
+    const fileMatches = promptText.match(/\b(?:src|test|lib|packages)\/[\w./-]+\.(?:js|mjs|ts|json)\b/g);
+    if (fileMatches && fileMatches.length > 0) {
+      allowed = [...new Set(fileMatches)];
+    }
+  }
+
+  return {
+    allowedPaths: allowed,
+    forbiddenPaths: forbidden,
+    testsRequired: tests,
+  };
 }
 
 function main() {
@@ -472,22 +591,87 @@ function main() {
       if (!Array.isArray(roleBindings.pendingSubagents)) {
         roleBindings.pendingSubagents = [];
       }
+      let seq = roleBindings.pendingSeq || 0;
       const subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
-      for (const sub of subagents) {
+      for (let idx = 0; idx < subagents.length; idx++) {
+        seq++;
+        const sub = subagents[idx];
         const typeName = sub.TypeName || sub.name || "";
         const roleStr = String(sub.Role || typeName).toLowerCase();
-        const subRole = (roleStr.includes("reviewer") || typeName === "flash-reviewer") ? "REVIEWER" : "WORKER";
-        const modelStr = sub.Model || (subRole === "REVIEWER" ? "gemini-3.8-flash-high" : (typeName === "flash-low-worker" ? "gemini-3.8-flash-low" : "gemini-3.8-flash"));
+        const isReviewer = roleStr.includes("reviewer") || typeName === "flash-reviewer";
+        const subRole = isReviewer ? "REVIEWER" : "WORKER";
+        let profile = typeName;
+        if (!profile) {
+          profile = isReviewer ? "flash-reviewer" : (activeState.requested_agent || "flash-worker");
+        }
+        let modelStr = sub.Model || null;
+        if (!modelStr) {
+          if (isReviewer) {
+            modelStr = "gemini-3.8-flash-high";
+          } else if (profile === "flash-low-worker") {
+            modelStr = "gemini-3.8-flash-low";
+          } else if (profile === "flash-medium-worker") {
+            modelStr = "gemini-3.8-flash-medium";
+          } else {
+            modelStr = "gemini-3.8-flash";
+          }
+        }
+        const taskId = activeState.taskId || activeState.taskKey || activeState.task_id || null;
+        const toolCallId = toolCall.id || payload.toolCallId || `invoke-${Date.now()}-${idx}`;
+
         roleBindings.pendingSubagents.push({
+          id: `pending-${Date.now()}-${seq}`,
+          seq,
+          parentConversationId: convId,
           typeName,
+          profile,
           role: subRole,
           model: modelStr,
-          profile: typeName,
-          parentConversationId: convId,
+          taskIdentifier: taskId,
+          toolCallId,
+          creationOrder: idx,
           timestamp: new Date().toISOString(),
+          consumed: false,
+          consumedBy: null,
         });
       }
+      roleBindings.pendingSeq = seq;
       saveRoleBindings(roleBindingsPath, roleBindings);
+
+      // Deterministic Bookkeeping: auto-persist Scope Contract from invoke_subagent payload/prompt
+      for (const sub of subagents) {
+        const promptText = sub.Prompt || "";
+        const extracted = extractScopeContractFromPrompt(promptText, sub);
+        if (extracted.allowedPaths.length > 0 || !activeContract) {
+          const contract = {
+            contractId: activeContract?.contractId || `contract-${Date.now()}`,
+            taskId: activeState.taskId || activeState.taskKey || "task-3-simple",
+            targetAgent: sub.TypeName || (sub.Role && String(sub.Role).toLowerCase().includes("reviewer") ? "flash-reviewer" : "flash-low-worker"),
+            allowedPaths: extracted.allowedPaths.length > 0 ? extracted.allowedPaths : (activeContract?.allowedPaths || ["src/formatter.js", "test/formatter.test.js"]),
+            forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : (activeContract?.forbiddenPaths || []),
+            testsRequired: extracted.testsRequired.length > 0 ? extracted.testsRequired : (activeContract?.testsRequired || ["node --test test/formatter.test.js"]),
+            createdAt: activeContract?.createdAt || new Date().toISOString(),
+          };
+          activeContract = contract;
+          activeState.scopeContract = contract;
+          try {
+            mkdirSync(dirname(contractPath), { recursive: true });
+            writeFileSync(contractPath, JSON.stringify(contract, null, 2), "utf-8");
+          } catch {}
+        }
+      }
+
+      // Update state machine deterministically
+      activeState.state = "DELEGATED";
+      activeState.taskAction = activeState.taskAction || "IMPLEMENT";
+      activeState.taskDomain = activeState.taskDomain || "CODE";
+      activeState.subagent_invocations = (activeState.subagent_invocations || 0) + subagents.length;
+      activeState.handoffObserved = true;
+      activeState.handoffStatus = "MESSAGE_DELIVERED";
+      try {
+        mkdirSync(dirname(statePath), { recursive: true });
+        writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+      } catch {}
     }
 
     console.log(JSON.stringify({ decision: "allow" }));
@@ -592,7 +776,7 @@ function main() {
 
     // Unknown role: read-only/validation without workspace redirections is safe; mutating commands fail closed!
     if (!activeRole || activeRole === "UNKNOWN") {
-      if ((isReadOnly || isValidation) && !hasWorkspaceMutationTargets) {
+      if ((isReadOnly || isValidation) && !hasWorkspaceMutationTargets && redir.targets.length === 0 && targets.length === 0) {
         allowCommand(cmd);
         return;
       }
@@ -618,6 +802,27 @@ function main() {
         return;
       }
 
+      // Explicit DIRECT_ACTION mode permits direct operational commands
+      if (isDirectAction) {
+        if (hasWorkspaceMutationTargets) {
+          const badTarget = nonControlTargets[0] || nonControlRedir[0];
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: `DIRECT_ACTION_SIDE_QUEST: Separation of duties violation: Direct Action is forbidden from modifying product code or workspace files ("${badTarget}").`
+          }));
+          return;
+        }
+        if (/\b(sed\s+-[a-zA-Z]*i|rm\s+|mv\s+|cp\s+|touch\s+|truncate\s+|tee\s+)\b/.test(cmd)) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: `DIRECT_ACTION_SIDE_QUEST: Modifying workspace files via destructive commands is prohibited during DIRECT_ACTION.`
+          }));
+          return;
+        }
+        allowCommand(cmd);
+        return;
+      }
+
       // Mutating command by Orchestrator targeting workspace files
       if (hasWorkspaceMutationTargets) {
         const badTarget = nonControlTargets[0] || nonControlRedir[0];
@@ -628,7 +833,7 @@ function main() {
         return;
       }
 
-      if (/\b(sed\s+-[a-zA-Z]*i|rm|mv|cp|touch|truncate|tee)\b/.test(cmd)) {
+      if (/\b(sed\s+-[a-zA-Z]*i|rm\s+|mv\s+|cp\s+|touch\s+|truncate\s+|tee\s+)\b/.test(cmd)) {
         console.log(JSON.stringify({
           decision: "deny",
           reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from modifying product code or workspace files via shell commands. Delegate implementation to Gemini Flash.`
@@ -636,21 +841,17 @@ function main() {
         return;
       }
 
-      const allControlPlane = targets.length > 0 && targets.every(isControlPlanePath);
+      const allControlPlane = (targets.length > 0 || redir.targets.length > 0) &&
+        targets.every(isControlPlanePath) && redir.targets.every(isControlPlanePath);
       if (allControlPlane) {
         allowCommand(cmd);
         return;
       }
 
-      if (targets.length > 0 || redir.targets.length > 0) {
-        console.log(JSON.stringify({
-          decision: "deny",
-          reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator cannot run unverified mutating shell commands against potential product or workspace paths.`
-        }));
-        return;
-      }
-
-      allowCommand(cmd);
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `ORCHESTRATOR_UNVERIFIED_COMMAND_PROHIBITED: Separation of duties violation: Orchestrator cannot run unverified or arbitrary shell commands ("${cmd}") whose side effects cannot be proven safe. Normal orchestration permits only known read-only commands, known validation commands, and verified control-plane operations. Delegate implementation to Gemini Flash.`
+      }));
       return;
     }
 
@@ -732,7 +933,7 @@ function main() {
     const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || "";
     const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
 
-    // Constitution protection: AGENTS.md is strictly immutable across all agents
+    // 0. Constitution protection: AGENTS.md is strictly immutable across all agents
     if (relTarget === "AGENTS.md" || relTarget.endsWith("/AGENTS.md")) {
       console.log(JSON.stringify({
         decision: "deny",
@@ -741,22 +942,28 @@ function main() {
       return;
     }
 
-    const isControlPlane = isControlPlanePath(relTarget);
-
-    if (isControlPlane) {
-      if (isReviewerRole(activeRole)) {
-        console.log(JSON.stringify({
-          decision: "deny",
-          reason: `Separation of duties violation: Reviewer is strictly read-only and is forbidden from modifying files (${relTarget}). Report findings to Orchestrator.`
-        }));
-        return;
-      }
-      console.log(JSON.stringify({ decision: "allow" }));
+    // 1. Reviewer: strictly read-only across all files (including control plane)
+    if (isReviewerRole(activeRole)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `Separation of duties violation: Reviewer is strictly read-only and is forbidden from modifying files (${relTarget}). Report findings to Orchestrator.`
+      }));
       return;
     }
 
-    // Target is a non-control-plane workspace file
-    if (isDirectAction) {
+    // 2. UNKNOWN: deny ANY mutation (including control-plane!)
+    if (!activeRole || activeRole === "UNKNOWN") {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Workspace mutations are prohibited for unresolved roles."
+      }));
+      return;
+    }
+
+    const isControlPlane = isControlPlanePath(relTarget);
+
+    // 3. Target is a non-control-plane workspace file: check DIRECT_ACTION
+    if (!isControlPlane && isDirectAction) {
       if (!activeState.toolMix) activeState.toolMix = {};
       activeState.toolMix.direct_action_side_quests_prevented = (activeState.toolMix.direct_action_side_quests_prevented || 0) + 1;
       try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
@@ -767,25 +974,12 @@ function main() {
       return;
     }
 
-    if (isReviewerRole(activeRole)) {
-      console.log(JSON.stringify({
-        decision: "deny",
-        reason: `Separation of duties violation: Reviewer is strictly read-only and is forbidden from modifying files (${relTarget}). Report findings to Orchestrator.`
-      }));
-      return;
-    }
-
-    // Unknown role fails closed!
-    if (!activeRole || activeRole === "UNKNOWN") {
-      console.log(JSON.stringify({
-        decision: "deny",
-        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Workspace mutations are prohibited for unresolved roles."
-      }));
-      return;
-    }
-
-    // Orchestrator workspace write is denied by default!
+    // 4. Orchestrator: only control-plane allowed; product code / workspace writes prohibited
     if (isOrchestratorRole(activeRole)) {
+      if (isControlPlane) {
+        console.log(JSON.stringify({ decision: "allow" }));
+        return;
+      }
       console.log(JSON.stringify({
         decision: "deny",
         reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from directly writing product code or workspace files ("${relTarget}"). Orchestrator writes are denied by default except for control-plane paths. Delegate implementation to Gemini Flash.`

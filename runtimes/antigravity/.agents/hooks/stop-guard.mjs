@@ -65,7 +65,7 @@ function main() {
     } catch {}
   }
 
-  const { statePath, telemetryPath } = getWorkspacePaths(payload);
+  const { repoRoot, statePath, telemetryPath } = getWorkspacePaths(payload);
 
   let activeState = {};
   if (existsSync(statePath)) {
@@ -95,6 +95,34 @@ function main() {
     recordStopTelemetry(telemetryPath, activeState, payload, "stop");
     console.log(JSON.stringify({ decision: "stop" }));
     return;
+  }
+
+  // Turn Diet: If worker completed and validation was observed,
+  // Orchestrator concluding turn automatically accepts work deterministically
+  const roleBindingsPath = resolve(repoRoot, ".agents/state/role-bindings.json");
+  let roleBindings = { mainConversationId: null, bindings: {} };
+  if (existsSync(roleBindingsPath)) {
+    try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
+  }
+  const convId = payload.conversationId || activeState.conversationId || null;
+  const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
+  const activeRole = (bound && bound.role) || activeState.activeRole || "ORCHESTRATOR";
+
+  const isWorkerDone = activeState.workerValidationObserved === true
+    || activeState.implementationComplete === true
+    || activeState.state === "EVIDENCE_READY";
+
+  if (isWorkerDone && (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR")) {
+    if (!activeState.acceptanceState || activeState.acceptanceState !== "ACCEPTED") {
+      activeState.acceptanceState = "ACCEPTED";
+      activeState.acceptanceActor = "ORCHESTRATOR";
+      activeState.acceptanceObserved = true;
+      activeState.state = "DONE";
+      try {
+        mkdirSync(dirname(statePath), { recursive: true });
+        writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+      } catch {}
+    }
   }
 
   // 2. Terminal states are always safe to stop

@@ -34,14 +34,20 @@ test.after(() => {
 
 test("pre-tool hook: allows legitimate control plane writes", () => {
   cleanState();
-  const input = JSON.stringify({
-    toolCall: {
-      name: "write_to_file",
-      args: { TargetFile: resolve(".agents/state/active-state.json") }
-    }
-  });
-  const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
-  assert.equal(output.decision, "allow");
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+    const input = JSON.stringify({
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve(".agents/state/active-state.json") }
+      }
+    });
+    const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+    assert.equal(output.decision, "allow");
+  } finally {
+    cleanState();
+  }
 });
 
 test("pre-tool hook: blocks reviewer from editing any product files", () => {
@@ -88,6 +94,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       taskDomain: "UI",
       allowedPaths: ["apps/web/**"],
@@ -438,7 +445,7 @@ test("pre-tool hook: allows legitimate JS arrow functions and comparisons withou
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
-    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
 
     // Arrow function
     const arrowInput = JSON.stringify({
@@ -1950,4 +1957,260 @@ test("pre-tool hook: allows worker to write within scope contract but denies out
   }
 });
 
+test("pre-tool hook: active contract with UNKNOWN actor remains UNKNOWN and write is DENIED", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    // Active contract exists, but no role is bound to the actor
+    writeFileSync(
+      ".agents/state/active-contract.json",
+      JSON.stringify({
+        taskDomain: "CODE",
+        allowedPaths: ["src/**"],
+      })
+    );
+    // Unresolved conversation with no roleBindings entry
+    const input = JSON.stringify({
+      conversationId: "unknown-conv-xyz",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+    assert.equal(output.decision, "deny");
+    assert(output.reason.includes("ROLE_IDENTITY_UNRESOLVED"));
+  } finally {
+    cleanState();
+  }
+});
 
+test("pre-tool hook: UNKNOWN actor writing to control plane .agents/state/foo.json is DENIED", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    const input = JSON.stringify({
+      conversationId: "unknown-actor-conv",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve(".agents/state/foo.json") },
+      },
+    });
+    const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+    assert.equal(output.decision, "deny");
+    assert(output.reason.includes("ROLE_IDENTITY_UNRESOLVED"));
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: ORCHESTRATOR writing to control plane .agents/state/foo.json is ALLOWED", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(
+      ".agents/state/active-state.json",
+      JSON.stringify({ activeRole: "ORCHESTRATOR" })
+    );
+    const input = JSON.stringify({
+      conversationId: "orch-conv-1",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve(".agents/state/foo.json") },
+      },
+    });
+    const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+    assert.equal(output.decision, "allow");
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: two pending subagents are consumed sequentially and cannot be reused", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    // Write scope contract
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({ allowedPaths: ["src/**"] }));
+
+    // Orchestrator invokes two subagents
+    const invokeInput = JSON.stringify({
+      conversationId: "orch-main",
+      toolCall: {
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            { TypeName: "flash-low-worker", Role: "Worker 1", Model: "flash_lite", Prompt: "Task 1" },
+            { TypeName: "flash-worker", Role: "Worker 2", Model: "pro", Prompt: "Task 2" },
+          ],
+        },
+      },
+    });
+    const invokeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: invokeInput }));
+    assert.equal(invokeOutput.decision, "allow");
+
+    const bindingsPath = resolve(".agents/state/role-bindings.json");
+    let bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.pendingSubagents.length, 2);
+    assert.equal(bindings.pendingSubagents[0].consumed, false);
+    assert.equal(bindings.pendingSubagents[1].consumed, false);
+
+    // Child 1 calls tool with distinguishing profile
+    const child1Input = JSON.stringify({
+      conversationId: "child-conv-1",
+      agentProfile: "flash-low-worker",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const child1Output = JSON.parse(execFileSync("node", [preToolScript], { input: child1Input }));
+    assert.equal(child1Output.decision, "allow");
+
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.pendingSubagents[0].consumed, true);
+    assert.equal(bindings.pendingSubagents[0].consumedBy, "child-conv-1");
+    assert.equal(bindings.pendingSubagents[1].consumed, false);
+    assert.equal(bindings.bindings["child-conv-1"].profile, "flash-low-worker");
+
+    // Child 2 calls tool with second profile
+    const child2Input = JSON.stringify({
+      conversationId: "child-conv-2",
+      agentProfile: "flash-worker",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const child2Output = JSON.parse(execFileSync("node", [preToolScript], { input: child2Input }));
+    assert.equal(child2Output.decision, "allow");
+
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.pendingSubagents[1].consumed, true);
+    assert.equal(bindings.pendingSubagents[1].consumedBy, "child-conv-2");
+    assert.equal(bindings.bindings["child-conv-2"].profile, "flash-worker");
+
+    // Child 3 calls tool -> NO unconsumed pending subagents remain!
+    const child3Input = JSON.stringify({
+      conversationId: "child-conv-3",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const child3Output = JSON.parse(execFileSync("node", [preToolScript], { input: child3Input }));
+    assert.equal(child3Output.decision, "deny", "Child 3 cannot bind already consumed pending subagents");
+    assert(child3Output.reason.includes("ROLE_IDENTITY_UNRESOLVED"));
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly read-only", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({ allowedPaths: ["src/**"] }));
+
+    // Orchestrator invokes two Two-Key reviewers
+    const invokeInput = JSON.stringify({
+      conversationId: "orch-main",
+      toolCall: {
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            { TypeName: "flash-reviewer", Role: "Two-Key Reviewer A", Model: "pro", Prompt: "Review parser" },
+            { TypeName: "flash-reviewer", Role: "Two-Key Reviewer B", Model: "pro", Prompt: "Review parser" },
+          ],
+        },
+      },
+    });
+    const invokeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: invokeInput }));
+    assert.equal(invokeOutput.decision, "allow");
+
+    // Reviewer A calls write_to_file -> must be DENIED as Reviewer
+    const revAInput = JSON.stringify({
+      conversationId: "rev-conv-a",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const revAOutput = JSON.parse(execFileSync("node", [preToolScript], { input: revAInput }));
+    assert.equal(revAOutput.decision, "deny");
+    assert(revAOutput.reason.includes("Reviewer is strictly read-only"));
+
+    // Reviewer B calls run_command -> must be DENIED as Reviewer
+    const revBInput = JSON.stringify({
+      conversationId: "rev-conv-b",
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "node --test test/formatter.test.js" },
+      },
+    });
+    const revBOutput = JSON.parse(execFileSync("node", [preToolScript], { input: revBInput }));
+    assert.equal(revBOutput.decision, "deny");
+    assert(revBOutput.reason.includes("Reviewer is strictly read-only"));
+
+    // Verify bindings confirm both received REVIEWER role
+    const bindingsPath = resolve(".agents/state/role-bindings.json");
+    const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.bindings["rev-conv-a"].role, "REVIEWER");
+    assert.equal(bindings.bindings["rev-conv-b"].role, "REVIEWER");
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: arbitrary orchestrator command is denied in normal mode and allowed in direct action script mode", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+
+    // 1. Normal orchestration mode: arbitrary command is denied
+    const normalInput = JSON.stringify({
+      conversationId: "orch-conv-main",
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "node scripts/unknown.js" },
+      },
+    });
+    const normalOutput = JSON.parse(execFileSync("node", [preToolScript], { input: normalInput }));
+    assert.equal(normalOutput.decision, "deny");
+    assert(normalOutput.reason.includes("ORCHESTRATOR_UNVERIFIED_COMMAND_PROHIBITED"));
+
+    // 2. Python / bash / pwsh arbitrary scripts also denied in normal mode
+    const pyInput = JSON.stringify({
+      conversationId: "orch-conv-main",
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "python arbitrary-script.py" },
+      },
+    });
+    const pyOutput = JSON.parse(execFileSync("node", [preToolScript], { input: pyInput }));
+    assert.equal(pyOutput.decision, "deny");
+    assert(pyOutput.reason.includes("ORCHESTRATOR_UNVERIFIED_COMMAND_PROHIBITED"));
+
+    // 3. Direct action with explicit script run is allowed
+    writeFileSync(
+      ".agents/state/active-state.json",
+      JSON.stringify({
+        activeRole: "ORCHESTRATOR",
+        taskAction: "DIRECT_ACTION",
+        directActionType: "RUN_PROJECT_SCRIPT",
+      })
+    );
+    const directScriptInput = JSON.stringify({
+      conversationId: "orch-conv-main",
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: "node scripts/unknown.js" },
+      },
+    });
+    const directScriptOutput = JSON.parse(execFileSync("node", [preToolScript], { input: directScriptInput }));
+    assert.equal(directScriptOutput.decision, "allow");
+  } finally {
+    cleanState();
+  }
+});

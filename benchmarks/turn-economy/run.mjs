@@ -8,12 +8,14 @@ import {
   readFileSync,
   writeFileSync,
   mkdirSync,
+  readdirSync,
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { normalizeUsageEvent, TOKEN_COUNTER_TYPES, CONFIDENCE_LEVELS } from "./token-semantics.mjs";
 import { evaluateTaskFidelity, TASK_FIDELITY_REQUIREMENTS } from "./fidelity.mjs";
+import { isControlPlanePath } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -280,6 +282,56 @@ function parseCodexJsonl(rawOutput) {
   };
 }
 
+function parseTranscriptTurns(transcriptPath) {
+  if (!existsSync(transcriptPath)) return null;
+  try {
+    const lines = readFileSync(transcriptPath, "utf8").trim().split("\n");
+    const turns = [];
+    lines.forEach((l, idx) => {
+      try {
+        const ev = JSON.parse(l);
+        if (ev.type === "PLANNER_RESPONSE") {
+          const tools = (ev.tool_calls || []).map((tc) => ({
+            name: tc.name || "",
+            args: tc.args || tc.parameters || {},
+          }));
+          turns.push({
+            turnIndex: turns.length + 1,
+            lineIndex: idx,
+            toolCount: tools.length,
+            tools,
+          });
+        }
+      } catch {}
+    });
+    return turns;
+  } catch {
+    return null;
+  }
+}
+
+function calculateDistribution(turns = []) {
+  const dist = { 0: 0, 1: 0, 2: 0, "3+": 0 };
+  let maxTools = 0;
+  let totalTools = 0;
+  for (const t of turns) {
+    totalTools += t.toolCount;
+    if (t.toolCount > maxTools) maxTools = t.toolCount;
+    if (t.toolCount === 0) dist[0]++;
+    else if (t.toolCount === 1) dist[1]++;
+    else if (t.toolCount === 2) dist[2]++;
+    else dist["3+"]++;
+  }
+  return {
+    distribution: dist,
+    max_tools_in_single_turn: maxTools,
+    total_tool_calls: totalTools,
+    turns_with_zero_tools: dist[0],
+    turns_with_one_tool: dist[1],
+    turns_with_multiple_tools: dist[2] + dist["3+"],
+  };
+}
+
 /**
  * Parses AGY telemetry from .agents/state/active-state.json, events.jsonl, and agy JSON output.
  */
@@ -296,49 +348,242 @@ function parseAgyTelemetry(targetDir, rawOutput) {
 
   // Check if agy exposed live usage in JSON output
   let agyUsage = null;
+  let convId = null;
   try {
     const trimmed = rawOutput.trim();
-    // In case there are log prefixes, find the JSON block
     const jsonMatch = trimmed.match(/\{[\s\S]*"usage"[\s\S]*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       if (parsed.usage) agyUsage = parsed.usage;
+      if (parsed.conversation_id) convId = parsed.conversation_id;
     }
   } catch {}
 
-  const modelInvocations = state.model_invocations || state.preinvocation_count || 1;
-  const workerInvocations = state.worker_invocations || 0;
-  const reviewerInvocations = state.reviewer_invocations || 0;
-  const parentInvocations = Math.max(0, modelInvocations - workerInvocations - reviewerInvocations);
-  const totalToolCalls = state.tool_calls_total || state.tool_calls || 0;
+  if (!convId && state.conversationId) convId = state.conversationId;
 
-  const normUsage = normalizeUsageEvent(agyUsage ? {
-    input_tokens: agyUsage.input_tokens,
-    cached_input_tokens: agyUsage.cache_read_tokens,
-    cache_read_tokens: agyUsage.cache_read_tokens,
-    output_tokens: agyUsage.output_tokens,
-    thinking_tokens: agyUsage.thinking_tokens,
-    total_tokens: agyUsage.total_tokens,
-  } : null, "antigravity");
+  // Inspect transcripts from brain directory if available
+  let parentTurns = null;
+  const workerTurns = [];
+  const reviewerTurns = [];
+
+  if (convId) {
+    const brainDir = join(homedir(), ".gemini/antigravity-cli/brain", convId);
+    const parentTranscriptFile = join(brainDir, ".system_generated/logs/transcript.jsonl");
+    if (existsSync(parentTranscriptFile)) {
+      parentTurns = parseTranscriptTurns(parentTranscriptFile);
+    }
+    const subagentsDir = join(brainDir, ".system_generated/subagents");
+    if (existsSync(subagentsDir)) {
+      try {
+        const files = readdirSync(subagentsDir);
+        for (const f of files) {
+          if (f.endsWith(".json")) {
+            const sub = JSON.parse(readFileSync(join(subagentsDir, f), "utf8"));
+            if (sub.conversationId) {
+              const childTranscriptFile = join(
+                homedir(),
+                ".gemini/antigravity-cli/brain",
+                sub.conversationId,
+                ".system_generated/logs/transcript.jsonl"
+              );
+              const childTurns = parseTranscriptTurns(childTranscriptFile);
+              if (childTurns) {
+                const role = String(
+                  sub.subagentDescriptor?.role || sub.subagentDescriptor?.typeName || ""
+                ).toLowerCase();
+                if (role.includes("reviewer")) {
+                  reviewerTurns.push(...childTurns);
+                } else {
+                  workerTurns.push(...childTurns);
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  const parentMetrics = parentTurns ? calculateDistribution(parentTurns) : null;
+  const workerMetrics = workerTurns.length > 0 ? calculateDistribution(workerTurns) : null;
+  const reviewerMetrics = reviewerTurns.length > 0 ? calculateDistribution(reviewerTurns) : null;
+
+  const parentModelTurns = parentTurns
+    ? parentTurns.length
+    : Math.max(
+        0,
+        (state.model_invocations || state.preinvocation_count || 1) -
+          (state.worker_invocations || 0) -
+          (state.reviewer_invocations || 0)
+      );
+  const workerModelTurns = workerTurns.length > 0 ? workerTurns.length : (state.worker_invocations || 0);
+  const reviewerModelTurns = reviewerTurns.length > 0 ? reviewerTurns.length : (state.reviewer_invocations || 0);
+  const totalModelTurns = parentModelTurns + workerModelTurns + reviewerModelTurns;
+
+  const parentToolCalls = parentMetrics
+    ? parentMetrics.total_tool_calls
+    : (state.tool_calls_total || state.tool_calls || 0);
+  const workerToolCalls = workerMetrics ? workerMetrics.total_tool_calls : 0;
+  const reviewerToolCalls = reviewerMetrics ? reviewerMetrics.total_tool_calls : 0;
+  const totalToolCalls = parentToolCalls + workerToolCalls + reviewerToolCalls;
+
+  // Breakdown stages
+  let parentPreDelegationTurns = 0;
+  let parentPostHandoffTurns = 0;
+  let seenDelegation = false;
+  let bookkeepingModelTurns = 0;
+  const turnClassifications = [];
+
+  if (parentTurns) {
+    parentTurns.forEach((t) => {
+      const hasDelegation = t.tools.some((tc) => tc.name === "invoke_subagent");
+      if (!seenDelegation) {
+        parentPreDelegationTurns++;
+        if (hasDelegation) seenDelegation = true;
+      } else {
+        parentPostHandoffTurns++;
+      }
+
+      let classification = "FINAL";
+      if (t.tools.length > 0) {
+        if (hasDelegation) classification = "DELEGATION";
+        else if (t.tools.some((tc) => tc.name === "define_subagent")) classification = "SCOPE";
+        else if (t.tools.some((tc) => tc.name === "manage_subagents" || tc.name === "manage_task"))
+          classification = "WAIT/POLL";
+        else if (t.tools.some((tc) => tc.name === "replace_file_content" || tc.name === "write_to_file")) {
+          const isCP = t.tools.every((tc) => {
+            const p = tc.args?.TargetFile || tc.args?.targetFile || "";
+            return p.includes(".agents");
+          });
+          classification = isCP ? "BOOKKEEPING" : "MUTATION";
+          if (isCP) bookkeepingModelTurns++;
+        } else if (t.tools.some((tc) => tc.name === "run_command")) {
+          classification = seenDelegation ? "ACCEPTANCE_VALIDATION" : "VALIDATION";
+        } else if (seenDelegation) {
+          classification = "ACCEPTANCE";
+        } else if (t.turnIndex === 1) {
+          classification = "CLASSIFICATION";
+        } else {
+          classification = "EXPLORATION";
+        }
+      }
+      turnClassifications.push({
+        turnIndex: t.turnIndex,
+        classification,
+        tools: t.tools.map((tc) => tc.name),
+      });
+    });
+  }
+
+  let workerPreMutationTurns = 0;
+  let workerPostMutationTurns = 0;
+  let workerSeenMutation = false;
+  let duplicateReads = 0;
+  const readHistory = new Set();
+  let repeatedValidationWithoutMutation = 0;
+
+  if (workerTurns.length > 0) {
+    workerTurns.forEach((t) => {
+      const hasMutation = t.tools.some(
+        (tc) => tc.name === "replace_file_content" || tc.name === "write_to_file"
+      );
+      if (!workerSeenMutation) {
+        if (hasMutation) workerSeenMutation = true;
+        else workerPreMutationTurns++;
+      } else {
+        workerPostMutationTurns++;
+      }
+
+      t.tools.forEach((tc) => {
+        if (tc.name === "view_file") {
+          const p = tc.args?.AbsolutePath || tc.args?.path || "";
+          if (readHistory.has(p) && !workerSeenMutation) duplicateReads++;
+          readHistory.add(p);
+        }
+      });
+    });
+  }
+
+  const parentDist = parentMetrics ? parentMetrics.distribution : { 0: 1, 1: parentToolCalls, 2: 0, "3+": 0 };
+  const workerDist = workerMetrics ? workerMetrics.distribution : { 0: 0, 1: workerToolCalls, 2: 0, "3+": 0 };
+  const combinedDist = {
+    0: (parentDist[0] || 0) + (workerDist[0] || 0),
+    1: (parentDist[1] || 0) + (workerDist[1] || 0),
+    2: (parentDist[2] || 0) + (workerDist[2] || 0),
+    "3+": (parentDist["3+"] || 0) + (workerDist["3+"] || 0),
+  };
+  const maxToolsSingleTurn = Math.max(
+    parentMetrics?.max_tools_in_single_turn || 0,
+    workerMetrics?.max_tools_in_single_turn || 0,
+    totalToolCalls > 0 ? 1 : 0
+  );
+
+  const normUsage = normalizeUsageEvent(
+    agyUsage
+      ? {
+          input_tokens: agyUsage.input_tokens,
+          cached_input_tokens: agyUsage.cache_read_tokens,
+          cache_read_tokens: agyUsage.cache_read_tokens,
+          output_tokens: agyUsage.output_tokens,
+          thinking_tokens: agyUsage.thinking_tokens,
+          total_tokens: agyUsage.total_tokens,
+        }
+      : null,
+    "antigravity"
+  );
 
   return {
-    model_turns_total: modelInvocations,
-    model_invocations: modelInvocations,
-    parent_invocations: parentInvocations,
-    worker_invocations: workerInvocations,
-    reviewer_invocations: reviewerInvocations,
+    model_turns_total: totalModelTurns,
+    model_invocations: totalModelTurns,
+    parent_model_turns: parentModelTurns,
+    parent_invocations: parentModelTurns,
+    worker_model_turns: workerModelTurns,
+    worker_invocations: workerModelTurns,
+    reviewer_model_turns: reviewerModelTurns,
+    reviewer_invocations: reviewerModelTurns,
+    total_model_turns: totalModelTurns,
+    parent_tool_calls: parentToolCalls,
+    worker_tool_calls: workerToolCalls,
+    total_tool_calls: totalToolCalls,
     tool_calls: totalToolCalls,
-    tool_calls_per_turn_distribution: {
-      0: 1,
-      1: totalToolCalls,
-      2: 0,
-      "3+": 0,
+    tool_calls_per_turn_distribution: combinedDist,
+    parent_tool_distribution: parentDist,
+    worker_tool_distribution: workerDist,
+    tool_distribution_by_role: {
+      ORCHESTRATOR: {
+        distribution: parentDist,
+        max_tools_single_turn: parentMetrics?.max_tools_in_single_turn || (parentToolCalls > 0 ? 1 : 0),
+        turns_with_0_tools: parentDist[0] || 0,
+        turns_with_1_tool: parentDist[1] || 0,
+        turns_with_2_tools: parentDist[2] || 0,
+        turns_with_3_plus_tools: parentDist["3+"] || 0,
+      },
+      WORKER: {
+        distribution: workerDist,
+        max_tools_single_turn: workerMetrics?.max_tools_in_single_turn || (workerToolCalls > 0 ? 1 : 0),
+        turns_with_0_tools: workerDist[0] || 0,
+        turns_with_1_tool: workerDist[1] || 0,
+        turns_with_2_tools: workerDist[2] || 0,
+        turns_with_3_plus_tools: workerDist["3+"] || 0,
+      },
     },
-    turns_with_zero_tools: 1,
-    turns_with_one_tool: totalToolCalls,
-    turns_with_multiple_tools: 0,
-    max_tools_in_single_turn: totalToolCalls > 0 ? 1 : 0,
-    subagent_invocations: state.subagent_invocations || 0,
+    turns_with_zero_tools: combinedDist[0] || 0,
+    turns_with_one_tool: combinedDist[1] || 0,
+    turns_with_multiple_tools: (combinedDist[2] || 0) + (combinedDist["3+"] || 0),
+    max_tools_in_single_turn: maxToolsSingleTurn,
+    parent_pre_delegation_turns: parentPreDelegationTurns,
+    parent_post_handoff_turns: parentPostHandoffTurns,
+    worker_pre_mutation_turns: workerPreMutationTurns,
+    worker_post_mutation_turns: workerPostMutationTurns,
+    tools_per_turn_by_role: {
+      ORCHESTRATOR: parentModelTurns > 0 ? Number((parentToolCalls / parentModelTurns).toFixed(2)) : 0,
+      WORKER: workerModelTurns > 0 ? Number((workerToolCalls / workerModelTurns).toFixed(2)) : 0,
+    },
+    duplicate_reads: duplicateReads,
+    repeated_validation_without_mutation: repeatedValidationWithoutMutation,
+    bookkeeping_model_turns: bookkeepingModelTurns,
+    turn_classifications: turnClassifications,
+    subagent_invocations: state.subagent_invocations || (workerTurns.length > 0 ? 1 : 0),
     manage_subagent_calls: state.manage_subagents_calls || 0,
     stop_attempts: state.stop_attempts || 0,
     clean_stops: state.clean_stops || 0,
@@ -354,8 +599,20 @@ function parseAgyTelemetry(targetDir, rawOutput) {
     reasoning_tokens: normUsage.reasoningTokens,
     token_semantics_confidence: normUsage.confidence,
     metric_status: normUsage.status,
-    mutation_events: state.mutationEvents || [],
+    mutation_events: (state.mutationEvents || []).filter((e) => !e.isControlPlane && !isControlPlanePath(e.path)),
     orchestrator_workspace_writes: state.orchestratorWorkspaceWrites || 0,
+    control_plane_writes: state.controlPlaneWrites || 0,
+    unknown_workspace_writes: state.unknownWorkspaceWrites || 0,
+    worker_validation_observed: state.workerValidationObserved || false,
+    worker_validation_command: state.workerValidationCommand || null,
+    worker_validation_exit_code: state.workerValidationExitCode ?? null,
+    handoff_observed: state.handoffObserved || false,
+    handoff_bytes: state.handoffBytes || state.worker_packet_bytes || 0,
+    handoff_status: state.handoffStatus || (state.worker_packet_bytes ? "MESSAGE_DELIVERED" : null),
+    worker_conversation_id: state.workerConversationId || null,
+    acceptance_actor: state.acceptanceActor || "ORCHESTRATOR",
+    acceptance_observed: state.acceptanceObserved || (state.state === "DONE" || state.acceptanceState === "ACCEPTED"),
+    acceptance_state: state.acceptanceState || (state.state === "DONE" ? "ACCEPTED" : null),
   };
 }
 
@@ -479,12 +736,16 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     } else if (runtime === "antigravity") {
       const agyExe = process.platform === "win32" ? "agy.exe" : "agy";
       const args = [
+        "--model",
+        "gemini-3.8-flash-medium",
         "--add-dir",
         tempDir,
         "-p",
         taskDef.prompt,
         "--output-format",
         "json",
+        "--print-timeout",
+        "15m",
         "--dangerously-skip-permissions",
       ];
 
@@ -499,6 +760,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         env,
         encoding: "utf8",
         maxBuffer: 20 * 1024 * 1024,
+        timeout: 20 * 60 * 1000, // 20 minutes hard wall-clock limit
       });
 
       stdout = (res.stdout || "") + "\n" + (res.stderr || "");
@@ -511,6 +773,8 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
 
     const mutationEvents = metrics.mutation_events || [];
     const orchestratorWrites = metrics.orchestrator_workspace_writes || 0;
+    const unknownWrites = metrics.unknown_workspace_writes || 0;
+    const controlPlaneWrites = metrics.control_plane_writes || 0;
     const workerMutations = mutationEvents.filter(
       (m) => m.actorRole === "WORKER" || m.actorRole === "WORKER_SUBAGENT"
     );
@@ -524,15 +788,17 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     let liveMutationActor = "NONE";
     if (orchestratorWrites > 0 || orchestratorMutations.length > 0) {
       liveMutationActor = "ORCHESTRATOR";
-    } else if (unknownMutations.length > 0) {
+    } else if (unknownWrites > 0 || unknownMutations.length > 0) {
       liveMutationActor = "UNKNOWN";
     } else if (workerMutations.length > 0) {
       liveMutationActor = "WORKER";
     } else if (runtime === "codex" && (metrics.subagent_invocations || 0) > 0) {
       liveMutationActor = TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? "WORKER" : "NONE";
-    } else if (TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected && (metrics.tool_calls || 0) > 0) {
-      liveMutationActor = "ORCHESTRATOR";
     }
+    // NOTE: Do NOT fall back to ORCHESTRATOR merely because tool_calls > 0.
+    // If no mutations were observed (mutation_events empty, orchestratorWrites=0, unknownWrites=0),
+    // actor stays NONE. This is the correct signal for EXPECTED_WORKER_ABSENT without
+    // a false ORCHESTRATOR_PRODUCT_WRITE_ALLOWED violation.
 
     const fidelity = evaluateTaskFidelity({
       taskKey,
@@ -541,6 +807,8 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       mutationActor: liveMutationActor,
       mutationEvents,
       orchestratorWorkspaceWrites: orchestratorWrites,
+      unknownWorkspaceWrites: unknownWrites,
+      controlPlaneWrites,
       dryRun: false,
       runtimeLoaded: true,
       orchestratorIdentity: runtime === "codex" ? "terra-medium" : "flash-orchestrator",
@@ -548,7 +816,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       confidenceEvidence: {
         hasExplicitThreadId: runtime === "codex" && (metrics.subagent_invocations || 0) > 0,
         hasExplicitAgentRole: mutationEvents.some(
-          (m) => m.evidenceSource === "hook_payload" || m.evidenceSource === "role_bindings"
+          (m) => m.evidenceSource === "hook_payload" || m.evidenceSource === "role_bindings" || m.evidenceSource === "RUNTIME_IDENTITY"
         ),
         hasSubagentTrace: (metrics.subagent_invocations || 0) > 0,
       },

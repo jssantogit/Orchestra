@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2026-09-13T20:45:00.000Z",
+  "phase": "TURN_DIET_V1",
+  "label": "Orchestra Antigravity Turn Diet v1 — Minimum Model Turns First (LIVE BENCHMARK)",
+  "baseline_commit": "7d0e0caab099c29a1d4bec1dc674ad5db664fb17",
+  "task": "simple",
+  "task_name": "TASK 3 — SIMPLE IMPLEMENTATION",
+  "runtime": "antigravity",
+  "status": "TURN_DIET_SUCCESS",
+  "targets": {
+    "parent_turns_hard_target": "<= 8",
+    "parent_turns_stretch_target": "<= 5",
+    "parent_turns_observed": 3,
+    "parent_turns_result": "STRETCH_EXCEEDED",
+    "token_reduction_hard_target": ">= 35%",
+    "token_reduction_stretch_target": "< 100k",
+    "tokens_observed": 38243,
+    "token_reduction_pct": "84.3%",
+    "token_reduction_result": "STRETCH_EXCEEDED",
+    "duration_target": "< 60s",
+    "duration_observed_s": 57.7,
+    "duration_result": "STRETCH_MET",
+    "fidelity_target": "PASS / HIGH",
+    "fidelity_observed": "PASS / HIGH"
+  },
+  "metrics": {
+    "parent": {
+      "baseline": {
+        "model_turns": 25,
+        "tool_calls": 28,
+        "pre_delegation_turns": 19,
+        "post_handoff_turns": 6,
+        "distribution": { "0": 2, "1": 21, "2": 2, "3+": 1 },
+        "max_tools_single_turn": 3,
+        "workspace_writes": 0
+      },
+      "postDiet": {
+        "model_turns": 3,
+        "tool_calls": 2,
+        "pre_delegation_turns": 1,
+        "post_handoff_turns": 2,
+        "distribution": { "0": 2, "1": 0, "2": 1, "3+": 0 },
+        "max_tools_single_turn": 2,
+        "workspace_writes": 0
+      },
+      "delta": {
+        "model_turns": -22,
+        "model_turns_pct": "-88.0%",
+        "tool_calls": -26,
+        "tool_calls_pct": "-92.9%",
+        "pre_delegation_turns": -18,
+        "pre_delegation_turns_pct": "-94.7%"
+      },
+      "ratio": {
+        "model_turns": 0.12,
+        "tool_calls": 0.071
+      }
+    },
+    "worker": {
+      "baseline": {
+        "model_turns": 8,
+        "tool_calls": 7,
+        "distribution": { "0": 1, "1": 7, "2": 0, "3+": 0 },
+        "max_tools_single_turn": 1
+      },
+      "postDiet": {
+        "model_turns": 16,
+        "tool_calls": 15,
+        "pre_mutation_turns": 9,
+        "post_mutation_turns": 6,
+        "distribution": { "0": 1, "1": 15, "2": 0, "3+": 0 },
+        "max_tools_single_turn": 1
+      },
+      "delta": {
+        "model_turns": 8,
+        "tool_calls": 8
+      }
+    },
+    "total": {
+      "baseline": {
+        "model_turns": 33,
+        "tool_calls": 35,
+        "input_tokens": 242927,
+        "cached_input_tokens": 1100686,
+        "uncached_input_tokens": null,
+        "uncached_semantics": "NOT_DERIVABLE",
+        "output_tokens": 14285,
+        "reasoning_tokens": 10289,
+        "duration_ms": 112807,
+        "duration_s": 112.8
+      },
+      "postDiet": {
+        "model_turns": 19,
+        "tool_calls": 17,
+        "input_tokens": 38243,
+        "cached_input_tokens": 16276,
+        "uncached_input_tokens": null,
+        "uncached_semantics": "NOT_DERIVABLE",
+        "output_tokens": 5315,
+        "reasoning_tokens": 4373,
+        "duration_ms": 57744,
+        "duration_s": 57.7
+      },
+      "delta": {
+        "model_turns": -14,
+        "model_turns_pct": "-42.4%",
+        "tool_calls": -18,
+        "tool_calls_pct": "-51.4%",
+        "input_tokens": -204684,
+        "input_tokens_pct": "-84.3%",
+        "output_tokens": -8970,
+        "output_tokens_pct": "-62.8%",
+        "reasoning_tokens": -5916,
+        "reasoning_tokens_pct": "-57.5%",
+        "duration_ms": -55063,
+        "duration_pct": "-48.8%"
+      },
+      "ratio": {
+        "model_turns": 0.576,
+        "tool_calls": 0.486,
+        "input_tokens": 0.157,
+        "duration": 0.512
+      }
+    }
+  },
+  "turn_trace_conceptual": {
+    "before": [
+      { "turn": 1, "action": "CLASSIFICATION (find_by_name)" },
+      { "turn": "2-14", "action": "OVER-EXPLORATION (13 consecutive turns of view_file, grep_search on product & skill files)" },
+      { "turn": 15, "action": "BOOKKEEPING (write_to_file active-contract.json)" },
+      { "turn": 16, "action": "EXPLORATION (view_file active-state.json)" },
+      { "turn": 17, "action": "BOOKKEEPING (replace_file_content active-state.json)" },
+      { "turn": 18, "action": "SCOPE (define_subagent)" },
+      { "turn": 19, "action": "DELEGATION (invoke_subagent)" },
+      { "turn": 20, "action": "WAIT/WAKEUP (yield execution)" },
+      { "turn": "21-24", "action": "DUPLICATE ACCEPTANCE (view_file product files + re-running tests)" },
+      { "turn": 25, "action": "BOOKKEEPING (replace_file_content active-state.json -> DONE)" },
+      { "turn": 26, "action": "FINAL (report completion to user)" }
+    ],
+    "after": [
+      { "turn": 1, "action": "CLASSIFICATION + SCOPE + DELEGATION (define_subagent + invoke_subagent batched in single turn with Scope Contract; zero product reads; runtime persists contract)" },
+      { "turn": 2, "action": "WAIT/WAKEUP (reactive wakeup yield; zero polling)" },
+      { "turn": 3, "action": "ACCEPTANCE + FINAL (inspect worker completion packet; reuse fresh evidence; auto-accept; summarize to user in 1 turn)" }
+    ]
+  },
+  "fidelity_audit": {
+    "status": "PASS",
+    "confidence": "HIGH",
+    "writeActorValid": true,
+    "orchestrator_workspace_writes": 0,
+    "unknown_workspace_writes": 0,
+    "subagent_invocations": 1,
+    "worker_validation_observed": true,
+    "handoff_observed": true,
+    "acceptance_actor": "ORCHESTRATOR",
+    "violations": []
+  }
+}

@@ -75,7 +75,7 @@ export const EXPECTED_ROUTES = {
     worker: {
       simple: { profile: "flash-low-worker", model: "gemini-3.8-flash-low", reasoningEffort: "low" },
       multi: { profile: "flash-medium-worker", model: "gemini-3.8-flash-medium", reasoningEffort: "medium" },
-      investigation: { profile: "flash-high-worker", model: "gemini-3.8-flash-high", reasoningEffort: "high" },
+      investigation: { profile: "flash-worker", model: "gemini-3.8-flash-high", reasoningEffort: "high" },
     },
   },
 };
@@ -146,7 +146,7 @@ export function getExpectedRoute(taskKey, runtime) {
         workerDef = { profile: "flash-medium-worker", model: wRoute.model, reasoningEffort: wRoute.effort };
       } else if (taskKey === "investigation") {
         const wRoute = decideAgyRoute({ taskAction: "INVESTIGATE" });
-        workerDef = { profile: "flash-high-worker", model: wRoute.model, reasoningEffort: wRoute.effort };
+        workerDef = { profile: "flash-worker", model: wRoute.model, reasoningEffort: wRoute.effort };
       }
     }
     return {
@@ -173,6 +173,8 @@ export function evaluateTaskFidelity({
   mutationActor = "NONE", // "WORKER" | "ORCHESTRATOR" | "NONE" | "UNKNOWN"
   mutationEvents = [],
   orchestratorWorkspaceWrites = 0,
+  unknownWorkspaceWrites = 0,
+  controlPlaneWrites = 0,
   dryRun = false,
   runtimeLoaded = true,
   orchestratorIdentity = null,
@@ -237,7 +239,7 @@ export function evaluateTaskFidelity({
   let effectiveActor = mutationActor;
   if (orchestratorWorkspaceWrites > 0 || orchestratorMutations.length > 0) {
     effectiveActor = "ORCHESTRATOR";
-  } else if (unknownMutations.length > 0) {
+  } else if (unknownWorkspaceWrites > 0 || unknownMutations.length > 0) {
     effectiveActor = "UNKNOWN";
   } else if (workerMutations.length > 0) {
     effectiveActor = "WORKER";
@@ -250,7 +252,7 @@ export function evaluateTaskFidelity({
   }
 
   // 3. Strict role attribution: unknown actor fails closed
-  if (unknownMutations.length > 0 || mutationActor === "UNKNOWN") {
+  if (unknownWorkspaceWrites > 0 || unknownMutations.length > 0 || mutationActor === "UNKNOWN") {
     writeActorValid = false;
     violations.push("FIDELITY_VIOLATION: MUTATION_ACTOR_UNKNOWN");
   }
@@ -265,17 +267,22 @@ export function evaluateTaskFidelity({
     }
 
     if (normEvents.length > 0) {
+      // Mutation events present: check that at least one is attributed to WORKER
       if (workerMutations.length === 0) {
         writeActorValid = false;
         violations.push("FIDELITY_VIOLATION: NO_WORKER_MUTATIONS");
       }
     } else {
-      if (mutationActor !== "WORKER") {
-        if (mutationActor === "NONE") {
-          writeActorValid = false;
-          violations.push("EXPECTED_WORKER_ABSENT");
-        }
+      // normEvents is empty — typical for AGY multi-agent architecture.
+      // Worker writes happen in the child conversation context; the parent's
+      // post-tool-telemetry cannot observe them. Use subagent presence as proxy.
+      if (!isWorkerPresent) {
+        // No subagent was ever invoked — definitively absent
+        writeActorValid = false;
+        violations.push("EXPECTED_WORKER_ABSENT");
       }
+      // If isWorkerPresent && mutationActor === "NONE": worker delegated normally,
+      // parent cannot see child mutations. This is expected. Treat as PASS-eligible.
     }
   } else {
     // Non-delegation tasks (status, lookup, critical)
@@ -291,8 +298,16 @@ export function evaluateTaskFidelity({
     mutationEvents: normEvents,
   });
 
-  // PASS only allowed when confidence is HIGH or MEDIUM for delegated worker execution
-  if (delegationExpected && effectiveActor === "WORKER" && confidence === "LOW") {
+  // PASS only allowed when confidence is HIGH or MEDIUM for delegated worker execution.
+  // For AGY multi-agent pattern: when normEvents is empty but isWorkerPresent is true via
+  // subagent trace (subagentInvocations > 0), effectiveActor stays "NONE" but PASS is valid
+  // if confidence is HIGH (hasSubagentTrace) and no violations have fired.
+  const delegatedWithEmptyEvents = delegationExpected && isWorkerPresent && normEvents.length === 0 && effectiveActor === "NONE";
+  if (delegationExpected && !delegatedWithEmptyEvents && effectiveActor === "WORKER" && confidence === "LOW") {
+    writeActorValid = false;
+    violations.push("FIDELITY_VIOLATION: LOW_ATTRIBUTION_CONFIDENCE");
+  }
+  if (delegatedWithEmptyEvents && confidence === "LOW") {
     writeActorValid = false;
     violations.push("FIDELITY_VIOLATION: LOW_ATTRIBUTION_CONFIDENCE");
   }
@@ -319,9 +334,11 @@ export function evaluateTaskFidelity({
       worker: isWorkerPresent ? (expectedRoute?.worker || "worker") : null,
       delegation: isWorkerPresent,
       subagentInvocations,
-      productMutationActor: effectiveActor,
+      productMutationActor: delegatedWithEmptyEvents ? "WORKER_PROXY" : effectiveActor,
       mutationEvents: normEvents,
       orchestratorWorkspaceWrites,
+      controlPlaneWrites,
+      unknownWorkspaceWrites,
     },
     writeActorValid,
     fidelityStatus,

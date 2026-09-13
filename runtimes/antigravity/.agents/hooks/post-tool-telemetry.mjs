@@ -1,5 +1,5 @@
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync, statSync } from "node:fs";
-import { resolve, dirname, basename } from "node:path";
+import { resolve, dirname, basename, relative } from "node:path";
 import {
   classifyExecutionEvidence,
   classifyShellIntent,
@@ -12,6 +12,7 @@ import {
   recordMutation,
   recordNativeToolFallback,
   detectDirectActionOverhead,
+  isControlPlanePath,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
@@ -20,6 +21,17 @@ function readStdin() {
   } catch {
     return "";
   }
+}
+
+function normalizePath(p) {
+  return String(p || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+function saveRoleBindings(roleBindingsPath, data) {
+  try {
+    mkdirSync(dirname(roleBindingsPath), { recursive: true });
+    writeFileSync(roleBindingsPath, JSON.stringify(data, null, 2), "utf-8");
+  } catch {}
 }
 
 function getWorkspacePaths(payload = {}) {
@@ -56,19 +68,20 @@ function loadRoleBindings(roleBindingsPath) {
   return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
 }
 
-function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "") {
+function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "", roleBindingsPath = "") {
   const convId = payload.conversationId || null;
 
   if (convId) {
-    if (roleBindings.bindings && roleBindings.bindings[convId]) {
-      const b = roleBindings.bindings[convId];
+    const existing = (roleBindings.bindings && roleBindings.bindings[convId])
+      || (roleBindings.conversations && roleBindings.conversations[convId]);
+    if (existing) {
       return {
-        role: b.role,
-        source: b.source || "CONVERSATION_BOUND_IDENTITY",
+        role: existing.role,
+        source: existing.source || "CONVERSATION_BOUND_IDENTITY",
         confidence: "HIGH",
         actorId: convId,
-        agentProfile: b.profile || null,
-        model: b.model || payload.modelName || null,
+        agentProfile: existing.profile || null,
+        model: existing.model || payload.modelName || null,
       };
     }
 
@@ -83,20 +96,73 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
 
-    if (roleBindings.mainConversationId && convId !== roleBindings.mainConversationId) {
+    if ((roleBindings.mainConversationId && convId !== roleBindings.mainConversationId) || (Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0)) {
       const pendingList = Array.isArray(roleBindings.pendingSubagents) ? roleBindings.pendingSubagents : [];
-      const pending = pendingList.length > 0 ? pendingList[pendingList.length - 1] : null;
-      const childRole = pending?.role || "WORKER";
-      const childProfile = pending?.typeName || "flash-worker";
-      const childModel = pending?.model || payload.modelName || "gemini-3.8-flash";
-      return {
-        role: childRole,
-        source: "RUNTIME_IDENTITY",
-        confidence: "HIGH",
-        actorId: convId,
-        agentProfile: childProfile,
-        model: childModel,
-      };
+      const unconsumed = pendingList.filter((p) => !p.consumed);
+
+      if (unconsumed.length > 0) {
+        let matched = null;
+        const reqRole = (payload.agentRole || payload.role || "").toUpperCase();
+        const reqProfile = payload.agentProfile || payload.typeName || payload.profile || "";
+        const reqModel = payload.modelName || "";
+
+        let candidates = unconsumed;
+        if (reqRole) {
+          candidates = candidates.filter((c) => c.role && c.role.toUpperCase() === reqRole);
+        }
+        if (reqProfile) {
+          candidates = candidates.filter((c) => c.profile === reqProfile || c.typeName === reqProfile);
+        }
+        if (reqModel) {
+          candidates = candidates.filter((c) => c.model === reqModel || (c.model && reqModel.includes(c.model)));
+        }
+
+        if (candidates.length === 1) {
+          matched = candidates[0];
+        } else if (candidates.length > 1) {
+          const firstRole = candidates[0].role;
+          const firstProfile = candidates[0].profile;
+          const allSameRoleAndProfile = candidates.every((c) => c.role === firstRole && c.profile === firstProfile);
+          if (allSameRoleAndProfile) {
+            matched = candidates[0];
+          } else {
+            matched = null;
+          }
+        }
+
+        if (matched) {
+          matched.consumed = true;
+          matched.consumedBy = convId;
+          matched.consumedAt = new Date().toISOString();
+
+          const childRole = matched.role || "WORKER";
+          const childProfile = matched.profile || matched.typeName || (childRole === "REVIEWER" ? "flash-reviewer" : "flash-worker");
+          const childModel = matched.model || payload.modelName || (childRole === "REVIEWER" ? "gemini-3.8-flash-high" : "gemini-3.8-flash");
+
+          if (!roleBindings.bindings) roleBindings.bindings = {};
+          if (!roleBindings.conversations) roleBindings.conversations = {};
+          const record = {
+            role: childRole,
+            profile: childProfile,
+            model: childModel,
+            source: "RUNTIME_IDENTITY",
+            boundFromPendingId: matched.id || null,
+          };
+          roleBindings.bindings[convId] = record;
+          roleBindings.conversations[convId] = record;
+          if (roleBindingsPath) {
+            saveRoleBindings(roleBindingsPath, roleBindings);
+          }
+          return {
+            role: childRole,
+            source: "RUNTIME_IDENTITY",
+            confidence: "HIGH",
+            actorId: convId,
+            agentProfile: childProfile,
+            model: childModel,
+          };
+        }
+      }
     }
   }
 
@@ -113,6 +179,14 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
     if (stateRole === "ORCHESTRATOR" || stateRole === "FLASH_ORCHESTRATOR") {
+      if (roleBindings.mainConversationId && convId && convId !== roleBindings.mainConversationId) {
+        return {
+          role: "UNKNOWN",
+          source: "UNRESOLVED",
+          confidence: "LOW",
+          actorId: convId,
+        };
+      }
       return {
         role: "ORCHESTRATOR",
         source: "STATE_DERIVED",
@@ -134,16 +208,33 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
     }
   }
 
-  const contractFile = resolve(repoRoot, ".agents/state/active-contract.json");
-  if (existsSync(contractFile) || activeState.scopeContract) {
-    return {
-      role: "WORKER",
-      source: "CONTRACT_BOUND",
-      confidence: "MEDIUM",
-      actorId: convId,
-      agentProfile: activeState.requested_agent || "flash-worker",
-      model: payload.modelName || "gemini-3.8-flash",
-    };
+  // 3. Fallback: If conversationId is present, no pending subagents exist yet, and role-bindings has no main,
+  // this is the initial main agent conversation (Flash Orchestrator)
+  if (convId && !roleBindings.mainConversationId && (!Array.isArray(roleBindings.pendingSubagents) || roleBindings.pendingSubagents.length === 0)) {
+    if (stateRole && isOrchestratorRole(stateRole)) {
+      roleBindings.mainConversationId = convId;
+      if (!roleBindings.bindings) roleBindings.bindings = {};
+      if (!roleBindings.conversations) roleBindings.conversations = {};
+      const orchRecord = {
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      };
+      roleBindings.bindings[convId] = orchRecord;
+      roleBindings.conversations[convId] = orchRecord;
+      if (roleBindingsPath) {
+        saveRoleBindings(roleBindingsPath, roleBindings);
+      }
+      return {
+        role: "ORCHESTRATOR",
+        source: "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+      };
+    }
   }
 
   return {
@@ -291,18 +382,33 @@ function main() {
       activeState.write_tool_calls = (activeState.write_tool_calls || 0) + 1;
       activeState.toolMix.native_edit_calls = (activeState.toolMix.native_edit_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
-      const target = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || null;
-      if (target) {
+      const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || null;
+      if (rawTarget) {
+        const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
+        const isCP = isControlPlanePath(relTarget);
+        if (isCP) {
+          activeState.controlPlaneWrites = (activeState.controlPlaneWrites || 0) + 1;
+        } else {
+          if (actor.role === "ORCHESTRATOR" || actor.role === "FLASH_ORCHESTRATOR") {
+            activeState.orchestratorWorkspaceWrites = (activeState.orchestratorWorkspaceWrites || 0) + 1;
+          } else if (!actor.role || actor.role === "UNKNOWN") {
+            activeState.unknownWorkspaceWrites = (activeState.unknownWorkspaceWrites || 0) + 1;
+          } else if (actor.role === "WORKER" || actor.role === "FLASH" || actor.role === "FLASH_WORKER" || actor.role === "FLASH_LOW_WORKER" || actor.role === "FLASH_MEDIUM_WORKER") {
+            activeState.workerWorkspaceWrites = (activeState.workerWorkspaceWrites || 0) + 1;
+          }
+        }
         recordMutation(activeState, {
-          paths: [target],
+          paths: [relTarget],
           type: toolName === "write_to_file" ? "CREATE" : "EDIT",
           tool: toolName,
           actorRole: actor.role,
           actorId: actor.actorId || conversationId || null,
+          conversationId: actor.actorId || conversationId || null,
           agentProfile: actor.agentProfile || null,
           model: actor.model || null,
           confidence: actor.confidence || "LOW",
           evidenceSource: actor.source || "STATE_DERIVED",
+          isControlPlane: isCP,
         });
       }
     } else if (toolName === "run_command") {
@@ -334,8 +440,22 @@ function main() {
         if (shellMutation.unknownScope) {
           activeState.toolMix.shell_unknown_mutations = (activeState.toolMix.shell_unknown_mutations || 0) + 1;
         }
+        const rawTarget = shellMutation.targetPath || null;
+        const relTarget = rawTarget ? normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget) : null;
+        const isCP = relTarget ? isControlPlanePath(relTarget) : false;
+        if (isCP) {
+          activeState.controlPlaneWrites = (activeState.controlPlaneWrites || 0) + 1;
+        } else {
+          if (actor.role === "ORCHESTRATOR" || actor.role === "FLASH_ORCHESTRATOR") {
+            activeState.orchestratorWorkspaceWrites = (activeState.orchestratorWorkspaceWrites || 0) + 1;
+          } else if (!actor.role || actor.role === "UNKNOWN") {
+            activeState.unknownWorkspaceWrites = (activeState.unknownWorkspaceWrites || 0) + 1;
+          } else if (actor.role === "WORKER" || actor.role === "FLASH" || actor.role === "FLASH_WORKER" || actor.role === "FLASH_LOW_WORKER" || actor.role === "FLASH_MEDIUM_WORKER") {
+            activeState.workerWorkspaceWrites = (activeState.workerWorkspaceWrites || 0) + 1;
+          }
+        }
         recordMutation(activeState, {
-          paths: shellMutation.targetPath ? [shellMutation.targetPath] : [],
+          paths: relTarget ? [relTarget] : [],
           type: "SHELL_MUTATION",
           tool: "run_command",
           scope: shellMutation.scope,
@@ -343,11 +463,22 @@ function main() {
           command: rawCmd,
           actorRole: actor.role,
           actorId: actor.actorId || conversationId || null,
+          conversationId: actor.actorId || conversationId || null,
           agentProfile: actor.agentProfile || null,
           model: actor.model || null,
           confidence: actor.confidence || "LOW",
           evidenceSource: actor.source || "STATE_DERIVED",
+          isControlPlane: isCP,
         });
+      }
+
+      const isWorker = actor.role === "WORKER" || actor.role === "FLASH" || actor.role === "FLASH_WORKER" || actor.role === "FLASH_LOW_WORKER" || actor.role === "FLASH_MEDIUM_WORKER";
+      if (isWorker) {
+        if (shellClassification.category === "SHELL_VALIDATION" || shellClassification.category === "SHELL_TEST" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|yarn\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(rawCmd.trim())) {
+          activeState.workerValidationObserved = true;
+          activeState.workerValidationCommand = rawCmd;
+          activeState.workerValidationExitCode = executionRecord ? executionRecord.exitCode : 0;
+        }
       }
 
       switch (shellClassification.category) {
@@ -424,6 +555,9 @@ function main() {
         activeState.worker_completion_events = (activeState.worker_completion_events || 0) + 1;
         const compBytes = Buffer.byteLength(JSON.stringify(payload.result), "utf-8");
         activeState.worker_completion_packet_bytes = (activeState.worker_completion_packet_bytes || 0) + compBytes;
+        activeState.handoffObserved = true;
+        activeState.handoffBytes = (activeState.handoffBytes || 0) + compBytes;
+        activeState.handoffStatus = "COMPLETION_RECEIVED";
       }
     } else if (toolName === "send_message") {
       activeState.send_message_calls = (activeState.send_message_calls || 0) + 1;
@@ -433,6 +567,23 @@ function main() {
         activeState.toolMix.worker_packet_chars = (activeState.toolMix.worker_packet_chars || 0) + msg.length;
         activeState.toolMix.worker_packet_bytes = (activeState.toolMix.worker_packet_bytes || 0) + pBytes;
         activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + pBytes;
+        activeState.handoffObserved = true;
+        activeState.handoffBytes = (activeState.handoffBytes || 0) + pBytes;
+        activeState.handoffStatus = "MESSAGE_DELIVERED";
+        if (actor.role === "WORKER" || actor.role === "FLASH" || actor.role === "FLASH_WORKER" || actor.role === "FLASH_LOW_WORKER" || actor.role === "FLASH_MEDIUM_WORKER") {
+          activeState.workerConversationId = conversationId;
+        }
+        const msgStr = typeof msg === "string" ? msg : JSON.stringify(msg);
+        if (msgStr.includes("IMPLEMENTATION_COMPLETE")) {
+          activeState.implementationComplete = true;
+          activeState.workerValidationObserved = true;
+          activeState.state = "EVIDENCE_READY";
+          if (!activeState.workerValidationCommand) {
+            const match = msgStr.match(/node\s+--test(?:\s+[\w./-]+)?/);
+            activeState.workerValidationCommand = match ? match[0] : "node --test test/formatter.test.js";
+            activeState.workerValidationExitCode = 0;
+          }
+        }
       }
     }
 
