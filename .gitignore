@@ -69,3 +69,5 @@ temp/
 scratch/
 *.tmp
 *.log
+benchmarks/turn-economy/raw/
+

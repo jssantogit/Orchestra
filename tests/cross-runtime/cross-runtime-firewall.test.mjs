@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   CODEX_MODELS,
   decideRoute as decideCodexRoute,
@@ -55,13 +56,13 @@ test("Antigravity operational routes stay exclusively on Gemini models", () => {
 });
 
 test("Codex active operational files contain no foreign AGY imports or routes", () => {
-  const scan = scanCodexOperationalFiles(new URL("../../runtimes/codex", import.meta.url).pathname);
+  const scan = scanCodexOperationalFiles(fileURLToPath(new URL("../../runtimes/codex", import.meta.url)));
   assert.equal(scan.valid, true);
   assert.deepEqual(scan.violations, []);
 });
 
 test("AGY active routing files contain no active OpenAI model routes", () => {
-  const agyPolicyPath = new URL("../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs", import.meta.url).pathname;
+  const agyPolicyPath = fileURLToPath(new URL("../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs", import.meta.url));
   const agyPolicy = readFileSync(agyPolicyPath, "utf8");
   const activeRouteLines = agyPolicy
     .split("\n")

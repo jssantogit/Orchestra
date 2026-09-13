@@ -1,0 +1,9 @@
+{
+  "name": "turn-economy-benchmark-fixture",
+  "version": "1.0.0",
+  "description": "Provider-neutral benchmark fixture for Orchestra turn economy measurement",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

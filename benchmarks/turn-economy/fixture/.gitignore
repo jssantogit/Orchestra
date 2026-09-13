@@ -1,0 +1,13 @@
+node_modules/
+.agents/state/*
+!.agents/state/.gitkeep
+.agents/telemetry/*
+!.agents/telemetry/.gitkeep
+.agents/artifacts/*
+!.agents/artifacts/.gitkeep
+.agents/artifacts/outputs/*
+!.agents/artifacts/outputs/.gitkeep
+*.execution-evidence.json
+active-state.json
+active-contract.json
+.codex/

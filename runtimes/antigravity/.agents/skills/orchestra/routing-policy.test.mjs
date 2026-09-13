@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import {
   TASK_DOMAINS,
@@ -437,7 +438,7 @@ test("calculates efficiency metrics", () => {
 });
 
 test("JSON CLI provides deterministic routing output", () => {
-  const policyScript = new URL("./routing-policy.mjs", import.meta.url).pathname;
+  const policyScript = fileURLToPath(new URL("./routing-policy.mjs", import.meta.url));
   const output = execFileSync(
     process.execPath,
     [policyScript, "--json"],

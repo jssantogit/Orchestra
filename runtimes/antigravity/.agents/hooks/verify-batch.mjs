@@ -91,9 +91,14 @@ export function executeVerificationBatch(steps = [], options = {}) {
     let output = "";
     let passed = true;
 
+    const defaultShell = process.platform === "win32"
+      ? (existsSync("C:\\Program Files\\Git\\bin\\bash.exe") ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash")
+      : "/bin/bash";
+
     try {
       output = execSync(step.command, {
         cwd: options.cwd || repoRoot,
+        shell: options.shell || process.env.SHELL || defaultShell,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
         maxBuffer: 5 * 1024 * 1024,

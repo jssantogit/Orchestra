@@ -109,8 +109,12 @@ function main() {
   let stdoutBytes = 0;
   let stderrBytes = 0;
 
+  const defaultShell = process.platform === "win32"
+    ? (existsSync("C:\\Program Files\\Git\\bin\\bash.exe") ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash")
+    : "/bin/bash";
+
   const child = spawn(command, {
-    shell: process.env.SHELL || "/bin/bash",
+    shell: process.env.SHELL || defaultShell,
     stdio: ["inherit", "pipe", "pipe"],
   });
 

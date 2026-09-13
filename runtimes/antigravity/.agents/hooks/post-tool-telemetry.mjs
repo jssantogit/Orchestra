@@ -1,5 +1,5 @@
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync, statSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, basename } from "node:path";
 import {
   classifyExecutionEvidence,
   classifyShellIntent,
@@ -22,11 +22,20 @@ function readStdin() {
   }
 }
 
-function getWorkspacePaths() {
+function getWorkspacePaths(payload = {}) {
   const cwd = process.cwd();
-  const repoRoot = existsSync(resolve(cwd, "packages"))
-    ? cwd
-    : (existsSync(resolve(cwd, "../packages")) ? resolve(cwd, "..") : cwd);
+  let repoRoot;
+  if (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0]) {
+    repoRoot = resolve(payload.workspacePaths[0]);
+  } else if (basename(cwd) === ".agents") {
+    repoRoot = resolve(cwd, "..");
+  } else if (existsSync(resolve(cwd, "packages"))) {
+    repoRoot = cwd;
+  } else if (existsSync(resolve(cwd, "../packages"))) {
+    repoRoot = resolve(cwd, "..");
+  } else {
+    repoRoot = cwd;
+  }
   return {
     repoRoot,
     statePath: resolve(repoRoot, ".agents/state/active-state.json"),
@@ -52,7 +61,7 @@ function main() {
   }
 
   try {
-    const { repoRoot, statePath, telemetryPath, executionsDir, pendingExecutionsDir } = getWorkspacePaths();
+    const { repoRoot, statePath, telemetryPath, executionsDir, pendingExecutionsDir } = getWorkspacePaths(payload);
     mkdirSync(dirname(telemetryPath), { recursive: true });
 
     let activeState = {};
@@ -65,6 +74,18 @@ function main() {
     if (!activeState.toolMix) {
       activeState.toolMix = createInitialToolMix();
     }
+
+    const benchmarkRunId = process.env.BENCHMARK_RUN_ID || payload.benchmarkRunId || activeState.benchmarkRunId || null;
+    const taskId = process.env.BENCHMARK_TASK_ID || payload.taskId || activeState.taskId || null;
+    if (benchmarkRunId) activeState.benchmarkRunId = benchmarkRunId;
+    if (taskId) activeState.taskId = taskId;
+
+    // Turn economy: total tool calls & context proxy bytes
+    activeState.tool_calls = (activeState.tool_calls || 0) + 1;
+    activeState.tool_calls_total = activeState.tool_calls;
+
+    const rawInputBytes = Buffer.byteLength(rawInput || "", "utf-8");
+    activeState.context_proxy_bytes = (activeState.context_proxy_bytes || 0) + rawInputBytes;
 
     let executionRecord = null;
     let recordedEvidence = null;
@@ -112,6 +133,7 @@ function main() {
     const toolName = payload.toolName ?? payload.toolCall?.name ?? null;
     const toolArgs = payload.toolCall?.args || {};
     let shellClassification = null;
+    let shellMutation = null;
 
     const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
     if (isDirectAction) {
@@ -122,7 +144,13 @@ function main() {
       }
     }
 
+    const nativeTools = ["view_file", "grep_search", "find_by_name", "replace_file_content", "write_to_file", "list_dir", "ask_question"];
+    if (nativeTools.includes(toolName)) {
+      activeState.native_tool_calls = (activeState.native_tool_calls || 0) + 1;
+    }
+
     if (toolName === "view_file") {
+      activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
       activeState.toolMix.native_read_calls = (activeState.toolMix.native_read_calls || 0) + 1;
       activeState.consecutiveFileReads = (activeState.consecutiveFileReads || 0) + 1;
       const hasWindow = toolArgs.StartLine !== undefined || toolArgs.EndLine !== undefined;
@@ -137,12 +165,18 @@ function main() {
         activeState.toolMix.view_file_lines = (activeState.toolMix.view_file_lines || 0) + 100;
       }
     } else if (toolName === "grep_search") {
+      activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
       activeState.toolMix.native_search_calls = (activeState.toolMix.native_search_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
     } else if (toolName === "find_by_name") {
+      activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
       activeState.toolMix.native_find_calls = (activeState.toolMix.native_find_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
+    } else if (toolName === "list_dir") {
+      activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
+      activeState.consecutiveFileReads = 0;
     } else if (toolName === "replace_file_content" || toolName === "write_to_file") {
+      activeState.write_tool_calls = (activeState.write_tool_calls || 0) + 1;
       activeState.toolMix.native_edit_calls = (activeState.toolMix.native_edit_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
       const target = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || null;
@@ -153,6 +187,7 @@ function main() {
         });
       }
     } else if (toolName === "run_command") {
+      activeState.run_command_calls = (activeState.run_command_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
       activeState.toolMix.shell_calls = (activeState.toolMix.shell_calls || 0) + 1;
       const rawCmd = (executionRecord && executionRecord.command) || toolArgs.CommandLine || toolArgs.command || toolArgs.cmd || "";
@@ -174,7 +209,7 @@ function main() {
       }
 
       // Track shell mutations
-      const shellMutation = classifyShellMutation(rawCmd);
+      shellMutation = classifyShellMutation(rawCmd);
       if (shellMutation.isMutation) {
         activeState.toolMix.shell_mutations = (activeState.toolMix.shell_mutations || 0) + 1;
         if (shellMutation.unknownScope) {
@@ -191,28 +226,40 @@ function main() {
 
       switch (shellClassification.category) {
         case "SHELL_READ":
+          activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
           activeState.toolMix.shell_read_calls = (activeState.toolMix.shell_read_calls || 0) + 1;
           break;
         case "SHELL_SEARCH":
+          activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
           activeState.toolMix.shell_search_calls = (activeState.toolMix.shell_search_calls || 0) + 1;
           break;
         case "SHELL_DISCOVERY":
+          activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
           activeState.toolMix.shell_discovery_calls = (activeState.toolMix.shell_discovery_calls || 0) + 1;
           break;
         case "SHELL_EDIT":
+          activeState.write_tool_calls = (activeState.write_tool_calls || 0) + 1;
           activeState.toolMix.shell_edit_calls = (activeState.toolMix.shell_edit_calls || 0) + 1;
           break;
         case "SHELL_VALIDATION":
+          activeState.verification_tool_calls = (activeState.verification_tool_calls || 0) + 1;
           activeState.toolMix.shell_validation_calls = (activeState.toolMix.shell_validation_calls || 0) + 1;
           break;
         case "SHELL_TEST":
+          activeState.verification_tool_calls = (activeState.verification_tool_calls || 0) + 1;
           activeState.toolMix.shell_test_calls = (activeState.toolMix.shell_test_calls || 0) + 1;
           break;
         case "SHELL_BUILD":
+          activeState.verification_tool_calls = (activeState.verification_tool_calls || 0) + 1;
           activeState.toolMix.shell_build_calls = (activeState.toolMix.shell_build_calls || 0) + 1;
           break;
         case "SHELL_HEAVY_EXECUTION":
           activeState.toolMix.shell_heavy_calls = (activeState.toolMix.shell_heavy_calls || 0) + 1;
+          break;
+        default:
+          if (/^(?:npm\s+(?:run\s+)?test|pnpm\s+test|yarn\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(rawCmd.trim())) {
+            activeState.verification_tool_calls = (activeState.verification_tool_calls || 0) + 1;
+          }
           break;
       }
 
@@ -226,11 +273,60 @@ function main() {
           shellCommand: rawCmd,
         });
       }
-    } else if (toolName === "send_message" || toolName === "invoke_subagent") {
-      const msg = toolArgs.Message || toolArgs.Prompt || "";
-      if (msg) {
+    } else if (toolName === "invoke_subagent") {
+      activeState.invoke_subagent_calls = (activeState.invoke_subagent_calls || 0) + 1;
+      activeState.subagent_invocations = (activeState.subagent_invocations || 0) + 1;
+      const subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
+      for (const sub of subagents) {
+        const role = String(sub.Role || sub.TypeName || "").toLowerCase();
+        const msg = sub.Prompt || "";
+        const pBytes = Buffer.byteLength(String(msg), "utf-8");
         activeState.toolMix.worker_packet_chars = (activeState.toolMix.worker_packet_chars || 0) + msg.length;
-        activeState.toolMix.worker_packet_bytes = (activeState.toolMix.worker_packet_bytes || 0) + Buffer.byteLength(msg, "utf-8");
+        activeState.toolMix.worker_packet_bytes = (activeState.toolMix.worker_packet_bytes || 0) + pBytes;
+
+        if (role.includes("reviewer") || sub.TypeName === "flash-reviewer") {
+          activeState.reviewer_invocations = (activeState.reviewer_invocations || 0) + 1;
+          activeState.review_packet_bytes = (activeState.review_packet_bytes || 0) + pBytes;
+        } else {
+          activeState.worker_invocations = (activeState.worker_invocations || 0) + 1;
+          activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + pBytes;
+        }
+      }
+    } else if (toolName === "manage_subagents") {
+      activeState.manage_subagents_calls = (activeState.manage_subagents_calls || 0) + 1;
+      if (payload.result) {
+        activeState.worker_completion_events = (activeState.worker_completion_events || 0) + 1;
+        const compBytes = Buffer.byteLength(JSON.stringify(payload.result), "utf-8");
+        activeState.worker_completion_packet_bytes = (activeState.worker_completion_packet_bytes || 0) + compBytes;
+      }
+    } else if (toolName === "send_message") {
+      activeState.send_message_calls = (activeState.send_message_calls || 0) + 1;
+      const msg = toolArgs.Message || "";
+      if (msg) {
+        const pBytes = Buffer.byteLength(String(msg), "utf-8");
+        activeState.toolMix.worker_packet_chars = (activeState.toolMix.worker_packet_chars || 0) + msg.length;
+        activeState.toolMix.worker_packet_bytes = (activeState.toolMix.worker_packet_bytes || 0) + pBytes;
+        activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + pBytes;
+      }
+    }
+
+    // Sequence mutation tracking: before first mutation vs after last mutation
+    const isMutationStep = toolName === "write_to_file"
+      || toolName === "replace_file_content"
+      || (shellMutation && shellMutation.isMutation);
+
+    if (!activeState.first_mutation_occurred) {
+      if (isMutationStep) {
+        activeState.first_mutation_occurred = true;
+        activeState.tools_after_last_mutation = 0;
+      } else {
+        activeState.tools_before_first_mutation = (activeState.tools_before_first_mutation || 0) + 1;
+      }
+    } else {
+      if (isMutationStep) {
+        activeState.tools_after_last_mutation = 0;
+      } else {
+        activeState.tools_after_last_mutation = (activeState.tools_after_last_mutation || 0) + 1;
       }
     }
 
@@ -310,6 +406,13 @@ function main() {
       }
     }
 
+    if (activeState.retriesUsed !== undefined) {
+      activeState.retry_count = activeState.retriesUsed;
+    }
+    if (activeState.toolMix?.verification_batches) {
+      activeState.verification_batches = activeState.toolMix.verification_batches;
+    }
+
     try {
       writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
     } catch {}
@@ -379,6 +482,26 @@ function main() {
       avoidable_shell: shellClassification ? shellClassification.avoidable : null,
       mutation_seq: activeState.mutationSeq || 0,
       tool_mix: activeState.toolMix || null,
+      benchmarkRunId: activeState.benchmarkRunId || null,
+      taskId: activeState.taskId || null,
+      tool_calls_total: activeState.tool_calls_total || 0,
+      native_tool_calls: activeState.native_tool_calls || 0,
+      run_command_calls: activeState.run_command_calls || 0,
+      read_tool_calls: activeState.read_tool_calls || 0,
+      write_tool_calls: activeState.write_tool_calls || 0,
+      verification_tool_calls: activeState.verification_tool_calls || 0,
+      tools_before_first_mutation: activeState.tools_before_first_mutation || 0,
+      tools_after_last_mutation: activeState.tools_after_last_mutation || 0,
+      invoke_subagent_calls: activeState.invoke_subagent_calls || 0,
+      subagent_invocations: activeState.subagent_invocations || 0,
+      worker_invocations: activeState.worker_invocations || 0,
+      reviewer_invocations: activeState.reviewer_invocations || 0,
+      manage_subagents_calls: activeState.manage_subagents_calls || 0,
+      send_message_calls: activeState.send_message_calls || 0,
+      worker_packet_bytes: activeState.worker_packet_bytes || 0,
+      worker_completion_packet_bytes: activeState.worker_completion_packet_bytes || 0,
+      review_packet_bytes: activeState.review_packet_bytes || 0,
+      context_proxy_bytes: activeState.context_proxy_bytes || 0,
       type: "TOOL_STEP"
     };
 

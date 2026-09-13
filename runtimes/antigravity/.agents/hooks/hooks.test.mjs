@@ -967,7 +967,8 @@ test("runner semantic transparency matrix: verifies shell execution equivalence"
   cleanState();
 
   // 1. CWD
-  const cwdDirect = execFileSync("bash", ["-c", "pwd"], { encoding: "utf-8" }).trim();
+  const defaultBash = process.platform === "win32" && existsSync("C:\\Program Files\\Git\\bin\\bash.exe") ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash";
+  const cwdDirect = execFileSync(defaultBash, ["-c", "pwd"], { encoding: "utf-8" }).trim();
   const cwdRunner = execFileSync("node", [runnerScript, "--cmd", "pwd"], { encoding: "utf-8" }).trim();
   assert.equal(cwdRunner, cwdDirect);
 
@@ -1015,7 +1016,8 @@ test("runner semantic transparency matrix: verifies shell execution equivalence"
   assert(combinedOutput.includes("hello stdout"));
 
   // 7. Redirections allowed
-  const redirFile = "/tmp/test-runner-redir.txt";
+  mkdirSync("scratch", { recursive: true });
+  const redirFile = "scratch/test-runner-redir.txt";
   try {
     execFileSync("node", [runnerScript, "--cmd", `echo 'redir_test' > "${redirFile}" && cat "${redirFile}"`]);
     const readBack = readFileSync(redirFile, "utf-8").trim();
