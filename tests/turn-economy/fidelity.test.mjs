@@ -431,8 +431,65 @@ test("fidelity: negative regression 11: AGY child-conversation pattern — worke
   assert.equal(result.fidelityStatus, "PASS", "AGY child-conversation pattern must yield FIDELITY_PASS");
   assert.equal(result.writeActorValid, true);
   assert.equal(result.observed.productMutationActor, "WORKER_PROXY", "Actor must be WORKER_PROXY when events empty but worker present");
-  assert.equal(result.confidence, "HIGH", "Subagent trace gives HIGH confidence");
+  assert.equal(result.confidence, "MEDIUM", "WORKER_PROXY confidence is capped at MEDIUM");
+  assert.equal(result.observed.mutation_attribution_mode, "PROXY");
   assert.equal(result.violations.length, 0, "Zero violations expected for normal delegation");
   assert.equal(result.observed.delegation, true);
   assert.equal(result.observed.worker, "flash-low-worker");
+});
+
+test("fidelity: negative regression 12: child transcript factual attribution yields FACTUAL and HIGH confidence", () => {
+  const result = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "WORKER",
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actor: "WORKER",
+        actorRole: "WORKER",
+        actorId: "child-worker-conv",
+        confidence: "HIGH",
+        evidenceSource: "CHILD_TRANSCRIPT",
+      },
+      {
+        path: "test/formatter.test.js",
+        actor: "WORKER",
+        actorRole: "WORKER",
+        actorId: "child-worker-conv",
+        confidence: "HIGH",
+        evidenceSource: "CHILD_TRANSCRIPT",
+      },
+    ],
+    orchestratorWorkspaceWrites: 0,
+    unknownWorkspaceWrites: 0,
+    controlPlaneWrites: 3,
+    dryRun: false,
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: {
+      hasExplicitThreadId: true,
+      hasExplicitAgentRole: true,
+      hasSubagentTrace: true,
+    },
+    workerCompletionClaimed: true,
+    workerValidationObserved: true,
+    workerValidationVerified: true,
+    workerValidationExecutionId: "child-worker-conv",
+    workerValidationActor: "WORKER",
+    workerValidationExitCode: 0,
+    workerValidationFresh: true,
+    mutationAttributionMode: "FACTUAL",
+  });
+
+  assert.equal(result.fidelityStatus, "PASS");
+  assert.equal(result.writeActorValid, true);
+  assert.equal(result.observed.productMutationActor, "WORKER");
+  assert.equal(result.confidence, "HIGH");
+  assert.equal(result.observed.mutation_attribution_mode, "FACTUAL");
+  assert.equal(result.observed.worker_validation_verified, true);
+  assert.equal(result.observed.worker_validation_fresh, true);
+  assert.equal(result.violations.length, 0);
 });

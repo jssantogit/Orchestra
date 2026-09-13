@@ -219,3 +219,51 @@ test("baseline: preserves backward compatibility with baseline-v1.json and summa
     }
   }
 });
+
+test("turn-analysis: enforces distribution invariant and tool count invariant", () => {
+  const mockSteps = [
+    {
+      type: "PLANNER_RESPONSE",
+      source: "MODEL",
+      step_index: 1,
+      tool_calls: [{ name: "view_file" }, { name: "grep_search" }, { name: "find_by_name" }],
+    },
+    {
+      type: "PLANNER_RESPONSE",
+      source: "MODEL",
+      step_index: 2,
+      tool_calls: [{ name: "replace_file_content" }, { name: "run_command" }],
+    },
+    {
+      type: "PLANNER_RESPONSE",
+      source: "MODEL",
+      step_index: 3,
+      tool_calls: [{ name: "run_command" }],
+    },
+    {
+      type: "PLANNER_RESPONSE",
+      source: "MODEL",
+      step_index: 4,
+      tool_calls: [],
+    },
+  ];
+
+  const analysis = analyzeAgyConversation(mockSteps, {});
+  assert.equal(analysis.model_turns_total, 4);
+  assert.equal(analysis.total_tool_calls, 6);
+
+  // Distribution invariant: sum of bucket counts equals total model turns
+  const dist = analysis.tool_calls_per_turn_distribution;
+  const distSum = (dist[0] || 0) + (dist[1] || 0) + (dist[2] || 0) + (dist["3+"] || 0);
+  assert.equal(distSum, analysis.model_turns_total, "Distribution sum must equal model_turns_total exactly");
+  assert.equal(dist[0], 1);
+  assert.equal(dist[1], 1);
+  assert.equal(dist[2], 1);
+  assert.equal(dist["3+"], 1);
+
+  // Tool count invariant: sum of per-turn tool counts equals total tool calls
+  assert.ok(Array.isArray(analysis.per_turn_tool_counts));
+  const toolSum = analysis.per_turn_tool_counts.reduce((sum, c) => sum + c, 0);
+  assert.equal(toolSum, analysis.total_tool_calls, "Per-turn tool count sum must equal total tool calls exactly");
+  assert.deepEqual(analysis.per_turn_tool_counts, [3, 2, 1, 0]);
+});

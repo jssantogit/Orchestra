@@ -13,6 +13,7 @@ import {
   recordNativeToolFallback,
   detectDirectActionOverhead,
   isControlPlanePath,
+  verifyWorkerValidation,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
@@ -473,11 +474,55 @@ function main() {
       }
 
       const isWorker = actor.role === "WORKER" || actor.role === "FLASH" || actor.role === "FLASH_WORKER" || actor.role === "FLASH_LOW_WORKER" || actor.role === "FLASH_MEDIUM_WORKER";
-      if (isWorker) {
-        if (shellClassification.category === "SHELL_VALIDATION" || shellClassification.category === "SHELL_TEST" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|yarn\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(rawCmd.trim())) {
+      const isValidation = shellClassification.category === "SHELL_VALIDATION"
+        || shellClassification.category === "SHELL_TEST"
+        || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|yarn\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(rawCmd.trim());
+
+      const exitCode = executionRecord && typeof executionRecord.exitCode === "number"
+        ? executionRecord.exitCode
+        : (typeof payload.exitCode === "number" ? payload.exitCode : (typeof payload.toolResult?.exitCode === "number" ? payload.toolResult.exitCode : null));
+
+      if (isValidation) {
+        if (isWorker) {
           activeState.workerValidationObserved = true;
           activeState.workerValidationCommand = rawCmd;
-          activeState.workerValidationExitCode = executionRecord ? executionRecord.exitCode : 0;
+          activeState.workerValidationActor = actor.role;
+          activeState.workerValidationActorConfidence = actor.confidence || "LOW";
+          activeState.workerValidationExecutionId = resolvedExecutionId || executionRecord?.executionId || null;
+          activeState.workerValidationExitCode = exitCode;
+          activeState.workerValidationMutationSeq = activeState.mutationSeq || 0;
+        } else if (actor.role === "ORCHESTRATOR" || actor.role === "FLASH_ORCHESTRATOR") {
+          activeState.orchestratorValidationObserved = true;
+          activeState.orchestratorValidationCommand = rawCmd;
+          activeState.orchestratorValidationExitCode = exitCode;
+        } else if (actor.role === "UNKNOWN" || !actor.role) {
+          activeState.unknownValidationObserved = true;
+          activeState.unknownValidationCommand = rawCmd;
+          activeState.unknownValidationExitCode = exitCode;
+        }
+
+        if (!executionRecord && typeof exitCode === "number") {
+          if (!Array.isArray(activeState.evidenceLedger)) {
+            activeState.evidenceLedger = [];
+          }
+          const syntheticEv = {
+            executionId: resolvedExecutionId || `exec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            command: rawCmd,
+            exitCode,
+            mutationSeq: activeState.mutationSeq || 0,
+            actorRole: actor.role,
+            actorId: actor.actorId || conversationId || null,
+            conversationId: conversationId || null,
+            confidence: actor.confidence || "MEDIUM",
+            evidenceSource: actor.source || "TOOL_RESULT",
+            timestamp: new Date().toISOString(),
+          };
+          const existingIdx = activeState.evidenceLedger.findIndex((e) => e && e.command === rawCmd);
+          if (existingIdx >= 0) {
+            activeState.evidenceLedger[existingIdx] = syntheticEv;
+          } else {
+            activeState.evidenceLedger.push(syntheticEv);
+          }
         }
       }
 
@@ -575,13 +620,21 @@ function main() {
         }
         const msgStr = typeof msg === "string" ? msg : JSON.stringify(msg);
         if (msgStr.includes("IMPLEMENTATION_COMPLETE")) {
+          activeState.workerCompletionClaimed = true;
+          activeState.workerCompletionClaimTimestamp = new Date().toISOString();
           activeState.implementationComplete = true;
-          activeState.workerValidationObserved = true;
-          activeState.state = "EVIDENCE_READY";
-          if (!activeState.workerValidationCommand) {
-            const match = msgStr.match(/node\s+--test(?:\s+[\w./-]+)?/);
-            activeState.workerValidationCommand = match ? match[0] : "node --test test/formatter.test.js";
-            activeState.workerValidationExitCode = 0;
+
+          const matchCmd = msgStr.match(/(?:verified with\s+)?(node\s+--test|npm\s+test|pnpm\s+test|pytest|cargo\s+test|vitest|jest)[^\n\r\]]*/i);
+          if (matchCmd) {
+            activeState.claimedValidationCommand = matchCmd[0].replace(/^verified\s+with\s+/i, "").trim();
+          }
+          const matchTests = msgStr.match(/TESTS:\s*\[?([^\n\r\]]+)\]?/i);
+          if (matchTests) {
+            activeState.claimedTestsPassed = matchTests[1].trim();
+          }
+          const matchExit = msgStr.match(/exit(?:_?\s*code)?[:\s=]+(\d+)/i);
+          if (matchExit) {
+            activeState.claimedValidationExitCode = parseInt(matchExit[1], 10);
           }
         }
       }
@@ -628,6 +681,11 @@ function main() {
           executionRecord.executionId,
           activeState.mutationSeq || 0
         );
+        recordedEvidence.actorRole = actor.role;
+        recordedEvidence.actorId = actor.actorId || conversationId || null;
+        recordedEvidence.conversationId = conversationId || null;
+        recordedEvidence.confidence = actor.confidence || "LOW";
+        recordedEvidence.evidenceSource = actor.source || "EXECUTION_HOOK";
 
         const existingIdx = activeState.evidenceLedger.findIndex(
           (e) => e && e.command === recordedEvidence.command && e.type === recordedEvidence.type && e.scope === recordedEvidence.scope
@@ -654,6 +712,21 @@ function main() {
           writeFileSync(execFilePath, JSON.stringify(executionRecord, null, 2), "utf-8");
         } catch {}
       }
+    }
+
+    // Evaluate worker validation verification against authoritative Evidence Ledger
+    const valEval = verifyWorkerValidation(activeState);
+    activeState.workerValidationVerified = valEval.verified;
+    activeState.workerValidationFresh = valEval.fresh;
+    if (valEval.verified && valEval.evidence) {
+      activeState.workerValidationExecutionId = valEval.evidence.executionId || activeState.workerValidationExecutionId;
+      activeState.workerValidationCommand = valEval.evidence.command || activeState.workerValidationCommand;
+      activeState.workerValidationExitCode = valEval.evidence.exitCode ?? activeState.workerValidationExitCode;
+      activeState.workerValidationActor = valEval.evidence.actorRole || activeState.workerValidationActor;
+    }
+
+    if (activeState.workerCompletionClaimed && activeState.workerValidationVerified) {
+      activeState.state = "EVIDENCE_READY";
     }
 
     // Update health diagnostics
@@ -779,6 +852,12 @@ function main() {
       worker_completion_packet_bytes: activeState.worker_completion_packet_bytes || 0,
       review_packet_bytes: activeState.review_packet_bytes || 0,
       context_proxy_bytes: activeState.context_proxy_bytes || 0,
+      worker_completion_claimed: activeState.workerCompletionClaimed || false,
+      worker_validation_observed: activeState.workerValidationObserved || false,
+      worker_validation_verified: activeState.workerValidationVerified || false,
+      worker_validation_exit_code: activeState.workerValidationExitCode ?? null,
+      worker_validation_actor: activeState.workerValidationActor || null,
+      worker_validation_fresh: activeState.workerValidationFresh || false,
       type: "TOOL_STEP"
     };
 

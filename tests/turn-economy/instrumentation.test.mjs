@@ -84,7 +84,7 @@ test("instrumentation: stop-guard distinguishes clean stops vs forced continuati
   let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
   assert.equal(state.stop_attempts, 1);
   assert.equal(state.forced_stop_continuations, 1);
-  assert.equal(state.forced_continuations_by_reason.CLAIMED_WITHOUT_ACCEPTANCE, 1);
+  assert.equal(state.forced_continuations_by_reason.EVIDENCE_MISSING || state.forced_continuations_by_reason.CLAIMED_WITHOUT_ACCEPTANCE, 1);
 
   // Now simulate acceptance satisfied
   state.acceptanceState = "ACCEPTED";

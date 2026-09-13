@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
-import { findReusableEvidence } from "../skills/agy-orchestra/routing-policy.mjs";
+import { findReusableEvidence, verifyWorkerValidation } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
   try {
@@ -108,11 +108,39 @@ function main() {
   const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
   const activeRole = (bound && bound.role) || activeState.activeRole || "ORCHESTRATOR";
 
-  const isWorkerDone = activeState.workerValidationObserved === true
-    || activeState.implementationComplete === true
-    || activeState.state === "EVIDENCE_READY";
+  const isOrchestrator = (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR");
 
-  if (isWorkerDone && (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR")) {
+  // Re-evaluate worker validation verification against authoritative Evidence Ledger
+  const valEval = verifyWorkerValidation(activeState);
+  activeState.workerValidationVerified = valEval.verified;
+  activeState.workerValidationFresh = valEval.fresh;
+  if (valEval.verified && valEval.evidence) {
+    activeState.workerValidationExecutionId = valEval.evidence.executionId || activeState.workerValidationExecutionId;
+    activeState.workerValidationCommand = valEval.evidence.command || activeState.workerValidationCommand;
+    activeState.workerValidationExitCode = valEval.evidence.exitCode ?? activeState.workerValidationExitCode;
+    activeState.workerValidationActor = valEval.evidence.actorRole || activeState.workerValidationActor;
+  }
+
+  const completionClaimed = activeState.workerCompletionClaimed === true
+    || (activeState.implementationComplete === true && activeState.handoffObserved === true);
+
+  const noScopeViolation = !activeState.scopeViolation && !activeState.forbiddenAccessDetected;
+  const noUnresolvedWrites = (activeState.orchestratorWorkspaceWrites || 0) === 0
+    && (activeState.unknownWorkspaceWrites || 0) === 0;
+
+  // Hardened Turn Diet acceptance: Orchestrator automatically accepts if and only if
+  // 1. Worker claimed completion
+  // 2. Required fresh validation evidence from WORKER (exitCode 0) is verified in ledger
+  // 3. No scope violation
+  // 4. No unresolved workspace writes
+  // 5. Orchestrator concluding turn
+  const canAccept = isOrchestrator
+    && completionClaimed
+    && valEval.verified
+    && noScopeViolation
+    && noUnresolvedWrites;
+
+  if (canAccept) {
     if (!activeState.acceptanceState || activeState.acceptanceState !== "ACCEPTED") {
       activeState.acceptanceState = "ACCEPTED";
       activeState.acceptanceActor = "ORCHESTRATOR";
@@ -132,7 +160,8 @@ function main() {
 
   const claimedComplete = activeState.claimCompleted === true
     || activeState.status === "COMPLETED"
-    || activeState.implementationComplete === true;
+    || activeState.implementationComplete === true
+    || activeState.workerCompletionClaimed === true;
 
   const formalAccepted = activeState.acceptanceState === "ACCEPTED"
     || activeState.acceptanceResult === "ACCEPTED"
@@ -147,34 +176,48 @@ function main() {
   // 3. Check for claimed completion without formal acceptance (product implementations only)
   if (claimedComplete && !formalAccepted && !isTerminalState && !isDirectAction) {
     activeState.forced_stop_continuations = (activeState.forced_stop_continuations || 0) + 1;
-    activeState.forced_continuations_by_reason["CLAIMED_WITHOUT_ACCEPTANCE"] =
-      (activeState.forced_continuations_by_reason["CLAIMED_WITHOUT_ACCEPTANCE"] || 0) + 1;
+    let reasonKey = "CLAIMED_WITHOUT_ACCEPTANCE";
+    let reasonMsg = "STOP_BLOCKED: Completion claimed but acceptance state is not ACCEPTED. Orchestrator must formally verify evidence and accept task.";
 
-    if (activeState.lastStopBlockedReason === "CLAIMED_WITHOUT_ACCEPTANCE") {
+    if (!valEval.verified) {
+      reasonKey = "EVIDENCE_MISSING";
+      reasonMsg = `STOP_BLOCKED: Completion claimed by worker, but required fresh validation evidence is not satisfied (${valEval.reason || "EVIDENCE_MISSING"}). MODEL CLAIM IS NOT EVIDENCE.`;
+    } else if (!noUnresolvedWrites) {
+      reasonKey = "UNRESOLVED_WRITES";
+      reasonMsg = "STOP_BLOCKED: Workspace writes by orchestrator or unknown actors detected. Separation of duties violated.";
+    } else if (!noScopeViolation) {
+      reasonKey = "SCOPE_VIOLATION";
+      reasonMsg = "STOP_BLOCKED: Scope violation detected during implementation.";
+    }
+
+    activeState.forced_continuations_by_reason[reasonKey] =
+      (activeState.forced_continuations_by_reason[reasonKey] || 0) + 1;
+
+    if (activeState.lastStopBlockedReason === reasonKey) {
       const count = (activeState.stopBlockedCount || 1) + 1;
       if (count >= 2) {
         activeState.state = "HUMAN_GATE";
         activeState.circuitBreakerType = "STOP_GUARD_STALLED";
         activeState.stopGuardStalled = true;
         try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-        recordStopTelemetry(telemetryPath, activeState, payload, "continue", "CLAIMED_WITHOUT_ACCEPTANCE");
+        recordStopTelemetry(telemetryPath, activeState, payload, "continue", reasonKey);
         console.log(JSON.stringify({
           decision: "continue",
-          reason: "STOP_GUARD_STALLED: Completion claimed without acceptance repeated without forward progress. Halting to HUMAN_GATE."
+          reason: `STOP_GUARD_STALLED: ${reasonKey} repeated without forward progress. Halting to HUMAN_GATE.`
         }));
         return;
       }
       activeState.stopBlockedCount = count;
     } else {
-      activeState.lastStopBlockedReason = "CLAIMED_WITHOUT_ACCEPTANCE";
+      activeState.lastStopBlockedReason = reasonKey;
       activeState.stopBlockedCount = 1;
     }
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
 
-    recordStopTelemetry(telemetryPath, activeState, payload, "continue", "CLAIMED_WITHOUT_ACCEPTANCE");
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", reasonKey);
     console.log(JSON.stringify({
       decision: "continue",
-      reason: "STOP_BLOCKED: Completion claimed but acceptance state is not ACCEPTED. Orchestrator must formally verify evidence and accept task."
+      reason: reasonMsg
     }));
     return;
   }

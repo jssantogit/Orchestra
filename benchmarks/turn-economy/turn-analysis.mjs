@@ -225,10 +225,26 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
     roleInvocations.orchestrator = modelTurnsTotal;
   }
 
+  // Enforce Distribution Invariant: sum of distribution buckets == model_turns_total
+  const distSum = toolCallsPerTurnDistribution[0] + toolCallsPerTurnDistribution[1] + toolCallsPerTurnDistribution[2] + toolCallsPerTurnDistribution["3+"];
+  if (distSum !== modelTurnsTotal) {
+    throw new Error(`Distribution invariant failed: sum(${toolCallsPerTurnDistribution[0]}, ${toolCallsPerTurnDistribution[1]}, ${toolCallsPerTurnDistribution[2]}, ${toolCallsPerTurnDistribution["3+"]}) = ${distSum} !== modelTurnsTotal (${modelTurnsTotal})`);
+  }
+
+  // Enforce Tool Count Invariant: total tool calls == sum of toolsPerTurnList
+  const totalTools = toolsPerTurnList.reduce((acc, count) => acc + count, 0);
+  const sum3Plus = toolsPerTurnList.filter(c => c >= 3).reduce((acc, count) => acc + count, 0);
+  const derivedToolSum = (1 * toolCallsPerTurnDistribution[1]) + (2 * toolCallsPerTurnDistribution[2]) + sum3Plus;
+  if (derivedToolSum !== totalTools) {
+    throw new Error(`Tool count invariant failed: derivedToolSum ${derivedToolSum} !== totalTools ${totalTools}`);
+  }
+
   return {
     model_turns_total: modelTurnsTotal,
+    total_tool_calls: totalTools,
     tool_calls_per_turn_distribution: toolCallsPerTurnDistribution,
     tools_per_turn_list: toolsPerTurnList,
+    per_turn_tool_counts: toolsPerTurnList,
     turns_with_zero_tools: turnsWithZeroTools,
     turns_with_one_tool: turnsWithOneTool,
     turns_with_multiple_tools: turnsWithMultipleTools,

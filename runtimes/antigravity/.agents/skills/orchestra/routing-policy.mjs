@@ -3220,12 +3220,15 @@ export function checkEvidenceFreshness(evidence, currentMutationSeq = 0, mutatio
     return { fresh: true, staleReason: null };
   }
 
-  const laterMutations = mutations.filter((m) => m && typeof m.mutationSeq === "number" && m.mutationSeq > evSeq);
+  const laterMutations = mutations.filter((m) => {
+    const s = typeof m?.mutationSeq === "number" ? m.mutationSeq : (typeof m?.seq === "number" ? m.seq : null);
+    return s !== null && s > evSeq;
+  });
   if (laterMutations.length === 0) {
     return { fresh: true, staleReason: null };
   }
 
-  const mutatedPaths = laterMutations.flatMap((m) => m.paths || []);
+  const mutatedPaths = laterMutations.flatMap((m) => m.paths || (m.path ? [m.path] : []));
 
   // 1. Docs-only or control-plane only mutations do NOT invalidate code validation evidence
   if (mutatedPaths.length > 0 && mutatedPaths.every(isPathDocsOrSpec)) {
@@ -3739,6 +3742,150 @@ export function planVerificationBatch(activeState = {}, requestedChecks = []) {
     batchExecutable: plannedSteps.length > 0,
     totalRequested: requestedChecks.length,
     reusedCount: skippedSteps.length,
+  };
+}
+
+export function isWorkerRole(role) {
+  const r = String(role || "").toUpperCase();
+  return r === "WORKER" || r === "FLASH" || r === "FLASH_WORKER" || r === "FLASH_LOW_WORKER" || r === "FLASH_MEDIUM_WORKER";
+}
+
+export function verifyWorkerValidation(activeState = {}) {
+  const ledger = Array.isArray(activeState.evidenceLedger) ? activeState.evidenceLedger : [];
+  const currentSeq = typeof activeState.mutationSeq === "number" ? activeState.mutationSeq : 0;
+  const mutations = Array.isArray(activeState.mutations) ? activeState.mutations : [];
+  const contract = activeState.scopeContract || {};
+  const requiredTests = contract.testsRequired || activeState.testsRequired || [];
+
+  if (requiredTests.length > 0) {
+    let lastEvidence = null;
+    for (const testCmd of requiredTests) {
+      const executed = ledger.slice().reverse().find((ev) => {
+        if (!ev) return false;
+        const evCmd = String(ev.command || "").trim();
+        return evCmd.includes(testCmd) || testCmd.includes(evCmd);
+      });
+
+      if (executed && executed.exitCode !== 0) {
+        return {
+          verified: false,
+          fresh: false,
+          reason: `FAILED: validation command ${testCmd} exited with code ${executed.exitCode}`,
+          evidence: executed,
+        };
+      }
+
+      const res = findReusableEvidence(ledger, testCmd, currentSeq, mutations);
+      if (!res.found) {
+        return {
+          verified: false,
+          fresh: false,
+          reason: `MISSING: required test not executed: ${testCmd}`,
+          evidence: null,
+        };
+      }
+      if (!res.reusable) {
+        return {
+          verified: false,
+          fresh: false,
+          reason: `STALE: evidence for ${testCmd} is stale (${res.staleReason || "mutation after test"})`,
+          evidence: res.evidence,
+        };
+      }
+      const ev = res.evidence;
+      if (ev.exitCode !== 0) {
+        return {
+          verified: false,
+          fresh: false,
+          reason: `FAILED: validation command ${testCmd} exited with code ${ev.exitCode}`,
+          evidence: ev,
+        };
+      }
+      const evActor = ev.actorRole || (activeState.workerValidationObserved && activeState.workerValidationCommand === ev.command ? "WORKER" : "UNKNOWN");
+      if (!isWorkerRole(evActor)) {
+        return {
+          verified: false,
+          fresh: false,
+          reason: `INVALID_ACTOR: validation evidence produced by ${evActor}, expected WORKER`,
+          evidence: ev,
+        };
+      }
+      if (ev.confidence === "LOW") {
+        return {
+          verified: false,
+          fresh: false,
+          reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
+          evidence: ev,
+        };
+      }
+      lastEvidence = ev;
+    }
+
+    return {
+      verified: true,
+      fresh: true,
+      reason: null,
+      evidence: lastEvidence,
+    };
+  }
+
+  // If no specific tests required by contract, look for ANY valid test run in ledger
+  for (const ev of ledger) {
+    if (!ev) continue;
+    const isTest = ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(String(ev.command || "").trim());
+    if (!isTest) continue;
+
+    if (ev.exitCode !== 0) {
+      return {
+        verified: false,
+        fresh: false,
+        reason: `FAILED: validation command exited with code ${ev.exitCode}`,
+        evidence: ev,
+      };
+    }
+
+    const evActor = ev.actorRole || (activeState.workerValidationObserved && activeState.workerValidationCommand === ev.command ? "WORKER" : "UNKNOWN");
+    if (!isWorkerRole(evActor)) {
+      return {
+        verified: false,
+        fresh: false,
+        reason: `INVALID_ACTOR: validation evidence produced by ${evActor}, expected WORKER`,
+        evidence: ev,
+      };
+    }
+
+    if (ev.confidence === "LOW") {
+      return {
+        verified: false,
+        fresh: false,
+        reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
+        evidence: ev,
+      };
+    }
+
+    const res = findReusableEvidence([ev], ev.command, currentSeq, mutations);
+    if (!res.reusable) {
+      return {
+        verified: false,
+        fresh: false,
+        reason: `STALE: validation evidence is stale (${res.staleReason || "mutation after test"})`,
+        evidence: ev,
+      };
+    }
+
+    return {
+      verified: true,
+      fresh: true,
+      reason: null,
+      evidence: ev,
+    };
+  }
+
+  return {
+    verified: false,
+    fresh: false,
+    reason: "NO_VERIFIED_WORKER_VALIDATION",
+    evidence: null,
   };
 }
 

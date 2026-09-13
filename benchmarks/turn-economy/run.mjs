@@ -314,14 +314,35 @@ function calculateDistribution(turns = []) {
   const dist = { 0: 0, 1: 0, 2: 0, "3+": 0 };
   let maxTools = 0;
   let totalTools = 0;
+  const perTurnToolCounts = [];
+  let sum3Plus = 0;
+
   for (const t of turns) {
-    totalTools += t.toolCount;
-    if (t.toolCount > maxTools) maxTools = t.toolCount;
-    if (t.toolCount === 0) dist[0]++;
-    else if (t.toolCount === 1) dist[1]++;
-    else if (t.toolCount === 2) dist[2]++;
-    else dist["3+"]++;
+    const count = typeof t.toolCount === "number" ? t.toolCount : (t.tools ? t.tools.length : 0);
+    perTurnToolCounts.push(count);
+    totalTools += count;
+    if (count > maxTools) maxTools = count;
+    if (count === 0) dist[0]++;
+    else if (count === 1) dist[1]++;
+    else if (count === 2) dist[2]++;
+    else {
+      dist["3+"]++;
+      sum3Plus += count;
+    }
   }
+
+  // Enforce Distribution Invariant: sum of distribution buckets == total model turns
+  const distSum = dist[0] + dist[1] + dist[2] + dist["3+"];
+  if (distSum !== turns.length) {
+    throw new Error(`Distribution invariant failed: ${distSum} !== ${turns.length}`);
+  }
+
+  // Enforce Tool Count Invariant: total tool calls == sum of per-turn counts
+  const derivedToolSum = (1 * dist[1]) + (2 * dist[2]) + sum3Plus;
+  if (derivedToolSum !== totalTools) {
+    throw new Error(`Tool count invariant failed: ${derivedToolSum} !== ${totalTools}`);
+  }
+
   return {
     distribution: dist,
     max_tools_in_single_turn: maxTools,
@@ -329,7 +350,94 @@ function calculateDistribution(turns = []) {
     turns_with_zero_tools: dist[0],
     turns_with_one_tool: dist[1],
     turns_with_multiple_tools: dist[2] + dist["3+"],
+    per_turn_tool_counts: perTurnToolCounts,
   };
+}
+
+function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir) {
+  if (!existsSync(childTranscriptFile)) return { mutations: [], validations: [], completionClaimed: false };
+  const mutations = [];
+  const validations = [];
+  let completionClaimed = false;
+
+  try {
+    const lines = readFileSync(childTranscriptFile, "utf8").trim().split("\n");
+    const steps = [];
+    for (const l of lines) {
+      try { steps.push(JSON.parse(l)); } catch {}
+    }
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      if (step.type === "PLANNER_RESPONSE" && Array.isArray(step.tool_calls)) {
+        for (const tc of step.tool_calls) {
+          const toolName = tc.name || "";
+          const args = tc.args || tc.parameters || {};
+
+          if (toolName === "replace_file_content" || toolName === "write_to_file") {
+            const rawTarget = String(args.TargetFile || args.targetFile || args.path || "").replace(/^["']|["']$/g, "");
+            let relPath = rawTarget;
+            const normRaw = rawTarget.replace(/\\/g, "/");
+            const normTargetDir = targetDir ? targetDir.replace(/\\/g, "/") : "";
+            if (normTargetDir && normRaw.startsWith(normTargetDir)) {
+              relPath = normRaw.slice(normTargetDir.length).replace(/^\/+/, "");
+            } else {
+              const idxSrc = normRaw.indexOf("src/");
+              const idxTest = normRaw.indexOf("test/");
+              if (idxSrc >= 0) relPath = normRaw.slice(idxSrc);
+              else if (idxTest >= 0) relPath = normRaw.slice(idxTest);
+            }
+            relPath = relPath.replace(/^\.\//, "");
+
+            if (!isControlPlanePath(relPath)) {
+              mutations.push({
+                path: relPath,
+                actorRole: "WORKER",
+                agentProfile: sub.subagentDescriptor?.typeName || sub.subagentDescriptor?.role || "flash-low-worker",
+                conversationId: sub.conversationId,
+                tool: toolName,
+                confidence: "HIGH",
+                evidenceSource: "CHILD_TRANSCRIPT",
+              });
+            }
+          } else if (toolName === "run_command") {
+            const cmd = String(args.CommandLine || args.command || args.cmd || "").replace(/^["']|["']$/g, "").trim();
+            let exitCode = null;
+            for (let j = i + 1; j < Math.min(i + 3, steps.length); j++) {
+              const next = steps[j];
+              if (next && next.content) {
+                const m = String(next.content).match(/The command exited with code (\d+)/i);
+                if (m) {
+                  exitCode = parseInt(m[1], 10);
+                  break;
+                }
+              }
+            }
+            const isTestCmd = /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd);
+            if (isTestCmd || cmd.includes("node --test")) {
+              validations.push({
+                command: cmd,
+                exitCode: exitCode !== null ? exitCode : 0,
+                actorRole: "WORKER",
+                agentProfile: sub.subagentDescriptor?.typeName || sub.subagentDescriptor?.role || "flash-low-worker",
+                conversationId: sub.conversationId,
+                tool: "run_command",
+                confidence: "HIGH",
+                evidenceSource: "CHILD_TRANSCRIPT",
+              });
+            }
+          } else if (toolName === "send_message") {
+            const msg = String(args.Message || "");
+            if (msg.includes("IMPLEMENTATION_COMPLETE")) {
+              completionClaimed = true;
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  return { mutations, validations, completionClaimed };
 }
 
 /**
@@ -365,6 +473,9 @@ function parseAgyTelemetry(targetDir, rawOutput) {
   let parentTurns = null;
   const workerTurns = [];
   const reviewerTurns = [];
+  const childMutations = [];
+  const childValidations = [];
+  let childCompletionClaimed = false;
 
   if (convId) {
     const brainDir = join(homedir(), ".gemini/antigravity-cli/brain", convId);
@@ -396,6 +507,13 @@ function parseAgyTelemetry(targetDir, rawOutput) {
                 } else {
                   workerTurns.push(...childTurns);
                 }
+              }
+
+              const childEv = extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir);
+              childMutations.push(...childEv.mutations);
+              childValidations.push(...childEv.validations);
+              if (childEv.completionClaimed) {
+                childCompletionClaimed = true;
               }
             }
           }
@@ -599,20 +717,34 @@ function parseAgyTelemetry(targetDir, rawOutput) {
     reasoning_tokens: normUsage.reasoningTokens,
     token_semantics_confidence: normUsage.confidence,
     metric_status: normUsage.status,
-    mutation_events: (state.mutationEvents || []).filter((e) => !e.isControlPlane && !isControlPlanePath(e.path)),
+    mutation_events: [
+      ...(state.mutationEvents || []).filter((e) => !e.isControlPlane && !isControlPlanePath(e.path)),
+      ...childMutations,
+    ],
     orchestrator_workspace_writes: state.orchestratorWorkspaceWrites || 0,
     control_plane_writes: state.controlPlaneWrites || 0,
     unknown_workspace_writes: state.unknownWorkspaceWrites || 0,
-    worker_validation_observed: state.workerValidationObserved || false,
-    worker_validation_command: state.workerValidationCommand || null,
-    worker_validation_exit_code: state.workerValidationExitCode ?? null,
-    handoff_observed: state.handoffObserved || false,
+    worker_completion_claimed: Boolean(state.workerCompletionClaimed || childCompletionClaimed || state.implementationComplete),
+    worker_validation_observed: Boolean(state.workerValidationObserved || childValidations.length > 0),
+    worker_validation_command: state.workerValidationCommand || (childValidations.length > 0 ? childValidations[childValidations.length - 1].command : null),
+    worker_validation_exit_code: state.workerValidationExitCode ?? (childValidations.length > 0 ? childValidations[childValidations.length - 1].exitCode : null),
+    worker_validation_actor: state.workerValidationActor || (childValidations.length > 0 ? childValidations[childValidations.length - 1].actorRole : (state.workerValidationObserved ? "WORKER" : null)),
+    worker_validation_execution_id: state.workerValidationExecutionId || (childValidations.length > 0 ? childValidations[childValidations.length - 1].conversationId : null),
+    worker_validation_verified: Boolean(
+      state.workerValidationVerified || (childValidations.length > 0 && childValidations[childValidations.length - 1].exitCode === 0)
+    ),
+    worker_validation_fresh: Boolean(
+      state.workerValidationFresh || (childValidations.length > 0 && childValidations[childValidations.length - 1].exitCode === 0)
+    ),
+    handoff_observed: state.handoffObserved || childCompletionClaimed,
     handoff_bytes: state.handoffBytes || state.worker_packet_bytes || 0,
     handoff_status: state.handoffStatus || (state.worker_packet_bytes ? "MESSAGE_DELIVERED" : null),
-    worker_conversation_id: state.workerConversationId || null,
+    worker_conversation_id: state.workerConversationId || (childValidations[0]?.conversationId || null),
     acceptance_actor: state.acceptanceActor || "ORCHESTRATOR",
     acceptance_observed: state.acceptanceObserved || (state.state === "DONE" || state.acceptanceState === "ACCEPTED"),
     acceptance_state: state.acceptanceState || (state.state === "DONE" ? "ACCEPTED" : null),
+    parent_per_turn_tool_counts: parentMetrics?.per_turn_tool_counts || (parentToolCalls > 0 ? [parentToolCalls] : [0]),
+    worker_per_turn_tool_counts: workerMetrics?.per_turn_tool_counts || (workerToolCalls > 0 ? [workerToolCalls] : []),
   };
 }
 
@@ -700,6 +832,16 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
           confidence: fidelity.confidence,
           writeActorValid: fidelity.writeActorValid,
           violations: fidelity.violations,
+          expectedRoute: fidelity.expectedRoute,
+          observed: fidelity.observed,
+          worker_completion_claimed: fidelity.worker_completion_claimed,
+          worker_validation_observed: fidelity.worker_validation_observed,
+          worker_validation_verified: fidelity.worker_validation_verified,
+          worker_validation_execution_id: fidelity.worker_validation_execution_id,
+          worker_validation_actor: fidelity.worker_validation_actor,
+          worker_validation_exit_code: fidelity.worker_validation_exit_code,
+          worker_validation_fresh: fidelity.worker_validation_fresh,
+          mutation_attribution_mode: fidelity.mutation_attribution_mode,
         },
       };
     }
@@ -820,6 +962,14 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         ),
         hasSubagentTrace: (metrics.subagent_invocations || 0) > 0,
       },
+      workerCompletionClaimed: metrics.worker_completion_claimed || false,
+      workerValidationObserved: metrics.worker_validation_observed || false,
+      workerValidationVerified: metrics.worker_validation_verified || false,
+      workerValidationExecutionId: metrics.worker_validation_execution_id || null,
+      workerValidationActor: metrics.worker_validation_actor || null,
+      workerValidationExitCode: metrics.worker_validation_exit_code ?? null,
+      workerValidationFresh: metrics.worker_validation_fresh || false,
+      mutationAttributionMode: mutationEvents.length > 0 ? (mutationEvents.some((m) => m.evidenceSource === "CHILD_TRANSCRIPT") ? "FACTUAL" : null) : null,
     });
 
     return {
@@ -837,6 +987,16 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         confidence: fidelity.confidence,
         writeActorValid: fidelity.writeActorValid,
         violations: fidelity.violations,
+        expectedRoute: fidelity.expectedRoute,
+        observed: fidelity.observed,
+        worker_completion_claimed: fidelity.worker_completion_claimed,
+        worker_validation_observed: fidelity.worker_validation_observed,
+        worker_validation_verified: fidelity.worker_validation_verified,
+        worker_validation_execution_id: fidelity.worker_validation_execution_id,
+        worker_validation_actor: fidelity.worker_validation_actor,
+        worker_validation_exit_code: fidelity.worker_validation_exit_code,
+        worker_validation_fresh: fidelity.worker_validation_fresh,
+        mutation_attribution_mode: fidelity.mutation_attribution_mode,
       },
     };
   } finally {

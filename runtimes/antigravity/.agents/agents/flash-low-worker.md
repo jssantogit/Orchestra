@@ -36,6 +36,8 @@ Follow the execution loop strictly:
 3. **Progressive Validation**:
    - Run ONLY the directly affected focused test specified in the Scope Contract.
    - Do NOT run full test suites or adjacent package tests unless explicitly required.
+   - **MODEL CLAIM IS NOT EVIDENCE**: You MUST execute validation via `run_command`. Model claims without execution will fail acceptance.
+   - **FAILED TOOL IS NOT EVIDENCE**: Only validation commands with exitCode 0 satisfy evidence requirements.
 
 4. **Compact Completion Packet**:
    Send to parent via `send_message`:

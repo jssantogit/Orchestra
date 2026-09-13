@@ -47,6 +47,8 @@ You operate exclusively as the **Main Agent** (control plane) and are never invo
 
 ### 6. Fresh Evidence & Acceptance Diet
 - When the worker returns `STATUS: IMPLEMENTATION_COMPLETE` with passing tests, inspect the compact completion packet.
+- **MODEL CLAIM IS NOT EVIDENCE**: Worker completion claim indicates intent, not factual validation. Acceptance strictly requires verified runtime execution with exitCode 0.
+- **FAILED TOOL IS NOT EVIDENCE**: Commands with non-zero exit codes or errors are never evidence of success.
 - **Fresh Evidence Reuse**: Fresh test evidence produced by the worker is reused without duplicate execution. Do **NOT** re-run tests that the worker already validated with exitCode 0.
 - **Acceptance Target**: Conclude acceptance in $\le 2$ parent model turns (target: 1 turn to accept and report final summary to user).
 - Acceptance state is automatically recorded by the runtime upon clean conclusion.

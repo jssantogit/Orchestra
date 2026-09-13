@@ -181,6 +181,14 @@ export function evaluateTaskFidelity({
   workerObserved = false,
   confidenceEvidence = {},
   gaps = [],
+  workerCompletionClaimed = false,
+  workerValidationObserved = false,
+  workerValidationVerified = false,
+  workerValidationExecutionId = null,
+  workerValidationActor = null,
+  workerValidationExitCode = null,
+  workerValidationFresh = false,
+  mutationAttributionMode = null,
 }) {
   const req = TASK_FIDELITY_REQUIREMENTS[taskKey];
   if (!req) {
@@ -212,7 +220,23 @@ export function evaluateTaskFidelity({
         subagentInvocations,
         productMutationActor: delegationExpected ? "WORKER" : "NONE",
         mutationEvents: [],
+        worker_completion_claimed: false,
+        worker_validation_observed: false,
+        worker_validation_verified: false,
+        worker_validation_execution_id: null,
+        worker_validation_actor: null,
+        worker_validation_exit_code: null,
+        worker_validation_fresh: false,
+        mutation_attribution_mode: "SIMULATED",
       },
+      worker_completion_claimed: false,
+      worker_validation_observed: false,
+      worker_validation_verified: false,
+      worker_validation_execution_id: null,
+      worker_validation_actor: null,
+      worker_validation_exit_code: null,
+      worker_validation_fresh: false,
+      mutation_attribution_mode: "SIMULATED",
       writeActorValid: true,
       fidelityStatus: "SIMULATED",
       confidence: "LOW",
@@ -293,16 +317,23 @@ export function evaluateTaskFidelity({
   }
 
   // Compute attribution confidence
-  const confidence = classifyRoleAttributionConfidence({
+  let confidence = classifyRoleAttributionConfidence({
     ...confidenceEvidence,
     mutationEvents: normEvents,
   });
 
-  // PASS only allowed when confidence is HIGH or MEDIUM for delegated worker execution.
-  // For AGY multi-agent pattern: when normEvents is empty but isWorkerPresent is true via
-  // subagent trace (subagentInvocations > 0), effectiveActor stays "NONE" but PASS is valid
-  // if confidence is HIGH (hasSubagentTrace) and no violations have fired.
   const delegatedWithEmptyEvents = delegationExpected && isWorkerPresent && normEvents.length === 0 && effectiveActor === "NONE";
+  const isFactualWorker = normEvents.length > 0 && normEvents.some(e => e.actorRole === "WORKER" || e.actorRole === "WORKER_SUBAGENT");
+  const attributionMode = mutationAttributionMode || (delegatedWithEmptyEvents ? "PROXY" : (isFactualWorker ? "FACTUAL" : (effectiveActor === "NONE" ? "NONE" : "FACTUAL")));
+
+  // Invariant: WORKER_PROXY confidence is capped at MEDIUM and is not factual attribution
+  if (delegatedWithEmptyEvents || attributionMode === "PROXY") {
+    if (confidence === "HIGH") {
+      confidence = "MEDIUM";
+    }
+  }
+
+  // PASS only allowed when confidence is HIGH or MEDIUM for delegated worker execution.
   if (delegationExpected && !delegatedWithEmptyEvents && effectiveActor === "WORKER" && confidence === "LOW") {
     writeActorValid = false;
     violations.push("FIDELITY_VIOLATION: LOW_ATTRIBUTION_CONFIDENCE");
@@ -339,7 +370,23 @@ export function evaluateTaskFidelity({
       orchestratorWorkspaceWrites,
       controlPlaneWrites,
       unknownWorkspaceWrites,
+      worker_completion_claimed: workerCompletionClaimed,
+      worker_validation_observed: workerValidationObserved,
+      worker_validation_verified: workerValidationVerified,
+      worker_validation_execution_id: workerValidationExecutionId,
+      worker_validation_actor: workerValidationActor,
+      worker_validation_exit_code: workerValidationExitCode,
+      worker_validation_fresh: workerValidationFresh,
+      mutation_attribution_mode: attributionMode,
     },
+    worker_completion_claimed: workerCompletionClaimed,
+    worker_validation_observed: workerValidationObserved,
+    worker_validation_verified: workerValidationVerified,
+    worker_validation_execution_id: workerValidationExecutionId,
+    worker_validation_actor: workerValidationActor,
+    worker_validation_exit_code: workerValidationExitCode,
+    worker_validation_fresh: workerValidationFresh,
+    mutation_attribution_mode: attributionMode,
     writeActorValid,
     fidelityStatus,
     confidence,
