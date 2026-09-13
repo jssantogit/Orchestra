@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync, mkdtempSync, existsSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   TASK_FIDELITY_REQUIREMENTS,
@@ -10,6 +12,7 @@ import {
   classifyRoleAttributionConfidence,
   evaluateTaskFidelity,
 } from "../../benchmarks/turn-economy/fidelity.mjs";
+import { extractChildTranscriptEvidence } from "../../benchmarks/turn-economy/run.mjs";
 import { decideRoute as decideCodexRoute } from "../../runtimes/codex/.codex/astra-orchestra/routing-policy.mjs";
 import { decideRoute as decideAgyRoute } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
 
@@ -172,6 +175,12 @@ test("fidelity: per-mutation event attribution verifies true worker author", () 
     orchestratorIdentity: "flash-orchestrator",
     workerObserved: true,
     confidenceEvidence: { hasExplicitAgentRole: true },
+    workerCompletionClaimed: true,
+    workerValidationObserved: true,
+    workerValidationVerified: true,
+    workerValidationFresh: true,
+    workerValidationActor: "WORKER",
+    workerValidationExitCode: 0,
   });
 
   assert.equal(evalResult.fidelityStatus, "PASS");
@@ -225,6 +234,12 @@ test("fidelity: fidelity PASS logic when worker performs implementation", () => 
       hasExplicitThreadId: true,
       hasExplicitAgentRole: true,
     },
+    workerCompletionClaimed: true,
+    workerValidationObserved: true,
+    workerValidationVerified: true,
+    workerValidationFresh: true,
+    workerValidationActor: "WORKER",
+    workerValidationExitCode: 0,
   });
 
   assert.equal(evalResult.fidelityStatus, "PASS");
@@ -379,6 +394,12 @@ test("fidelity: negative regression 9: worker mutations correctly attributed are
     orchestratorIdentity: "flash-orchestrator",
     workerObserved: true,
     confidenceEvidence: { hasExplicitAgentRole: true },
+    workerCompletionClaimed: true,
+    workerValidationObserved: true,
+    workerValidationVerified: true,
+    workerValidationFresh: true,
+    workerValidationActor: "WORKER",
+    workerValidationExitCode: 0,
   });
 
   assert.equal(evalResult.fidelityStatus, "PASS");
@@ -426,6 +447,12 @@ test("fidelity: negative regression 11: AGY child-conversation pattern — worke
       hasExplicitAgentRole: false,
       hasSubagentTrace: true,       // invocation trace is sufficient evidence
     },
+    workerCompletionClaimed: true,
+    workerValidationObserved: true,
+    workerValidationVerified: true,
+    workerValidationFresh: true,
+    workerValidationActor: "WORKER",
+    workerValidationExitCode: 0,
   });
 
   assert.equal(result.fidelityStatus, "PASS", "AGY child-conversation pattern must yield FIDELITY_PASS");
@@ -477,7 +504,8 @@ test("fidelity: negative regression 12: child transcript factual attribution yie
     workerCompletionClaimed: true,
     workerValidationObserved: true,
     workerValidationVerified: true,
-    workerValidationExecutionId: "child-worker-conv",
+    workerValidationExecutionId: "exec-valid-12",
+    workerValidationConversationId: "child-worker-conv",
     workerValidationActor: "WORKER",
     workerValidationExitCode: 0,
     workerValidationFresh: true,
@@ -491,5 +519,355 @@ test("fidelity: negative regression 12: child transcript factual attribution yie
   assert.equal(result.observed.mutation_attribution_mode, "FACTUAL");
   assert.equal(result.observed.worker_validation_verified, true);
   assert.equal(result.observed.worker_validation_fresh, true);
+  assert.equal(result.observed.worker_validation_execution_id, "exec-valid-12");
+  assert.equal(result.observed.worker_validation_conversation_id, "child-worker-conv");
   assert.equal(result.violations.length, 0);
+});
+
+test("regression 8: child transcript without explicit exit code yields exitCode=null and verified=false", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "child-transcript-reg-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    const lines = [
+      JSON.stringify({ type: "USER_INPUT", content: "Implement the feature" }),
+      JSON.stringify({
+        type: "PLANNER_RESPONSE",
+        tool_calls: [
+          {
+            name: "run_command",
+            args: { CommandLine: "npm test" },
+          },
+        ],
+      }),
+      JSON.stringify({
+        type: "TOOL_RESULT",
+        content: "Running tests...\nAll suites queued", // No exit code output
+      }),
+    ];
+    writeFileSync(transcriptPath, lines.join("\n"), "utf8");
+
+    const sub = {
+      conversationId: "child-conv-no-exit",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir);
+    assert.equal(ev.validations.length, 1);
+    assert.equal(ev.validations[0].command, "npm test");
+    assert.equal(ev.validations[0].exitCode, null, "Exit code must be null when no explicit tool result exit code is present");
+    assert.equal(ev.validations[0].actorRole, "WORKER");
+
+    // Evaluate fidelity with this evidence:
+    const fidelity = evaluateTaskFidelity({
+      taskKey: "simple",
+      runtime: "antigravity",
+      subagentInvocations: 1,
+      mutationActor: "WORKER",
+      mutationEvents: [{ path: "src/formatter.js", actorRole: "WORKER", confidence: "HIGH" }],
+      orchestratorWorkspaceWrites: 0,
+      unknownWorkspaceWrites: 0,
+      workerObserved: true,
+      confidenceEvidence: { hasExplicitAgentRole: true },
+      workerCompletionClaimed: true,
+      workerValidationObserved: ev.validations.length > 0,
+      workerValidationVerified: false,
+      workerValidationFresh: false,
+      workerValidationActor: ev.validations[0].actorRole,
+      workerValidationExitCode: ev.validations[0].exitCode,
+    });
+
+    assert.equal(fidelity.fidelityStatus, "FAIL");
+    assert.equal(fidelity.observed.worker_validation_observed, true);
+    assert.equal(fidelity.observed.worker_validation_exit_code, null);
+    assert.equal(fidelity.observed.worker_validation_verified, false);
+    assert.ok(fidelity.violations.includes("WORKER_VALIDATION_FAILED"));
+    assert.ok(fidelity.violations.includes("WORKER_VALIDATION_NOT_VERIFIED"));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("regression 9: explicit success output (The command exited with code 0) yields exitCode=0 and eligible for verified success", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "child-transcript-succ-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    const lines = [
+      JSON.stringify({
+        type: "PLANNER_RESPONSE",
+        tool_calls: [
+          {
+            name: "write_to_file",
+            args: { TargetFile: join(tempDir, "src/formatter.js") },
+          },
+        ],
+      }),
+      JSON.stringify({
+        type: "PLANNER_RESPONSE",
+        tool_calls: [
+          {
+            name: "run_command",
+            args: { CommandLine: "npm test" },
+          },
+        ],
+      }),
+      JSON.stringify({
+        type: "TOOL_RESULT",
+        content: "The command exited with code 0.\nOutput:\n✔ tests passed",
+      }),
+      JSON.stringify({
+        type: "PLANNER_RESPONSE",
+        tool_calls: [
+          {
+            name: "send_message",
+            args: { Message: "IMPLEMENTATION_COMPLETE: Finished" },
+          },
+        ],
+      }),
+    ];
+    writeFileSync(transcriptPath, lines.join("\n"), "utf8");
+
+    const sub = {
+      conversationId: "child-conv-success",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir);
+    assert.equal(ev.validations.length, 1);
+    assert.equal(ev.validations[0].exitCode, 0);
+    assert.equal(ev.completionClaimed, true);
+
+    const fidelity = evaluateTaskFidelity({
+      taskKey: "simple",
+      runtime: "antigravity",
+      subagentInvocations: 1,
+      mutationActor: "WORKER",
+      mutationEvents: ev.mutations,
+      orchestratorWorkspaceWrites: 0,
+      unknownWorkspaceWrites: 0,
+      workerObserved: true,
+      confidenceEvidence: { hasExplicitAgentRole: true },
+      workerCompletionClaimed: ev.completionClaimed,
+      workerValidationObserved: true,
+      workerValidationVerified: true,
+      workerValidationFresh: true,
+      workerValidationActor: "WORKER",
+      workerValidationExitCode: ev.validations[0].exitCode,
+    });
+
+    assert.equal(fidelity.fidelityStatus, "PASS");
+    assert.equal(fidelity.observed.worker_validation_exit_code, 0);
+    assert.equal(fidelity.observed.worker_validation_verified, true);
+    assert.equal(fidelity.violations.length, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("regression 10: explicit failure output (The command exited with code 1) yields exitCode=1 and fidelity FAIL", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "child-transcript-fail-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    const lines = [
+      JSON.stringify({
+        type: "PLANNER_RESPONSE",
+        tool_calls: [
+          {
+            name: "run_command",
+            args: { CommandLine: "npm test" },
+          },
+        ],
+      }),
+      JSON.stringify({
+        type: "TOOL_RESULT",
+        content: "The command exited with code 1.\nOutput:\n✖ 1 test failed",
+      }),
+    ];
+    writeFileSync(transcriptPath, lines.join("\n"), "utf8");
+
+    const sub = {
+      conversationId: "child-conv-fail",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir);
+    assert.equal(ev.validations.length, 1);
+    assert.equal(ev.validations[0].exitCode, 1);
+
+    const fidelity = evaluateTaskFidelity({
+      taskKey: "simple",
+      runtime: "antigravity",
+      subagentInvocations: 1,
+      mutationActor: "WORKER",
+      mutationEvents: [{ path: "src/formatter.js", actorRole: "WORKER", confidence: "HIGH" }],
+      orchestratorWorkspaceWrites: 0,
+      unknownWorkspaceWrites: 0,
+      workerObserved: true,
+      confidenceEvidence: { hasExplicitAgentRole: true },
+      workerCompletionClaimed: true,
+      workerValidationObserved: true,
+      workerValidationVerified: false,
+      workerValidationFresh: false,
+      workerValidationActor: "WORKER",
+      workerValidationExitCode: 1,
+    });
+
+    assert.equal(fidelity.fidelityStatus, "FAIL");
+    assert.equal(fidelity.observed.worker_validation_exit_code, 1);
+    assert.equal(fidelity.observed.worker_validation_verified, false);
+    assert.ok(fidelity.violations.includes("WORKER_VALIDATION_FAILED"));
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("regression 11: subagent invocation count: 1 worker => 1 invocation, 2 reviewers => 2 invocations without double count", () => {
+  const runtimeRoot = resolve(orchestraRoot, "runtimes/antigravity");
+  const preToolScript = resolve(runtimeRoot, ".agents/hooks/pre-tool-enforce.mjs");
+  const postToolScript = resolve(runtimeRoot, ".agents/hooks/post-tool-telemetry.mjs");
+
+  const clean = () => {
+    process.chdir(runtimeRoot);
+    try { unlinkSync(".agents/state/active-state.json"); } catch {}
+    try { unlinkSync(".agents/state/role-bindings.json"); } catch {}
+    try { unlinkSync(".agents/telemetry/events.jsonl"); } catch {}
+  };
+
+  // Case A: 1 invoke_subagent with 1 worker
+  clean();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+
+    const workerCall = {
+      name: "invoke_subagent",
+      args: {
+        Subagents: [
+          { TypeName: "flash-low-worker", Role: "Worker", Prompt: "Fix bug" },
+        ],
+      },
+    };
+
+    // Run pre-tool hook then post-tool hook (the full cycle)
+    execFileSync("node", [preToolScript], {
+      input: JSON.stringify({ conversationId: "parent-c1", toolCall: workerCall }),
+    });
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({ conversationId: "parent-c1", toolName: "invoke_subagent", toolCall: workerCall }),
+    });
+
+    const stateA = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(stateA.invoke_subagent_calls, 1);
+    assert.equal(stateA.subagent_invocations, 1, "1 worker delegation must yield subagent_invocations = 1");
+    assert.equal(stateA.worker_invocations, 1);
+    assert.equal(stateA.reviewer_invocations || 0, 0);
+  } finally {
+    clean();
+  }
+
+  // Case B: 1 invoke_subagent with 2 reviewers
+  clean();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+
+    const reviewerCall = {
+      name: "invoke_subagent",
+      args: {
+        Subagents: [
+          { TypeName: "flash-reviewer", Role: "Two-Key Reviewer 1", Prompt: "Review key 1" },
+          { TypeName: "flash-reviewer", Role: "Two-Key Reviewer 2", Prompt: "Review key 2" },
+        ],
+      },
+    };
+
+    execFileSync("node", [preToolScript], {
+      input: JSON.stringify({ conversationId: "parent-c2", toolCall: reviewerCall }),
+    });
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({ conversationId: "parent-c2", toolName: "invoke_subagent", toolCall: reviewerCall }),
+    });
+
+    const stateB = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(stateB.invoke_subagent_calls, 1);
+    assert.equal(stateB.subagent_invocations, 2, "2 reviewers in 1 invoke_subagent call must yield subagent_invocations = 2");
+    assert.equal(stateB.reviewer_invocations, 2);
+    assert.equal(stateB.worker_invocations || 0, 0);
+  } finally {
+    clean();
+  }
+});
+
+test("regression 12: fidelity negative tests: missing verification, null exitCode, orchestrator validator, stale validation fail closed; valid passes", () => {
+  const baseValid = {
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "WORKER",
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actorRole: "WORKER",
+        actorId: "child-worker-conv",
+        agentProfile: "flash-low-worker",
+        confidence: "HIGH",
+        evidenceSource: "CHILD_TRANSCRIPT",
+      },
+    ],
+    orchestratorWorkspaceWrites: 0,
+    unknownWorkspaceWrites: 0,
+    controlPlaneWrites: 2,
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: { hasExplicitAgentRole: true },
+    workerCompletionClaimed: true,
+    workerValidationObserved: true,
+    workerValidationVerified: true,
+    workerValidationFresh: true,
+    workerValidationActor: "WORKER",
+    workerValidationExitCode: 0,
+    mutationAttributionMode: "FACTUAL",
+  };
+
+  // Case 1: Worker exists + mutations factual but validationVerified=false => FAIL
+  const res1 = evaluateTaskFidelity({
+    ...baseValid,
+    workerValidationVerified: false,
+  });
+  assert.equal(res1.fidelityStatus, "FAIL");
+  assert.ok(res1.violations.includes("WORKER_VALIDATION_NOT_VERIFIED"));
+
+  // Case 2: Worker validation exitCode=null => FAIL
+  const res2 = evaluateTaskFidelity({
+    ...baseValid,
+    workerValidationExitCode: null,
+    workerValidationVerified: false,
+  });
+  assert.equal(res2.fidelityStatus, "FAIL");
+  assert.ok(res2.violations.includes("WORKER_VALIDATION_FAILED"));
+
+  // Case 3: workerValidationActor=ORCHESTRATOR => FAIL
+  const res3 = evaluateTaskFidelity({
+    ...baseValid,
+    workerValidationActor: "ORCHESTRATOR",
+  });
+  assert.equal(res3.fidelityStatus, "FAIL");
+  assert.ok(res3.violations.includes("WORKER_VALIDATION_INVALID_ACTOR"));
+
+  // Case 4: workerValidationFresh=false => FAIL
+  const res4 = evaluateTaskFidelity({
+    ...baseValid,
+    workerValidationFresh: false,
+  });
+  assert.equal(res4.fidelityStatus, "FAIL");
+  assert.ok(res4.violations.includes("WORKER_VALIDATION_STALE"));
+
+  // Case 5: All evidence valid => PASS
+  const res5 = evaluateTaskFidelity(baseValid);
+  assert.equal(res5.fidelityStatus, "PASS");
+  assert.equal(res5.violations.length, 0);
+  assert.equal(res5.observed.worker_validation_verified, true);
+  assert.equal(res5.observed.worker_validation_fresh, true);
+  assert.equal(res5.observed.worker_validation_actor, "WORKER");
+  assert.equal(res5.observed.worker_validation_exit_code, 0);
 });

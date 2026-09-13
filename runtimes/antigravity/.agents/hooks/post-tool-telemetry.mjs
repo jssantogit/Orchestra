@@ -577,8 +577,8 @@ function main() {
       }
     } else if (toolName === "invoke_subagent") {
       activeState.invoke_subagent_calls = (activeState.invoke_subagent_calls || 0) + 1;
-      activeState.subagent_invocations = (activeState.subagent_invocations || 0) + 1;
       const subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
+      activeState.subagent_invocations = (activeState.subagent_invocations || 0) + (subagents.length > 0 ? subagents.length : 1);
       for (const sub of subagents) {
         const role = String(sub.Role || sub.TypeName || "").toLowerCase();
         const msg = sub.Prompt || "";

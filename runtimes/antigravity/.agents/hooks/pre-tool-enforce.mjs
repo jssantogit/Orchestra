@@ -665,7 +665,6 @@ function main() {
       activeState.state = "DELEGATED";
       activeState.taskAction = activeState.taskAction || "IMPLEMENT";
       activeState.taskDomain = activeState.taskDomain || "CODE";
-      activeState.subagent_invocations = (activeState.subagent_invocations || 0) + subagents.length;
       activeState.handoffObserved = true;
       activeState.handoffStatus = "MESSAGE_DELIVERED";
       try {

@@ -185,6 +185,7 @@ export function evaluateTaskFidelity({
   workerValidationObserved = false,
   workerValidationVerified = false,
   workerValidationExecutionId = null,
+  workerValidationConversationId = null,
   workerValidationActor = null,
   workerValidationExitCode = null,
   workerValidationFresh = false,
@@ -224,6 +225,7 @@ export function evaluateTaskFidelity({
         worker_validation_observed: false,
         worker_validation_verified: false,
         worker_validation_execution_id: null,
+        worker_validation_conversation_id: null,
         worker_validation_actor: null,
         worker_validation_exit_code: null,
         worker_validation_fresh: false,
@@ -233,6 +235,7 @@ export function evaluateTaskFidelity({
       worker_validation_observed: false,
       worker_validation_verified: false,
       worker_validation_execution_id: null,
+      worker_validation_conversation_id: null,
       worker_validation_actor: null,
       worker_validation_exit_code: null,
       worker_validation_fresh: false,
@@ -343,6 +346,35 @@ export function evaluateTaskFidelity({
     violations.push("FIDELITY_VIOLATION: LOW_ATTRIBUTION_CONFIDENCE");
   }
 
+  // 5. Evidence Ledger / Worker Validation verification for delegated implementation tasks
+  const isDelegatedImpl = delegationExpected && (req.intent === "IMPLEMENTATION" || req.intent === "INVESTIGATION_AND_FIX");
+  if (isDelegatedImpl) {
+    if (workerCompletionClaimed !== true) {
+      writeActorValid = false;
+      violations.push("WORKER_COMPLETION_NOT_CLAIMED");
+    }
+    if (workerValidationObserved !== true) {
+      writeActorValid = false;
+      violations.push("WORKER_VALIDATION_NOT_OBSERVED");
+    }
+    if (workerValidationVerified !== true) {
+      writeActorValid = false;
+      violations.push("WORKER_VALIDATION_NOT_VERIFIED");
+    }
+    if (workerValidationFresh !== true) {
+      writeActorValid = false;
+      violations.push("WORKER_VALIDATION_STALE");
+    }
+    if (!workerValidationActor || workerValidationActor !== "WORKER") {
+      writeActorValid = false;
+      violations.push("WORKER_VALIDATION_INVALID_ACTOR");
+    }
+    if (workerValidationExitCode !== 0) {
+      writeActorValid = false;
+      violations.push("WORKER_VALIDATION_FAILED");
+    }
+  }
+
   let fidelityStatus = "PASS";
   if (!runtimeLoaded) {
     fidelityStatus = "FAIL";
@@ -373,7 +405,8 @@ export function evaluateTaskFidelity({
       worker_completion_claimed: workerCompletionClaimed,
       worker_validation_observed: workerValidationObserved,
       worker_validation_verified: workerValidationVerified,
-      worker_validation_execution_id: workerValidationExecutionId,
+      worker_validation_execution_id: workerValidationExecutionId || null,
+      worker_validation_conversation_id: workerValidationConversationId || null,
       worker_validation_actor: workerValidationActor,
       worker_validation_exit_code: workerValidationExitCode,
       worker_validation_fresh: workerValidationFresh,
@@ -382,7 +415,8 @@ export function evaluateTaskFidelity({
     worker_completion_claimed: workerCompletionClaimed,
     worker_validation_observed: workerValidationObserved,
     worker_validation_verified: workerValidationVerified,
-    worker_validation_execution_id: workerValidationExecutionId,
+    worker_validation_execution_id: workerValidationExecutionId || null,
+    worker_validation_conversation_id: workerValidationConversationId || null,
     worker_validation_actor: workerValidationActor,
     worker_validation_exit_code: workerValidationExitCode,
     worker_validation_fresh: workerValidationFresh,

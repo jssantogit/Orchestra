@@ -354,7 +354,7 @@ function calculateDistribution(turns = []) {
   };
 }
 
-function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir) {
+export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir) {
   if (!existsSync(childTranscriptFile)) return { mutations: [], validations: [], completionClaimed: false };
   const mutations = [];
   const validations = [];
@@ -398,6 +398,7 @@ function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir) {
                 tool: toolName,
                 confidence: "HIGH",
                 evidenceSource: "CHILD_TRANSCRIPT",
+                stepIndex: i,
               });
             }
           } else if (toolName === "run_command") {
@@ -417,13 +418,14 @@ function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir) {
             if (isTestCmd || cmd.includes("node --test")) {
               validations.push({
                 command: cmd,
-                exitCode: exitCode !== null ? exitCode : 0,
+                exitCode: exitCode,
                 actorRole: "WORKER",
                 agentProfile: sub.subagentDescriptor?.typeName || sub.subagentDescriptor?.role || "flash-low-worker",
                 conversationId: sub.conversationId,
                 tool: "run_command",
                 confidence: "HIGH",
                 evidenceSource: "CHILD_TRANSCRIPT",
+                stepIndex: i,
               });
             }
           } else if (toolName === "send_message") {
@@ -443,7 +445,7 @@ function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir) {
 /**
  * Parses AGY telemetry from .agents/state/active-state.json, events.jsonl, and agy JSON output.
  */
-function parseAgyTelemetry(targetDir, rawOutput) {
+export function parseAgyTelemetry(targetDir, rawOutput) {
   const stateFile = join(targetDir, ".agents/state/active-state.json");
   const telemetryFile = join(targetDir, ".agents/telemetry/events.jsonl");
 
@@ -650,6 +652,22 @@ function parseAgyTelemetry(targetDir, rawOutput) {
     "antigravity"
   );
 
+  const lastChildVal = childValidations.length > 0 ? childValidations[childValidations.length - 1] : null;
+  const lastChildMutationStep = childMutations.length > 0
+    ? Math.max(...childMutations.map((m) => (typeof m.stepIndex === "number" ? m.stepIndex : -1)))
+    : -1;
+  const childValFresh = Boolean(
+    lastChildVal &&
+    lastChildVal.exitCode === 0 &&
+    (lastChildMutationStep === -1 || (typeof lastChildVal.stepIndex === "number" && lastChildVal.stepIndex > lastChildMutationStep))
+  );
+  const childValVerified = Boolean(
+    lastChildVal &&
+    lastChildVal.exitCode === 0 &&
+    childValFresh &&
+    lastChildVal.actorRole === "WORKER"
+  );
+
   return {
     model_turns_total: totalModelTurns,
     model_invocations: totalModelTurns,
@@ -726,15 +744,16 @@ function parseAgyTelemetry(targetDir, rawOutput) {
     unknown_workspace_writes: state.unknownWorkspaceWrites || 0,
     worker_completion_claimed: Boolean(state.workerCompletionClaimed || childCompletionClaimed || state.implementationComplete),
     worker_validation_observed: Boolean(state.workerValidationObserved || childValidations.length > 0),
-    worker_validation_command: state.workerValidationCommand || (childValidations.length > 0 ? childValidations[childValidations.length - 1].command : null),
-    worker_validation_exit_code: state.workerValidationExitCode ?? (childValidations.length > 0 ? childValidations[childValidations.length - 1].exitCode : null),
-    worker_validation_actor: state.workerValidationActor || (childValidations.length > 0 ? childValidations[childValidations.length - 1].actorRole : (state.workerValidationObserved ? "WORKER" : null)),
-    worker_validation_execution_id: state.workerValidationExecutionId || (childValidations.length > 0 ? childValidations[childValidations.length - 1].conversationId : null),
+    worker_validation_command: state.workerValidationCommand || (lastChildVal ? lastChildVal.command : null),
+    worker_validation_exit_code: state.workerValidationExitCode ?? (lastChildVal ? lastChildVal.exitCode : null),
+    worker_validation_actor: state.workerValidationActor || (lastChildVal ? lastChildVal.actorRole : (state.workerValidationObserved ? "WORKER" : null)),
+    worker_validation_execution_id: state.workerValidationExecutionId || null,
+    worker_validation_conversation_id: state.workerConversationId || (lastChildVal ? lastChildVal.conversationId : null),
     worker_validation_verified: Boolean(
-      state.workerValidationVerified || (childValidations.length > 0 && childValidations[childValidations.length - 1].exitCode === 0)
+      state.workerValidationVerified || childValVerified
     ),
     worker_validation_fresh: Boolean(
-      state.workerValidationFresh || (childValidations.length > 0 && childValidations[childValidations.length - 1].exitCode === 0)
+      state.workerValidationFresh || childValFresh
     ),
     handoff_observed: state.handoffObserved || childCompletionClaimed,
     handoff_bytes: state.handoffBytes || state.worker_packet_bytes || 0,
@@ -838,6 +857,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
           worker_validation_observed: fidelity.worker_validation_observed,
           worker_validation_verified: fidelity.worker_validation_verified,
           worker_validation_execution_id: fidelity.worker_validation_execution_id,
+          worker_validation_conversation_id: fidelity.worker_validation_conversation_id,
           worker_validation_actor: fidelity.worker_validation_actor,
           worker_validation_exit_code: fidelity.worker_validation_exit_code,
           worker_validation_fresh: fidelity.worker_validation_fresh,
@@ -966,6 +986,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       workerValidationObserved: metrics.worker_validation_observed || false,
       workerValidationVerified: metrics.worker_validation_verified || false,
       workerValidationExecutionId: metrics.worker_validation_execution_id || null,
+      workerValidationConversationId: metrics.worker_validation_conversation_id || null,
       workerValidationActor: metrics.worker_validation_actor || null,
       workerValidationExitCode: metrics.worker_validation_exit_code ?? null,
       workerValidationFresh: metrics.worker_validation_fresh || false,
@@ -993,6 +1014,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         worker_validation_observed: fidelity.worker_validation_observed,
         worker_validation_verified: fidelity.worker_validation_verified,
         worker_validation_execution_id: fidelity.worker_validation_execution_id,
+        worker_validation_conversation_id: fidelity.worker_validation_conversation_id,
         worker_validation_actor: fidelity.worker_validation_actor,
         worker_validation_exit_code: fidelity.worker_validation_exit_code,
         worker_validation_fresh: fidelity.worker_validation_fresh,
@@ -1067,9 +1089,16 @@ function main() {
         const fidelityStr = res.fidelity ? ` Fidelity=${res.fidelity.status}` : "";
         console.log(`RESULT [${runtime} / ${taskKey}]: Success=${res.success}${fidelityStr} Duration=${res.duration_ms}ms Invocations=${res.model_invocations} Tools=${res.tool_calls}`);
 
-        if (options.requireFidelity && !options.dryRun && res.fidelity && res.fidelity.status !== "PASS" && TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected) {
-          console.error(`FIDELITY_FAILED: ${runtime} on ${taskKey} failed runtime fidelity check: ${res.fidelity.violations.join(", ")}`);
-          hasFidelityFailure = true;
+        const reqFidelity = TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected;
+        if (options.requireFidelity && !options.dryRun && reqFidelity) {
+          if (res.success !== true) {
+            console.error(`BENCHMARK_FAILED: ${runtime} on ${taskKey} failed functional verification: ${res.verification_detail || "functional test failed"}`);
+            hasFidelityFailure = true;
+          }
+          if (res.fidelity && res.fidelity.status !== "PASS") {
+            console.error(`FIDELITY_FAILED: ${runtime} on ${taskKey} failed runtime fidelity check: ${res.fidelity.violations.join(", ")}`);
+            hasFidelityFailure = true;
+          }
         }
       } catch (err) {
         console.error(`ERROR running [${runtime} / ${taskKey}]:`, err.message);
@@ -1093,4 +1122,6 @@ function main() {
   }
 }
 
-main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main();
+}

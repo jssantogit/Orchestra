@@ -7,35 +7,35 @@
     "success": true,
     "verification_detail": "OK",
     "dry_run": false,
-    "duration_ms": 57471,
-    "model_turns_total": 19,
-    "model_invocations": 19,
-    "parent_model_turns": 3,
-    "parent_invocations": 3,
-    "worker_model_turns": 16,
-    "worker_invocations": 16,
+    "duration_ms": 52586,
+    "model_turns_total": 16,
+    "model_invocations": 16,
+    "parent_model_turns": 4,
+    "parent_invocations": 4,
+    "worker_model_turns": 12,
+    "worker_invocations": 12,
     "reviewer_model_turns": 0,
     "reviewer_invocations": 0,
-    "total_model_turns": 19,
+    "total_model_turns": 16,
     "parent_tool_calls": 2,
-    "worker_tool_calls": 15,
-    "total_tool_calls": 17,
-    "tool_calls": 17,
+    "worker_tool_calls": 11,
+    "total_tool_calls": 13,
+    "tool_calls": 13,
     "tool_calls_per_turn_distribution": {
       "0": 3,
-      "1": 15,
-      "2": 1,
+      "1": 13,
+      "2": 0,
       "3+": 0
     },
     "parent_tool_distribution": {
       "0": 2,
-      "1": 0,
-      "2": 1,
+      "1": 2,
+      "2": 0,
       "3+": 0
     },
     "worker_tool_distribution": {
       "0": 1,
-      "1": 15,
+      "1": 11,
       "2": 0,
       "3+": 0
     },
@@ -43,41 +43,41 @@
       "ORCHESTRATOR": {
         "distribution": {
           "0": 2,
-          "1": 0,
-          "2": 1,
+          "1": 2,
+          "2": 0,
           "3+": 0
         },
-        "max_tools_single_turn": 2,
+        "max_tools_single_turn": 1,
         "turns_with_0_tools": 2,
-        "turns_with_1_tool": 0,
-        "turns_with_2_tools": 1,
+        "turns_with_1_tool": 2,
+        "turns_with_2_tools": 0,
         "turns_with_3_plus_tools": 0
       },
       "WORKER": {
         "distribution": {
           "0": 1,
-          "1": 15,
+          "1": 11,
           "2": 0,
           "3+": 0
         },
         "max_tools_single_turn": 1,
         "turns_with_0_tools": 1,
-        "turns_with_1_tool": 15,
+        "turns_with_1_tool": 11,
         "turns_with_2_tools": 0,
         "turns_with_3_plus_tools": 0
       }
     },
     "turns_with_zero_tools": 3,
-    "turns_with_one_tool": 15,
-    "turns_with_multiple_tools": 1,
-    "max_tools_in_single_turn": 2,
-    "parent_pre_delegation_turns": 1,
+    "turns_with_one_tool": 13,
+    "turns_with_multiple_tools": 0,
+    "max_tools_in_single_turn": 1,
+    "parent_pre_delegation_turns": 2,
     "parent_post_handoff_turns": 2,
-    "worker_pre_mutation_turns": 8,
-    "worker_post_mutation_turns": 7,
+    "worker_pre_mutation_turns": 5,
+    "worker_post_mutation_turns": 6,
     "tools_per_turn_by_role": {
-      "ORCHESTRATOR": 0.67,
-      "WORKER": 0.94
+      "ORCHESTRATOR": 0.5,
+      "WORKER": 0.92
     },
     "duplicate_reads": 0,
     "repeated_validation_without_mutation": 0,
@@ -85,57 +85,65 @@
     "turn_classifications": [
       {
         "turnIndex": 1,
-        "classification": "DELEGATION",
+        "classification": "SCOPE",
         "tools": [
-          "define_subagent",
-          "invoke_subagent"
+          "define_subagent"
         ]
       },
       {
         "turnIndex": 2,
-        "classification": "FINAL",
-        "tools": []
+        "classification": "DELEGATION",
+        "tools": [
+          "invoke_subagent"
+        ]
       },
       {
         "turnIndex": 3,
         "classification": "FINAL",
         "tools": []
+      },
+      {
+        "turnIndex": 4,
+        "classification": "FINAL",
+        "tools": []
       }
     ],
-    "subagent_invocations": 2,
+    "subagent_invocations": 1,
     "manage_subagent_calls": 0,
     "stop_attempts": 2,
     "clean_stops": 2,
     "forced_stop_continuations": 0,
     "advisory_injections": 0,
-    "worker_packet_bytes": 531,
-    "context_proxy_bytes": 4155,
-    "input_tokens": 38071,
-    "cached_input_tokens": 16275,
+    "worker_packet_bytes": 736,
+    "context_proxy_bytes": 4644,
+    "input_tokens": 44037,
+    "cached_input_tokens": 36650,
     "uncached_input_tokens": null,
     "uncached_semantics": "NOT_DERIVABLE",
-    "output_tokens": 5535,
-    "reasoning_tokens": 4523,
+    "output_tokens": 7964,
+    "reasoning_tokens": 7053,
     "token_semantics_confidence": "MEDIUM",
     "metric_status": "OK",
     "mutation_events": [
       {
-        "path": "src//formatter.js",
+        "path": "src/formatter.js",
         "actorRole": "WORKER",
         "agentProfile": "flash-low-worker",
-        "conversationId": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+        "conversationId": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
         "tool": "replace_file_content",
         "confidence": "HIGH",
-        "evidenceSource": "CHILD_TRANSCRIPT"
+        "evidenceSource": "CHILD_TRANSCRIPT",
+        "stepIndex": 11
       },
       {
-        "path": "test//formatter.test.js",
+        "path": "test/formatter.test.js",
         "actorRole": "WORKER",
         "agentProfile": "flash-low-worker",
-        "conversationId": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+        "conversationId": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
         "tool": "replace_file_content",
         "confidence": "HIGH",
-        "evidenceSource": "CHILD_TRANSCRIPT"
+        "evidenceSource": "CHILD_TRANSCRIPT",
+        "stepIndex": 15
       }
     ],
     "orchestrator_workspace_writes": 0,
@@ -146,26 +154,24 @@
     "worker_validation_command": "npm test",
     "worker_validation_exit_code": 0,
     "worker_validation_actor": "WORKER",
-    "worker_validation_execution_id": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+    "worker_validation_execution_id": null,
+    "worker_validation_conversation_id": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
     "worker_validation_verified": true,
     "worker_validation_fresh": true,
     "handoff_observed": true,
-    "handoff_bytes": 531,
+    "handoff_bytes": 736,
     "handoff_status": "MESSAGE_DELIVERED",
-    "worker_conversation_id": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+    "worker_conversation_id": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
     "acceptance_actor": "ORCHESTRATOR",
     "acceptance_observed": false,
     "acceptance_state": null,
     "parent_per_turn_tool_counts": [
-      2,
+      1,
+      1,
       0,
       0
     ],
     "worker_per_turn_tool_counts": [
-      1,
-      1,
-      1,
-      1,
       1,
       1,
       1,
@@ -193,26 +199,28 @@
         "orchestrator": "flash-orchestrator",
         "worker": "flash-low-worker",
         "delegation": true,
-        "subagentInvocations": 2,
+        "subagentInvocations": 1,
         "productMutationActor": "WORKER",
         "mutationEvents": [
           {
-            "path": "src//formatter.js",
+            "path": "src/formatter.js",
             "actorRole": "WORKER",
             "agentProfile": "flash-low-worker",
-            "conversationId": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+            "conversationId": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
             "tool": "replace_file_content",
             "confidence": "HIGH",
-            "evidenceSource": "CHILD_TRANSCRIPT"
+            "evidenceSource": "CHILD_TRANSCRIPT",
+            "stepIndex": 11
           },
           {
-            "path": "test//formatter.test.js",
+            "path": "test/formatter.test.js",
             "actorRole": "WORKER",
             "agentProfile": "flash-low-worker",
-            "conversationId": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+            "conversationId": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
             "tool": "replace_file_content",
             "confidence": "HIGH",
-            "evidenceSource": "CHILD_TRANSCRIPT"
+            "evidenceSource": "CHILD_TRANSCRIPT",
+            "stepIndex": 15
           }
         ],
         "orchestratorWorkspaceWrites": 0,
@@ -221,7 +229,8 @@
         "worker_completion_claimed": true,
         "worker_validation_observed": true,
         "worker_validation_verified": true,
-        "worker_validation_execution_id": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+        "worker_validation_execution_id": null,
+        "worker_validation_conversation_id": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
         "worker_validation_actor": "WORKER",
         "worker_validation_exit_code": 0,
         "worker_validation_fresh": true,
@@ -230,7 +239,8 @@
       "worker_completion_claimed": true,
       "worker_validation_observed": true,
       "worker_validation_verified": true,
-      "worker_validation_execution_id": "0a7394c0-64c8-49b6-9371-0370ce8d752a",
+      "worker_validation_execution_id": null,
+      "worker_validation_conversation_id": "8850abbd-ab1a-4c01-962e-3fb62abb2288",
       "worker_validation_actor": "WORKER",
       "worker_validation_exit_code": 0,
       "worker_validation_fresh": true,
