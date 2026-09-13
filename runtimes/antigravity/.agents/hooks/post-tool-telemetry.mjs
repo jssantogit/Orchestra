@@ -39,9 +39,118 @@ function getWorkspacePaths(payload = {}) {
   return {
     repoRoot,
     statePath: resolve(repoRoot, ".agents/state/active-state.json"),
+    contractPath: resolve(repoRoot, ".agents/state/active-contract.json"),
+    roleBindingsPath: resolve(repoRoot, ".agents/state/role-bindings.json"),
     telemetryPath: resolve(repoRoot, ".agents/telemetry/events.jsonl"),
     executionsDir: resolve(repoRoot, ".agents/state/executions"),
     pendingExecutionsDir: resolve(repoRoot, ".agents/state/executions/pending"),
+  };
+}
+
+function loadRoleBindings(roleBindingsPath) {
+  if (roleBindingsPath && existsSync(roleBindingsPath)) {
+    try {
+      return JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    } catch {}
+  }
+  return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+}
+
+function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "") {
+  const convId = payload.conversationId || null;
+
+  if (convId) {
+    if (roleBindings.bindings && roleBindings.bindings[convId]) {
+      const b = roleBindings.bindings[convId];
+      return {
+        role: b.role,
+        source: b.source || "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: b.profile || null,
+        model: b.model || payload.modelName || null,
+      };
+    }
+
+    if (roleBindings.mainConversationId && convId === roleBindings.mainConversationId) {
+      return {
+        role: "ORCHESTRATOR",
+        source: "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+      };
+    }
+
+    if (roleBindings.mainConversationId && convId !== roleBindings.mainConversationId) {
+      const pendingList = Array.isArray(roleBindings.pendingSubagents) ? roleBindings.pendingSubagents : [];
+      const pending = pendingList.length > 0 ? pendingList[pendingList.length - 1] : null;
+      const childRole = pending?.role || "WORKER";
+      const childProfile = pending?.typeName || "flash-worker";
+      const childModel = pending?.model || payload.modelName || "gemini-3.8-flash";
+      return {
+        role: childRole,
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: childProfile,
+        model: childModel,
+      };
+    }
+  }
+
+  const stateRole = String(activeState.activeRole || activeState.role || "").toUpperCase();
+  if (stateRole) {
+    if (stateRole === "REVIEWER" || stateRole === "FLASH_REVIEWER") {
+      return {
+        role: "REVIEWER",
+        source: "STATE_DERIVED",
+        confidence: "MEDIUM",
+        actorId: convId,
+        agentProfile: "flash-reviewer",
+        model: payload.modelName || "gemini-3.8-flash-high",
+      };
+    }
+    if (stateRole === "ORCHESTRATOR" || stateRole === "FLASH_ORCHESTRATOR") {
+      return {
+        role: "ORCHESTRATOR",
+        source: "STATE_DERIVED",
+        confidence: "MEDIUM",
+        actorId: convId,
+        agentProfile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+      };
+    }
+    if (stateRole === "WORKER" || stateRole === "FLASH" || stateRole === "FLASH_WORKER") {
+      return {
+        role: "WORKER",
+        source: "STATE_DERIVED",
+        confidence: "MEDIUM",
+        actorId: convId,
+        agentProfile: activeState.requested_agent || "flash-worker",
+        model: payload.modelName || "gemini-3.8-flash",
+      };
+    }
+  }
+
+  const contractFile = resolve(repoRoot, ".agents/state/active-contract.json");
+  if (existsSync(contractFile) || activeState.scopeContract) {
+    return {
+      role: "WORKER",
+      source: "CONTRACT_BOUND",
+      confidence: "MEDIUM",
+      actorId: convId,
+      agentProfile: activeState.requested_agent || "flash-worker",
+      model: payload.modelName || "gemini-3.8-flash",
+    };
+  }
+
+  return {
+    role: "UNKNOWN",
+    source: "UNRESOLVED",
+    confidence: "LOW",
+    actorId: convId,
   };
 }
 
@@ -61,7 +170,7 @@ function main() {
   }
 
   try {
-    const { repoRoot, statePath, telemetryPath, executionsDir, pendingExecutionsDir } = getWorkspacePaths(payload);
+    const { repoRoot, statePath, roleBindingsPath, telemetryPath, executionsDir, pendingExecutionsDir } = getWorkspacePaths(payload);
     mkdirSync(dirname(telemetryPath), { recursive: true });
 
     let activeState = {};
@@ -130,6 +239,9 @@ function main() {
     }
 
     // Track tool mix and mutations
+    const roleBindings = loadRoleBindings(roleBindingsPath);
+    const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot);
+
     const toolName = payload.toolName ?? payload.toolCall?.name ?? null;
     const toolArgs = payload.toolCall?.args || {};
     let shellClassification = null;
@@ -184,6 +296,13 @@ function main() {
         recordMutation(activeState, {
           paths: [target],
           type: toolName === "write_to_file" ? "CREATE" : "EDIT",
+          tool: toolName,
+          actorRole: actor.role,
+          actorId: actor.actorId || conversationId || null,
+          agentProfile: actor.agentProfile || null,
+          model: actor.model || null,
+          confidence: actor.confidence || "LOW",
+          evidenceSource: actor.source || "STATE_DERIVED",
         });
       }
     } else if (toolName === "run_command") {
@@ -218,9 +337,16 @@ function main() {
         recordMutation(activeState, {
           paths: shellMutation.targetPath ? [shellMutation.targetPath] : [],
           type: "SHELL_MUTATION",
+          tool: "run_command",
           scope: shellMutation.scope,
           unknownScope: shellMutation.unknownScope,
           command: rawCmd,
+          actorRole: actor.role,
+          actorId: actor.actorId || conversationId || null,
+          agentProfile: actor.agentProfile || null,
+          model: actor.model || null,
+          confidence: actor.confidence || "LOW",
+          evidenceSource: actor.source || "STATE_DERIVED",
         });
       }
 

@@ -1,10 +1,11 @@
 import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, relative } from "node:path";
+import { resolve, relative, dirname, basename } from "node:path";
 import {
   extractRealShellRedirections,
   TOOL_OUTPUT_LIMITS,
   POLLING_POLICY,
   checkPollingBudget,
+  isControlPlanePath,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
@@ -34,22 +35,186 @@ function pathMatchesPattern(filePath, pattern) {
   return normPath === normPattern;
 }
 
-function getWorkspacePaths() {
+function getWorkspacePaths(payload = {}) {
   const cwd = process.cwd();
-  const repoRoot = existsSync(resolve(cwd, "packages"))
-    ? cwd
-    : (existsSync(resolve(cwd, "../packages")) ? resolve(cwd, "..") : cwd);
+  let repoRoot;
+  if (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0]) {
+    repoRoot = resolve(payload.workspacePaths[0]);
+  } else if (basename(cwd) === ".agents") {
+    repoRoot = resolve(cwd, "..");
+  } else if (existsSync(resolve(cwd, ".agents"))) {
+    repoRoot = cwd;
+  } else if (existsSync(resolve(cwd, "../.agents"))) {
+    repoRoot = resolve(cwd, "..");
+  } else if (existsSync(resolve(cwd, "packages"))) {
+    repoRoot = cwd;
+  } else if (existsSync(resolve(cwd, "../packages"))) {
+    repoRoot = resolve(cwd, "..");
+  } else {
+    repoRoot = cwd;
+  }
   return {
     repoRoot,
     statePath: resolve(repoRoot, ".agents/state/active-state.json"),
     contractPath: resolve(repoRoot, ".agents/state/active-contract.json"),
+    roleBindingsPath: resolve(repoRoot, ".agents/state/role-bindings.json"),
     pendingExecutionsDir: resolve(repoRoot, ".agents/state/executions/pending"),
   };
 }
 
-function isProductPath(p) {
-  const norm = normalizePath(p);
-  return norm.startsWith("packages/") || norm.startsWith("apps/") || norm.startsWith("vendor/");
+function loadRoleBindings(roleBindingsPath) {
+  if (existsSync(roleBindingsPath)) {
+    try {
+      return JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    } catch {}
+  }
+  return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+}
+
+function saveRoleBindings(roleBindingsPath, data) {
+  try {
+    mkdirSync(dirname(roleBindingsPath), { recursive: true });
+    writeFileSync(roleBindingsPath, JSON.stringify(data, null, 2), "utf-8");
+  } catch {}
+}
+
+function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "", roleBindingsPath = "") {
+  const convId = payload.conversationId || null;
+
+  // 1. Check exact conversationId in role-bindings
+  if (convId) {
+    const existing = (roleBindings.bindings && roleBindings.bindings[convId])
+      || (roleBindings.conversations && roleBindings.conversations[convId]);
+    if (existing) {
+      return {
+        role: existing.role,
+        source: existing.source || "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: existing.profile || null,
+        model: existing.model || payload.modelName || null,
+      };
+    }
+
+    // Matches main conversation ID
+    if (roleBindings.mainConversationId && convId === roleBindings.mainConversationId) {
+      return {
+        role: "ORCHESTRATOR",
+        source: "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+      };
+    }
+
+    // Different conversationId than main -> child subagent
+    if ((roleBindings.mainConversationId && convId !== roleBindings.mainConversationId) || (Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0)) {
+      const pendingList = Array.isArray(roleBindings.pendingSubagents) ? roleBindings.pendingSubagents : [];
+      const pending = pendingList.length > 0 ? pendingList[pendingList.length - 1] : null;
+      const childRole = pending?.role || "WORKER";
+      const childProfile = pending?.typeName || "flash-worker";
+      const childModel = pending?.model || payload.modelName || "gemini-3.8-flash";
+      if (!roleBindings.bindings) roleBindings.bindings = {};
+      if (!roleBindings.conversations) roleBindings.conversations = {};
+      const record = {
+        role: childRole,
+        profile: childProfile,
+        model: childModel,
+        source: "RUNTIME_IDENTITY",
+      };
+      roleBindings.bindings[convId] = record;
+      roleBindings.conversations[convId] = record;
+      if (roleBindingsPath) {
+        saveRoleBindings(roleBindingsPath, roleBindings);
+      }
+      return {
+        role: childRole,
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: childProfile,
+        model: childModel,
+      };
+    }
+  }
+
+  // 2. State-derived role
+  const stateRole = String(activeState.activeRole || activeState.role || "").toUpperCase();
+  if (stateRole) {
+    if (isReviewerRole(stateRole)) {
+      return {
+        role: "REVIEWER",
+        source: "STATE_DERIVED",
+        confidence: "MEDIUM",
+        actorId: convId,
+        agentProfile: "flash-reviewer",
+        model: payload.modelName || "gemini-3.8-flash-high",
+      };
+    }
+    if (isOrchestratorRole(stateRole)) {
+      return {
+        role: "ORCHESTRATOR",
+        source: "STATE_DERIVED",
+        confidence: "MEDIUM",
+        actorId: convId,
+        agentProfile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+      };
+    }
+    if (isWorkerRole(stateRole)) {
+      return {
+        role: "WORKER",
+        source: "STATE_DERIVED",
+        confidence: "MEDIUM",
+        actorId: convId,
+        agentProfile: activeState.requested_agent || "flash-worker",
+        model: payload.modelName || "gemini-3.8-flash",
+      };
+    }
+  }
+
+  // 3. Contract-bound role: if active-contract exists, worker execution is contracted
+  const contractFile = resolve(repoRoot, ".agents/state/active-contract.json");
+  if (existsSync(contractFile) || activeState.scopeContract) {
+    return {
+      role: "WORKER",
+      source: "CONTRACT_BOUND",
+      confidence: "MEDIUM",
+      actorId: convId,
+      agentProfile: activeState.requested_agent || "flash-worker",
+      model: payload.modelName || "gemini-3.8-flash",
+    };
+  }
+
+  // 4. Fallback: If conversationId is present, no subagents exist yet, and role-bindings has no main,
+  // this is the initial main agent conversation (Flash Orchestrator)
+  if (convId && !roleBindings.mainConversationId) {
+    if (stateRole && isOrchestratorRole(stateRole)) {
+      roleBindings.mainConversationId = convId;
+      roleBindings.bindings[convId] = {
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      };
+      return {
+        role: "ORCHESTRATOR",
+        source: "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
+        actorId: convId,
+        agentProfile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+      };
+    }
+  }
+
+  return {
+    role: "UNKNOWN",
+    source: "UNRESOLVED",
+    confidence: "LOW",
+    actorId: convId,
+  };
 }
 
 function checkLargeFileGuard(cmd, repoRoot) {
@@ -244,7 +409,7 @@ function main() {
   const toolName = toolCall.name || "";
   const toolArgs = toolCall.args || {};
 
-  const { repoRoot, statePath, contractPath, pendingExecutionsDir } = getWorkspacePaths();
+  const { repoRoot, statePath, contractPath, roleBindingsPath, pendingExecutionsDir } = getWorkspacePaths(payload);
 
   let activeState = {};
   let activeContract = null;
@@ -263,7 +428,9 @@ function main() {
     activeContract = activeState.scopeContract;
   }
 
-  const activeRole = String(activeState.activeRole || activeState.role || "").toUpperCase();
+  const roleBindings = loadRoleBindings(roleBindingsPath);
+  const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot, roleBindingsPath);
+  const activeRole = actor.role;
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
   // Check 1: Worker or Reviewer spawning subagents, OR any subagent during DIRECT_ACTION
@@ -285,6 +452,44 @@ function main() {
       }));
       return;
     }
+
+    if (toolName === "invoke_subagent") {
+      const convId = payload.conversationId || "default";
+      if (!roleBindings.mainConversationId) {
+        roleBindings.mainConversationId = convId;
+      }
+      if (!roleBindings.bindings) roleBindings.bindings = {};
+      if (!roleBindings.conversations) roleBindings.conversations = {};
+      const orchRecord = {
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      };
+      roleBindings.bindings[convId] = orchRecord;
+      roleBindings.conversations[convId] = orchRecord;
+
+      if (!Array.isArray(roleBindings.pendingSubagents)) {
+        roleBindings.pendingSubagents = [];
+      }
+      const subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
+      for (const sub of subagents) {
+        const typeName = sub.TypeName || sub.name || "";
+        const roleStr = String(sub.Role || typeName).toLowerCase();
+        const subRole = (roleStr.includes("reviewer") || typeName === "flash-reviewer") ? "REVIEWER" : "WORKER";
+        const modelStr = sub.Model || (subRole === "REVIEWER" ? "gemini-3.8-flash-high" : (typeName === "flash-low-worker" ? "gemini-3.8-flash-low" : "gemini-3.8-flash"));
+        roleBindings.pendingSubagents.push({
+          typeName,
+          role: subRole,
+          model: modelStr,
+          profile: typeName,
+          parentConversationId: convId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      saveRoleBindings(roleBindingsPath, roleBindings);
+    }
+
     console.log(JSON.stringify({ decision: "allow" }));
     return;
   }
@@ -381,14 +586,31 @@ function main() {
     const targets = extractTargetPaths(cmd, repoRoot);
     const redir = extractRealShellRedirections(cmd);
 
-    // 2b. Orchestrator: allow read-only and validation; block shell mutations to product code
+    const nonControlTargets = targets.filter(t => !isControlPlanePath(t));
+    const nonControlRedir = redir.targets.filter(t => !isControlPlanePath(t));
+    const hasWorkspaceMutationTargets = nonControlTargets.length > 0 || nonControlRedir.length > 0;
+
+    // Unknown role: read-only/validation without workspace redirections is safe; mutating commands fail closed!
+    if (!activeRole || activeRole === "UNKNOWN") {
+      if ((isReadOnly || isValidation) && !hasWorkspaceMutationTargets) {
+        allowCommand(cmd);
+        return;
+      }
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Workspace mutations are prohibited for unresolved roles."
+      }));
+      return;
+    }
+
+    // 2b. Orchestrator: allow read-only and validation; block shell mutations to workspace/product code
     if (isOrchestratorRole(activeRole)) {
       if (isReadOnly || isValidation) {
-        const productTarget = targets.find(isProductPath);
-        if (productTarget) {
+        if (hasWorkspaceMutationTargets) {
+          const badTarget = nonControlTargets[0] || nonControlRedir[0];
           console.log(JSON.stringify({
             decision: "deny",
-            reason: `Separation of duties violation: Orchestrator is forbidden from redirecting output to product code ("${productTarget}"). Delegate implementation to Gemini Flash.`
+            reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from redirecting output to product code or workspace files ("${badTarget}"). Delegate implementation to Gemini Flash.`
           }));
           return;
         }
@@ -396,26 +618,26 @@ function main() {
         return;
       }
 
-      // Mutating command by Orchestrator targeting product code
-      const productTarget = targets.find(isProductPath);
-      if (productTarget) {
+      // Mutating command by Orchestrator targeting workspace files
+      if (hasWorkspaceMutationTargets) {
+        const badTarget = nonControlTargets[0] || nonControlRedir[0];
         console.log(JSON.stringify({
           decision: "deny",
-          reason: `Separation of duties violation: Orchestrator is forbidden from modifying product code ("${productTarget}") via shell commands. Delegate implementation to Gemini Flash.`
+          reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from modifying product code or workspace files ("${badTarget}") via shell commands. Delegate implementation to Gemini Flash.`
         }));
         return;
       }
 
-      if (/\b(sed\s+-[a-zA-Z]*i|rm|mv|cp|touch)\b/.test(cmd) && (cmd.includes("packages/") || cmd.includes("apps/"))) {
+      if (/\b(sed\s+-[a-zA-Z]*i|rm|mv|cp|touch|truncate|tee)\b/.test(cmd)) {
         console.log(JSON.stringify({
           decision: "deny",
-          reason: `Separation of duties violation: Orchestrator is forbidden from modifying product code via shell commands. Delegate implementation to Gemini Flash.`
+          reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from modifying product code or workspace files via shell commands. Delegate implementation to Gemini Flash.`
         }));
         return;
       }
 
-      const allNonProduct = targets.length > 0 && targets.every(t => t.startsWith(".agents/") || t.startsWith(".gemini/") || t.startsWith("scratch/"));
-      if (allNonProduct) {
+      const allControlPlane = targets.length > 0 && targets.every(isControlPlanePath);
+      if (allControlPlane) {
         allowCommand(cmd);
         return;
       }
@@ -423,7 +645,7 @@ function main() {
       if (targets.length > 0 || redir.targets.length > 0) {
         console.log(JSON.stringify({
           decision: "deny",
-          reason: `Separation of duties violation: Orchestrator cannot run unverified mutating shell commands against potential product paths.`
+          reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator cannot run unverified mutating shell commands against potential product or workspace paths.`
         }));
         return;
       }
@@ -510,10 +732,31 @@ function main() {
     const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || "";
     const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
 
-    const isControlPlane = relTarget.startsWith(".agents/") || relTarget.startsWith(".gemini/") || relTarget.endsWith("AGENTS.md") || relTarget.startsWith("scratch/");
-    const isProductCode = isProductPath(relTarget);
+    // Constitution protection: AGENTS.md is strictly immutable across all agents
+    if (relTarget === "AGENTS.md" || relTarget.endsWith("/AGENTS.md")) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "AGENTS.md is the provider-neutral repository constitution and is strictly read-only for all agents."
+      }));
+      return;
+    }
 
-    if (isDirectAction && !isControlPlane) {
+    const isControlPlane = isControlPlanePath(relTarget);
+
+    if (isControlPlane) {
+      if (isReviewerRole(activeRole)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `Separation of duties violation: Reviewer is strictly read-only and is forbidden from modifying files (${relTarget}). Report findings to Orchestrator.`
+        }));
+        return;
+      }
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
+    }
+
+    // Target is a non-control-plane workspace file
+    if (isDirectAction) {
       if (!activeState.toolMix) activeState.toolMix = {};
       activeState.toolMix.direct_action_side_quests_prevented = (activeState.toolMix.direct_action_side_quests_prevented || 0) + 1;
       try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
@@ -532,15 +775,34 @@ function main() {
       return;
     }
 
-    if (isOrchestratorRole(activeRole) && isProductCode) {
+    // Unknown role fails closed!
+    if (!activeRole || activeRole === "UNKNOWN") {
       console.log(JSON.stringify({
         decision: "deny",
-        reason: `Separation of duties violation: Orchestrator is forbidden from directly writing product code (${relTarget}). Delegate implementation to Gemini Flash.`
+        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Workspace mutations are prohibited for unresolved roles."
       }));
       return;
     }
 
-    if (activeContract && !isControlPlane) {
+    // Orchestrator workspace write is denied by default!
+    if (isOrchestratorRole(activeRole)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from directly writing product code or workspace files ("${relTarget}"). Orchestrator writes are denied by default except for control-plane paths. Delegate implementation to Gemini Flash.`
+      }));
+      return;
+    }
+
+    // Worker validation against Scope Contract
+    if (isWorkerRole(activeRole)) {
+      if (!activeContract) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `SCOPE_VIOLATION: Worker cannot modify workspace files ("${relTarget}") without an active Scope Contract.`
+        }));
+        return;
+      }
+
       const allowed = Array.isArray(activeContract.allowedPaths) ? activeContract.allowedPaths : [];
       const forbidden = Array.isArray(activeContract.forbiddenPaths) ? activeContract.forbiddenPaths : [];
 
@@ -548,25 +810,37 @@ function main() {
         if (pathMatchesPattern(relTarget, pattern)) {
           console.log(JSON.stringify({
             decision: "deny",
-            reason: `Scope contract violation: "${relTarget}" matches forbiddenPaths pattern "${pattern}".`
+            reason: `SCOPE_VIOLATION: "${relTarget}" matches forbiddenPaths pattern "${pattern}".`
           }));
           return;
         }
       }
 
-      if (allowed.length > 0) {
-        const isAllowed = allowed.some((pattern) => pathMatchesPattern(relTarget, pattern));
-        if (!isAllowed) {
-          console.log(JSON.stringify({
-            decision: "deny",
-            reason: `Scope contract violation: "${relTarget}" is outside allowedPaths [${allowed.join(", ")}]. If required, return CROSS_DOMAIN_REQUEST to Orchestrator.`
-          }));
-          return;
-        }
+      if (allowed.length === 0) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `SCOPE_VIOLATION: Worker has no allowedPaths specified in active Scope Contract.`
+        }));
+        return;
       }
+
+      const isAllowed = allowed.some((pattern) => pathMatchesPattern(relTarget, pattern));
+      if (!isAllowed) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `SCOPE_VIOLATION: "${relTarget}" is outside allowedPaths [${allowed.join(", ")}]. If required, return CROSS_DOMAIN_REQUEST to Orchestrator.`
+        }));
+        return;
+      }
+
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
     }
 
-    console.log(JSON.stringify({ decision: "allow" }));
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `ROLE_IDENTITY_UNRESOLVED: Unauthorized role "${activeRole}" cannot modify workspace files.`
+    }));
     return;
   }
 

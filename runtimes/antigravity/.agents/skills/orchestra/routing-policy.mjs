@@ -3133,18 +3133,31 @@ export function createMutationRecord(mutationSeq, paths = [], type = "EDIT", dom
   };
 }
 
+export function isControlPlanePath(path) {
+  const norm = String(path || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  if (!norm) return false;
+  if (norm.startsWith(".agents/") || norm === ".agents") return true;
+  if (norm.startsWith("scratch/") || norm === "scratch") return true;
+  if (norm.startsWith(".scratch/") || norm === ".scratch") return true;
+  return false;
+}
+
 export function recordMutation(activeState = {}, mutation = {}) {
   const currentSeq = typeof activeState.mutationSeq === "number" ? activeState.mutationSeq : 0;
   const nextSeq = currentSeq + 1;
   const paths = Array.isArray(mutation.paths) ? mutation.paths : (mutation.paths ? [mutation.paths] : []);
 
+  const authorRole = mutation.actorRole || activeState.activeRole || null;
   const record = {
     mutationSeq: nextSeq,
     timestamp: new Date().toISOString(),
     paths,
     type: mutation.type || "EDIT",
     domain: mutation.domain || null,
-    authorRole: activeState.activeRole || null,
+    authorRole,
+    actorId: mutation.actorId || activeState.conversationId || null,
+    confidence: mutation.confidence || "LOW",
+    evidenceSource: mutation.evidenceSource || "STATE_DERIVED",
   };
 
   activeState.mutationSeq = nextSeq;
@@ -3155,6 +3168,23 @@ export function recordMutation(activeState = {}, mutation = {}) {
 
   if (activeState.mutations.length > 50) {
     activeState.mutations = activeState.mutations.slice(-50);
+  }
+
+  if (!Array.isArray(activeState.mutationEvents)) {
+    activeState.mutationEvents = [];
+  }
+  for (const p of paths) {
+    activeState.mutationEvents.push({
+      path: p,
+      tool: mutation.tool || (mutation.type === "CREATE" ? "write_to_file" : (mutation.type === "SHELL_MUTATION" ? "run_command" : "replace_file_content")),
+      actorRole: authorRole || "UNKNOWN",
+      actorId: mutation.actorId || activeState.conversationId || null,
+      agentProfile: mutation.agentProfile || activeState.requested_agent || null,
+      model: mutation.model || activeState.actual_runtime_model || activeState.configured_model || null,
+      confidence: mutation.confidence || (authorRole ? "MEDIUM" : "LOW"),
+      evidenceSource: mutation.evidenceSource || "STATE_DERIVED",
+      timestamp: new Date().toISOString(),
+    });
   }
 
   return record;

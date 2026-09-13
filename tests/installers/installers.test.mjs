@@ -36,6 +36,7 @@ test("installer: installs Antigravity runtime cleanly into empty project without
     assert.equal(existsSync(join(tempProject, ".agents/agents/flash-orchestrator.md")), true);
     assert.equal(existsSync(join(tempProject, ".agents/hooks/pre-tool-enforce.mjs")), true);
     assert.equal(existsSync(join(tempProject, ".agents/skills/orchestra/routing-policy.mjs")), true);
+    assert.equal(existsSync(join(tempProject, "GEMINI.md")), true);
     // Verify no state or telemetry was copied
     assert.equal(existsSync(join(tempProject, ".agents/state/active-state.json")), false);
     assert.equal(existsSync(join(tempProject, ".agents/telemetry/events.jsonl")), false);

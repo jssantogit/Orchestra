@@ -10,6 +10,8 @@ import {
   classifyRoleAttributionConfidence,
   evaluateTaskFidelity,
 } from "../../benchmarks/turn-economy/fidelity.mjs";
+import { decideRoute as decideCodexRoute } from "../../runtimes/codex/.codex/astra-orchestra/routing-policy.mjs";
+import { decideRoute as decideAgyRoute } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -31,10 +33,151 @@ test("fidelity: expected worker route classification", () => {
   assert.equal(codexSimpleRoute.worker, "luna-high");
   assert.equal(codexSimpleRoute.delegationExpected, true);
 
+  // Authoritative policy: simple implementation routes to flash-low-worker (gemini-3.8-flash-low)
   const agySimpleRoute = getExpectedRoute("simple", "antigravity");
   assert.equal(agySimpleRoute.orchestrator, "flash-orchestrator");
-  assert.equal(agySimpleRoute.worker, "flash-worker");
+  assert.equal(agySimpleRoute.worker, "flash-low-worker");
+  assert.equal(agySimpleRoute.workerModel, "gemini-3.8-flash-low");
   assert.equal(agySimpleRoute.delegationExpected, true);
+});
+
+test("fidelity: dynamic policy derivation eliminates route drift", () => {
+  // Verify Codex policy alignment
+  const codexPolicySimple = decideCodexRoute({ taskAction: "IMPLEMENT", implementationComplexity: "simple" });
+  const codexExpectedSimple = getExpectedRoute("simple", "codex");
+  assert.equal(codexExpectedSimple.worker, codexPolicySimple.profile);
+  assert.equal(codexExpectedSimple.workerModel, codexPolicySimple.model);
+
+  const codexPolicyMulti = decideCodexRoute({ taskAction: "IMPLEMENT", implementationComplexity: "normal" });
+  const codexExpectedMulti = getExpectedRoute("multi", "codex");
+  assert.equal(codexExpectedMulti.worker, codexPolicyMulti.profile);
+  assert.equal(codexExpectedMulti.workerModel, codexPolicyMulti.model);
+
+  // Verify Antigravity policy alignment
+  const agyPolicySimple = decideAgyRoute({ taskAction: "IMPLEMENT", implementationComplexity: "simple" });
+  const agyExpectedSimple = getExpectedRoute("simple", "antigravity");
+  assert.equal(agyExpectedSimple.workerModel, agyPolicySimple.model);
+
+  const agyPolicyMulti = decideAgyRoute({ taskAction: "IMPLEMENT", implementationComplexity: "normal" });
+  const agyExpectedMulti = getExpectedRoute("multi", "antigravity");
+  assert.equal(agyExpectedMulti.workerModel, agyPolicyMulti.model);
+});
+
+test("fidelity: dry-run returns SIMULATED status and LOW confidence", () => {
+  const dryRunCodex = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "codex",
+    dryRun: true,
+    subagentInvocations: 1,
+    mutationActor: "WORKER",
+    runtimeLoaded: true,
+  });
+
+  assert.equal(dryRunCodex.fidelityStatus, "SIMULATED");
+  assert.equal(dryRunCodex.confidence, "LOW");
+  assert.equal(dryRunCodex.writeActorValid, true);
+
+  const dryRunAgy = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    dryRun: true,
+    subagentInvocations: 1,
+    mutationActor: "WORKER",
+    runtimeLoaded: true,
+  });
+
+  assert.equal(dryRunAgy.fidelityStatus, "SIMULATED");
+  assert.equal(dryRunAgy.confidence, "LOW");
+  assert.equal(dryRunAgy.writeActorValid, true);
+});
+
+test("fidelity: subagent spawn alone does NOT grant PASS if orchestrator mutates product code", () => {
+  // Scenario: Orchestrator spawned a subagent, but wrote product code itself
+  const evalResult = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "ORCHESTRATOR",
+    orchestratorWorkspaceWrites: 1,
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actorRole: "ORCHESTRATOR",
+        actorId: "orchestrator-main",
+        confidence: "HIGH",
+        evidenceSource: "hook_payload",
+      },
+    ],
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: { hasExplicitAgentRole: true },
+  });
+
+  assert.equal(evalResult.fidelityStatus, "FAIL");
+  assert.equal(evalResult.writeActorValid, false);
+  assert.ok(
+    evalResult.violations.includes("FIDELITY_VIOLATION: ORCHESTRATOR_PRODUCT_WRITE_ALLOWED"),
+    "Orchestrator product write must fail closed even when subagent is present"
+  );
+});
+
+test("fidelity: unknown mutation actor fails closed", () => {
+  const evalResult = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "UNKNOWN",
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actorRole: "UNKNOWN",
+        actorId: null,
+        confidence: "LOW",
+        evidenceSource: "unresolved",
+      },
+    ],
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: {},
+  });
+
+  assert.equal(evalResult.fidelityStatus, "FAIL");
+  assert.equal(evalResult.writeActorValid, false);
+  assert.ok(
+    evalResult.violations.includes("FIDELITY_VIOLATION: MUTATION_ACTOR_UNKNOWN"),
+    "Unknown actor mutations must fail closed"
+  );
+});
+
+test("fidelity: per-mutation event attribution verifies true worker author", () => {
+  // Valid worker mutation event with HIGH confidence
+  const evalResult = evaluateTaskFidelity({
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actorRole: "WORKER",
+        actorId: "subagent-c1234",
+        agentProfile: "flash-low-worker",
+        model: "gemini-3.8-flash-low",
+        confidence: "HIGH",
+        evidenceSource: "hook_payload",
+      },
+    ],
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: { hasExplicitAgentRole: true },
+  });
+
+  assert.equal(evalResult.fidelityStatus, "PASS");
+  assert.equal(evalResult.confidence, "HIGH");
+  assert.equal(evalResult.writeActorValid, true);
+  assert.equal(evalResult.observed.productMutationActor, "WORKER");
 });
 
 test("fidelity: direct / read-only tasks pass without worker delegation", () => {

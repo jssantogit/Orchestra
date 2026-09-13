@@ -354,6 +354,8 @@ function parseAgyTelemetry(targetDir, rawOutput) {
     reasoning_tokens: normUsage.reasoningTokens,
     token_semantics_confidence: normUsage.confidence,
     metric_status: normUsage.status,
+    mutation_events: state.mutationEvents || [],
+    orchestrator_workspace_writes: state.orchestratorWorkspaceWrites || 0,
   };
 }
 
@@ -391,6 +393,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         runtime,
         subagentInvocations: TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? 1 : 0,
         mutationActor: TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? "WORKER" : "NONE",
+        dryRun: true,
         runtimeLoaded: true,
         orchestratorIdentity: runtime === "codex" ? "terra-medium" : "flash-orchestrator",
         workerObserved: !!TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected,
@@ -506,17 +509,47 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     const durationMs = Date.now() - startTime;
     const verification = taskDef.verify(tempDir, stdout);
 
+    const mutationEvents = metrics.mutation_events || [];
+    const orchestratorWrites = metrics.orchestrator_workspace_writes || 0;
+    const workerMutations = mutationEvents.filter(
+      (m) => m.actorRole === "WORKER" || m.actorRole === "WORKER_SUBAGENT"
+    );
+    const orchestratorMutations = mutationEvents.filter(
+      (m) => m.actorRole === "ORCHESTRATOR"
+    );
+    const unknownMutations = mutationEvents.filter(
+      (m) => m.actorRole === "UNKNOWN"
+    );
+
+    let liveMutationActor = "NONE";
+    if (orchestratorWrites > 0 || orchestratorMutations.length > 0) {
+      liveMutationActor = "ORCHESTRATOR";
+    } else if (unknownMutations.length > 0) {
+      liveMutationActor = "UNKNOWN";
+    } else if (workerMutations.length > 0) {
+      liveMutationActor = "WORKER";
+    } else if (runtime === "codex" && (metrics.subagent_invocations || 0) > 0) {
+      liveMutationActor = TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? "WORKER" : "NONE";
+    } else if (TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected && (metrics.tool_calls || 0) > 0) {
+      liveMutationActor = "ORCHESTRATOR";
+    }
+
     const fidelity = evaluateTaskFidelity({
       taskKey,
       runtime,
       subagentInvocations: metrics.subagent_invocations || 0,
-      mutationActor: (metrics.subagent_invocations || 0) > 0 ? "WORKER" : (metrics.tool_calls > 0 && TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? "ORCHESTRATOR" : "NONE"),
+      mutationActor: liveMutationActor,
+      mutationEvents,
+      orchestratorWorkspaceWrites: orchestratorWrites,
+      dryRun: false,
       runtimeLoaded: true,
       orchestratorIdentity: runtime === "codex" ? "terra-medium" : "flash-orchestrator",
-      workerObserved: (metrics.subagent_invocations || 0) > 0,
+      workerObserved: workerMutations.length > 0 || (metrics.subagent_invocations || 0) > 0,
       confidenceEvidence: {
         hasExplicitThreadId: runtime === "codex" && (metrics.subagent_invocations || 0) > 0,
-        hasExplicitAgentRole: true,
+        hasExplicitAgentRole: mutationEvents.some(
+          (m) => m.evidenceSource === "hook_payload" || m.evidenceSource === "role_bindings"
+        ),
         hasSubagentTrace: (metrics.subagent_invocations || 0) > 0,
       },
     });
@@ -606,7 +639,7 @@ function main() {
         const fidelityStr = res.fidelity ? ` Fidelity=${res.fidelity.status}` : "";
         console.log(`RESULT [${runtime} / ${taskKey}]: Success=${res.success}${fidelityStr} Duration=${res.duration_ms}ms Invocations=${res.model_invocations} Tools=${res.tool_calls}`);
 
-        if (options.requireFidelity && res.fidelity && res.fidelity.status !== "PASS" && TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected) {
+        if (options.requireFidelity && !options.dryRun && res.fidelity && res.fidelity.status !== "PASS" && TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected) {
           console.error(`FIDELITY_FAILED: ${runtime} on ${taskKey} failed runtime fidelity check: ${res.fidelity.violations.join(", ")}`);
           hasFidelityFailure = true;
         }

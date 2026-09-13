@@ -13,6 +13,7 @@ const targetDir = resolve(args[0]);
 const scriptDir = fileURLToPath(new URL(".", import.meta.url));
 const orchestraRoot = resolve(scriptDir, "..");
 const sourceAgents = join(orchestraRoot, "runtimes/antigravity/.agents");
+const sourceGemini = join(orchestraRoot, "runtimes/antigravity/GEMINI.md");
 
 if (!existsSync(targetDir)) {
   console.error(`Error: Target directory '${targetDir}' does not exist.`);
@@ -20,10 +21,11 @@ if (!existsSync(targetDir)) {
 }
 
 const targetAgents = join(targetDir, ".agents");
+const targetGemini = join(targetDir, "GEMINI.md");
 
 // Conflict check: Do not overwrite existing configuration silently
-if (existsSync(targetAgents)) {
-  console.error(`Conflict detected: '${targetAgents}' already exists in target project.`);
+if (existsSync(targetAgents) || existsSync(targetGemini)) {
+  console.error(`Conflict detected: '${targetAgents}' or '${targetGemini}' already exists in target project.`);
   console.error("Aborting installation to prevent destructive overwriting.");
   console.error(`To install manually, review and merge components under '${targetAgents}'.`);
   process.exit(2);
@@ -41,6 +43,9 @@ cpSync(join(sourceAgents, "agents"), join(targetAgents, "agents"), { recursive: 
 cpSync(join(sourceAgents, "hooks"), join(targetAgents, "hooks"), { recursive: true });
 cpSync(join(sourceAgents, "skills"), join(targetAgents, "skills"), { recursive: true });
 cpSync(join(sourceAgents, "hooks.json"), join(targetAgents, "hooks.json"));
+if (existsSync(sourceGemini)) {
+  cpSync(sourceGemini, targetGemini);
+}
 
 // Ensure runtime state and logs are never copied
 try { rmSync(join(targetAgents, "state/active-state.json"), { force: true }); } catch {}

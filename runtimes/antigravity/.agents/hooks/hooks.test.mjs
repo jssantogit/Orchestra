@@ -22,6 +22,7 @@ const gitOpScript = resolve(".agents/hooks/git-operation.mjs");
 function cleanState() {
   try { unlinkSync(".agents/state/active-state.json"); } catch {}
   try { unlinkSync(".agents/state/active-contract.json"); } catch {}
+  try { unlinkSync(".agents/state/role-bindings.json"); } catch {}
   try { rmSync(".agents/state/executions", { recursive: true, force: true }); } catch {}
   try { unlinkSync(".agents/telemetry/events.jsonl"); } catch {}
   try { rmSync("scratch", { recursive: true, force: true }); } catch {}
@@ -1710,4 +1711,243 @@ test("v5: git-operation runner idempotency and push partial failure recovery", (
     cleanState();
   }
 });
+
+test("pre-tool hook: fails closed with ROLE_IDENTITY_UNRESOLVED on workspace write when role is unknown", () => {
+  cleanState();
+  try {
+    const input = JSON.stringify({
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/new-feature.ts") },
+      },
+    });
+    const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+    assert.equal(output.decision, "deny");
+    assert(output.reason.includes("ROLE_IDENTITY_UNRESOLVED"));
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: blocks orchestrator workspace writes across the full layout matrix", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+
+    const matrixPaths = [
+      "src/formatter.ts",
+      "lib/utils.js",
+      "packages/core/index.ts",
+      "apps/web/main.tsx",
+      "test/formatter.test.js",
+      "docs/architecture.md",
+      "config/default.json",
+      "scripts/build.sh",
+      "README.md",
+    ];
+
+    for (const relPath of matrixPaths) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: resolve(relPath) },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "deny", `Orchestrator write to ${relPath} must be denied`);
+      assert(
+        output.reason.includes("ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED"),
+        `Expected ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED for ${relPath}, got ${output.reason}`
+      );
+    }
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: allows orchestrator control plane writes (.agents/**, scratch/**) but blocks AGENTS.md", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+
+    // Allowed control-plane paths
+    const allowed = [
+      ".agents/state/active-state.json",
+      ".agents/state/active-contract.json",
+      ".agents/evidence/ledger.json",
+      "scratch/experiment.py",
+      "scratch/debug-notes.txt",
+    ];
+
+    for (const relPath of allowed) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: resolve(relPath) },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "allow", `Orchestrator write to ${relPath} should be allowed`);
+    }
+
+    // AGENTS.md is strictly protected constitution
+    const agentsMdInput = JSON.stringify({
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("AGENTS.md") },
+      },
+    });
+    const agentsMdOutput = JSON.parse(execFileSync("node", [preToolScript], { input: agentsMdInput }));
+    assert.equal(agentsMdOutput.decision, "deny");
+    assert(agentsMdOutput.reason.includes("AGENTS.md is the provider-neutral repository constitution"));
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: blocks orchestrator shell mutations but permits read-only commands", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
+
+    // Mutating shell commands
+    const mutatingCommands = [
+      "rm -rf src/old.js",
+      "echo 'alert()' > src/index.js",
+      "cat new.js > lib/core.js",
+      "sed -i 's/foo/bar/g' src/file.js",
+    ];
+
+    for (const cmd of mutatingCommands) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: cmd },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "deny", `Shell mutation '${cmd}' must be denied`);
+      assert(output.reason.includes("ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED"));
+    }
+
+    // Read-only shell commands
+    const readOnlyCommands = [
+      "git status",
+      "git diff",
+      "node --test test/formatter.test.js",
+      "npm test",
+    ];
+
+    for (const cmd of readOnlyCommands) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: cmd },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "allow", `Read-only shell '${cmd}' should be allowed`);
+    }
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: tracks subagent invocations and binds child conversation ID to worker role", () => {
+  cleanState();
+  try {
+    // 1. invoke_subagent call records pending subagent
+    const invokeInput = JSON.stringify({
+      conversationId: "parent-conv-1",
+      toolCall: {
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            {
+              TypeName: "worker",
+              Role: "Implementation Worker",
+              Model: "flash_lite",
+              Prompt: "Fix the bug in src/formatter.js",
+            },
+          ],
+        },
+      },
+    });
+    const invokeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: invokeInput }));
+    assert.equal(invokeOutput.decision, "allow");
+
+    // Verify role-bindings.json has pending binding
+    const bindingsPath = resolve(".agents/state/role-bindings.json");
+    assert.ok(existsSync(bindingsPath), "role-bindings.json must exist after invoke_subagent");
+    const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.ok(bindings.pendingSubagents.length > 0, "pendingSubagents must be populated");
+    assert.equal(bindings.pendingSubagents[0].role, "WORKER");
+
+    // 2. Authorize scope contract for worker
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      taskDomain: "CODE",
+      allowedPaths: ["src/**"],
+    }));
+
+    // 3. Child conversation calls tool -> automatically bound to WORKER and allowed within scope
+    const childInput = JSON.stringify({
+      conversationId: "child-conv-42",
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const childOutput = JSON.parse(execFileSync("node", [preToolScript], { input: childInput }));
+    assert.equal(childOutput.decision, "allow", "Bound worker must be allowed to write product file");
+
+    // Verify bindings now map child-conv-42 to WORKER
+    const updatedBindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(updatedBindings.conversations["child-conv-42"].role, "WORKER");
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: allows worker to write within scope contract but denies out-of-scope files", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    writeFileSync(
+      ".agents/state/active-contract.json",
+      JSON.stringify({
+        taskDomain: "CODE",
+        allowedPaths: ["src/**"],
+        forbiddenPaths: ["packages/core/**"],
+      })
+    );
+
+    // In-scope write
+    const inScopeInput = JSON.stringify({
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const inScopeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: inScopeInput }));
+    assert.equal(inScopeOutput.decision, "allow");
+
+    // Out-of-scope write
+    const outOfScopeInput = JSON.stringify({
+      toolCall: {
+        name: "write_to_file",
+        args: { TargetFile: resolve("packages/core/secret.ts") },
+      },
+    });
+    const outOfScopeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: outOfScopeInput }));
+    assert.equal(outOfScopeOutput.decision, "deny");
+    assert(outOfScopeOutput.reason.includes("SCOPE_VIOLATION"));
+  } finally {
+    cleanState();
+  }
+});
+
 

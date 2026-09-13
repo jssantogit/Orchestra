@@ -82,6 +82,7 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/SKILL.md"
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.test.mjs"
+  "runtimes/antigravity/GEMINI.md"
 )
 
 for file in "${REQUIRED_AGY_FILES[@]}"; do
