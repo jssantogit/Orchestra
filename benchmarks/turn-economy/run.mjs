@@ -282,6 +282,20 @@ function parseCodexJsonl(rawOutput) {
   };
 }
 
+/**
+ * Normalizes file paths to clean forward-slash relative workspace paths without double slashes.
+ */
+export function canonicalizePath(p) {
+  return String(p || "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/\\+/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/^(\.\/)+/, "")
+    .replace(/\/+$/, "");
+}
+
 function parseTranscriptTurns(transcriptPath) {
   if (!existsSync(transcriptPath)) return null;
   try {
@@ -377,17 +391,12 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
           if (toolName === "replace_file_content" || toolName === "write_to_file") {
             const rawTarget = String(args.TargetFile || args.targetFile || args.path || "").replace(/^["']|["']$/g, "");
             let relPath = rawTarget;
-            const normRaw = rawTarget.replace(/\\/g, "/");
-            const normTargetDir = targetDir ? targetDir.replace(/\\/g, "/") : "";
-            if (normTargetDir && normRaw.startsWith(normTargetDir)) {
-              relPath = normRaw.slice(normTargetDir.length).replace(/^\/+/, "");
-            } else {
-              const idxSrc = normRaw.indexOf("src/");
-              const idxTest = normRaw.indexOf("test/");
-              if (idxSrc >= 0) relPath = normRaw.slice(idxSrc);
-              else if (idxTest >= 0) relPath = normRaw.slice(idxTest);
+            const normRaw = rawTarget.replace(/\\+/g, "/").replace(/\/+/g, "/");
+            const normTargetDir = targetDir ? targetDir.replace(/\\+/g, "/").replace(/\/+/g, "/").replace(/\/+$/, "") : "";
+            if (normTargetDir && normRaw.toLowerCase().startsWith(normTargetDir.toLowerCase())) {
+              relPath = normRaw.slice(normTargetDir.length);
             }
-            relPath = relPath.replace(/^\.\//, "");
+            relPath = canonicalizePath(relPath);
 
             if (!isControlPlanePath(relPath)) {
               mutations.push({
@@ -816,9 +825,9 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     handoff_bytes: state.handoffBytes || state.worker_packet_bytes || 0,
     handoff_status: state.handoffStatus || (state.worker_packet_bytes ? "MESSAGE_DELIVERED" : null),
     worker_conversation_id: state.workerConversationId || (childValidations[0]?.conversationId || null),
-    acceptance_actor: state.acceptanceActor || "ORCHESTRATOR",
-    acceptance_observed: state.acceptanceObserved || (state.state === "DONE" || state.acceptanceState === "ACCEPTED"),
-    acceptance_state: state.acceptanceState || (state.state === "DONE" ? "ACCEPTED" : null),
+    acceptance_actor: state.acceptanceActor || null,
+    acceptance_observed: Boolean(state.acceptanceObserved),
+    acceptance_state: state.acceptanceState || null,
     parent_per_turn_tool_counts: parentMetrics?.per_turn_tool_counts || (parentToolCalls > 0 ? [parentToolCalls] : [0]),
     worker_per_turn_tool_counts: workerMetrics?.per_turn_tool_counts || (workerToolCalls > 0 ? [workerToolCalls] : []),
   };
@@ -1047,6 +1056,9 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       workerValidationActor: metrics.worker_validation_actor || null,
       workerValidationExitCode: metrics.worker_validation_exit_code ?? null,
       workerValidationFresh: metrics.worker_validation_fresh || false,
+      acceptanceObserved: metrics.acceptance_observed || false,
+      acceptanceActor: metrics.acceptance_actor || null,
+      acceptanceState: metrics.acceptance_state || null,
       mutationAttributionMode: mutationEvents.length > 0 ? (mutationEvents.some((m) => m.evidenceSource === "CHILD_TRANSCRIPT") ? "FACTUAL" : null) : null,
     });
 
@@ -1075,6 +1087,9 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         worker_validation_actor: fidelity.worker_validation_actor,
         worker_validation_exit_code: fidelity.worker_validation_exit_code,
         worker_validation_fresh: fidelity.worker_validation_fresh,
+        acceptance_observed: fidelity.acceptance_observed,
+        acceptance_actor: fidelity.acceptance_actor,
+        acceptance_state: fidelity.acceptance_state,
         mutation_attribution_mode: fidelity.mutation_attribution_mode,
       },
     };

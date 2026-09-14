@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   deliverPendingAdvisories,
   consumeDeliveredAdvisories,
@@ -13,12 +14,31 @@ function readStdin() {
   }
 }
 
+function parseWorkspacePath(p) {
+  if (!p || typeof p !== "string") return "";
+  if (p.startsWith("file://")) {
+    try {
+      return fileURLToPath(p);
+    } catch {
+      return p.replace(/^file:\/\/\/?/, "");
+    }
+  }
+  return p;
+}
+
 function getWorkspacePaths(payload = {}) {
   const cwd = process.cwd();
   let repoRoot;
-  if (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0]) {
-    repoRoot = resolve(payload.workspacePaths[0]);
+  const rawWs = (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0])
+    || (Array.isArray(payload.workspaceUris) && payload.workspaceUris[0])
+    || null;
+  if (rawWs) {
+    repoRoot = resolve(parseWorkspacePath(rawWs));
   } else if (basename(cwd) === ".agents") {
+    repoRoot = resolve(cwd, "..");
+  } else if (existsSync(resolve(cwd, ".agents"))) {
+    repoRoot = cwd;
+  } else if (existsSync(resolve(cwd, "../.agents"))) {
     repoRoot = resolve(cwd, "..");
   } else if (existsSync(resolve(cwd, "packages"))) {
     repoRoot = cwd;

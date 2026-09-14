@@ -181,6 +181,9 @@ test("fidelity: per-mutation event attribution verifies true worker author", () 
     workerValidationFresh: true,
     workerValidationActor: "WORKER",
     workerValidationExitCode: 0,
+    acceptanceObserved: true,
+    acceptanceActor: "ORCHESTRATOR",
+    acceptanceState: "ACCEPTED",
   });
 
   assert.equal(evalResult.fidelityStatus, "PASS");
@@ -240,6 +243,9 @@ test("fidelity: fidelity PASS logic when worker performs implementation", () => 
     workerValidationFresh: true,
     workerValidationActor: "WORKER",
     workerValidationExitCode: 0,
+    acceptanceObserved: true,
+    acceptanceActor: "ORCHESTRATOR",
+    acceptanceState: "ACCEPTED",
   });
 
   assert.equal(evalResult.fidelityStatus, "PASS");
@@ -400,6 +406,9 @@ test("fidelity: negative regression 9: worker mutations correctly attributed are
     workerValidationFresh: true,
     workerValidationActor: "WORKER",
     workerValidationExitCode: 0,
+    acceptanceObserved: true,
+    acceptanceActor: "ORCHESTRATOR",
+    acceptanceState: "ACCEPTED",
   });
 
   assert.equal(evalResult.fidelityStatus, "PASS");
@@ -453,6 +462,9 @@ test("fidelity: negative regression 11: AGY child-conversation pattern — worke
     workerValidationFresh: true,
     workerValidationActor: "WORKER",
     workerValidationExitCode: 0,
+    acceptanceObserved: true,
+    acceptanceActor: "ORCHESTRATOR",
+    acceptanceState: "ACCEPTED",
   });
 
   assert.equal(result.fidelityStatus, "PASS", "AGY child-conversation pattern must yield FIDELITY_PASS");
@@ -509,6 +521,9 @@ test("fidelity: negative regression 12: child transcript factual attribution yie
     workerValidationActor: "WORKER",
     workerValidationExitCode: 0,
     workerValidationFresh: true,
+    acceptanceObserved: true,
+    acceptanceActor: "ORCHESTRATOR",
+    acceptanceState: "ACCEPTED",
     mutationAttributionMode: "FACTUAL",
   });
 
@@ -652,6 +667,9 @@ test("regression 9: explicit success output (The command exited with code 0) yie
       workerValidationFresh: true,
       workerValidationActor: "WORKER",
       workerValidationExitCode: ev.validations[0].exitCode,
+      acceptanceObserved: true,
+      acceptanceActor: "ORCHESTRATOR",
+      acceptanceState: "ACCEPTED",
     });
 
     assert.equal(fidelity.fidelityStatus, "PASS");
@@ -826,6 +844,9 @@ test("regression 12: fidelity negative tests: missing verification, null exitCod
     workerValidationFresh: true,
     workerValidationActor: "WORKER",
     workerValidationExitCode: 0,
+    acceptanceObserved: true,
+    acceptanceActor: "ORCHESTRATOR",
+    acceptanceState: "ACCEPTED",
     mutationAttributionMode: "FACTUAL",
   };
 
@@ -870,4 +891,83 @@ test("regression 12: fidelity negative tests: missing verification, null exitCod
   assert.equal(res5.observed.worker_validation_fresh, true);
   assert.equal(res5.observed.worker_validation_actor, "WORKER");
   assert.equal(res5.observed.worker_validation_exit_code, 0);
+  assert.equal(res5.observed.acceptance_observed, true);
+  assert.equal(res5.observed.acceptance_actor, "ORCHESTRATOR");
+  assert.equal(res5.observed.acceptance_state, "ACCEPTED");
+});
+
+test("regression 13: formal orchestrator acceptance gate enforcement (missing, self-acceptance, non-accepted state fail closed; valid passes)", () => {
+  const baseValid = {
+    taskKey: "simple",
+    runtime: "antigravity",
+    subagentInvocations: 1,
+    mutationActor: "WORKER",
+    mutationEvents: [
+      {
+        path: "src/formatter.js",
+        actorRole: "WORKER",
+        actorId: "child-worker-conv",
+        agentProfile: "flash-low-worker",
+        confidence: "HIGH",
+        evidenceSource: "CHILD_TRANSCRIPT",
+      },
+    ],
+    orchestratorWorkspaceWrites: 0,
+    unknownWorkspaceWrites: 0,
+    controlPlaneWrites: 2,
+    runtimeLoaded: true,
+    orchestratorIdentity: "flash-orchestrator",
+    workerObserved: true,
+    confidenceEvidence: { hasExplicitAgentRole: true },
+    workerCompletionClaimed: true,
+    workerValidationObserved: true,
+    workerValidationVerified: true,
+    workerValidationFresh: true,
+    workerValidationActor: "WORKER",
+    workerValidationExitCode: 0,
+    acceptanceObserved: true,
+    acceptanceActor: "ORCHESTRATOR",
+    acceptanceState: "ACCEPTED",
+    mutationAttributionMode: "FACTUAL",
+  };
+
+  // Case 1: acceptanceObserved === false => FAIL closed
+  const res1 = evaluateTaskFidelity({
+    ...baseValid,
+    acceptanceObserved: false,
+  });
+  assert.equal(res1.fidelityStatus, "FAIL");
+  assert.ok(res1.violations.includes("ORCHESTRATOR_ACCEPTANCE_NOT_OBSERVED"));
+
+  // Case 2: worker self-acceptance (acceptanceActor === "WORKER") => FAIL closed
+  const res2 = evaluateTaskFidelity({
+    ...baseValid,
+    acceptanceActor: "WORKER",
+  });
+  assert.equal(res2.fidelityStatus, "FAIL");
+  assert.ok(res2.violations.includes("INVALID_ACCEPTANCE_ACTOR"));
+
+  // Case 3: missing acceptance actor => FAIL closed
+  const res3 = evaluateTaskFidelity({
+    ...baseValid,
+    acceptanceActor: null,
+  });
+  assert.equal(res3.fidelityStatus, "FAIL");
+  assert.ok(res3.violations.includes("INVALID_ACCEPTANCE_ACTOR"));
+
+  // Case 4: acceptanceState !== "ACCEPTED" (e.g. "PENDING") => FAIL closed
+  const res4 = evaluateTaskFidelity({
+    ...baseValid,
+    acceptanceState: "PENDING",
+  });
+  assert.equal(res4.fidelityStatus, "FAIL");
+  assert.ok(res4.violations.includes("IMPLEMENTATION_NOT_ACCEPTED"));
+
+  // Case 5: Fully valid orchestrator acceptance => PASS
+  const res5 = evaluateTaskFidelity(baseValid);
+  assert.equal(res5.fidelityStatus, "PASS");
+  assert.equal(res5.violations.length, 0);
+  assert.equal(res5.observed.acceptance_observed, true);
+  assert.equal(res5.observed.acceptance_actor, "ORCHESTRATOR");
+  assert.equal(res5.observed.acceptance_state, "ACCEPTED");
 });

@@ -14,6 +14,13 @@ const preToolScript = resolve(runtimeRoot, ".agents/hooks/pre-tool-enforce.mjs")
 const postToolScript = resolve(runtimeRoot, ".agents/hooks/post-tool-telemetry.mjs");
 const stopScript = resolve(runtimeRoot, ".agents/hooks/stop-guard.mjs");
 
+import {
+  classifyScopeSpecificity,
+  isConcretePath,
+} from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
+import { canonicalizePath } from "../../benchmarks/turn-economy/run.mjs";
+import { isValidAgentName } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
+
 function cleanState() {
   process.chdir(runtimeRoot);
   try { unlinkSync(".agents/state/active-state.json"); } catch {}
@@ -614,17 +621,18 @@ test("turn-diet: regression 35: define_subagent injects authoritative prompt fro
   assert.ok(out.overwrite.system_prompt.includes("KNOWN-PATH FAST PATH"), "Must include KNOWN-PATH FAST PATH");
 });
 
-test("turn-diet: regression 36: invoke_subagent refines Scope Contract index for simple formatter task", () => {
+test("turn-diet: regression 36: invoke_subagent extracts Scope Contract faithfully without benchmark-specific hardcoding or prompt rewrites", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "PLANNED",
     taskAction: "IMPLEMENT",
-    taskId: "task-3-simple",
+    taskId: "arbitrary-task-99",
   }));
 
-  const input = JSON.stringify({
+  // Case 1: Arbitrary project with concrete paths
+  const concreteInput = JSON.stringify({
     conversationId: "parent-orch-1",
     toolCall: {
       name: "invoke_subagent",
@@ -634,25 +642,55 @@ test("turn-diet: regression 36: invoke_subagent refines Scope Contract index for
             TypeName: "flash-low-worker",
             Role: "flash-low-worker",
             Model: "gemini-3.8-flash-low",
-            Prompt: "Task: Fix the formatter bug where negative values lose their sign.\n\nScope Contract:\n- allowedPaths: [\"src/**\", \"test/**\"]\n- testsRequired: Focused formatter unit test\n\nInstructions:\n1. Discover the formatter implementation file and the corresponding test file.\n2. Fix the bug.\n3. Validate.",
+            Prompt: "Task: Implement OAuth token refresh.\n\nScope Contract:\n- allowedPaths: [\"pkg/auth/token.go\", \"pkg/auth/token_test.go\"]\n- testsRequired: `go test ./pkg/auth/...`\n\nInstructions: Implement refresh logic and validate.",
           },
         ],
       },
     },
   });
 
-  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
-  assert.equal(out.decision, "allow");
-  assert.ok(out.overwrite, "Must provide overwrite for refined Subagents");
-  const refinedPrompt = out.overwrite.Subagents[0].Prompt;
-  assert.ok(refinedPrompt.includes('allowedPaths: ["src/formatter.js", "test/formatter.test.js"]'), "Must refine allowedPaths to concrete paths");
-  assert.ok(refinedPrompt.includes('testsRequired: ["node --test test/formatter.test.js"]'), "Must refine testsRequired to exact test command");
-  assert.ok(!refinedPrompt.includes("1. Discover the formatter"), "Must remove discovery instruction for known paths");
+  const out1 = JSON.parse(execFileSync("node", [preToolScript], { input: concreteInput }));
+  assert.equal(out1.decision, "allow");
+  assert.equal(out1.overwrite, undefined, "Must NOT rewrite prompt for arbitrary tasks");
 
-  // Verify active-contract.json was saved with concrete paths
-  const contract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf-8"));
-  assert.deepEqual(contract.allowedPaths, ["src/formatter.js", "test/formatter.test.js"]);
-  assert.deepEqual(contract.testsRequired, ["node --test test/formatter.test.js"]);
+  const contract1 = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf-8"));
+  assert.deepEqual(contract1.allowedPaths, ["pkg/auth/token.go", "pkg/auth/token_test.go"], "Must extract exact concrete paths without benchmark fallback");
+  assert.deepEqual(contract1.testsRequired, ["go test ./pkg/auth/..."], "Must extract exact test command");
+
+  // Case 2: Glob prompt retains globs and does NOT invent concrete files
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "PLANNED",
+    taskAction: "IMPLEMENT",
+    taskId: "glob-task",
+  }));
+
+  const globInput = JSON.stringify({
+    conversationId: "parent-orch-2",
+    toolCall: {
+      name: "invoke_subagent",
+      args: {
+        Subagents: [
+          {
+            TypeName: "flash-low-worker",
+            Role: "flash-low-worker",
+            Model: "gemini-3.8-flash-low",
+            Prompt: "Task: General refactoring.\n\nScope Contract:\n- allowedPaths: [\"src/**\", \"test/**\"]\n- testsRequired: `npm test`\n",
+          },
+        ],
+      },
+    },
+  });
+
+  const out2 = JSON.parse(execFileSync("node", [preToolScript], { input: globInput }));
+  assert.equal(out2.decision, "allow");
+  assert.equal(out2.overwrite, undefined, "Must not rewrite globs into benchmark files");
+
+  const contract2 = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf-8"));
+  assert.deepEqual(contract2.allowedPaths, ["src/**", "test/**"], "Globs must be preserved as globs");
+  assert.deepEqual(contract2.testsRequired, ["npm test"]);
 });
 
 test("turn-diet: regression 37: worker cannot spawn subagents (hierarchy violation)", () => {
@@ -745,4 +783,152 @@ test("turn-diet: regression 39: flash-low-worker.md contains CROSS_DOMAIN_REQUES
   assert.ok(content.includes("MODEL CLAIM IS NOT EVIDENCE") || content.includes("Model claim is NOT evidence"), "Must preserve evidence integrity");
   // Check size invariant: must be <= 2252 bytes
   assert.ok(Buffer.byteLength(content, "utf-8") <= 2252, "Must not expand worker prompt size");
+});
+
+test("turn-diet: regression A: prompt without allowedPaths does not invent benchmark paths", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "PLANNED",
+    taskAction: "IMPLEMENT",
+    taskId: "unknown-task-42",
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "parent-orch-a",
+    toolCall: {
+      name: "invoke_subagent",
+      args: {
+        Subagents: [
+          {
+            TypeName: "flash-low-worker",
+            Role: "flash-low-worker",
+            Model: "gemini-3.8-flash-low",
+            Prompt: "Task: Implement a new calculation feature. Please inspect the code and implement it.",
+          },
+        ],
+      },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "allow");
+
+  const contract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf-8"));
+  assert.ok(!contract.allowedPaths.includes("src/formatter.js"), "Must NOT invent src/formatter.js when missing");
+  assert.ok(!contract.allowedPaths.includes("test/formatter.test.js"), "Must NOT invent test/formatter.test.js when missing");
+  assert.notEqual(contract.taskId, "task-3-simple", "Must NOT fallback to task-3-simple");
+});
+
+test("turn-diet: regression B: classifyScopeSpecificity classifies CONCRETE, GLOB, INCOMPLETE accurately", () => {
+  assert.equal(classifyScopeSpecificity({ allowedPaths: ["src/app.ts"] }), "CONCRETE");
+  assert.equal(classifyScopeSpecificity({ allowedPaths: ["a.js", "b.js"] }), "CONCRETE");
+  assert.equal(classifyScopeSpecificity({ allowedPaths: ["src/**"] }), "GLOB");
+  assert.equal(classifyScopeSpecificity({ allowedPaths: ["src/a.js", "test/**"] }), "GLOB");
+  assert.equal(classifyScopeSpecificity({ allowedPaths: ["src/*.ts"] }), "GLOB");
+  assert.equal(classifyScopeSpecificity({ allowedPaths: [] }), "INCOMPLETE");
+  assert.equal(classifyScopeSpecificity({}), "INCOMPLETE");
+  assert.equal(classifyScopeSpecificity(null), "INCOMPLETE");
+
+  assert.equal(isConcretePath("src/index.js"), true);
+  assert.equal(isConcretePath("lib/core/util.py"), true);
+  assert.equal(isConcretePath("src/**/*.js"), false);
+  assert.equal(isConcretePath("src/*.js"), false);
+  assert.equal(isConcretePath("src/[a-z].js"), false);
+  assert.equal(isConcretePath(""), false);
+  assert.equal(isConcretePath(null), false);
+});
+
+test("turn-diet: regression C: define_subagent rejects malicious agentName traversal and bounds to .agents/agents/", () => {
+  assert.equal(isValidAgentName("../../etc/passwd"), false);
+  assert.equal(isValidAgentName("foo/bar"), false);
+  assert.equal(isValidAgentName("..\\win.ini"), false);
+  assert.equal(isValidAgentName("../flash-low-worker"), false);
+  assert.equal(isValidAgentName(""), false);
+  assert.equal(isValidAgentName(null), false);
+  assert.equal(isValidAgentName("flash-low-worker"), true);
+  assert.equal(isValidAgentName("flash_reviewer_1"), true);
+
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "PLANNED",
+    taskAction: "IMPLEMENT",
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "parent-orch-c",
+    toolCall: {
+      name: "define_subagent",
+      args: {
+        name: "../../package",
+        system_prompt: "Should not be read from outside agents dir",
+      },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "allow");
+  assert.equal(out.overwrite, undefined, "Malicious traversal name must NOT trigger file overwrite");
+});
+
+test("turn-diet: regression D: canonicalizePath handles double slashes, trailing slashes, backslashes uniformly", () => {
+  assert.equal(canonicalizePath("src\\\\formatter.js"), "src/formatter.js");
+  assert.equal(canonicalizePath("src\\formatter.js"), "src/formatter.js");
+  assert.equal(canonicalizePath("src//formatter.js"), "src/formatter.js");
+  assert.equal(canonicalizePath("src///sub//formatter.js"), "src/sub/formatter.js");
+  assert.equal(canonicalizePath("./src/formatter.js"), "src/formatter.js");
+  assert.equal(canonicalizePath("/src/formatter.js"), "src/formatter.js");
+  assert.equal(canonicalizePath("\\src\\formatter.js"), "src/formatter.js");
+  assert.equal(canonicalizePath("src/formatter.js/"), "src/formatter.js");
+  assert.equal(canonicalizePath("  src/formatter.js  "), "src/formatter.js");
+  assert.equal(canonicalizePath(null), "");
+  assert.equal(canonicalizePath(undefined), "");
+});
+
+test("turn-diet: regression E: Known-Path Fast Path works for arbitrary concrete paths without dependency on 'formatter'", () => {
+  const contract = {
+    allowedPaths: ["pkg/service/auth.go", "pkg/service/auth_test.go"],
+    forbiddenPaths: [".agents/**"],
+    testsRequired: ["go test ./pkg/service/..."],
+  };
+
+  const specificity = classifyScopeSpecificity(contract);
+  assert.equal(specificity, "CONCRETE", "Arbitrary non-benchmark paths must be classified as CONCRETE");
+
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "PLANNED",
+    taskAction: "IMPLEMENT",
+    taskId: "arbitrary-service-task",
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "parent-orch-e",
+    toolCall: {
+      name: "invoke_subagent",
+      args: {
+        Subagents: [
+          {
+            TypeName: "flash-low-worker",
+            Role: "flash-low-worker",
+            Model: "gemini-3.8-flash-low",
+            Prompt: "Task: Implement Auth.\n\nScope Contract:\n- allowedPaths: [\"pkg/service/auth.go\", \"pkg/service/auth_test.go\"]\n- testsRequired: `go test ./pkg/service/...`\n",
+          },
+        ],
+      },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "allow");
+
+  const savedContract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf-8"));
+  assert.deepEqual(savedContract.allowedPaths, ["pkg/service/auth.go", "pkg/service/auth_test.go"]);
+  assert.deepEqual(savedContract.testsRequired, ["go test ./pkg/service/..."]);
+  assert.equal(classifyScopeSpecificity(savedContract), "CONCRETE");
 });

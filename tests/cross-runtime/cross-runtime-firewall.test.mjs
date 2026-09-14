@@ -69,3 +69,31 @@ test("AGY active routing files contain no active OpenAI model routes", () => {
     .filter((line) => /(?:model|executor|worker|profile)\s*[:=]/i.test(line));
   assert.equal(activeRouteLines.some((line) => /gpt-5\.6-(?:terra|luna|sol)|gpt-6-astra/i.test(line)), false);
 });
+
+test("AGY operational hooks and skills contain no benchmark-specific contamination", () => {
+  const agyOperationalFiles = [
+    "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs",
+    "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs",
+    "../../runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs",
+    "../../runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs",
+    "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs",
+  ];
+  const forbiddenPatterns = [
+    /task-3-simple/i,
+    /src\/formatter\.js/i,
+    /test\/formatter\.test\.js/i,
+  ];
+
+  for (const relPath of agyOperationalFiles) {
+    const absPath = fileURLToPath(new URL(relPath, import.meta.url));
+    if (!existsSync(absPath)) continue;
+    const content = readFileSync(absPath, "utf8");
+    for (const pattern of forbiddenPatterns) {
+      assert.equal(
+        pattern.test(content),
+        false,
+        `Operational file ${relPath} must not contain benchmark artifact matching ${pattern}`
+      );
+    }
+  }
+});

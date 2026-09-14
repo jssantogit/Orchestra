@@ -87,9 +87,43 @@ for (const file of agyFiles) {
   }
 }
 
-// 3. Report Results
+// 3. Scan Antigravity Operational Hooks and Skills for Benchmark Contamination
+const forbiddenBenchmarkPatterns = [
+  { pattern: /task-3-simple/i, name: "Hardcoded benchmark task identifier (task-3-simple)" },
+  { pattern: /src\/formatter\.js/i, name: "Hardcoded benchmark product path (src/formatter.js)" },
+  { pattern: /test\/formatter\.test\.js/i, name: "Hardcoded benchmark test path (test/formatter.test.js)" },
+];
+
+const agyOperationalFiles = [
+  join(agyDir, "skills/orchestra/routing-policy.mjs"),
+  join(agyDir, "hooks/pre-tool-enforce.mjs"),
+  join(agyDir, "hooks/post-tool-telemetry.mjs"),
+  join(agyDir, "hooks/pre-invocation-guard.mjs"),
+  join(agyDir, "hooks/stop-guard.mjs"),
+];
+
+for (const file of agyOperationalFiles) {
+  if (!existsSync(file)) continue;
+  const content = readFileSync(file, "utf8");
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const { pattern, name } of forbiddenBenchmarkPatterns) {
+      if (pattern.test(line)) {
+        violations.push({
+          runtime: "ANTIGRAVITY",
+          file: relative(root, file),
+          line: i + 1,
+          violation: `Benchmark contamination in operational code: ${name} (${line.trim()})`,
+        });
+      }
+    }
+  }
+}
+
+// 4. Report Results
 if (violations.length === 0) {
-  console.log("PASS: Cross-runtime firewall is clean. Zero provider contamination detected.");
+  console.log("PASS: Cross-runtime firewall is clean. Zero provider or benchmark contamination detected.");
   process.exit(0);
 } else {
   console.error("FAIL: Cross-runtime contamination detected:");

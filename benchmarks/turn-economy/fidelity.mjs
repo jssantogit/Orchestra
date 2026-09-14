@@ -189,6 +189,9 @@ export function evaluateTaskFidelity({
   workerValidationActor = null,
   workerValidationExitCode = null,
   workerValidationFresh = false,
+  acceptanceObserved = false,
+  acceptanceActor = null,
+  acceptanceState = null,
   mutationAttributionMode = null,
 }) {
   const req = TASK_FIDELITY_REQUIREMENTS[taskKey];
@@ -229,6 +232,9 @@ export function evaluateTaskFidelity({
         worker_validation_actor: null,
         worker_validation_exit_code: null,
         worker_validation_fresh: false,
+        acceptance_observed: delegationExpected,
+        acceptance_actor: delegationExpected ? "ORCHESTRATOR" : null,
+        acceptance_state: delegationExpected ? "ACCEPTED" : null,
         mutation_attribution_mode: "SIMULATED",
       },
       worker_completion_claimed: false,
@@ -239,6 +245,9 @@ export function evaluateTaskFidelity({
       worker_validation_actor: null,
       worker_validation_exit_code: null,
       worker_validation_fresh: false,
+      acceptance_observed: delegationExpected,
+      acceptance_actor: delegationExpected ? "ORCHESTRATOR" : null,
+      acceptance_state: delegationExpected ? "ACCEPTED" : null,
       mutation_attribution_mode: "SIMULATED",
       writeActorValid: true,
       fidelityStatus: "SIMULATED",
@@ -373,6 +382,18 @@ export function evaluateTaskFidelity({
       writeActorValid = false;
       violations.push("WORKER_VALIDATION_FAILED");
     }
+    if (acceptanceObserved !== true) {
+      writeActorValid = false;
+      violations.push("ORCHESTRATOR_ACCEPTANCE_NOT_OBSERVED");
+    }
+    if (!acceptanceActor || acceptanceActor !== "ORCHESTRATOR") {
+      writeActorValid = false;
+      violations.push("INVALID_ACCEPTANCE_ACTOR");
+    }
+    if (acceptanceState !== "ACCEPTED") {
+      writeActorValid = false;
+      violations.push("IMPLEMENTATION_NOT_ACCEPTED");
+    }
   }
 
   let fidelityStatus = "PASS";
@@ -410,6 +431,9 @@ export function evaluateTaskFidelity({
       worker_validation_actor: workerValidationActor,
       worker_validation_exit_code: workerValidationExitCode,
       worker_validation_fresh: workerValidationFresh,
+      acceptance_observed: Boolean(acceptanceObserved),
+      acceptance_actor: acceptanceActor || null,
+      acceptance_state: acceptanceState || null,
       mutation_attribution_mode: attributionMode,
     },
     worker_completion_claimed: workerCompletionClaimed,
@@ -420,6 +444,9 @@ export function evaluateTaskFidelity({
     worker_validation_actor: workerValidationActor,
     worker_validation_exit_code: workerValidationExitCode,
     worker_validation_fresh: workerValidationFresh,
+    acceptance_observed: Boolean(acceptanceObserved),
+    acceptance_actor: acceptanceActor || null,
+    acceptance_state: acceptanceState || null,
     mutation_attribution_mode: attributionMode,
     writeActorValid,
     fidelityStatus,

@@ -3889,6 +3889,38 @@ export function verifyWorkerValidation(activeState = {}) {
   };
 }
 
+/**
+ * Determines whether a file path is concrete (specific relative file path without wildcards).
+ */
+export function isConcretePath(p) {
+  if (!p || typeof p !== "string") return false;
+  const clean = p.trim().replace(/^["']|["']$/g, "").replace(/\\+/g, "/");
+  if (!clean) return false;
+  if (/[\*\?\[\]\{\}]/.test(clean)) return false;
+  if (clean.endsWith("/")) return false;
+  return /\.[a-zA-Z0-9_-]+$/.test(clean);
+}
+
+/**
+ * General Fast-Path Scope Specificity Classifier.
+ * Classifies a Scope Contract as CONCRETE, GLOB, or INCOMPLETE without domain-specific knowledge.
+ */
+export function classifyScopeSpecificity(contract = {}) {
+  const allowed = Array.isArray(contract?.allowedPaths) ? contract.allowedPaths.filter(Boolean) : [];
+  if (allowed.length === 0) {
+    return "INCOMPLETE";
+  }
+  const hasGlob = allowed.some((p) => /[\*\?\[\]\{\}]/.test(p) || p.endsWith("/"));
+  const allConcrete = allowed.every((p) => isConcretePath(p));
+  if (allConcrete) {
+    return "CONCRETE";
+  }
+  if (hasGlob) {
+    return "GLOB";
+  }
+  return "INCOMPLETE";
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv[2] !== "--json") {
     throw new Error("Usage: node routing-policy.mjs --json < facts.json");

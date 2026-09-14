@@ -1,11 +1,14 @@
 import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, relative, dirname, basename } from "node:path";
+import { resolve, relative, dirname, basename, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   extractRealShellRedirections,
   TOOL_OUTPUT_LIMITS,
   POLLING_POLICY,
   checkPollingBudget,
   isControlPlanePath,
+  classifyScopeSpecificity,
+  isConcretePath,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
@@ -17,7 +20,14 @@ function readStdin() {
 }
 
 function normalizePath(p) {
-  return String(p || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  return String(p || "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/\\+/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/^(\.\/)+/, "")
+    .replace(/\/+$/, "");
 }
 
 function pathMatchesPattern(filePath, pattern) {
@@ -35,11 +45,26 @@ function pathMatchesPattern(filePath, pattern) {
   return normPath === normPattern;
 }
 
+function parseWorkspacePath(p) {
+  if (!p || typeof p !== "string") return "";
+  if (p.startsWith("file://")) {
+    try {
+      return fileURLToPath(p);
+    } catch {
+      return p.replace(/^file:\/\/\/?/, "");
+    }
+  }
+  return p;
+}
+
 function getWorkspacePaths(payload = {}) {
   const cwd = process.cwd();
   let repoRoot;
-  if (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0]) {
-    repoRoot = resolve(payload.workspacePaths[0]);
+  const rawWs = (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0])
+    || (Array.isArray(payload.workspaceUris) && payload.workspaceUris[0])
+    || null;
+  if (rawWs) {
+    repoRoot = resolve(parseWorkspacePath(rawWs));
   } else if (basename(cwd) === ".agents") {
     repoRoot = resolve(cwd, "..");
   } else if (existsSync(resolve(cwd, ".agents"))) {
@@ -489,17 +514,32 @@ function extractScopeContractFromPrompt(promptText = "", sub = {}) {
   }
 
   if (tests.length === 0 && typeof promptText === "string") {
-    const testMatch = promptText.match(/(?:testsRequired|Validate(?: changes)?(?: using)?)\s*:\s*`?([^`\n]+)`?/i);
-    if (testMatch && testMatch[1]) {
-      let raw = testMatch[1].trim();
-      if (raw.startsWith("[") && raw.endsWith("]")) {
-        try {
-          tests = JSON.parse(raw);
-        } catch {
-          tests = raw.slice(1, -1).split(",").map(s => s.trim().replace(/^["'`]|["'`]$/g, "")).filter(Boolean);
+    // 1. Explicit array in testsRequired: [...]
+    const arrayMatch = promptText.match(/testsRequired\s*:\s*(\[[^\]]+\])/i);
+    if (arrayMatch && arrayMatch[1]) {
+      try {
+        tests = JSON.parse(arrayMatch[1]);
+      } catch {
+        tests = arrayMatch[1].slice(1, -1).split(",").map(s => s.trim().replace(/^["'`]|["'`]$/g, "")).filter(Boolean);
+      }
+    }
+
+    // 2. Explicit backticked test command anywhere in validation instructions
+    if (tests.length === 0) {
+      const codeMatch = promptText.match(/`((?:node\s+--test|npm\s+(?:run\s+)?test|pnpm\s+test|yarn\s+test|pytest|cargo\s+test|vitest|jest)[^`\n]+)`/i);
+      if (codeMatch && codeMatch[1]) {
+        tests = [codeMatch[1].trim()];
+      }
+    }
+
+    // 3. Structured line testsRequired: ... or Validate using: ...
+    if (tests.length === 0) {
+      const testMatch = promptText.match(/(?:testsRequired|Validate(?: changes)?(?: using)?)\s*:\s*`?([^`\n]+)`?/i);
+      if (testMatch && testMatch[1]) {
+        let raw = testMatch[1].trim().replace(/^["'`]|["'`]$/g, "");
+        if (raw.toLowerCase() !== "true" && raw.toLowerCase() !== "false") {
+          tests = [raw];
         }
-      } else {
-        tests = [raw.replace(/^["'`]|["'`]$/g, "")];
       }
     }
   }
@@ -516,6 +556,14 @@ function extractScopeContractFromPrompt(promptText = "", sub = {}) {
     forbiddenPaths: forbidden,
     testsRequired: tests,
   };
+}
+
+export function isValidAgentName(name) {
+  if (!name || typeof name !== "string") return false;
+  const clean = name.trim().replace(/^["']|["']$/g, "");
+  if (!/^[a-zA-Z0-9_-]+$/.test(clean)) return false;
+  if (clean.includes("..") || clean.includes("/") || clean.includes("\\")) return false;
+  return true;
 }
 
 function main() {
@@ -582,10 +630,11 @@ function main() {
     }
 
     if (toolName === "define_subagent") {
-      const agentName = toolArgs.name;
-      if (agentName) {
-        const agentFile = resolve(repoRoot, ".agents/agents", `${agentName}.md`);
-        if (existsSync(agentFile)) {
+      const agentName = String(toolArgs.name || "").replace(/^["']|["']$/g, "").trim();
+      if (isValidAgentName(agentName)) {
+        const agentsDir = resolve(repoRoot, ".agents/agents");
+        const agentFile = resolve(agentsDir, `${agentName}.md`);
+        if (agentFile.startsWith(agentsDir + sep) && existsSync(agentFile)) {
           try {
             const rawContent = readFileSync(agentFile, "utf-8");
             const match = rawContent.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
@@ -610,6 +659,10 @@ function main() {
       if (!roleBindings.mainConversationId) {
         roleBindings.mainConversationId = convId;
       }
+      activeState.conversationId = roleBindings.mainConversationId || convId;
+      activeState.activeRole = "ORCHESTRATOR";
+
+      // Ensure orchestrator binding exists
       if (!roleBindings.bindings) roleBindings.bindings = {};
       if (!roleBindings.conversations) roleBindings.conversations = {};
       const orchRecord = {
@@ -649,13 +702,13 @@ function main() {
             modelStr = "gemini-3.8-flash";
           }
         }
-        const taskId = activeState.taskId || activeState.taskKey || activeState.task_id || null;
-        const toolCallId = toolCall.id || payload.toolCallId || `invoke-${Date.now()}-${idx}`;
+
+        const taskId = activeState.taskId || activeState.taskKey || null;
+        const toolCallId = payload.toolCallId || null;
 
         roleBindings.pendingSubagents.push({
-          id: `pending-${Date.now()}-${seq}`,
           seq,
-          parentConversationId: convId,
+          conversationId: null,
           typeName,
           profile,
           role: subRole,
@@ -671,57 +724,23 @@ function main() {
       roleBindings.pendingSeq = seq;
       saveRoleBindings(roleBindingsPath, roleBindings);
 
-      // Known-Path Fast Path: for simple implementation with concrete paths, refine Scope Contract
-      let promptModified = false;
-      const refinedSubagents = subagents.map((sub) => {
-        let promptText = sub.Prompt || "";
-        const isSimpleFormatter = (activeState.taskId === "task-3-simple" || activeState.taskKey === "task-3-simple" || promptText.toLowerCase().includes("formatter"));
-        if (isSimpleFormatter) {
-          let newPrompt = promptText;
-          if (newPrompt.includes("src/**") || /allowedPaths\s*:\s*\[[^\]]*\*\*[^\]]*\]/i.test(newPrompt)) {
-            newPrompt = newPrompt.replace(
-              /allowedPaths\s*:\s*\[[^\]]*\]/i,
-              'allowedPaths: ["src/formatter.js", "test/formatter.test.js"]'
-            );
-          }
-          if (/testsRequired\s*:\s*[^`\n]+/i.test(newPrompt) && !newPrompt.includes("node --test")) {
-            newPrompt = newPrompt.replace(
-              /testsRequired\s*:\s*[^`\n]+/i,
-              'testsRequired: ["node --test test/formatter.test.js"]'
-            );
-          }
-          if (/1\.\s*Discover the formatter implementation file and the corresponding test file\.\s*/i.test(newPrompt)) {
-            newPrompt = newPrompt.replace(
-              /1\.\s*Discover the formatter implementation file and the corresponding test file\.\s*/i,
-              ""
-            );
-          }
-          if (newPrompt !== promptText) {
-            promptModified = true;
-            return { ...sub, Prompt: newPrompt };
-          }
-        }
-        return sub;
-      });
-
       // Deterministic Bookkeeping: auto-persist Scope Contract from invoke_subagent payload/prompt
-      for (const sub of (promptModified ? refinedSubagents : subagents)) {
+      for (const sub of subagents) {
         const promptText = sub.Prompt || "";
         const extracted = extractScopeContractFromPrompt(promptText, sub);
-        const isSimpleFormatter = promptText.toLowerCase().includes("formatter") || activeState.taskId === "task-3-simple";
-        const allowedPaths = (isSimpleFormatter && (extracted.allowedPaths.length === 0 || extracted.allowedPaths.some(p => p.includes("*"))))
-          ? ["src/formatter.js", "test/formatter.test.js"]
-          : (extracted.allowedPaths.length > 0 ? extracted.allowedPaths : (activeContract?.allowedPaths || ["src/formatter.js", "test/formatter.test.js"]));
-        const testsRequired = (isSimpleFormatter && (extracted.testsRequired.length === 0 || !extracted.testsRequired.some(t => t.includes("node --test"))))
-          ? ["node --test test/formatter.test.js"]
-          : (extracted.testsRequired.length > 0 ? extracted.testsRequired : (activeContract?.testsRequired || ["node --test test/formatter.test.js"]));
+        const allowedPaths = extracted.allowedPaths.length > 0
+          ? extracted.allowedPaths
+          : (activeContract?.allowedPaths || []);
+        const testsRequired = extracted.testsRequired.length > 0
+          ? extracted.testsRequired
+          : (activeContract?.testsRequired || []);
 
         const contract = {
           contractId: activeContract?.contractId || `contract-${Date.now()}`,
-          taskId: activeState.taskId || activeState.taskKey || "task-3-simple",
+          taskId: activeState.taskId || activeState.taskKey || null,
           targetAgent: sub.TypeName || (sub.Role && String(sub.Role).toLowerCase().includes("reviewer") ? "flash-reviewer" : "flash-low-worker"),
           allowedPaths,
-          forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : (activeContract?.forbiddenPaths || ["package.json", "package-lock.json", ".agents/**", "GEMINI.md"]),
+          forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : (activeContract?.forbiddenPaths || [".agents/**"]),
           testsRequired,
           createdAt: activeContract?.createdAt || new Date().toISOString(),
         };
@@ -743,17 +762,6 @@ function main() {
         mkdirSync(dirname(statePath), { recursive: true });
         writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
       } catch {}
-
-      if (promptModified) {
-        console.log(JSON.stringify({
-          decision: "allow",
-          overwrite: {
-            ...toolArgs,
-            Subagents: refinedSubagents,
-          },
-        }));
-        return;
-      }
     }
 
     console.log(JSON.stringify({ decision: "allow" }));
@@ -1123,4 +1131,6 @@ function main() {
   console.log(JSON.stringify({ decision: "allow" }));
 }
 
-main();
+if (process.argv[1] && process.argv[1].includes("pre-tool-enforce.mjs")) {
+  main();
+}

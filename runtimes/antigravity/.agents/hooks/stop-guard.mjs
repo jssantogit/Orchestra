@@ -1,5 +1,7 @@
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
-import { resolve, dirname, basename } from "node:path";
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { resolve, dirname, basename, join } from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
@@ -10,12 +12,31 @@ function readStdin() {
   }
 }
 
+function parseWorkspacePath(p) {
+  if (!p || typeof p !== "string") return "";
+  if (p.startsWith("file://")) {
+    try {
+      return fileURLToPath(p);
+    } catch {
+      return p.replace(/^file:\/\/\/?/, "");
+    }
+  }
+  return p;
+}
+
 function getWorkspacePaths(payload = {}) {
   const cwd = process.cwd();
   let repoRoot;
-  if (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0]) {
-    repoRoot = resolve(payload.workspacePaths[0]);
+  const rawWs = (Array.isArray(payload.workspacePaths) && payload.workspacePaths[0])
+    || (Array.isArray(payload.workspaceUris) && payload.workspaceUris[0])
+    || null;
+  if (rawWs) {
+    repoRoot = resolve(parseWorkspacePath(rawWs));
   } else if (basename(cwd) === ".agents") {
+    repoRoot = resolve(cwd, "..");
+  } else if (existsSync(resolve(cwd, ".agents"))) {
+    repoRoot = cwd;
+  } else if (existsSync(resolve(cwd, "../.agents"))) {
     repoRoot = resolve(cwd, "..");
   } else if (existsSync(resolve(cwd, "packages"))) {
     repoRoot = cwd;
@@ -53,6 +74,111 @@ function recordStopTelemetry(telemetryPath, activeState, payload, decision, cont
       forced_continuations_by_reason: activeState.forced_continuations_by_reason || {},
     };
     appendFileSync(telemetryPath, JSON.stringify(stopEvent) + "\n", "utf-8");
+  } catch {}
+}
+
+function syncChildEvidence(activeState, parentConvId) {
+  if (!parentConvId) return;
+  try {
+    const brainDir = join(homedir(), ".gemini/antigravity-cli/brain", parentConvId);
+    const subagentsDir = join(brainDir, ".system_generated/subagents");
+    if (!existsSync(subagentsDir)) return;
+
+    const files = readdirSync(subagentsDir);
+    for (const f of files) {
+      if (!f.endsWith(".json")) continue;
+      let sub;
+      try {
+        sub = JSON.parse(readFileSync(join(subagentsDir, f), "utf-8"));
+      } catch {
+        continue;
+      }
+      if (!sub?.conversationId) continue;
+
+      const childTranscriptFile = join(
+        homedir(),
+        ".gemini/antigravity-cli/brain",
+        sub.conversationId,
+        ".system_generated/logs/transcript.jsonl"
+      );
+      if (!existsSync(childTranscriptFile)) continue;
+
+      const content = readFileSync(childTranscriptFile, "utf-8");
+      const lines = content.split("\n").filter((l) => l.trim().length > 0);
+      const steps = [];
+      for (const line of lines) {
+        try {
+          steps.push(JSON.parse(line));
+        } catch {}
+      }
+
+      if (!Array.isArray(activeState.evidenceLedger)) {
+        activeState.evidenceLedger = [];
+      }
+
+      for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        if (!step || !Array.isArray(step.tool_calls)) continue;
+        for (const tc of step.tool_calls) {
+          const toolName = tc.name;
+          const args = tc.args || tc.parameters || {};
+
+          if (toolName === "run_command") {
+            const cmd = String(args.CommandLine || args.command || args.cmd || "").replace(/^["']|["']$/g, "").trim();
+            let exitCode = null;
+            for (let j = i + 1; j < Math.min(i + 3, steps.length); j++) {
+              const next = steps[j];
+              if (next && next.content) {
+                const m = String(next.content).match(/The command exited with code (\d+)/i);
+                if (m) {
+                  exitCode = parseInt(m[1], 10);
+                  break;
+                }
+              }
+            }
+
+            const isTestCmd = /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd) || cmd.includes("node --test");
+            if (isTestCmd && typeof exitCode === "number") {
+              const syntheticEv = {
+                executionId: `exec-${sub.conversationId}-${i}`,
+                command: cmd,
+                exitCode,
+                mutationSeq: activeState.mutationSeq || 0,
+                actorRole: "WORKER",
+                actorId: sub.conversationId,
+                conversationId: sub.conversationId,
+                confidence: "HIGH",
+                evidenceSource: "CHILD_TRANSCRIPT",
+                timestamp: step.created_at || new Date().toISOString(),
+                type: "TEST_RUN",
+              };
+
+              const existingIdx = activeState.evidenceLedger.findIndex(
+                (e) => e && e.command === cmd && e.actorRole === "WORKER"
+              );
+              if (existingIdx >= 0) {
+                activeState.evidenceLedger[existingIdx] = syntheticEv;
+              } else {
+                activeState.evidenceLedger.push(syntheticEv);
+              }
+
+              activeState.workerValidationObserved = true;
+              activeState.workerValidationCommand = cmd;
+              activeState.workerValidationExitCode = exitCode;
+              activeState.workerValidationActor = "WORKER";
+            }
+          } else if (toolName === "send_message") {
+            const msg = String(args.Message || "");
+            if (msg.includes("IMPLEMENTATION_COMPLETE")) {
+              activeState.workerCompletionClaimed = true;
+              activeState.implementationComplete = true;
+              activeState.handoffObserved = true;
+              activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + Buffer.byteLength(msg, "utf-8");
+            }
+          }
+        }
+      }
+    }
   } catch {}
 }
 
@@ -104,11 +230,14 @@ function main() {
   if (existsSync(roleBindingsPath)) {
     try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
   }
-  const convId = payload.conversationId || activeState.conversationId || null;
+  const convId = payload.conversationId || activeState.conversationId || roleBindings.mainConversationId || null;
   const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
   const activeRole = (bound && bound.role) || activeState.activeRole || "ORCHESTRATOR";
 
   const isOrchestrator = (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR");
+
+  // Sync child execution evidence from brain transcripts if available
+  syncChildEvidence(activeState, convId);
 
   // Re-evaluate worker validation verification against authoritative Evidence Ledger
   const valEval = verifyWorkerValidation(activeState);
