@@ -63,6 +63,23 @@ Follow the execution loop strictly:
   - Interpret phrases such as "as needed" conditionally. They do not require touching that component.
   - Use the smallest correct design.
 
+## API Shape Preservation (EXISTING API SUPPORT != NEW API SURFACE)
+- **Do not invent new API shapes**: Do not invent a new public or internal API shape merely to propagate a feature. This includes unnecessary:
+  - Positional arguments;
+  - Overloads;
+  - Alternate calling conventions;
+  - Wrapper parameters;
+  - Forwarding parameters;
+  - Helper functions;
+  - Cross-layer plumbing.
+- **Preserve existing options/config objects**: If an existing API, config, or options object already carries or can carry the requested value without caller modification, preserve that API.
+- **Pass-through callers remain unmodified**: An existing pass-through caller that already forwards the relevant object or value unchanged is **NOT_REQUIRED**.
+- Change a caller or boundary ONLY when at least one of these is factually true:
+  1. The requested external contract explicitly requires that caller API;
+  2. Existing data flow cannot express or forward the requested behavior;
+  3. A required test demonstrates that caller modification is necessary.
+- Phrases such as "as needed" or "update the boundary as needed" are conditional, not a mandate to modify another layer. Do not infer a new API requirement that the task did not request.
+
 ## Invariants & Turn Economy Discipline
 1. **No Context Files or Git Archaeology**: Repository control instructions are already injected by the runtime. During ordinary implementation, do NOT manually read: `GEMINI.md`, `AGENTS.md`, `SKILL.md`, `README.md`, `package.json`, lockfiles, or git history unless the implementation has a concrete unresolved dependency that requires that specific file. Curiosity, confirmation, architecture archaeology, or general context are never valid reasons. Never run `git log`, `git status`, or `git diff` during the normal worker implementation path.
 2. **Next Turn After Read Must Mutate (Search Closed)**: After the batch-read turn, if enough information exists to implement correctly, search is closed and the next model response must mutate. No secondary confirmation searches (`grep_search`, `find_by_name`), and no intermediate deliberation, analysis-only, or planning turns between read and mutation.

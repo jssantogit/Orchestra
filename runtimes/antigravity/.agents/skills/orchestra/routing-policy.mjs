@@ -4014,6 +4014,41 @@ export function classifyScopeSpecificity(contract = {}) {
   return "INCOMPLETE";
 }
 
+/**
+ * Checks whether a given role is the Orchestrator.
+ */
+export function isOrchestratorRole(role) {
+  const r = String(role || "").toUpperCase();
+  return r === "ORCHESTRATOR" || r === "FLASH_ORCHESTRATOR" || r === "SONNET";
+}
+
+/**
+ * Evaluates whether runtime state represents healthy delegated execution.
+ * When true, Orchestrator must yield and await Reactive Wakeup without polling or side quests.
+ */
+export function isHealthyDelegatedExecution(activeState = {}, activeRole = "") {
+  const currentState = String(activeState?.state || "").toUpperCase();
+  const isDelegated = currentState === "DELEGATED";
+  const roleToCheck = activeRole || activeState?.activeRole || "";
+  const isOrchestrator = isOrchestratorRole(roleToCheck);
+
+  if (!isDelegated || !isOrchestrator) {
+    return false;
+  }
+
+  // Exceptional coordination conditions (recovery, stall, user status)
+  const isDiagnosedStalled = Boolean(activeState?.stalled || activeState?.circuitBreakerType === "STALLED");
+  const isCircuitBreakerRecovery = Boolean(activeState?.circuitBreakerTripped || activeState?.circuitBreaker);
+  const isRecoveryWithoutReactive = Boolean(activeState?.reactiveWakeupDisabled);
+  const isExplicitUserStatus = Boolean(activeState?.userRequestedStatus);
+
+  if (isDiagnosedStalled || isCircuitBreakerRecovery || isRecoveryWithoutReactive || isExplicitUserStatus) {
+    return false;
+  }
+
+  return true;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv[2] !== "--json") {
     throw new Error("Usage: node routing-policy.mjs --json < facts.json");

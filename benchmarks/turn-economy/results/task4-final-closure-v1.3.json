@@ -1,0 +1,290 @@
+{
+  "benchmark": "TASK 4 FINAL CLOSURE v1.3 — REACTIVE DELEGATION LOCK + API SURFACE MINIMALITY",
+  "task": "multi",
+  "task_id": "task-4-multi",
+  "version": "v1.3",
+  "runtime": "antigravity",
+  "status": "PASS",
+  "gates": {
+    "fidelity_gate": "PASS",
+    "reactive_delegation_lock_gate": "PASS",
+    "zero_parent_sidequests_gate": "PASS",
+    "one_search_discipline_gate": "PASS",
+    "api_surface_minimality_gate": "PASS",
+    "scope_minimality_gate": "PASS",
+    "task3_regression_gate": "PASS",
+    "task4_final_closed": true
+  },
+  "route": {
+    "expected": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-medium-worker",
+      "worker_model": "gemini-3.8-flash-medium"
+    },
+    "observed": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-medium-worker",
+      "worker_model": "gemini-3.8-flash-medium"
+    },
+    "routing_match": true
+  },
+  "baseline_from_95d72b9": {
+    "benchmark": "TASK 4 MICRO-CLOSURE v1.2",
+    "run_id": "run-1789600342173",
+    "conversation_id_parent": "0776ed42-7086-4f6f-9246-0855a36a6d65",
+    "conversation_id_worker": "a4915ac5-a960-4f05-b017-1759e470bbec",
+    "success": true,
+    "duration_ms": 53931,
+    "turns": {
+      "parent_model_turns": 8,
+      "worker_model_turns": 6,
+      "total_model_turns": 14,
+      "parent_per_turn_tool_counts": [2, 1, 1, 1, 1, 1, 0, 0],
+      "worker_per_turn_tool_counts": [1, 6, 4, 1, 1, 0],
+      "parent_tool_calls": 7,
+      "worker_tool_calls": 13,
+      "total_tool_calls": 20
+    },
+    "parent_trace_summary": "T1: define+invoke -> T2: schedule -> T3: schedule -> T4: manage_task -> T5: view_file -> T6: manage_task -> T7: final -> T8: final",
+    "parent_sidequests": {
+      "schedule_calls": 2,
+      "manage_task_calls": 2,
+      "view_file_calls": 1,
+      "manage_subagents_calls": 0,
+      "total_sidequest_calls": 5
+    },
+    "worker_phases": {
+      "pre_mutation_turns": 2,
+      "post_mutation_turns": 3,
+      "search_turns": 1,
+      "post_batch_read_search_turns": 0,
+      "read_turns": 1,
+      "mutation_turns": 1,
+      "validation_turns": 1,
+      "handoff_turns": 2,
+      "multi_tool_turns": 2,
+      "duplicate_reads": 0,
+      "post_mutation_rereads": 0,
+      "repeated_validation_without_mutation": 0
+    },
+    "files_mutated": [
+      "src/formatter.js",
+      "src/calculator.js",
+      "test/formatter.test.js",
+      "test/calculator.test.js"
+    ],
+    "mutation_count": 4,
+    "fidelity": {
+      "status": "PASS",
+      "confidence": "HIGH",
+      "mutation_attribution_mode": "FACTUAL",
+      "orchestrator_workspace_writes": 0,
+      "unknown_workspace_writes": 0,
+      "worker_validation_command": "node --test",
+      "worker_validation_exit_code": 0,
+      "acceptance_actor": "ORCHESTRATOR",
+      "acceptance_state": "ACCEPTED"
+    }
+  },
+  "task4_live_run": {
+    "run_id": "run-1789601482765",
+    "conversation_id_parent": "1a0e990b-0985-45a8-9430-96fbd0fbb5ec",
+    "conversation_id_worker": "dc10269b-48c1-47de-9611-17ada04ee861",
+    "success": true,
+    "duration_ms": 48687,
+    "turns": {
+      "parent_model_turns": 4,
+      "worker_model_turns": 6,
+      "total_model_turns": 10,
+      "parent_per_turn_tool_counts": [2, 1, 0, 0],
+      "worker_per_turn_tool_counts": [1, 6, 2, 1, 1, 0],
+      "parent_tool_calls": 3,
+      "worker_tool_calls": 11,
+      "total_tool_calls": 14
+    },
+    "parent_trace_summary": "T1: define_subagent + invoke_subagent -> T2: schedule (denied by Reactive Delegation Lock) -> T3: clean yield text (awaiting reactive wakeup) -> T4: acceptance upon reactive wakeup",
+    "reactive_delegation_lock_enforcement": {
+      "status": "ENFORCED",
+      "schedule_attempted": 1,
+      "schedule_denied": 1,
+      "schedule_succeeded": 0,
+      "manage_task_calls": 0,
+      "manage_subagents_calls": 0,
+      "parent_workspace_reads": 0,
+      "parent_workspace_writes": 0,
+      "clean_yield_after_lock": true,
+      "reactive_wakeup_functional": true
+    },
+    "worker_trace": [
+      {
+        "turn": 1,
+        "phase": "DISCOVERY",
+        "tools": ["find_by_name"],
+        "files_found": 11,
+        "output_summary": "Discovered source and test layout in single turn."
+      },
+      {
+        "turn": 2,
+        "phase": "READ",
+        "tools": ["view_file", "view_file", "view_file", "view_file", "view_file", "view_file"],
+        "files_read": [
+          "src/calculator.js",
+          "src/formatter.js",
+          "src/parser.js",
+          "test/calculator.test.js",
+          "test/formatter.test.js",
+          "test/parser.test.js"
+        ],
+        "output_summary": "Batch read all 6 files in single turn. Discovered calculateAndFormat passes options directly to formatNumber."
+      },
+      {
+        "turn": 3,
+        "phase": "MUTATION",
+        "tools": ["replace_file_content", "replace_file_content"],
+        "files_mutated": [
+          "src/formatter.js",
+          "test/formatter.test.js"
+        ],
+        "output_summary": "Direct batch mutation of src/formatter.js (supporting positional and options.precision) and test/formatter.test.js without mutating src/calculator.js."
+      },
+      {
+        "turn": 4,
+        "phase": "VALIDATION",
+        "tools": ["run_command"],
+        "command": "node --test",
+        "exit_code": 0,
+        "output_summary": "14 passing tests across calculator, formatter, and parser suites."
+      },
+      {
+        "turn": 5,
+        "phase": "HANDOFF",
+        "tools": ["send_message"],
+        "recipient": "1a0e990b-0985-45a8-9430-96fbd0fbb5ec",
+        "output_summary": "Delivered compact structured completion message to parent."
+      },
+      {
+        "turn": 6,
+        "phase": "FINAL",
+        "tools": [],
+        "output_summary": "Clean final stop."
+      }
+    ],
+    "worker_phases": {
+      "pre_mutation_turns": 2,
+      "post_mutation_turns": 3,
+      "search_turns": 1,
+      "post_batch_read_search_turns": 0,
+      "read_turns": 1,
+      "mutation_turns": 1,
+      "validation_turns": 1,
+      "handoff_turns": 2,
+      "multi_tool_turns": 2,
+      "duplicate_reads": 0,
+      "post_mutation_rereads": 0,
+      "repeated_validation_without_mutation": 0
+    },
+    "tokens": {
+      "input_tokens": 53683,
+      "cached_input_tokens": 16258,
+      "output_tokens": 3765,
+      "reasoning_tokens": 2983
+    },
+    "fidelity": {
+      "status": "PASS",
+      "confidence": "HIGH",
+      "mutation_attribution_mode": "FACTUAL",
+      "orchestrator_workspace_writes": 0,
+      "unknown_workspace_writes": 0,
+      "worker_validation_command": "node --test",
+      "worker_validation_exit_code": 0,
+      "worker_validation_verified": true,
+      "worker_validation_fresh": true,
+      "acceptance_actor": "ORCHESTRATOR",
+      "acceptance_state": "ACCEPTED"
+    },
+    "files_mutated": [
+      "src/formatter.js",
+      "test/formatter.test.js"
+    ],
+    "files_mutated_count": 2,
+    "api_surface_audit": {
+      "formatter_api_extended": "formatNumber(value, options, precision) supports options.precision and positional precision parameter while preserving default behavior",
+      "calculator_api_preserved": "calculateAndFormat(operation, a, b, options) was NOT mutated because options passes through directly to formatNumber",
+      "parser_api_preserved": "src/parser.js was NOT mutated because numeric parsing is decoupled from formatting",
+      "scope_minimality": "PASS"
+    }
+  },
+  "task3_regression_run": {
+    "run_id": "run-1789601571334",
+    "task": "simple",
+    "task_id": "task-3-simple",
+    "conversation_id_worker": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+    "success": true,
+    "duration_ms": 40576,
+    "turns": {
+      "parent_model_turns": 3,
+      "worker_model_turns": 5,
+      "total_model_turns": 8,
+      "parent_per_turn_tool_counts": [2, 0, 0],
+      "worker_per_turn_tool_counts": [2, 2, 1, 1, 0],
+      "parent_tool_calls": 2,
+      "worker_tool_calls": 6,
+      "total_tool_calls": 8
+    },
+    "parent_trace_summary": "T1: define_subagent + invoke_subagent -> T2: clean yield text -> T3: acceptance upon reactive wakeup",
+    "worker_phases": {
+      "pre_mutation_turns": 1,
+      "post_mutation_turns": 3,
+      "search_turns": 0,
+      "read_turns": 1,
+      "mutation_turns": 1,
+      "validation_turns": 1,
+      "handoff_turns": 2,
+      "duplicate_reads": 0,
+      "post_mutation_rereads": 0,
+      "repeated_validation_without_mutation": 0
+    },
+    "tokens": {
+      "input_tokens": 28311,
+      "cached_input_tokens": 28483,
+      "output_tokens": 6501,
+      "reasoning_tokens": 5808
+    },
+    "fidelity": {
+      "status": "PASS",
+      "confidence": "HIGH",
+      "mutation_attribution_mode": "FACTUAL",
+      "orchestrator_workspace_writes": 0,
+      "unknown_workspace_writes": 0,
+      "worker_validation_command": "node --test test/formatter.test.js",
+      "worker_validation_exit_code": 0,
+      "worker_validation_verified": true,
+      "worker_validation_fresh": true,
+      "acceptance_actor": "ORCHESTRATOR",
+      "acceptance_state": "ACCEPTED"
+    },
+    "files_mutated": [
+      "src/formatter.js",
+      "test/formatter.test.js"
+    ],
+    "files_mutated_count": 2
+  },
+  "delta": {
+    "task4_parent_model_turns": { "baseline": 8, "optimized": 4, "diff": -4, "percentage": "-50.0%" },
+    "task4_worker_model_turns": { "baseline": 6, "optimized": 6, "diff": 0, "percentage": "0.0%" },
+    "task4_total_model_turns": { "baseline": 14, "optimized": 10, "diff": -4, "percentage": "-28.6%" },
+    "task4_total_tool_calls": { "baseline": 20, "optimized": 14, "diff": -6, "percentage": "-30.0%" },
+    "task4_files_mutated": { "baseline": 4, "optimized": 2, "diff": -2, "percentage": "-50.0%" },
+    "task4_parent_polling_sidequests": { "baseline": 5, "optimized": 0, "diff": -5, "percentage": "-100.0%" },
+    "task3_parent_model_turns": 3,
+    "task3_worker_model_turns": 5,
+    "task3_total_model_turns": 8,
+    "task3_total_tool_calls": 8,
+    "task3_parent_polling_sidequests": 0,
+    "reactive_delegation_lock_status": "PROVEN_EFFECTIVE",
+    "api_surface_minimality_status": "PROVEN_EFFECTIVE",
+    "cross_runtime_firewall_status": "CLEAN"
+  }
+}

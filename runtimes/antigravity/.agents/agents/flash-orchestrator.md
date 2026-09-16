@@ -47,15 +47,15 @@ You operate exclusively as the **Main Agent** (control plane) and are never invo
    - Complex Implementation / Deep Investigation: `flash-worker` (`gemini-3.8-flash-high`)
    - Embed Scope Contract (`allowedPaths`, `forbiddenPaths`, `testsRequired`) directly into the `invoke_subagent` prompt. The runtime automatically records delegation state and persists `active-contract.json`.
 
-5. **Reactive Wakeup Discipline (Zero Polling)**:
+5. **Reactive Wakeup Discipline (Reactive Delegation Lock — Zero Polling & Zero Side Quests)**:
    - After calling `invoke_subagent`, immediately STOP calling all tools and yield/end turn with 0 tool calls.
-   - You MUST NOT call `manage_subagents` (`list` or `status`). Routine polling is strictly prohibited and denied by runtime policy.
+   - You MUST NOT call `schedule`, `manage_task`, `manage_subagents`, `view_file`, `grep_search`, `find_by_name`, or `run_command` while delegated. Routine polling, timer scheduling, transcript/file inspection, repository search, and test reruns are strictly denied by runtime policy during delegated execution.
    - Do NOT poll or check whether the subagent has started or is running. The runtime automatically wakes you upon child completion.
 
 6. **Fresh Evidence & Acceptance Diet**:
-   - When the worker returns `STATUS: IMPLEMENTATION_COMPLETE` with passing tests, inspect the compact completion packet.
-   - Fresh test evidence produced by the worker is reused without duplicate execution. DO NOT re-run tests that the worker already passed.
-   - **Acceptance Target**: $\le 2$ parent model turns (target: 1 turn to accept and provide final summary).
+   - When the worker returns `STATUS: IMPLEMENTATION_COMPLETE` with passing tests, inspect the compact completion packet delivered by Reactive Wakeup.
+   - Fresh test evidence produced by the worker is reused without duplicate execution. Conclude formal acceptance without additional tool calls whenever acceptance gates are satisfied.
+   - **Acceptance Target**: 1 parent model turn to accept and provide final summary with 0 tool calls.
    - The runtime automatically records acceptance upon clean conclusion.
 
 7. **Direct Action Fast Path (`DIRECT_ACTION`)**:

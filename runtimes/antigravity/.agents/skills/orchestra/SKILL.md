@@ -35,14 +35,15 @@ Orchestra provides a 100% **ALL-GEMINI** local architecture in the Antigravity C
 - Scope Contract is embedded directly in `invoke_subagent` prompt (`allowedPaths`, `forbiddenPaths`, `testsRequired`).
 - Runtime hooks auto-persist `active-contract.json` and transition state to `DELEGATED`.
 
-### 4. Reactive Wakeup Discipline
+### 4. Reactive Wakeup Discipline (Reactive Delegation Lock)
 - After calling `invoke_subagent`, immediately stop calling all tools and yield/end turn with 0 tool calls.
-- Zero polling: DO NOT poll `manage_subagents` or `manage_task` during healthy delegated execution. Routine polling is strictly prohibited and denied by runtime policy.
+- Zero polling & zero side quests: DO NOT call `schedule`, `manage_task`, `manage_subagents`, `view_file`, `grep_search`, `find_by_name`, or `run_command` during healthy delegated execution. Routine polling, timer scheduling, and inspection side quests are strictly denied by runtime policy.
 - Await asynchronous reactive wakeup on child completion.
 
 ### 5. Fresh Evidence & Acceptance Diet
 - Fresh test evidence produced by worker is reused without re-running.
-- Orchestrator acceptance concludes in $\le 2$ parent model turns (target: 1 turn to accept and summarize).
+- Conclude formal acceptance without additional tool calls whenever acceptance gates are satisfied.
+- Orchestrator acceptance concludes in 1 parent model turn to accept and summarize.
 - Acceptance state is recorded deterministically by runtime hooks.
 
 ### 6. Pre-Context Output Gate & Large File Guard

@@ -2070,3 +2070,360 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
   assert.equal(finalState.workerValidationActor, "WORKER");
   assert.equal(finalState.workerValidationExitCode, 0);
 });
+
+test("reactive-delegation-lock: 1. Orchestrator + DELEGATED + healthy + schedule -> DENY", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "orch-parent-conv",
+    toolCall: {
+      name: "schedule",
+      args: { DurationSeconds: 300, Prompt: "check status" },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Reactive Wakeup policy"));
+});
+
+test("reactive-delegation-lock: 2. Orchestrator + DELEGATED + healthy + manage_task status -> DENY on first attempt", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "orch-parent-conv",
+    toolCall: {
+      name: "manage_task",
+      args: { Action: "status", TaskId: "task-123" },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Reactive Wakeup policy"));
+});
+
+test("reactive-delegation-lock: 3. Orchestrator + DELEGATED + healthy + manage_subagents list/status -> DENY", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "orch-parent-conv",
+    toolCall: {
+      name: "manage_subagents",
+      args: { Action: "list" },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Reactive Wakeup policy"));
+});
+
+test("reactive-delegation-lock: 4. Orchestrator + DELEGATED + healthy + view_file -> DENY", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "orch-parent-conv",
+    toolCall: {
+      name: "view_file",
+      args: { AbsolutePath: resolve(runtimeRoot, "README.md") },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Reactive Wakeup policy"));
+});
+
+test("reactive-delegation-lock: 5. Orchestrator + DELEGATED + healthy + grep_search -> DENY", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "orch-parent-conv",
+    toolCall: {
+      name: "grep_search",
+      args: { Query: "test", SearchPath: runtimeRoot },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Reactive Wakeup policy"));
+});
+
+test("reactive-delegation-lock: 6. Orchestrator + DELEGATED + healthy + find_by_name -> DENY", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "orch-parent-conv",
+    toolCall: {
+      name: "find_by_name",
+      args: { Pattern: "*", SearchDirectory: runtimeRoot },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Reactive Wakeup policy"));
+});
+
+test("reactive-delegation-lock: 7. Orchestrator + DELEGATED + healthy + routine run_command inspection -> DENY", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "orch-parent-conv",
+    toolCall: {
+      name: "run_command",
+      args: { CommandLine: "git status" },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("Reactive Wakeup policy"));
+});
+
+test("reactive-delegation-lock: 8. Worker performing normal implementation tools -> ALLOW according to existing scope rules", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: "orch-parent",
+    bindings: {
+      "child-worker-conv": { role: "WORKER", profile: "flash-medium-worker" },
+    },
+  }));
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "WORKER",
+    state: "DELEGATED",
+  }));
+
+  // Worker view_file
+  const viewInput = JSON.stringify({
+    conversationId: "child-worker-conv",
+    toolCall: {
+      name: "view_file",
+      args: { AbsolutePath: resolve(runtimeRoot, "README.md") },
+    },
+  });
+  const viewOut = JSON.parse(execFileSync("node", [preToolScript], { input: viewInput, encoding: "utf-8" }));
+  assert.equal(viewOut.decision, "allow");
+
+  // Worker grep_search
+  const grepInput = JSON.stringify({
+    conversationId: "child-worker-conv",
+    toolCall: {
+      name: "grep_search",
+      args: { Query: "test", SearchPath: runtimeRoot },
+    },
+  });
+  const grepOut = JSON.parse(execFileSync("node", [preToolScript], { input: grepInput, encoding: "utf-8" }));
+  assert.equal(grepOut.decision, "allow");
+
+  // Worker find_by_name
+  const findInput = JSON.stringify({
+    conversationId: "child-worker-conv",
+    toolCall: {
+      name: "find_by_name",
+      args: { Pattern: "*", SearchDirectory: runtimeRoot },
+    },
+  });
+  const findOut = JSON.parse(execFileSync("node", [preToolScript], { input: findInput, encoding: "utf-8" }));
+  assert.equal(findOut.decision, "allow");
+});
+
+test("reactive-delegation-lock: 9. Orchestrator outside DELEGATED state performing legitimate read-only work -> existing behavior preserved", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "PLANNED",
+  }));
+
+  // view_file outside DELEGATED state
+  const viewInput = JSON.stringify({
+    conversationId: "orch-planning-conv",
+    toolCall: {
+      name: "view_file",
+      args: { AbsolutePath: resolve(runtimeRoot, "README.md") },
+    },
+  });
+  const viewOut = JSON.parse(execFileSync("node", [preToolScript], { input: viewInput, encoding: "utf-8" }));
+  assert.equal(viewOut.decision, "allow");
+
+  // run_command read-only (git status) outside DELEGATED state
+  const runInput = JSON.stringify({
+    conversationId: "orch-planning-conv",
+    toolCall: {
+      name: "run_command",
+      args: { CommandLine: "git status" },
+    },
+  });
+  const runOut = JSON.parse(execFileSync("node", [preToolScript], { input: runInput, encoding: "utf-8" }));
+  assert.equal(runOut.decision, "allow");
+});
+
+test("reactive-delegation-lock: 10. explicit cancellation/recovery path -> coordination action allowed", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+  }));
+
+  // manage_subagents with Action="kill" is allowed
+  const killSubInput = JSON.stringify({
+    conversationId: "orch-cancel-conv",
+    toolCall: {
+      name: "manage_subagents",
+      args: { Action: "kill", ConversationIds: ["sub-1"] },
+    },
+  });
+  const killSubOut = JSON.parse(execFileSync("node", [preToolScript], { input: killSubInput, encoding: "utf-8" }));
+  assert.equal(killSubOut.decision, "allow");
+
+  // manage_task with Action="kill" is allowed
+  const killTaskInput = JSON.stringify({
+    conversationId: "orch-cancel-conv",
+    toolCall: {
+      name: "manage_task",
+      args: { Action: "kill", TaskId: "task-1" },
+    },
+  });
+  const killTaskOut = JSON.parse(execFileSync("node", [preToolScript], { input: killTaskInput, encoding: "utf-8" }));
+  assert.equal(killTaskOut.decision, "allow");
+});
+
+test("reactive-delegation-lock: 11. diagnosed stalled/recovery state -> appropriate coordination action allowed", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    stalled: true,
+  }));
+
+  // manage_subagents list allowed under diagnosed stalled state
+  const subInput = JSON.stringify({
+    conversationId: "orch-stalled-conv",
+    toolCall: {
+      name: "manage_subagents",
+      args: { Action: "list" },
+    },
+  });
+  const subOut = JSON.parse(execFileSync("node", [preToolScript], { input: subInput, encoding: "utf-8" }));
+  assert.equal(subOut.decision, "allow");
+
+  // manage_task status allowed under diagnosed stalled state (via budget)
+  const taskInput = JSON.stringify({
+    conversationId: "orch-stalled-conv",
+    toolCall: {
+      name: "manage_task",
+      args: { Action: "status", TaskId: "task-stalled" },
+    },
+  });
+  const taskOut = JSON.parse(execFileSync("node", [preToolScript], { input: taskInput, encoding: "utf-8" }));
+  assert.equal(taskOut.decision, "allow");
+
+  // product inspection tools remain prohibited even under diagnosed stalled state
+  const viewInput = JSON.stringify({
+    conversationId: "orch-stalled-conv",
+    toolCall: {
+      name: "view_file",
+      args: { AbsolutePath: resolve(runtimeRoot, "src/formatter.js") },
+    },
+  });
+  const viewOut = JSON.parse(execFileSync("node", [preToolScript], { input: viewInput, encoding: "utf-8" }));
+  assert.equal(viewOut.decision, "deny");
+});
+
+test("reactive-delegation-lock: 12. healthy delegated execution can yield and later reach factual ORCHESTRATOR / ACCEPTED with zero parent polling tools", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: "orch-yield-accept",
+    bindings: {
+      "orch-yield-accept": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "child-worker-clean": { role: "WORKER", profile: "flash-medium-worker", confidence: "HIGH" },
+    },
+  }));
+
+  // 1. Initially delegated with verified worker evidence in ledger
+  const activeState = {
+    activeRole: "ORCHESTRATOR",
+    conversationId: "orch-yield-accept",
+    state: "DELEGATED",
+    workerCompletionClaimed: true,
+    evidenceLedger: [
+      {
+        executionId: null,
+        transcriptEvidenceId: "child:child-worker-clean:step:4:tool:0",
+        command: "node --test",
+        exitCode: 0,
+        fresh: true,
+        actorRole: "WORKER",
+        conversationId: "child-worker-clean",
+      },
+    ],
+  };
+  writeFileSync(".agents/state/active-state.json", JSON.stringify(activeState, null, 2), "utf-8");
+
+  // 2. Parent concludes cleanly with zero polling tool calls
+  const input = JSON.stringify({
+    conversationId: "orch-yield-accept",
+    fullyIdle: true,
+    stop_attempts: 1,
+  });
+
+  const out = JSON.parse(execFileSync("node", [stopScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "stop");
+
+  const finalState = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+  assert.equal(finalState.acceptanceState, "ACCEPTED");
+  assert.equal(finalState.acceptanceActor, "ORCHESTRATOR");
+  assert.equal(finalState.state, "DONE");
+  assert.equal(finalState.workerValidationVerified, true);
+  assert.equal(finalState.workerValidationFresh, true);
+  assert.equal(finalState.workerValidationExitCode, 0);
+});

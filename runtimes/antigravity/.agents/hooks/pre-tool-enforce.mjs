@@ -9,6 +9,8 @@ import {
   isControlPlanePath,
   classifyScopeSpecificity,
   isConcretePath,
+  isHealthyDelegatedExecution,
+  isOrchestratorRole,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
@@ -499,10 +501,6 @@ function isReviewerRole(role) {
   return role === "REVIEWER" || role === "FLASH_REVIEWER" || role === "OPUS";
 }
 
-function isOrchestratorRole(role) {
-  return role === "ORCHESTRATOR" || role === "FLASH_ORCHESTRATOR" || role === "SONNET";
-}
-
 function extractScopeContractFromPrompt(promptText = "", sub = {}) {
   let allowed = [];
   let forbidden = [];
@@ -855,10 +853,37 @@ function main() {
     console.log(JSON.stringify({ decision: "allow" }));
   }
 
-  // Check 1b: manage_task polling budget
+  // Check 1a: schedule / timer policy during delegated execution
+  if (toolName === "schedule") {
+    if (isHealthyDelegatedExecution(activeState, activeRole)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "Reactive Wakeup policy: Routine schedule/timer calls are prohibited for Orchestrator during healthy delegated execution. Yield and await asynchronous reactive wakeup on child completion.",
+      }));
+      return;
+    }
+    console.log(JSON.stringify({ decision: "allow" }));
+    return;
+  }
+
+  // Check 1b: manage_task polling budget and delegation lock
   if (toolName === "manage_task") {
     const action = String(toolArgs.Action || toolArgs.action || "");
+    const isCancellation = action === "kill";
+    if (isCancellation) {
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
+    }
+
     if (action === "status") {
+      if (isHealthyDelegatedExecution(activeState, activeRole)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "Reactive Wakeup policy: Routine manage_task status polling is prohibited for Orchestrator during healthy delegated execution (polling budget is closed). Yield and await asynchronous reactive wakeup on child completion.",
+        }));
+        return;
+      }
+
       const tracker = activeState.pollingTracker || {};
       const now = Date.now();
       const budget = checkPollingBudget(tracker, now);
@@ -887,10 +912,11 @@ function main() {
     const action = String(toolArgs.Action || toolArgs.action || "list").toLowerCase();
     const isCancellation = action === "kill" || action === "kill_all";
     const isDiagnosedStalled = Boolean(activeState.stalled || activeState.circuitBreakerType === "STALLED");
+    const isCircuitBreakerRecovery = Boolean(activeState.circuitBreakerTripped || activeState.circuitBreaker);
     const isExplicitUserStatus = Boolean(activeState.userRequestedStatus);
     const isRecoveryWithoutReactive = Boolean(activeState.reactiveWakeupDisabled);
 
-    if (isCancellation || isDiagnosedStalled || isExplicitUserStatus || isRecoveryWithoutReactive) {
+    if (isCancellation || isDiagnosedStalled || isCircuitBreakerRecovery || isExplicitUserStatus || isRecoveryWithoutReactive) {
       console.log(JSON.stringify({ decision: "allow" }));
       return;
     }
@@ -899,6 +925,20 @@ function main() {
       decision: "deny",
       reason: "Reactive Wakeup policy: Routine manage_subagents polling is prohibited during healthy delegated execution. Await asynchronous reactive wakeup on child completion.",
     }));
+    return;
+  }
+
+  // Check 1d: view_file, grep_search, find_by_name inspection lock during delegation
+  if (toolName === "view_file" || toolName === "grep_search" || toolName === "find_by_name") {
+    const currentState = String(activeState.state || "").toUpperCase();
+    if (isOrchestratorRole(activeRole) && currentState === "DELEGATED") {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `Reactive Wakeup policy: Orchestrator exploration/inspection (${toolName}) is prohibited during delegated execution. Workers own implementation discovery and exploration; Orchestrator must yield and await child completion.`,
+      }));
+      return;
+    }
+    console.log(JSON.stringify({ decision: "allow" }));
     return;
   }
 
@@ -949,6 +989,14 @@ function main() {
 
     // 2b. Orchestrator: allow read-only and validation; block shell mutations to workspace/product code
     if (isOrchestratorRole(activeRole)) {
+      if (isHealthyDelegatedExecution(activeState, activeRole)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "Reactive Wakeup policy: Orchestrator command execution is prohibited during healthy delegated execution. Workers own implementation and validation; Orchestrator must yield and await child completion.",
+        }));
+        return;
+      }
+
       if (isReadOnly || isValidation) {
         if (hasWorkspaceMutationTargets) {
           const badTarget = nonControlTargets[0] || nonControlRedir[0];
