@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { findReusableEvidence, verifyWorkerValidation } from "../skills/agy-orchestra/routing-policy.mjs";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
   try {
@@ -77,12 +77,44 @@ function recordStopTelemetry(telemetryPath, activeState, payload, decision, cont
   } catch {}
 }
 
-function syncChildEvidence(activeState, parentConvId) {
+function isStepMutation(step) {
+  if (!step || !Array.isArray(step.tool_calls)) return false;
+  for (const tc of step.tool_calls) {
+    const toolName = tc.name;
+    if (toolName === "write_to_file" || toolName === "replace_file_content" || toolName === "edit_file" || toolName === "create_file") {
+      return true;
+    }
+    if (toolName === "run_command") {
+      const args = tc.args || tc.parameters || {};
+      const cmd = String(args.CommandLine || args.command || args.cmd || "").replace(/^["']|["']$/g, "").trim();
+      if (cmd) {
+        const mut = classifyShellMutation(cmd);
+        if (mut.isMutation) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function syncChildEvidence(activeState, parentConvId, options = {}) {
   if (!parentConvId) return;
   try {
-    const brainDir = join(homedir(), ".gemini/antigravity-cli/brain", parentConvId);
+    const brainBaseDir = options.brainBaseDir || process.env.AGY_BRAIN_DIR || join(homedir(), ".gemini/antigravity-cli/brain");
+    const brainDir = join(brainBaseDir, parentConvId);
     const subagentsDir = join(brainDir, ".system_generated/subagents");
     if (!existsSync(subagentsDir)) return;
+
+    let roleBindings = options.roleBindings || null;
+    if (!roleBindings) {
+      const repoRoot = options.repoRoot || getWorkspacePaths().repoRoot;
+      const roleBindingsPath = options.roleBindingsPath || resolve(repoRoot, ".agents/state/role-bindings.json");
+      if (existsSync(roleBindingsPath)) {
+        try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
+      }
+    }
+    if (!roleBindings) {
+      roleBindings = { mainConversationId: null, bindings: {}, conversations: {} };
+    }
 
     const files = readdirSync(subagentsDir);
     for (const f of files) {
@@ -94,16 +126,77 @@ function syncChildEvidence(activeState, parentConvId) {
         continue;
       }
       if (!sub?.conversationId) continue;
+      const childConvId = sub.conversationId;
+
+      // Child / Parent correlation & Task correlation
+      let binding = (roleBindings.bindings && roleBindings.bindings[childConvId])
+        || (roleBindings.conversations && roleBindings.conversations[childConvId])
+        || null;
+
+      if (!binding && Array.isArray(roleBindings.pendingSubagents)) {
+        const unconsumed = roleBindings.pendingSubagents.filter((p) => !p.consumed);
+        const descTypeName = sub.subagentDescriptor?.typeName || "";
+        const descRole = String(sub.subagentDescriptor?.role || "").toLowerCase();
+        const match = unconsumed.find((p) =>
+          p.profile === descTypeName ||
+          p.typeName === descTypeName ||
+          (p.role && descRole.includes(p.role.toLowerCase())) ||
+          (p.role === "WORKER" && descTypeName.includes("worker")) ||
+          (p.role === "REVIEWER" && descTypeName.includes("reviewer"))
+        );
+        if (match) {
+          match.consumed = true;
+          match.consumedBy = childConvId;
+          const boundRecord = {
+            role: match.role || "WORKER",
+            profile: match.profile || descTypeName || "flash-low-worker",
+            model: match.model || null,
+            source: "RUNTIME_IDENTITY",
+            confidence: "HIGH",
+            parentConversationId: match.parentConversationId || parentConvId,
+            taskIdentifier: match.taskIdentifier || null,
+          };
+          if (!roleBindings.bindings) roleBindings.bindings = {};
+          roleBindings.bindings[childConvId] = boundRecord;
+          binding = boundRecord;
+        }
+      }
+
+      if (binding && binding.parentConversationId && binding.parentConversationId !== parentConvId) {
+        continue;
+      }
+      if (binding && (binding.taskIdentifier || binding.taskId) && activeState.taskId) {
+        const bTask = binding.taskIdentifier || binding.taskId;
+        if (bTask !== activeState.taskId) continue;
+      }
+      if (binding && binding.benchmarkRunId && activeState.benchmarkRunId) {
+        if (binding.benchmarkRunId !== activeState.benchmarkRunId) continue;
+      }
+
+      // Child Identity Resolution
+      let childRole = "UNKNOWN";
+      let childConfidence = "LOW";
+      let childProfile = sub.subagentDescriptor?.typeName || sub.subagentDescriptor?.role || null;
+
+      if (binding) {
+        childRole = (binding.role || "UNKNOWN").toUpperCase();
+        childConfidence = binding.confidence === "HIGH" ? "HIGH" : "MEDIUM";
+        childProfile = binding.profile || childProfile;
+      }
 
       const childTranscriptFile = join(
-        homedir(),
-        ".gemini/antigravity-cli/brain",
-        sub.conversationId,
+        brainBaseDir,
+        childConvId,
         ".system_generated/logs/transcript.jsonl"
       );
       if (!existsSync(childTranscriptFile)) continue;
 
-      const content = readFileSync(childTranscriptFile, "utf-8");
+      let content = "";
+      try {
+        content = readFileSync(childTranscriptFile, "utf-8");
+      } catch {
+        continue;
+      }
       const lines = content.split("\n").filter((l) => l.trim().length > 0);
       const steps = [];
       for (const line of lines) {
@@ -116,10 +209,21 @@ function syncChildEvidence(activeState, parentConvId) {
         activeState.evidenceLedger = [];
       }
 
+      // Collect mutation step indices
+      const mutationStepIndices = [];
+      for (let i = 0; i < steps.length; i++) {
+        if (isStepMutation(steps[i])) {
+          mutationStepIndices.push(i);
+        }
+      }
+
+      let lastWorkerValidationEv = null;
+
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
         if (!step || !Array.isArray(step.tool_calls)) continue;
-        for (const tc of step.tool_calls) {
+        for (let tIdx = 0; tIdx < step.tool_calls.length; tIdx++) {
+          const tc = step.tool_calls[tIdx];
           const toolName = tc.name;
           const args = tc.args || tc.parameters || {};
 
@@ -138,45 +242,85 @@ function syncChildEvidence(activeState, parentConvId) {
             }
 
             const isTestCmd = /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd) || cmd.includes("node --test");
-            if (isTestCmd && typeof exitCode === "number") {
-              const syntheticEv = {
-                executionId: `exec-${sub.conversationId}-${i}`,
+            if (isTestCmd) {
+              const stepIdx = typeof step.step_index === "number" ? step.step_index : i;
+              const transcriptEvidenceId = `child:${childConvId}:step:${stepIdx}:tool:${tIdx}`;
+              const latestMutationStepBeforeValidation = mutationStepIndices.filter((idx) => idx < i).pop() ?? null;
+              const mutationAfterValidation = mutationStepIndices.some((idx) => idx > i);
+              const fresh = !mutationAfterValidation && exitCode === 0;
+
+              const ev = {
+                executionId: null,
+                transcriptEvidenceId,
                 command: cmd,
                 exitCode,
-                mutationSeq: activeState.mutationSeq || 0,
-                actorRole: "WORKER",
-                actorId: sub.conversationId,
-                conversationId: sub.conversationId,
-                confidence: "HIGH",
+                mutationSeq: null,
+                actorRole: childRole,
+                actorId: childConvId,
+                conversationId: childConvId,
+                confidence: childConfidence,
                 evidenceSource: "CHILD_TRANSCRIPT",
+                transcriptStepIndex: stepIdx,
+                latestMutationStepBeforeValidation,
+                mutationAfterValidation,
+                fresh,
                 timestamp: step.created_at || new Date().toISOString(),
                 type: "TEST_RUN",
               };
 
-              const existingIdx = activeState.evidenceLedger.findIndex(
-                (e) => e && e.command === cmd && e.actorRole === "WORKER"
-              );
+              // Deduplicate strictly by transcriptEvidenceId or non-null executionId
+              const existingIdx = activeState.evidenceLedger.findIndex((e) => {
+                if (!e) return false;
+                if (e.transcriptEvidenceId && e.transcriptEvidenceId === transcriptEvidenceId) return true;
+                if (e.executionId && ev.executionId && e.executionId === ev.executionId) return true;
+                return false;
+              });
+
               if (existingIdx >= 0) {
-                activeState.evidenceLedger[existingIdx] = syntheticEv;
+                activeState.evidenceLedger[existingIdx] = ev;
               } else {
-                activeState.evidenceLedger.push(syntheticEv);
+                activeState.evidenceLedger.push(ev);
               }
 
-              activeState.workerValidationObserved = true;
-              activeState.workerValidationCommand = cmd;
-              activeState.workerValidationExitCode = exitCode;
-              activeState.workerValidationActor = "WORKER";
+              if (isWorkerRole(childRole)) {
+                lastWorkerValidationEv = ev;
+              } else if (childRole === "REVIEWER") {
+                activeState.reviewerValidationObserved = true;
+                activeState.reviewerValidationCommand = cmd;
+                activeState.reviewerValidationExitCode = exitCode;
+              } else {
+                activeState.unknownValidationObserved = true;
+                activeState.unknownValidationCommand = cmd;
+                activeState.unknownValidationExitCode = exitCode;
+              }
             }
           } else if (toolName === "send_message") {
             const msg = String(args.Message || "");
             if (msg.includes("IMPLEMENTATION_COMPLETE")) {
-              activeState.workerCompletionClaimed = true;
-              activeState.implementationComplete = true;
-              activeState.handoffObserved = true;
-              activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + Buffer.byteLength(msg, "utf-8");
+              if (isWorkerRole(childRole)) {
+                activeState.workerCompletionClaimed = true;
+                activeState.implementationComplete = true;
+                activeState.handoffObserved = true;
+                activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + Buffer.byteLength(msg, "utf-8");
+              }
             }
           }
         }
+      }
+
+      if (lastWorkerValidationEv) {
+        activeState.workerValidationObserved = true;
+        activeState.workerValidationCommand = lastWorkerValidationEv.command;
+        activeState.workerValidationExitCode = lastWorkerValidationEv.exitCode;
+        activeState.workerValidationActor = "WORKER";
+        // Observability
+        activeState.child_evidence_source = "CHILD_TRANSCRIPT";
+        activeState.child_identity_role = childRole;
+        activeState.child_identity_confidence = childConfidence;
+        activeState.child_validation_step = lastWorkerValidationEv.transcriptStepIndex;
+        activeState.child_last_mutation_step = lastWorkerValidationEv.latestMutationStepBeforeValidation;
+        activeState.child_mutation_after_validation = lastWorkerValidationEv.mutationAfterValidation;
+        activeState.child_evidence_fresh = lastWorkerValidationEv.fresh;
       }
     }
   } catch {}
@@ -237,17 +381,20 @@ function main() {
   const isOrchestrator = (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR");
 
   // Sync child execution evidence from brain transcripts if available
-  syncChildEvidence(activeState, convId);
+  syncChildEvidence(activeState, convId, { repoRoot, roleBindings });
 
   // Re-evaluate worker validation verification against authoritative Evidence Ledger
   const valEval = verifyWorkerValidation(activeState);
   activeState.workerValidationVerified = valEval.verified;
   activeState.workerValidationFresh = valEval.fresh;
   if (valEval.verified && valEval.evidence) {
-    activeState.workerValidationExecutionId = valEval.evidence.executionId || activeState.workerValidationExecutionId;
+    activeState.workerValidationExecutionId = valEval.evidence.executionId || null;
+    activeState.workerValidationTranscriptEvidenceId = valEval.evidence.transcriptEvidenceId || null;
     activeState.workerValidationCommand = valEval.evidence.command || activeState.workerValidationCommand;
     activeState.workerValidationExitCode = valEval.evidence.exitCode ?? activeState.workerValidationExitCode;
     activeState.workerValidationActor = valEval.evidence.actorRole || activeState.workerValidationActor;
+  } else {
+    activeState.workerValidationExecutionId = null;
   }
 
   const completionClaimed = activeState.workerCompletionClaimed === true
@@ -418,4 +565,9 @@ function main() {
   console.log(JSON.stringify({ decision: "stop" }));
 }
 
-main();
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main();
+}

@@ -17,9 +17,11 @@ const stopScript = resolve(runtimeRoot, ".agents/hooks/stop-guard.mjs");
 import {
   classifyScopeSpecificity,
   isConcretePath,
+  verifyWorkerValidation,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
 import { canonicalizePath } from "../../benchmarks/turn-economy/run.mjs";
 import { isValidAgentName } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
+import { syncChildEvidence } from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
 
 function cleanState() {
   process.chdir(runtimeRoot);
@@ -870,7 +872,8 @@ test("turn-diet: regression C: define_subagent rejects malicious agentName trave
   });
 
   const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
-  assert.equal(out.decision, "allow");
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("INVALID_AGENT_NAME"), "Malicious traversal name must fail closed with INVALID_AGENT_NAME");
   assert.equal(out.overwrite, undefined, "Malicious traversal name must NOT trigger file overwrite");
 });
 
@@ -931,4 +934,599 @@ test("turn-diet: regression E: Known-Path Fast Path works for arbitrary concrete
   assert.deepEqual(savedContract.allowedPaths, ["pkg/service/auth.go", "pkg/service/auth_test.go"]);
   assert.deepEqual(savedContract.testsRequired, ["go test ./pkg/service/..."]);
   assert.equal(classifyScopeSpecificity(savedContract), "CONCRETE");
+});
+
+/* =========================================================================
+   EVIDENCE SYNC INTEGRITY v2.2 REGRESSIONS
+   ========================================================================= */
+
+const testBrainDir = resolve(runtimeRoot, "scratch/test-brain");
+
+function setupTestBrain(parentConvId, childConvId, childDescriptor, transcriptSteps) {
+  const subagentsDir = resolve(testBrainDir, parentConvId, ".system_generated/subagents");
+  const childLogsDir = resolve(testBrainDir, childConvId, ".system_generated/logs");
+  mkdirSync(subagentsDir, { recursive: true });
+  mkdirSync(childLogsDir, { recursive: true });
+
+  const subJson = {
+    conversationId: childConvId,
+    subagentDescriptor: childDescriptor,
+    state: "SUBAGENT_STATE_ALIVE",
+    spawnStepIndex: 1,
+  };
+  writeFileSync(resolve(subagentsDir, `${childConvId}.json`), JSON.stringify(subJson), "utf-8");
+
+  const transcriptLines = transcriptSteps.map((s) => JSON.stringify(s)).join("\n");
+  writeFileSync(resolve(childLogsDir, "transcript.jsonl"), transcriptLines, "utf-8");
+}
+
+function teardownTestBrain() {
+  try { rmSync(testBrainDir, { recursive: true, force: true }); } catch {}
+}
+
+test("evidence-sync-integrity: regression 1: reviewer test cannot satisfy worker validation", () => {
+  teardownTestBrain();
+  const parentId = "parent-rev-1";
+  const childId = "child-rev-1";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-reviewer", role: "Reviewer" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "node --test tests/auth.test.mjs" } }],
+      },
+      {
+        step_index: 1,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: {
+        role: "REVIEWER",
+        profile: "flash-reviewer",
+        confidence: "HIGH",
+        parentConversationId: parentId,
+      },
+    },
+  };
+
+  const activeState = {
+    evidenceLedger: [],
+    scopeContract: { testsRequired: ["node --test tests/auth.test.mjs"] },
+  };
+
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+
+  assert.equal(activeState.evidenceLedger.length, 1);
+  assert.equal(activeState.evidenceLedger[0].actorRole, "REVIEWER");
+  assert.equal(activeState.reviewerValidationObserved, true);
+  assert.equal(activeState.workerValidationObserved, undefined);
+
+  const val = verifyWorkerValidation(activeState);
+  assert.equal(val.verified, false);
+  assert.ok(val.reason.includes("INVALID_ACTOR"));
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 2: unknown child cannot satisfy worker validation", () => {
+  teardownTestBrain();
+  const parentId = "parent-unk-1";
+  const childId = "child-unk-1";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "arbitrary-unknown", role: "UnknownRole" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "node --test" } }],
+      },
+      {
+        step_index: 1,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const roleBindings = { bindings: {} };
+  const activeState = { evidenceLedger: [] };
+
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+
+  assert.equal(activeState.evidenceLedger.length, 1);
+  assert.equal(activeState.evidenceLedger[0].actorRole, "UNKNOWN");
+  assert.equal(activeState.evidenceLedger[0].confidence, "LOW");
+  assert.equal(activeState.unknownValidationObserved, true);
+  assert.equal(activeState.workerValidationObserved, undefined);
+
+  const val = verifyWorkerValidation(activeState);
+  assert.equal(val.verified, false);
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 3: unbound child fails closed", () => {
+  teardownTestBrain();
+  const parentId = "parent-unbound-1";
+  const childId = "child-unbound-1";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "self", role: "Worker" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+      },
+      {
+        step_index: 1,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const activeState = { evidenceLedger: [] };
+  // Empty role bindings -> child is unbound
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings: { bindings: {} } });
+
+  assert.equal(activeState.evidenceLedger.length, 1);
+  assert.notEqual(activeState.evidenceLedger[0].actorRole, "WORKER");
+  assert.equal(activeState.evidenceLedger[0].actorRole, "UNKNOWN");
+  assert.equal(activeState.evidenceLedger[0].confidence, "LOW");
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 4: child from wrong parent is ignored", () => {
+  teardownTestBrain();
+  const parentId = "parent-orch-104";
+  const childId = "child-foreign-1";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-low-worker", role: "Worker" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+      },
+      {
+        step_index: 1,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: {
+        role: "WORKER",
+        confidence: "HIGH",
+        parentConversationId: "completely-different-parent",
+      },
+    },
+  };
+
+  const activeState = { evidenceLedger: [] };
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+  assert.equal(activeState.evidenceLedger.length, 0, "Foreign parent child evidence must be ignored");
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 5: old task evidence is ignored", () => {
+  teardownTestBrain();
+  const parentId = "parent-orch-105";
+  const childId = "child-old-task-1";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-low-worker", role: "Worker" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+      },
+      {
+        step_index: 1,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: {
+        role: "WORKER",
+        confidence: "HIGH",
+        parentConversationId: parentId,
+        taskIdentifier: "task-old-yesterday",
+      },
+    },
+  };
+
+  const activeState = { evidenceLedger: [], taskId: "task-current-today" };
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+  assert.equal(activeState.evidenceLedger.length, 0, "Evidence with mismatched taskId must be ignored");
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 6: validation PASS followed by mutation becomes stale", () => {
+  teardownTestBrain();
+  const parentId = "parent-orch-106";
+  const childId = "child-worker-106";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-low-worker", role: "Worker" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "write_to_file", args: { TargetFile: "src/index.js", CodeContent: "const a = 1;" } }],
+      },
+      {
+        step_index: 1,
+        content: "File written",
+      },
+      {
+        step_index: 2,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "node --test" } }],
+      },
+      {
+        step_index: 3,
+        content: "The command exited with code 0",
+      },
+      {
+        step_index: 4,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "replace_file_content", args: { TargetFile: "src/index.js", TargetContent: "1", ReplacementContent: "2" } }],
+      },
+      {
+        step_index: 5,
+        content: "File replaced",
+      },
+      {
+        step_index: 6,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "send_message", args: { Message: "IMPLEMENTATION_COMPLETE" } }],
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: {
+        role: "WORKER",
+        confidence: "HIGH",
+        parentConversationId: parentId,
+      },
+    },
+  };
+
+  const activeState = { evidenceLedger: [] };
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+
+  assert.equal(activeState.evidenceLedger.length, 1);
+  const ev = activeState.evidenceLedger[0];
+  assert.equal(ev.mutationAfterValidation, true);
+  assert.equal(ev.fresh, false);
+
+  const val = verifyWorkerValidation(activeState);
+  assert.equal(val.verified, false);
+  assert.equal(val.fresh, false);
+  assert.ok(val.reason.includes("STALE"));
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 7: validation FAIL -> mutation -> PASS uses final fresh pass", () => {
+  teardownTestBrain();
+  const parentId = "parent-orch-107";
+  const childId = "child-worker-107";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-low-worker", role: "Worker" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "write_to_file", args: { TargetFile: "src/index.js", CodeContent: "broken" } }],
+      },
+      {
+        step_index: 1,
+        content: "File written",
+      },
+      {
+        step_index: 2,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "node --test test/index.test.mjs" } }],
+      },
+      {
+        step_index: 3,
+        content: "The command exited with code 1",
+      },
+      {
+        step_index: 4,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "replace_file_content", args: { TargetFile: "src/index.js", TargetContent: "broken", ReplacementContent: "fixed" } }],
+      },
+      {
+        step_index: 5,
+        content: "File replaced",
+      },
+      {
+        step_index: 6,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "node --test test/index.test.mjs" } }],
+      },
+      {
+        step_index: 7,
+        content: "The command exited with code 0",
+      },
+      {
+        step_index: 8,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "send_message", args: { Message: "IMPLEMENTATION_COMPLETE" } }],
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: {
+        role: "WORKER",
+        confidence: "HIGH",
+        parentConversationId: parentId,
+      },
+    },
+  };
+
+  const activeState = {
+    evidenceLedger: [],
+    scopeContract: { testsRequired: ["node --test test/index.test.mjs"] },
+  };
+
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+
+  assert.equal(activeState.evidenceLedger.length, 2, "Both distinct test executions must remain in ledger");
+  const failEv = activeState.evidenceLedger[0];
+  const passEv = activeState.evidenceLedger[1];
+
+  assert.equal(failEv.exitCode, 1);
+  assert.equal(failEv.mutationAfterValidation, true);
+  assert.equal(failEv.fresh, false);
+
+  assert.equal(passEv.exitCode, 0);
+  assert.equal(passEv.mutationAfterValidation, false);
+  assert.equal(passEv.fresh, true);
+
+  assert.equal(activeState.workerValidationExitCode, 0);
+  assert.equal(activeState.workerValidationActor, "WORKER");
+
+  const val = verifyWorkerValidation(activeState);
+  assert.equal(val.verified, true);
+  assert.equal(val.fresh, true);
+  assert.equal(val.evidence.exitCode, 0);
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 8: repeated same test executions remain distinct", () => {
+  teardownTestBrain();
+  const parentId = "parent-orch-108";
+  const childId = "child-worker-108";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-low-worker", role: "Worker" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+      },
+      {
+        step_index: 1,
+        content: "The command exited with code 0",
+      },
+      {
+        step_index: 2,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+      },
+      {
+        step_index: 3,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: { role: "WORKER", confidence: "HIGH", parentConversationId: parentId },
+    },
+  };
+
+  const activeState = { evidenceLedger: [] };
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+
+  assert.equal(activeState.evidenceLedger.length, 2, "Repeated executions must not overwrite each other");
+  assert.notEqual(
+    activeState.evidenceLedger[0].transcriptEvidenceId,
+    activeState.evidenceLedger[1].transcriptEvidenceId
+  );
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 9: no synthetic executionId in child evidence", () => {
+  teardownTestBrain();
+  const parentId = "parent-orch-109";
+  const childId = "child-worker-109";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-low-worker", role: "Worker" },
+    [
+      {
+        step_index: 0,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "node --test" } }],
+      },
+      {
+        step_index: 1,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: { role: "WORKER", confidence: "HIGH", parentConversationId: parentId },
+    },
+  };
+
+  const activeState = { evidenceLedger: [] };
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+
+  assert.equal(activeState.evidenceLedger[0].executionId, null, "Child transcript evidence executionId must be null");
+  assert.ok(
+    !JSON.stringify(activeState.evidenceLedger[0]).includes("exec-child-worker-109"),
+    "No synthetic execId string allowed"
+  );
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 10: transcriptEvidenceId is separate from executionId", () => {
+  teardownTestBrain();
+  const parentId = "parent-orch-110";
+  const childId = "child-worker-110";
+  setupTestBrain(
+    parentId,
+    childId,
+    { typeName: "flash-low-worker", role: "Worker" },
+    [
+      {
+        step_index: 4,
+        type: "PLANNER_RESPONSE",
+        tool_calls: [{ name: "run_command", args: { CommandLine: "node --test" } }],
+      },
+      {
+        step_index: 5,
+        content: "The command exited with code 0",
+      },
+    ]
+  );
+
+  const roleBindings = {
+    bindings: {
+      [childId]: { role: "WORKER", confidence: "HIGH", parentConversationId: parentId },
+    },
+  };
+
+  const activeState = { evidenceLedger: [] };
+  syncChildEvidence(activeState, parentId, { brainBaseDir: testBrainDir, roleBindings });
+
+  const ev = activeState.evidenceLedger[0];
+  assert.equal(ev.executionId, null);
+  assert.equal(ev.transcriptEvidenceId, `child:${childId}:step:4:tool:0`);
+  teardownTestBrain();
+});
+
+test("evidence-sync-integrity: regression 11: invalid agent names are denied", () => {
+  const invalidNames = [
+    "../worker",
+    "../../foo",
+    "foo/bar",
+    "foo\\bar",
+    "C:\\foo",
+    "/absolute",
+    "foo.md/../bar",
+    ".",
+    "..",
+    "",
+  ];
+
+  for (const badName of invalidNames) {
+    const input = JSON.stringify({
+      conversationId: "parent-orch",
+      toolCall: {
+        name: "define_subagent",
+        args: { name: badName, system_prompt: "Malicious prompt" },
+      },
+    });
+    const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+    assert.equal(out.decision, "deny", `Agent name "${badName}" must be denied`);
+    assert.ok(out.reason.includes("INVALID_AGENT_NAME"), `Reason for "${badName}" must indicate INVALID_AGENT_NAME`);
+  }
+});
+
+test("evidence-sync-integrity: regression 12: valid registered profile is allowed with authoritative prompt", () => {
+  const input = JSON.stringify({
+    conversationId: "parent-orch",
+    toolCall: {
+      name: "define_subagent",
+      args: { name: "flash-low-worker", system_prompt: "Untrusted prompt from orchestrator" },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "allow");
+  assert.ok(out.overwrite && out.overwrite.system_prompt, "Authoritative system prompt must be overwritten");
+  assert.ok(out.overwrite.system_prompt.includes("Flash Low Worker"), "Prompt must match authoritative inventory");
+});
+
+test("evidence-sync-integrity: regression 13: valid name syntax but nonexistent profile is denied", () => {
+  const input = JSON.stringify({
+    conversationId: "parent-orch",
+    toolCall: {
+      name: "define_subagent",
+      args: { name: "flash-nonexistent-worker", system_prompt: "Custom untrusted subagent" },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "deny");
+  assert.ok(out.reason.includes("UNKNOWN_AGENT_PROFILE"), "Unknown profile must fail closed with UNKNOWN_AGENT_PROFILE");
+});
+
+test("evidence-sync-integrity: regression 14: module import does not invoke main or read stdin", () => {
+  // Test importing pre-tool-enforce.mjs and stop-guard.mjs in a separate node process without hanging
+  const testScript = `
+    const start = Date.now();
+    await import(${JSON.stringify(preToolScript)});
+    await import(${JSON.stringify(stopScript)});
+    const elapsed = Date.now() - start;
+    if (elapsed > 2000) {
+      process.exit(2);
+    }
+    process.exit(0);
+  `;
+
+  const child = execFileSync("node", ["--input-type=module", "-e", testScript], {
+    timeout: 3000,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  assert.ok(true, "Imports completed without hang");
+});
+
+test("evidence-sync-integrity: regression 15: direct script execution still invokes hook", () => {
+  const input = JSON.stringify({
+    toolCall: {
+      name: "define_subagent",
+      args: { name: "invalid/name" },
+    },
+  });
+
+  const rawOut = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+  const parsed = JSON.parse(rawOut.trim());
+  assert.equal(parsed.decision, "deny");
+  assert.ok(parsed.reason.includes("INVALID_AGENT_NAME"));
 });

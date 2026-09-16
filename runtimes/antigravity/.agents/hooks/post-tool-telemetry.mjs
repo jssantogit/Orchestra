@@ -174,6 +174,8 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             profile: childProfile,
             model: childModel,
             source: "RUNTIME_IDENTITY",
+            confidence: "HIGH",
+            parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             boundFromPendingId: matched.id || null,
           };
           roleBindings.bindings[convId] = record;
@@ -532,8 +534,8 @@ function main() {
           if (!Array.isArray(activeState.evidenceLedger)) {
             activeState.evidenceLedger = [];
           }
-          const syntheticEv = {
-            executionId: resolvedExecutionId || `exec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          const ev = {
+            executionId: resolvedExecutionId || null,
             command: rawCmd,
             exitCode,
             mutationSeq: activeState.mutationSeq || 0,
@@ -544,11 +546,13 @@ function main() {
             evidenceSource: actor.source || "TOOL_RESULT",
             timestamp: new Date().toISOString(),
           };
-          const existingIdx = activeState.evidenceLedger.findIndex((e) => e && e.command === rawCmd);
+          const existingIdx = activeState.evidenceLedger.findIndex(
+            (e) => e && resolvedExecutionId && e.executionId === resolvedExecutionId
+          );
           if (existingIdx >= 0) {
-            activeState.evidenceLedger[existingIdx] = syntheticEv;
+            activeState.evidenceLedger[existingIdx] = ev;
           } else {
-            activeState.evidenceLedger.push(syntheticEv);
+            activeState.evidenceLedger.push(ev);
           }
         }
       }
@@ -604,7 +608,13 @@ function main() {
       }
     } else if (toolName === "invoke_subagent") {
       activeState.invoke_subagent_calls = (activeState.invoke_subagent_calls || 0) + 1;
-      const subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
+      let subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
+      if (subagents.length === 0 && typeof toolArgs.Subagents === "string") {
+        try {
+          const parsed = JSON.parse(toolArgs.Subagents);
+          if (Array.isArray(parsed)) subagents = parsed;
+        } catch {}
+      }
       activeState.subagent_invocations = (activeState.subagent_invocations || 0) + (subagents.length > 0 ? subagents.length : 1);
       for (const sub of subagents) {
         const role = String(sub.Role || sub.TypeName || "").toLowerCase();

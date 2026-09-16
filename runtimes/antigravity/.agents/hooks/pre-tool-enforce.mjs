@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, relative, dirname, basename, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   extractRealShellRedirections,
   TOOL_OUTPUT_LIMITS,
@@ -190,6 +190,8 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             profile: childProfile,
             model: childModel,
             source: "RUNTIME_IDENTITY",
+            confidence: "HIGH",
+            parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             boundFromPendingId: matched.id || null,
           };
           roleBindings.bindings[convId] = record;
@@ -560,7 +562,8 @@ function extractScopeContractFromPrompt(promptText = "", sub = {}) {
 
 export function isValidAgentName(name) {
   if (!name || typeof name !== "string") return false;
-  const clean = name.trim().replace(/^["']|["']$/g, "");
+  const clean = name.trim().replace(/^["']|["']$/g, "").trim();
+  if (!clean || clean === "." || clean === "..") return false;
   if (!/^[a-zA-Z0-9_-]+$/.test(clean)) return false;
   if (clean.includes("..") || clean.includes("/") || clean.includes("\\")) return false;
   return true;
@@ -631,27 +634,44 @@ function main() {
 
     if (toolName === "define_subagent") {
       const agentName = String(toolArgs.name || "").replace(/^["']|["']$/g, "").trim();
-      if (isValidAgentName(agentName)) {
-        const agentsDir = resolve(repoRoot, ".agents/agents");
-        const agentFile = resolve(agentsDir, `${agentName}.md`);
-        if (agentFile.startsWith(agentsDir + sep) && existsSync(agentFile)) {
-          try {
-            const rawContent = readFileSync(agentFile, "utf-8");
-            const match = rawContent.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
-            const authoritativePrompt = match ? match[2].trim() : rawContent.trim();
-            console.log(JSON.stringify({
-              decision: "allow",
-              overwrite: {
-                ...toolArgs,
-                system_prompt: authoritativePrompt,
-              },
-            }));
-            return;
-          } catch {}
-        }
+      if (!isValidAgentName(agentName)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `INVALID_AGENT_NAME: "${toolArgs.name || ""}" is not a valid agent name. Agent names must match /^[a-zA-Z0-9_-]+$/ and not contain path separators.`
+        }));
+        return;
       }
-      console.log(JSON.stringify({ decision: "allow" }));
-      return;
+
+      const agentsDir = resolve(repoRoot, ".agents/agents");
+      const agentFile = resolve(agentsDir, `${agentName}.md`);
+      const isInside = agentFile.startsWith(agentsDir + sep) || agentFile.startsWith(agentsDir + "/");
+      if (!isInside || !existsSync(agentFile)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `UNKNOWN_AGENT_PROFILE: Agent profile "${agentName}" does not exist in .agents/agents/. Only registered agent profiles may be defined.`
+        }));
+        return;
+      }
+
+      try {
+        const rawContent = readFileSync(agentFile, "utf-8");
+        const match = rawContent.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
+        const authoritativePrompt = match ? match[2].trim() : rawContent.trim();
+        console.log(JSON.stringify({
+          decision: "allow",
+          overwrite: {
+            ...toolArgs,
+            system_prompt: authoritativePrompt,
+          },
+        }));
+        return;
+      } catch (err) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `AGENT_PROFILE_LOAD_FAILED: Could not load authoritative definition for "${agentName}": ${err.message}`
+        }));
+        return;
+      }
     }
 
     if (toolName === "invoke_subagent") {
@@ -677,8 +697,14 @@ function main() {
       if (!Array.isArray(roleBindings.pendingSubagents)) {
         roleBindings.pendingSubagents = [];
       }
+      let subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
+      if (subagents.length === 0 && typeof toolArgs.Subagents === "string") {
+        try {
+          const parsed = JSON.parse(toolArgs.Subagents);
+          if (Array.isArray(parsed)) subagents = parsed;
+        } catch {}
+      }
       let seq = roleBindings.pendingSeq || 0;
-      const subagents = Array.isArray(toolArgs.Subagents) ? toolArgs.Subagents : [];
       for (let idx = 0; idx < subagents.length; idx++) {
         seq++;
         const sub = subagents[idx];
@@ -709,6 +735,7 @@ function main() {
         roleBindings.pendingSubagents.push({
           seq,
           conversationId: null,
+          parentConversationId: convId,
           typeName,
           profile,
           role: subRole,
@@ -1131,6 +1158,9 @@ function main() {
   console.log(JSON.stringify({ decision: "allow" }));
 }
 
-if (process.argv[1] && process.argv[1].includes("pre-tool-enforce.mjs")) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main();
 }

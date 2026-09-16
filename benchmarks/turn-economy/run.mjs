@@ -368,11 +368,49 @@ function calculateDistribution(turns = []) {
   };
 }
 
-export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir) {
+export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir, roleBindings = null) {
   if (!existsSync(childTranscriptFile)) return { mutations: [], validations: [], completionClaimed: false };
   const mutations = [];
   const validations = [];
   let completionClaimed = false;
+
+  let resolvedRole = "UNKNOWN";
+  let resolvedConfidence = "LOW";
+  let resolvedProfile = sub?.subagentDescriptor?.typeName || sub?.subagentDescriptor?.role || "flash-low-worker";
+
+  const binding = (roleBindings?.bindings && roleBindings.bindings[sub?.conversationId])
+    || (roleBindings?.conversations && roleBindings.conversations[sub?.conversationId])
+    || null;
+
+  if (binding) {
+    resolvedRole = (binding.role || "UNKNOWN").toUpperCase();
+    resolvedConfidence = binding.confidence === "HIGH" ? "HIGH" : "MEDIUM";
+    resolvedProfile = binding.profile || resolvedProfile;
+  } else if (Array.isArray(roleBindings?.pendingSubagents) && roleBindings.pendingSubagents.length > 0) {
+    const matched = roleBindings.pendingSubagents.find(
+      (p) => p.typeName === sub?.subagentDescriptor?.typeName ||
+             p.role === sub?.subagentDescriptor?.role ||
+             (sub?.subagentDescriptor?.typeName && p.typeName && p.typeName.toLowerCase() === sub.subagentDescriptor.typeName.toLowerCase())
+    );
+    if (matched) {
+      resolvedRole = (matched.role || "WORKER").toUpperCase();
+      resolvedConfidence = "HIGH";
+      resolvedProfile = matched.typeName || resolvedProfile;
+    }
+  }
+
+  if (resolvedRole === "UNKNOWN") {
+    const typeName = String(sub?.subagentDescriptor?.typeName || "").toLowerCase();
+    const roleName = String(sub?.subagentDescriptor?.role || "").toLowerCase();
+    const combined = `${typeName} ${roleName}`;
+    if (combined.includes("reviewer") || typeName === "flash-reviewer") {
+      resolvedRole = "REVIEWER";
+      resolvedConfidence = "MEDIUM";
+    } else if (combined.includes("worker") || combined.includes("self") || combined.includes("implement") || combined.includes("fixer") || combined.includes("fix")) {
+      resolvedRole = "WORKER";
+      resolvedConfidence = "HIGH";
+    }
+  }
 
   try {
     const lines = readFileSync(childTranscriptFile, "utf8").trim().split("\n");
@@ -384,7 +422,8 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       if (step.type === "PLANNER_RESPONSE" && Array.isArray(step.tool_calls)) {
-        for (const tc of step.tool_calls) {
+        for (let tcIdx = 0; tcIdx < step.tool_calls.length; tcIdx++) {
+          const tc = step.tool_calls[tcIdx];
           const toolName = tc.name || "";
           const args = tc.args || tc.parameters || {};
 
@@ -401,11 +440,11 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
             if (!isControlPlanePath(relPath)) {
               mutations.push({
                 path: relPath,
-                actorRole: "WORKER",
-                agentProfile: sub.subagentDescriptor?.typeName || sub.subagentDescriptor?.role || "flash-low-worker",
+                actorRole: resolvedRole,
+                agentProfile: resolvedProfile,
                 conversationId: sub.conversationId,
                 tool: toolName,
-                confidence: "HIGH",
+                confidence: resolvedConfidence,
                 evidenceSource: "CHILD_TRANSCRIPT",
                 stepIndex: i,
               });
@@ -425,14 +464,17 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
             }
             const isTestCmd = /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd);
             if (isTestCmd || cmd.includes("node --test")) {
+              const transcriptEvidenceId = `child:${sub.conversationId}:step:${i}:tool:${tcIdx}`;
               validations.push({
+                executionId: null,
+                transcriptEvidenceId,
                 command: cmd,
                 exitCode: exitCode,
-                actorRole: "WORKER",
-                agentProfile: sub.subagentDescriptor?.typeName || sub.subagentDescriptor?.role || "flash-low-worker",
+                actorRole: resolvedRole,
+                agentProfile: resolvedProfile,
                 conversationId: sub.conversationId,
                 tool: "run_command",
-                confidence: "HIGH",
+                confidence: resolvedConfidence,
                 evidenceSource: "CHILD_TRANSCRIPT",
                 stepIndex: i,
               });
@@ -494,6 +536,12 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     if (existsSync(parentTranscriptFile)) {
       parentTurns = parseTranscriptTurns(parentTranscriptFile);
     }
+    const roleBindingsPath = join(targetDir, ".agents/state/role-bindings.json");
+    let roleBindings = null;
+    if (existsSync(roleBindingsPath)) {
+      try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf8")); } catch {}
+    }
+
     const subagentsDir = join(brainDir, ".system_generated/subagents");
     if (existsSync(subagentsDir)) {
       try {
@@ -508,23 +556,24 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
                 sub.conversationId,
                 ".system_generated/logs/transcript.jsonl"
               );
-              const childTurns = parseTranscriptTurns(childTranscriptFile);
-              if (childTurns) {
-                const role = String(
-                  sub.subagentDescriptor?.role || sub.subagentDescriptor?.typeName || ""
-                ).toLowerCase();
-                if (role.includes("reviewer")) {
-                  reviewerTurns.push(...childTurns);
-                } else {
-                  workerTurns.push(...childTurns);
-                }
-              }
-
-              const childEv = extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir);
+              const childEv = extractChildTranscriptEvidence(childTranscriptFile, sub, targetDir, roleBindings);
               childMutations.push(...childEv.mutations);
               childValidations.push(...childEv.validations);
               if (childEv.completionClaimed) {
                 childCompletionClaimed = true;
+              }
+
+              const childTurns = parseTranscriptTurns(childTranscriptFile);
+              if (childTurns) {
+                const childRole = (childEv.validations[0]?.actorRole || childEv.mutations[0]?.actorRole || "").toLowerCase();
+                const descRole = String(
+                  sub.subagentDescriptor?.role || sub.subagentDescriptor?.typeName || ""
+                ).toLowerCase();
+                if (childRole.includes("reviewer") || descRole.includes("reviewer")) {
+                  reviewerTurns.push(...childTurns);
+                } else {
+                  workerTurns.push(...childTurns);
+                }
               }
             }
           }

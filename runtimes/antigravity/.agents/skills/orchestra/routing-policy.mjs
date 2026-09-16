@@ -3213,6 +3213,15 @@ export function checkEvidenceFreshness(evidence, currentMutationSeq = 0, mutatio
   if (!evidence) {
     return { fresh: false, staleReason: "NO_EVIDENCE" };
   }
+  if (evidence.evidenceSource === "CHILD_TRANSCRIPT") {
+    if (evidence.mutationAfterValidation === true) {
+      return { fresh: false, staleReason: "CHILD_MUTATION_AFTER_VALIDATION" };
+    }
+    if (evidence.fresh === false) {
+      return { fresh: false, staleReason: evidence.staleReason || "CHILD_TRANSCRIPT_STALE" };
+    }
+    return { fresh: true, staleReason: null };
+  }
   const evSeq = typeof evidence.mutationSeq === "number" ? evidence.mutationSeq : 0;
   const currentSeq = typeof currentMutationSeq === "number" ? currentMutationSeq : evSeq;
 
@@ -3279,7 +3288,7 @@ export function findReusableEvidence(evidenceLedger = [], requiredCheck = "", cu
   const filterMatch = req.match(/--filter\s+([^\s]+)/);
   const reqFilter = filterMatch ? filterMatch[1].replace(/["']/g, "") : null;
 
-  for (const ev of evidenceLedger) {
+  for (const ev of evidenceLedger.slice().reverse()) {
     if (!ev || ev.exitCode !== 0 || (ev.failed && ev.failed > 0)) continue;
 
     const evCmd = String(ev.command || "").trim();
@@ -3750,6 +3759,26 @@ export function isWorkerRole(role) {
   return r === "WORKER" || r === "FLASH" || r === "FLASH_WORKER" || r === "FLASH_LOW_WORKER" || r === "FLASH_MEDIUM_WORKER";
 }
 
+export function isExecutableCommand(cmd) {
+  const s = String(cmd || "").trim();
+  if (!s) return false;
+  const unquoted = s.replace(/^[`'"]|[`'"]$/g, "").trim();
+  return /^(?:node|npm|pnpm|yarn|bun|deno|pytest|cargo|go|vitest|jest|make|bash|sh|\.\/|bundle|mvn|gradle|python[0-9.]*|ruby|perl|bin\/)\b/i.test(unquoted);
+}
+
+export function extractExecutableCommand(cmd) {
+  const s = String(cmd || "").trim();
+  if (!s) return null;
+  const backtickMatch = s.match(/`([^`]+)`/);
+  if (backtickMatch && isExecutableCommand(backtickMatch[1])) {
+    return backtickMatch[1].trim();
+  }
+  if (isExecutableCommand(s)) {
+    return s.replace(/^[`'"]|[`'"]$/g, "").trim();
+  }
+  return null;
+}
+
 export function verifyWorkerValidation(activeState = {}) {
   const ledger = Array.isArray(activeState.evidenceLedger) ? activeState.evidenceLedger : [];
   const currentSeq = typeof activeState.mutationSeq === "number" ? activeState.mutationSeq : 0;
@@ -3759,66 +3788,130 @@ export function verifyWorkerValidation(activeState = {}) {
 
   if (requiredTests.length > 0) {
     let lastEvidence = null;
-    for (const testCmd of requiredTests) {
-      const executed = ledger.slice().reverse().find((ev) => {
-        if (!ev) return false;
-        const evCmd = String(ev.command || "").trim();
-        return evCmd.includes(testCmd) || testCmd.includes(evCmd);
-      });
+    for (const rawTestCmd of requiredTests) {
+      const execCmd = extractExecutableCommand(rawTestCmd);
 
-      if (executed && executed.exitCode !== 0) {
-        return {
-          verified: false,
-          fresh: false,
-          reason: `FAILED: validation command ${testCmd} exited with code ${executed.exitCode}`,
-          evidence: executed,
-        };
-      }
+      if (execCmd) {
+        const executed = ledger.slice().reverse().find((ev) => {
+          if (!ev) return false;
+          const evCmd = String(ev.command || "").trim();
+          return evCmd.includes(execCmd) || execCmd.includes(evCmd);
+        });
 
-      const res = findReusableEvidence(ledger, testCmd, currentSeq, mutations);
-      if (!res.found) {
-        return {
-          verified: false,
-          fresh: false,
-          reason: `MISSING: required test not executed: ${testCmd}`,
-          evidence: null,
-        };
+        if (executed && executed.exitCode !== 0) {
+          return {
+            verified: false,
+            fresh: false,
+            reason: `FAILED: validation command ${execCmd} exited with code ${executed.exitCode}`,
+            evidence: executed,
+          };
+        }
+
+        const res = findReusableEvidence(ledger, execCmd, currentSeq, mutations);
+        if (!res.found) {
+          return {
+            verified: false,
+            fresh: false,
+            reason: `MISSING: required test not executed: ${execCmd}`,
+            evidence: null,
+          };
+        }
+        if (!res.reusable) {
+          return {
+            verified: false,
+            fresh: false,
+            reason: `STALE: evidence for ${execCmd} is stale (${res.staleReason || "mutation after test"})`,
+            evidence: res.evidence,
+          };
+        }
+        const ev = res.evidence;
+        if (ev.exitCode !== 0) {
+          return {
+            verified: false,
+            fresh: false,
+            reason: `FAILED: validation command ${execCmd} exited with code ${ev.exitCode}`,
+            evidence: ev,
+          };
+        }
+        const evActor = ev.actorRole || (activeState.workerValidationObserved && activeState.workerValidationCommand === ev.command ? "WORKER" : "UNKNOWN");
+        if (!isWorkerRole(evActor)) {
+          return {
+            verified: false,
+            fresh: false,
+            reason: `INVALID_ACTOR: validation evidence produced by ${evActor}, expected WORKER`,
+            evidence: ev,
+          };
+        }
+        if (ev.confidence === "LOW") {
+          return {
+            verified: false,
+            fresh: false,
+            reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
+            evidence: ev,
+          };
+        }
+        lastEvidence = ev;
+      } else {
+        // Descriptive requirement (e.g. "Run the focused formatter test suite to verify the fix with exitCode 0.")
+        // Satisfied by any fresh, passing worker test execution in ledger
+        let foundTest = null;
+        for (const ev of ledger.slice().reverse()) {
+          if (!ev) continue;
+          const isTest = ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest|go\s+test)\b/.test(String(ev.command || "").trim());
+          if (!isTest) continue;
+
+          if (ev.exitCode !== 0) {
+            return {
+              verified: false,
+              fresh: false,
+              reason: `FAILED: validation command ${ev.command} exited with code ${ev.exitCode}`,
+              evidence: ev,
+            };
+          }
+
+          const freshness = checkEvidenceFreshness(ev, currentSeq, mutations);
+          if (!freshness.fresh) {
+            return {
+              verified: false,
+              fresh: false,
+              reason: `STALE: validation evidence is stale (${freshness.staleReason || "mutation after test"})`,
+              evidence: ev,
+            };
+          }
+
+          const evActor = ev.actorRole || (activeState.workerValidationObserved && activeState.workerValidationCommand === ev.command ? "WORKER" : "UNKNOWN");
+          if (!isWorkerRole(evActor)) {
+            return {
+              verified: false,
+              fresh: false,
+              reason: `INVALID_ACTOR: validation evidence produced by ${evActor}, expected WORKER`,
+              evidence: ev,
+            };
+          }
+
+          if (ev.confidence === "LOW") {
+            return {
+              verified: false,
+              fresh: false,
+              reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
+              evidence: ev,
+            };
+          }
+
+          foundTest = ev;
+          break;
+        }
+
+        if (!foundTest) {
+          return {
+            verified: false,
+            fresh: false,
+            reason: `MISSING: required test not executed: ${rawTestCmd}`,
+            evidence: null,
+          };
+        }
+        lastEvidence = foundTest;
       }
-      if (!res.reusable) {
-        return {
-          verified: false,
-          fresh: false,
-          reason: `STALE: evidence for ${testCmd} is stale (${res.staleReason || "mutation after test"})`,
-          evidence: res.evidence,
-        };
-      }
-      const ev = res.evidence;
-      if (ev.exitCode !== 0) {
-        return {
-          verified: false,
-          fresh: false,
-          reason: `FAILED: validation command ${testCmd} exited with code ${ev.exitCode}`,
-          evidence: ev,
-        };
-      }
-      const evActor = ev.actorRole || (activeState.workerValidationObserved && activeState.workerValidationCommand === ev.command ? "WORKER" : "UNKNOWN");
-      if (!isWorkerRole(evActor)) {
-        return {
-          verified: false,
-          fresh: false,
-          reason: `INVALID_ACTOR: validation evidence produced by ${evActor}, expected WORKER`,
-          evidence: ev,
-        };
-      }
-      if (ev.confidence === "LOW") {
-        return {
-          verified: false,
-          fresh: false,
-          reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
-          evidence: ev,
-        };
-      }
-      lastEvidence = ev;
     }
 
     return {
@@ -3830,7 +3923,7 @@ export function verifyWorkerValidation(activeState = {}) {
   }
 
   // If no specific tests required by contract, look for ANY valid test run in ledger
-  for (const ev of ledger) {
+  for (const ev of ledger.slice().reverse()) {
     if (!ev) continue;
     const isTest = ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(String(ev.command || "").trim());
     if (!isTest) continue;
