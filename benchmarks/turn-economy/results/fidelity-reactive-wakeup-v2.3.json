@@ -1,0 +1,197 @@
+[
+  {
+    "version": "v2.3",
+    "benchmark": "fidelity-reactive-wakeup",
+    "runtime": "antigravity",
+    "task": "simple",
+    "task_id": "task-3-simple",
+    "task_name": "TASK 3 — SIMPLE IMPLEMENTATION",
+    "success": true,
+    "verification_detail": "OK",
+    "dry_run": false,
+    "duration_ms": 48231,
+    "comparison": {
+      "metric": "model_turns",
+      "before_v2_2": {
+        "parent_model_turns": 7,
+        "worker_model_turns": 6,
+        "total_model_turns": 13,
+        "manage_subagent_calls": 5,
+        "parent_per_turn_tool_counts": [2, 1, 1, 1, 1, 1, 0],
+        "worker_per_turn_tool_counts": [1, 2, 2, 1, 1, 0],
+        "total_tool_calls": 14,
+        "input_tokens": 56606
+      },
+      "after_v2_3": {
+        "parent_model_turns": 3,
+        "worker_model_turns": 6,
+        "total_model_turns": 9,
+        "manage_subagent_calls": 0,
+        "parent_per_turn_tool_counts": [2, 0, 0],
+        "worker_per_turn_tool_counts": [2, 1, 2, 1, 1, 0],
+        "total_tool_calls": 9,
+        "input_tokens": 42668
+      },
+      "reduction": {
+        "parent_turns_saved": 4,
+        "parent_turns_percentage": "57.1%",
+        "polling_calls_eliminated": 5,
+        "total_turns_saved": 4,
+        "total_turns_percentage": "30.8%"
+      }
+    },
+    "identity_resolution": {
+      "mode": "FACTUAL_ROLE_BINDING_SCOPED_PENDING",
+      "descriptor_promotions_removed": [
+        "worker",
+        "implement",
+        "fix",
+        "fixer",
+        "self"
+      ],
+      "unbound_child_resolution": {
+        "actorRole": "UNKNOWN",
+        "confidence": "LOW",
+        "satisfiesFidelity": false
+      },
+      "pending_binding_result": {
+        "parent_scoped": true,
+        "task_scoped": true,
+        "run_scoped": true,
+        "matching_rule": "EXACTLY_ONE_CANDIDATE",
+        "ambiguity_fail_closed": true,
+        "persisted": true,
+        "role_bindings_file": ".agents/state/role-bindings.json",
+        "fields_persisted": [
+          "conversationId",
+          "role",
+          "profile",
+          "model",
+          "parentConversationId",
+          "taskIdentifier",
+          "benchmarkRunId",
+          "confidence",
+          "source",
+          "consumed",
+          "consumedBy",
+          "consumedAt"
+        ]
+      }
+    },
+    "reactive_wakeup": {
+      "root_cause": "Orchestrator called manage_subagents in Turn 2 after invoke_subagent returned instead of ending turn with 0 tool calls; runtime lack of pre-tool denial on manage_subagents allowed 5 consecutive polling cycles",
+      "remedy": [
+        "Added manage_subagents to hooks.json PreToolUse matcher",
+        "Enforced zero-polling policy in pre-tool-enforce.mjs (denies manage_subagents during healthy delegation)",
+        "Strengthened Reactive Wakeup prompt instructions in flash-orchestrator.md, GEMINI.md, and SKILL.md to end turn with 0 tool calls immediately after invoke_subagent"
+      ],
+      "status_polling_calls": 0,
+      "flow_observed": [
+        {
+          "turn": 1,
+          "role": "ORCHESTRATOR",
+          "tools": ["define_subagent", "invoke_subagent"],
+          "action": "DELEGATION"
+        },
+        {
+          "turn": 2,
+          "role": "ORCHESTRATOR",
+          "tools": [],
+          "action": "YIELD (clean stop with fullyIdle=false)"
+        },
+        {
+          "turn": "child_execution",
+          "role": "WORKER",
+          "turns": 6,
+          "tools": ["replace_file_content", "replace_file_content", "run_command", "send_message"],
+          "action": "IMPLEMENTATION & VERIFICATION"
+        },
+        {
+          "turn": 3,
+          "role": "ORCHESTRATOR",
+          "tools": [],
+          "action": "WAKEUP, ACCEPTANCE & FINAL SUMMARY"
+        }
+      ]
+    },
+    "acceptance_evidence": {
+      "acceptance_actor": "ORCHESTRATOR",
+      "acceptance_observed": true,
+      "acceptance_state": "ACCEPTED",
+      "worker_completion_claimed": true,
+      "worker_validation_observed": true,
+      "worker_validation_command": "npm test",
+      "worker_validation_exit_code": 0,
+      "worker_validation_actor": "WORKER",
+      "worker_validation_execution_id": null,
+      "worker_validation_conversation_id": "a5d5b726-2404-44e1-8d45-14777d314523",
+      "worker_validation_verified": true,
+      "worker_validation_fresh": true
+    },
+    "fidelity": {
+      "status": "PASS",
+      "confidence": "HIGH",
+      "writeActorValid": true,
+      "violations": [],
+      "expectedRoute": {
+        "orchestrator": "flash-orchestrator",
+        "worker": "flash-low-worker",
+        "delegationExpected": true
+      },
+      "observed": {
+        "orchestrator": "flash-orchestrator",
+        "worker": "flash-low-worker",
+        "delegation": true,
+        "subagentInvocations": 1,
+        "productMutationActor": "WORKER",
+        "mutationEvents": [
+          {
+            "path": "src/formatter.js",
+            "actorRole": "WORKER",
+            "agentProfile": "flash-low-worker",
+            "conversationId": "a5d5b726-2404-44e1-8d45-14777d314523",
+            "tool": "replace_file_content",
+            "confidence": "HIGH",
+            "evidenceSource": "CHILD_TRANSCRIPT",
+            "stepIndex": 6
+          },
+          {
+            "path": "test/formatter.test.js",
+            "actorRole": "WORKER",
+            "agentProfile": "flash-low-worker",
+            "conversationId": "a5d5b726-2404-44e1-8d45-14777d314523",
+            "tool": "replace_file_content",
+            "confidence": "HIGH",
+            "evidenceSource": "CHILD_TRANSCRIPT",
+            "stepIndex": 6
+          }
+        ],
+        "orchestratorWorkspaceWrites": 0,
+        "controlPlaneWrites": 0,
+        "unknownWorkspaceWrites": 0,
+        "worker_completion_claimed": true,
+        "worker_validation_observed": true,
+        "worker_validation_verified": true,
+        "worker_validation_execution_id": null,
+        "worker_validation_conversation_id": "a5d5b726-2404-44e1-8d45-14777d314523",
+        "worker_validation_actor": "WORKER",
+        "worker_validation_exit_code": 0,
+        "worker_validation_fresh": true,
+        "acceptance_observed": true,
+        "acceptance_actor": "ORCHESTRATOR",
+        "acceptance_state": "ACCEPTED",
+        "mutation_attribution_mode": "FACTUAL"
+      }
+    },
+    "tokens": {
+      "input_tokens": 42668,
+      "cached_input_tokens": 16286,
+      "uncached_input_tokens": null,
+      "uncached_semantics": "NOT_DERIVABLE",
+      "output_tokens": 7559,
+      "reasoning_tokens": 6825,
+      "token_semantics_confidence": "MEDIUM",
+      "metric_status": "OK"
+    }
+  }
+]

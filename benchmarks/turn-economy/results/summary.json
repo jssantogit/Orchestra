@@ -7,29 +7,29 @@
     "success": true,
     "verification_detail": "OK",
     "dry_run": false,
-    "duration_ms": 37548,
-    "model_turns_total": 13,
-    "model_invocations": 13,
-    "parent_model_turns": 7,
-    "parent_invocations": 7,
+    "duration_ms": 48231,
+    "model_turns_total": 9,
+    "model_invocations": 9,
+    "parent_model_turns": 3,
+    "parent_invocations": 3,
     "worker_model_turns": 6,
     "worker_invocations": 6,
     "reviewer_model_turns": 0,
     "reviewer_invocations": 0,
-    "total_model_turns": 13,
-    "parent_tool_calls": 7,
+    "total_model_turns": 9,
+    "parent_tool_calls": 2,
     "worker_tool_calls": 7,
-    "total_tool_calls": 14,
-    "tool_calls": 14,
+    "total_tool_calls": 9,
+    "tool_calls": 9,
     "tool_calls_per_turn_distribution": {
-      "0": 2,
-      "1": 8,
+      "0": 3,
+      "1": 3,
       "2": 3,
       "3+": 0
     },
     "parent_tool_distribution": {
-      "0": 1,
-      "1": 5,
+      "0": 2,
+      "1": 0,
       "2": 1,
       "3+": 0
     },
@@ -42,14 +42,14 @@
     "tool_distribution_by_role": {
       "ORCHESTRATOR": {
         "distribution": {
-          "0": 1,
-          "1": 5,
+          "0": 2,
+          "1": 0,
           "2": 1,
           "3+": 0
         },
         "max_tools_single_turn": 2,
-        "turns_with_0_tools": 1,
-        "turns_with_1_tool": 5,
+        "turns_with_0_tools": 2,
+        "turns_with_1_tool": 0,
         "turns_with_2_tools": 1,
         "turns_with_3_plus_tools": 0
       },
@@ -67,12 +67,12 @@
         "turns_with_3_plus_tools": 0
       }
     },
-    "turns_with_zero_tools": 2,
-    "turns_with_one_tool": 8,
+    "turns_with_zero_tools": 3,
+    "turns_with_one_tool": 3,
     "turns_with_multiple_tools": 3,
     "max_tools_in_single_turn": 2,
     "parent_pre_delegation_turns": 1,
-    "parent_post_handoff_turns": 6,
+    "parent_post_handoff_turns": 2,
     "worker_pre_mutation_turns": 2,
     "worker_post_mutation_turns": 3,
     "worker_search_turns": 1,
@@ -83,7 +83,7 @@
     "worker_multi_tool_turns": 2,
     "worker_serial_independent_tool_opportunities": 0,
     "tools_per_turn_by_role": {
-      "ORCHESTRATOR": 1,
+      "ORCHESTRATOR": 0.67,
       "WORKER": 1.17
     },
     "duplicate_reads": 0,
@@ -105,59 +105,29 @@
       },
       {
         "turnIndex": 2,
-        "classification": "WAIT/POLL",
-        "tools": [
-          "manage_subagents"
-        ]
+        "classification": "FINAL",
+        "tools": []
       },
       {
         "turnIndex": 3,
-        "classification": "WAIT/POLL",
-        "tools": [
-          "manage_subagents"
-        ]
-      },
-      {
-        "turnIndex": 4,
-        "classification": "WAIT/POLL",
-        "tools": [
-          "manage_subagents"
-        ]
-      },
-      {
-        "turnIndex": 5,
-        "classification": "WAIT/POLL",
-        "tools": [
-          "manage_subagents"
-        ]
-      },
-      {
-        "turnIndex": 6,
-        "classification": "WAIT/POLL",
-        "tools": [
-          "manage_subagents"
-        ]
-      },
-      {
-        "turnIndex": 7,
         "classification": "FINAL",
         "tools": []
       }
     ],
     "subagent_invocations": 1,
-    "manage_subagent_calls": 5,
-    "stop_attempts": 1,
-    "clean_stops": 1,
+    "manage_subagent_calls": 0,
+    "stop_attempts": 2,
+    "clean_stops": 2,
     "forced_stop_continuations": 0,
     "advisory_injections": 0,
-    "worker_packet_bytes": 1123,
-    "context_proxy_bytes": 9838,
-    "input_tokens": 56606,
-    "cached_input_tokens": 81321,
+    "worker_packet_bytes": 1307,
+    "context_proxy_bytes": 5575,
+    "input_tokens": 42668,
+    "cached_input_tokens": 16286,
     "uncached_input_tokens": null,
     "uncached_semantics": "NOT_DERIVABLE",
-    "output_tokens": 5921,
-    "reasoning_tokens": 5026,
+    "output_tokens": 7559,
+    "reasoning_tokens": 6825,
     "token_semantics_confidence": "MEDIUM",
     "metric_status": "OK",
     "mutation_events": [
@@ -165,7 +135,7 @@
         "path": "src/formatter.js",
         "actorRole": "WORKER",
         "agentProfile": "flash-low-worker",
-        "conversationId": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+        "conversationId": "a5d5b726-2404-44e1-8d45-14777d314523",
         "tool": "replace_file_content",
         "confidence": "HIGH",
         "evidenceSource": "CHILD_TRANSCRIPT",
@@ -175,7 +145,7 @@
         "path": "test/formatter.test.js",
         "actorRole": "WORKER",
         "agentProfile": "flash-low-worker",
-        "conversationId": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+        "conversationId": "a5d5b726-2404-44e1-8d45-14777d314523",
         "tool": "replace_file_content",
         "confidence": "HIGH",
         "evidenceSource": "CHILD_TRANSCRIPT",
@@ -191,28 +161,24 @@
     "worker_validation_exit_code": 0,
     "worker_validation_actor": "WORKER",
     "worker_validation_execution_id": null,
-    "worker_validation_conversation_id": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+    "worker_validation_conversation_id": "a5d5b726-2404-44e1-8d45-14777d314523",
     "worker_validation_verified": true,
     "worker_validation_fresh": true,
     "handoff_observed": true,
-    "handoff_bytes": 1123,
+    "handoff_bytes": 1307,
     "handoff_status": "MESSAGE_DELIVERED",
-    "worker_conversation_id": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+    "worker_conversation_id": "a5d5b726-2404-44e1-8d45-14777d314523",
     "acceptance_actor": "ORCHESTRATOR",
     "acceptance_observed": true,
     "acceptance_state": "ACCEPTED",
     "parent_per_turn_tool_counts": [
       2,
-      1,
-      1,
-      1,
-      1,
-      1,
+      0,
       0
     ],
     "worker_per_turn_tool_counts": [
-      1,
       2,
+      1,
       2,
       1,
       1,
@@ -239,7 +205,7 @@
             "path": "src/formatter.js",
             "actorRole": "WORKER",
             "agentProfile": "flash-low-worker",
-            "conversationId": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+            "conversationId": "a5d5b726-2404-44e1-8d45-14777d314523",
             "tool": "replace_file_content",
             "confidence": "HIGH",
             "evidenceSource": "CHILD_TRANSCRIPT",
@@ -249,7 +215,7 @@
             "path": "test/formatter.test.js",
             "actorRole": "WORKER",
             "agentProfile": "flash-low-worker",
-            "conversationId": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+            "conversationId": "a5d5b726-2404-44e1-8d45-14777d314523",
             "tool": "replace_file_content",
             "confidence": "HIGH",
             "evidenceSource": "CHILD_TRANSCRIPT",
@@ -263,7 +229,7 @@
         "worker_validation_observed": true,
         "worker_validation_verified": true,
         "worker_validation_execution_id": null,
-        "worker_validation_conversation_id": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+        "worker_validation_conversation_id": "a5d5b726-2404-44e1-8d45-14777d314523",
         "worker_validation_actor": "WORKER",
         "worker_validation_exit_code": 0,
         "worker_validation_fresh": true,
@@ -276,7 +242,7 @@
       "worker_validation_observed": true,
       "worker_validation_verified": true,
       "worker_validation_execution_id": null,
-      "worker_validation_conversation_id": "55ca7d68-80a8-4926-982c-a8acd6fdf302",
+      "worker_validation_conversation_id": "a5d5b726-2404-44e1-8d45-14777d314523",
       "worker_validation_actor": "WORKER",
       "worker_validation_exit_code": 0,
       "worker_validation_fresh": true,

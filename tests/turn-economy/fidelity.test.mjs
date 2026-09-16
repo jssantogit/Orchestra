@@ -566,7 +566,8 @@ test("regression 8: child transcript without explicit exit code yields exitCode=
       subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
     };
 
-    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir);
+    const roleBindings = { bindings: { [sub.conversationId]: { role: "WORKER", confidence: "HIGH" } } };
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings);
     assert.equal(ev.validations.length, 1);
     assert.equal(ev.validations[0].command, "npm test");
     assert.equal(ev.validations[0].exitCode, null, "Exit code must be null when no explicit tool result exit code is present");
@@ -646,7 +647,8 @@ test("regression 9: explicit success output (The command exited with code 0) yie
       subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
     };
 
-    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir);
+    const roleBindings = { bindings: { [sub.conversationId]: { role: "WORKER", confidence: "HIGH" } } };
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings);
     assert.equal(ev.validations.length, 1);
     assert.equal(ev.validations[0].exitCode, 0);
     assert.equal(ev.completionClaimed, true);
@@ -707,7 +709,8 @@ test("regression 10: explicit failure output (The command exited with code 1) yi
       subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
     };
 
-    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir);
+    const roleBindings = { bindings: { [sub.conversationId]: { role: "WORKER", confidence: "HIGH" } } };
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings);
     assert.equal(ev.validations.length, 1);
     assert.equal(ev.validations[0].exitCode, 1);
 

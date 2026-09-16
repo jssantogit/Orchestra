@@ -36,8 +36,9 @@ Orchestra provides a 100% **ALL-GEMINI** local architecture in the Antigravity C
 - Runtime hooks auto-persist `active-contract.json` and transition state to `DELEGATED`.
 
 ### 4. Reactive Wakeup Discipline
-- After `invoke_subagent`, stop calling tools and await completion wakeup.
-- Zero polling: DO NOT poll `manage_subagents` or `manage_task` in a loop.
+- After calling `invoke_subagent`, immediately stop calling all tools and yield/end turn with 0 tool calls.
+- Zero polling: DO NOT poll `manage_subagents` or `manage_task` during healthy delegated execution. Routine polling is strictly prohibited and denied by runtime policy.
+- Await asynchronous reactive wakeup on child completion.
 
 ### 5. Fresh Evidence & Acceptance Diet
 - Fresh test evidence produced by worker is reused without re-running.

@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -19,7 +20,7 @@ import {
   isConcretePath,
   verifyWorkerValidation,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
-import { canonicalizePath } from "../../benchmarks/turn-economy/run.mjs";
+import { canonicalizePath, extractChildTranscriptEvidence } from "../../benchmarks/turn-economy/run.mjs";
 import { isValidAgentName } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
 import { syncChildEvidence } from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
 
@@ -1529,4 +1530,543 @@ test("evidence-sync-integrity: regression 15: direct script execution still invo
   const parsed = JSON.parse(rawOut.trim());
   assert.equal(parsed.decision, "deny");
   assert.ok(parsed.reason.includes("INVALID_AGENT_NAME"));
+});
+
+// --- Fidelity & Reactive Wakeup v2.3 Regressions ---
+
+test("fidelity-reactive-wakeup: regression 1: unbound descriptor 'flash-low-worker' remains UNKNOWN", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg1-unbound-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-unbound-flash",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "flash-low-worker" },
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, { bindings: {}, pendingSubagents: [] });
+    assert.equal(ev.role, "UNKNOWN");
+    assert.equal(ev.confidence, "LOW");
+    assert.equal(ev.validations.length, 1);
+    assert.equal(ev.validations[0].actorRole, "UNKNOWN");
+    assert.equal(ev.validations[0].confidence, "LOW");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 2: descriptor containing 'fix'/'implement'/'self' cannot prove WORKER", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg2-descriptor-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const probeDescriptors = [
+      { typeName: "self", role: "fixer" },
+      { typeName: "implementer", role: "implement" },
+      { typeName: "fix-agent", role: "Worker" },
+      { typeName: "code-fixer", role: "self" },
+    ];
+
+    for (const desc of probeDescriptors) {
+      const sub = { conversationId: `child-${desc.typeName}`, subagentDescriptor: desc };
+      const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, { bindings: {}, pendingSubagents: [] });
+      assert.equal(ev.role, "UNKNOWN", `Descriptor ${JSON.stringify(desc)} must not be promoted to WORKER`);
+      assert.equal(ev.confidence, "LOW");
+      assert.equal(ev.validations[0].actorRole, "UNKNOWN");
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 3: exact bound worker resolves WORKER/HIGH", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg3-bound-worker-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-worker-exact",
+      subagentDescriptor: { typeName: "unrelated-desc", role: "Helper" },
+    };
+    const roleBindings = {
+      bindings: {
+        "child-worker-exact": {
+          role: "WORKER",
+          confidence: "HIGH",
+          profile: "flash-low-worker",
+        },
+      },
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings);
+    assert.equal(ev.role, "WORKER");
+    assert.equal(ev.confidence, "HIGH");
+    assert.equal(ev.profile, "flash-low-worker");
+    assert.equal(ev.validations[0].actorRole, "WORKER");
+    assert.equal(ev.validations[0].confidence, "HIGH");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 4: reviewer binding remains REVIEWER", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg4-reviewer-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-reviewer-exact",
+      subagentDescriptor: { typeName: "flash-worker", role: "Worker" },
+    };
+    const roleBindings = {
+      bindings: {
+        "child-reviewer-exact": {
+          role: "REVIEWER",
+          confidence: "HIGH",
+          profile: "flash-reviewer",
+        },
+      },
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings);
+    assert.equal(ev.role, "REVIEWER");
+    assert.equal(ev.validations[0].actorRole, "REVIEWER");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 5: wrong-parent pending cannot bind", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg5-wrong-parent-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-parent-mismatch",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+    const roleBindings = {
+      pendingSubagents: [
+        {
+          typeName: "flash-low-worker",
+          profile: "flash-low-worker",
+          role: "WORKER",
+          parentConversationId: "parent-alpha",
+          consumed: false,
+        },
+      ],
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings, {
+      parentConvId: "parent-beta",
+    });
+    assert.equal(ev.role, "UNKNOWN");
+    assert.equal(ev.confidence, "LOW");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 6: wrong-task pending cannot bind", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg6-wrong-task-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-task-mismatch",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+    const roleBindings = {
+      pendingSubagents: [
+        {
+          typeName: "flash-low-worker",
+          profile: "flash-low-worker",
+          role: "WORKER",
+          parentConversationId: "parent-1",
+          taskIdentifier: "task-other",
+          consumed: false,
+        },
+      ],
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings, {
+      parentConvId: "parent-1",
+      taskId: "task-current",
+    });
+    assert.equal(ev.role, "UNKNOWN");
+    assert.equal(ev.confidence, "LOW");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 7: ambiguous pending candidates fail closed", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg7-ambiguous-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-ambiguous",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+    const roleBindings = {
+      pendingSubagents: [
+        {
+          typeName: "flash-low-worker",
+          profile: "flash-low-worker",
+          role: "WORKER",
+          parentConversationId: "parent-1",
+          taskId: "task-simple",
+          consumed: false,
+        },
+        {
+          typeName: "flash-low-worker",
+          profile: "flash-low-worker",
+          role: "WORKER",
+          parentConversationId: "parent-1",
+          taskId: "task-simple",
+          consumed: false,
+        },
+      ],
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings, {
+      parentConvId: "parent-1",
+      taskId: "task-simple",
+    });
+    assert.equal(ev.role, "UNKNOWN", "Ambiguous (>1) candidates must fail closed to UNKNOWN");
+    assert.equal(ev.confidence, "LOW");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 8: unique parent/task/profile candidate binds", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg8-unique-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-unique-bind",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+    const roleBindings = {
+      pendingSubagents: [
+        {
+          typeName: "flash-low-worker",
+          profile: "flash-low-worker",
+          role: "WORKER",
+          parentConversationId: "parent-1",
+          taskIdentifier: "task-simple",
+          consumed: false,
+        },
+      ],
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings, {
+      parentConvId: "parent-1",
+      taskId: "task-simple",
+    });
+    assert.equal(ev.role, "WORKER");
+    assert.equal(ev.confidence, "HIGH");
+    assert.equal(ev.validations[0].actorRole, "WORKER");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 9: consumed pending cannot bind twice", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "reg9-consumed-"));
+  try {
+    const transcriptPath = join(tempDir, "transcript.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    const sub = {
+      conversationId: "child-second-attempter",
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    };
+    const roleBindings = {
+      pendingSubagents: [
+        {
+          typeName: "flash-low-worker",
+          profile: "flash-low-worker",
+          role: "WORKER",
+          parentConversationId: "parent-1",
+          taskIdentifier: "task-simple",
+          consumed: true,
+          consumedBy: "child-first",
+          consumedAt: "2026-09-16T20:00:00.000Z",
+        },
+      ],
+    };
+
+    const ev = extractChildTranscriptEvidence(transcriptPath, sub, tempDir, roleBindings, {
+      parentConvId: "parent-1",
+      taskId: "task-simple",
+    });
+    assert.equal(ev.role, "UNKNOWN", "Consumed pending candidate cannot bind again");
+    assert.equal(ev.confidence, "LOW");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 10: fallback-created binding is persisted", () => {
+  cleanState();
+  const brainDir = mkdtempSync(join(tmpdir(), "brain-persist-"));
+  try {
+    const parentConvId = "parent-persist-test";
+    const childConvId = "child-persist-test";
+    const subagentsDir = join(brainDir, parentConvId, ".system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(join(subagentsDir, `${childConvId}.json`), JSON.stringify({
+      conversationId: childConvId,
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    }), "utf-8");
+
+    const childLogDir = join(brainDir, childConvId, ".system_generated/logs");
+    mkdirSync(childLogDir, { recursive: true });
+    writeFileSync(join(childLogDir, "transcript.jsonl"), JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    mkdirSync(".agents/state", { recursive: true });
+    const initialRoleBindings = {
+      mainConversationId: parentConvId,
+      bindings: {},
+      pendingSubagents: [
+        {
+          typeName: "flash-low-worker",
+          profile: "flash-low-worker",
+          role: "WORKER",
+          model: "gemini-3.8-flash-low",
+          parentConversationId: parentConvId,
+          taskIdentifier: "task-persist",
+          consumed: false,
+        },
+      ],
+    };
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(initialRoleBindings, null, 2), "utf-8");
+
+    const activeState = {
+      taskId: "task-persist",
+      evidenceLedger: [],
+    };
+
+    syncChildEvidence(activeState, parentConvId, {
+      brainBaseDir: brainDir,
+      repoRoot: process.cwd(),
+      taskId: "task-persist",
+    });
+
+    const savedBindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf-8"));
+    const bound = savedBindings.bindings[childConvId];
+    assert.ok(bound, "Binding for child conversation must be persisted to role-bindings.json");
+    assert.equal(bound.role, "WORKER");
+    assert.equal(bound.profile, "flash-low-worker");
+    assert.equal(bound.consumed, true);
+    assert.equal(bound.consumedBy, childConvId);
+    assert.ok(bound.consumedAt, "consumedAt timestamp must be recorded");
+
+    const pending = savedBindings.pendingSubagents[0];
+    assert.equal(pending.consumed, true);
+    assert.equal(pending.consumedBy, childConvId);
+  } finally {
+    rmSync(brainDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 11: second sync reuses persisted exact binding rather than pending", () => {
+  cleanState();
+  const brainDir = mkdtempSync(join(tmpdir(), "brain-second-sync-"));
+  try {
+    const parentConvId = "parent-sync2-test";
+    const childConvId = "child-sync2-test";
+    const subagentsDir = join(brainDir, parentConvId, ".system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(join(subagentsDir, `${childConvId}.json`), JSON.stringify({
+      conversationId: childConvId,
+      subagentDescriptor: { typeName: "flash-low-worker", role: "Worker" },
+    }), "utf-8");
+
+    const childLogDir = join(brainDir, childConvId, ".system_generated/logs");
+    mkdirSync(childLogDir, { recursive: true });
+    writeFileSync(join(childLogDir, "transcript.jsonl"), JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "npm test" } }],
+    }) + "\n" + JSON.stringify({
+      type: "TOOL_RESULT",
+      content: "The command exited with code 0.\nOutput:\n✔ pass",
+    }), "utf-8");
+
+    mkdirSync(".agents/state", { recursive: true });
+    const roleBindings = {
+      mainConversationId: parentConvId,
+      bindings: {
+        [childConvId]: {
+          conversationId: childConvId,
+          role: "WORKER",
+          profile: "flash-low-worker",
+          parentConversationId: parentConvId,
+          taskIdentifier: "task-sync2",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+          consumedBy: childConvId,
+        },
+      },
+      pendingSubagents: [],
+    };
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(roleBindings, null, 2), "utf-8");
+
+    const activeState = { taskId: "task-sync2", evidenceLedger: [] };
+    syncChildEvidence(activeState, parentConvId, {
+      brainBaseDir: brainDir,
+      repoRoot: process.cwd(),
+      taskId: "task-sync2",
+    });
+
+    assert.equal(activeState.evidenceLedger.length, 1);
+    assert.equal(activeState.evidenceLedger[0].actorRole, "WORKER");
+    assert.equal(activeState.evidenceLedger[0].confidence, "HIGH");
+  } finally {
+    rmSync(brainDir, { recursive: true, force: true });
+  }
+});
+
+test("fidelity-reactive-wakeup: regression 12: healthy delegation does not require manage_subagents polling", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    activeRole: "ORCHESTRATOR",
+    state: "DELEGATED",
+    subagent_invocations: 1,
+  }));
+
+  const input = JSON.stringify({
+    conversationId: "parent-orch-poll",
+    toolCall: {
+      name: "manage_subagents",
+      args: { Action: "list" },
+    },
+  });
+
+  const out = JSON.parse(execFileSync("node", [preToolScript], { input }));
+  assert.equal(out.decision, "deny", "manage_subagents list polling must be denied during healthy delegation");
+  assert.ok(out.reason.includes("Reactive Wakeup"), "Denial reason must cite Reactive Wakeup policy");
+});
+
+test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal acceptance", () => {
+  cleanState();
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: "orch-acceptance-conv",
+    bindings: {
+      "orch-acceptance-conv": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "child-worker-conv": { role: "WORKER", profile: "flash-low-worker", confidence: "HIGH" },
+    },
+  }));
+
+  const activeState = {
+    activeRole: "ORCHESTRATOR",
+    conversationId: "orch-acceptance-conv",
+    state: "DELEGATED",
+    workerCompletionClaimed: true,
+    evidenceLedger: [
+      {
+        executionId: null,
+        transcriptEvidenceId: "child:child-worker-conv:step:3:tool:0",
+        command: "npm test",
+        exitCode: 0,
+        fresh: true,
+        actorRole: "WORKER",
+        conversationId: "child-worker-conv",
+      },
+    ],
+  };
+  writeFileSync(".agents/state/active-state.json", JSON.stringify(activeState, null, 2), "utf-8");
+
+  const input = JSON.stringify({
+    conversationId: "orch-acceptance-conv",
+    fullyIdle: true,
+    stop_attempts: 1,
+  });
+
+  const out = JSON.parse(execFileSync("node", [stopScript], { input, encoding: "utf-8" }));
+  assert.equal(out.decision, "stop");
+
+  const finalState = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+  assert.equal(finalState.acceptanceState, "ACCEPTED");
+  assert.equal(finalState.acceptanceActor, "ORCHESTRATOR");
+  assert.equal(finalState.state, "DONE");
+  assert.equal(finalState.workerValidationVerified, true);
+  assert.equal(finalState.workerValidationFresh, true);
+  assert.equal(finalState.workerValidationActor, "WORKER");
+  assert.equal(finalState.workerValidationExitCode, 0);
 });

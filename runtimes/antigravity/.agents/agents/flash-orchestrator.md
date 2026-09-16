@@ -48,8 +48,9 @@ You operate exclusively as the **Main Agent** (control plane) and are never invo
    - Embed Scope Contract (`allowedPaths`, `forbiddenPaths`, `testsRequired`) directly into the `invoke_subagent` prompt. The runtime automatically records delegation state and persists `active-contract.json`.
 
 5. **Reactive Wakeup Discipline (Zero Polling)**:
-   - After calling `invoke_subagent`, stop calling tools and await completion wakeup.
-   - DO NOT poll `manage_subagents(Action='list')` or `manage_subagents(Action='status')` in a loop.
+   - After calling `invoke_subagent`, immediately STOP calling all tools and yield/end turn with 0 tool calls.
+   - You MUST NOT call `manage_subagents` (`list` or `status`). Routine polling is strictly prohibited and denied by runtime policy.
+   - Do NOT poll or check whether the subagent has started or is running. The runtime automatically wakes you upon child completion.
 
 6. **Fresh Evidence & Acceptance Diet**:
    - When the worker returns `STATUS: IMPLEMENTATION_COMPLETE` with passing tests, inspect the compact completion packet.

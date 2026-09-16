@@ -135,6 +135,20 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         const reqModel = payload.modelName || "";
 
         let candidates = unconsumed;
+        // Filter by parent/task/run context before matching role/profile:
+        const parentConvId = payload.parentConversationId || activeState.parentConversationId || roleBindings.mainConversationId || null;
+        if (parentConvId) {
+          candidates = candidates.filter((c) => !c.parentConversationId || c.parentConversationId === parentConvId);
+        }
+        const activeTaskId = payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || null;
+        if (activeTaskId) {
+          candidates = candidates.filter((c) => !(c.taskIdentifier || c.taskId) || (c.taskIdentifier || c.taskId) === activeTaskId);
+        }
+        const activeRunId = payload.benchmarkRunId || activeState.benchmarkRunId || null;
+        if (activeRunId) {
+          candidates = candidates.filter((c) => !c.benchmarkRunId || c.benchmarkRunId === activeRunId);
+        }
+
         if (reqRole) {
           candidates = candidates.filter((c) => c.role && c.role.toUpperCase() === reqRole);
         }
@@ -148,20 +162,25 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         if (candidates.length === 1) {
           matched = candidates[0];
         } else if (candidates.length > 1) {
+          // If multiple candidates share the exact same role and profile (e.g. Two-Key reviewers), safe to bind FIFO
           const firstRole = candidates[0].role;
           const firstProfile = candidates[0].profile;
           const allSameRoleAndProfile = candidates.every((c) => c.role === firstRole && c.profile === firstProfile);
           if (allSameRoleAndProfile) {
             matched = candidates[0];
           } else {
+            // Ambiguous candidates with different roles/profiles fail closed
             matched = null;
           }
+        } else {
+          matched = null;
         }
 
         if (matched) {
+          const consumedAt = new Date().toISOString();
           matched.consumed = true;
           matched.consumedBy = convId;
-          matched.consumedAt = new Date().toISOString();
+          matched.consumedAt = consumedAt;
 
           const childRole = matched.role || "WORKER";
           const childProfile = matched.profile || matched.typeName || (childRole === "REVIEWER" ? "flash-reviewer" : "flash-worker");
@@ -170,13 +189,18 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           if (!roleBindings.bindings) roleBindings.bindings = {};
           if (!roleBindings.conversations) roleBindings.conversations = {};
           const record = {
+            conversationId: convId,
             role: childRole,
             profile: childProfile,
             model: childModel,
-            source: "RUNTIME_IDENTITY",
-            confidence: "HIGH",
             parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
-            boundFromPendingId: matched.id || null,
+            taskIdentifier: matched.taskIdentifier || activeTaskId || null,
+            benchmarkRunId: matched.benchmarkRunId || activeRunId || null,
+            confidence: "HIGH",
+            source: "RUNTIME_IDENTITY",
+            consumed: true,
+            consumedBy: convId,
+            consumedAt,
           };
           roleBindings.bindings[convId] = record;
           roleBindings.conversations[convId] = record;

@@ -104,10 +104,11 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
     const subagentsDir = join(brainDir, ".system_generated/subagents");
     if (!existsSync(subagentsDir)) return;
 
+    const repoRoot = options.repoRoot || getWorkspacePaths().repoRoot;
+    const roleBindingsPath = options.roleBindingsPath || resolve(repoRoot, ".agents/state/role-bindings.json");
+
     let roleBindings = options.roleBindings || null;
     if (!roleBindings) {
-      const repoRoot = options.repoRoot || getWorkspacePaths().repoRoot;
-      const roleBindingsPath = options.roleBindingsPath || resolve(repoRoot, ".agents/state/role-bindings.json");
       if (existsSync(roleBindingsPath)) {
         try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
       }
@@ -128,49 +129,97 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
       if (!sub?.conversationId) continue;
       const childConvId = sub.conversationId;
 
-      // Child / Parent correlation & Task correlation
+      let roleBindingsModified = false;
+
+      // 1. Exact role binding for child conversation
       let binding = (roleBindings.bindings && roleBindings.bindings[childConvId])
         || (roleBindings.conversations && roleBindings.conversations[childConvId])
         || null;
 
-      if (!binding && Array.isArray(roleBindings.pendingSubagents)) {
-        const unconsumed = roleBindings.pendingSubagents.filter((p) => !p.consumed);
+      if (!binding && Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0) {
+        // Step 1: Filter candidates by available scope:
+        // parentConversationId === current parent
+        // taskIdentifier/taskId === current task
+        // benchmarkRunId === current run
+        let candidates = roleBindings.pendingSubagents.filter((p) => !p.consumed);
+        if (parentConvId) {
+          candidates = candidates.filter((p) => !p.parentConversationId || p.parentConversationId === parentConvId);
+        }
+        const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || null;
+        if (activeTaskId) {
+          candidates = candidates.filter((p) => !(p.taskIdentifier || p.taskId) || (p.taskIdentifier || p.taskId) === activeTaskId);
+        }
+        const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || null;
+        if (activeRunId) {
+          candidates = candidates.filter((p) => !p.benchmarkRunId || p.benchmarkRunId === activeRunId);
+        }
+
+        // Step 2: Use role/profile evidence from descriptor
         const descTypeName = sub.subagentDescriptor?.typeName || "";
         const descRole = String(sub.subagentDescriptor?.role || "").toLowerCase();
-        const match = unconsumed.find((p) =>
-          p.profile === descTypeName ||
-          p.typeName === descTypeName ||
-          (p.role && descRole.includes(p.role.toLowerCase())) ||
-          (p.role === "WORKER" && descTypeName.includes("worker")) ||
-          (p.role === "REVIEWER" && descTypeName.includes("reviewer"))
-        );
-        if (match) {
+
+        let matchedCandidates = [];
+        if (descTypeName || descRole) {
+          matchedCandidates = candidates.filter((p) => {
+            if (descTypeName && (p.profile === descTypeName || p.typeName === descTypeName)) return true;
+            if (descRole && p.role && descRole.includes(p.role.toLowerCase())) return true;
+            return false;
+          });
+        } else {
+          matchedCandidates = candidates;
+        }
+
+        // Deterministic rule: exactly 1 valid candidate -> bind; 0 or >1 ambiguous -> UNKNOWN (fail closed, never guess)
+        if (matchedCandidates.length === 1) {
+          const match = matchedCandidates[0];
+          const consumedAt = new Date().toISOString();
           match.consumed = true;
           match.consumedBy = childConvId;
+          match.consumedAt = consumedAt;
+
           const boundRecord = {
+            conversationId: childConvId,
             role: match.role || "WORKER",
-            profile: match.profile || descTypeName || "flash-low-worker",
+            profile: match.profile || match.typeName || descTypeName || "flash-low-worker",
             model: match.model || null,
-            source: "RUNTIME_IDENTITY",
-            confidence: "HIGH",
             parentConversationId: match.parentConversationId || parentConvId,
-            taskIdentifier: match.taskIdentifier || null,
+            taskIdentifier: match.taskIdentifier || activeTaskId || null,
+            benchmarkRunId: match.benchmarkRunId || activeRunId || null,
+            confidence: "HIGH",
+            source: "RUNTIME_IDENTITY",
+            consumed: true,
+            consumedBy: childConvId,
+            consumedAt,
           };
           if (!roleBindings.bindings) roleBindings.bindings = {};
+          if (!roleBindings.conversations) roleBindings.conversations = {};
           roleBindings.bindings[childConvId] = boundRecord;
+          roleBindings.conversations[childConvId] = boundRecord;
           binding = boundRecord;
+          roleBindingsModified = true;
         }
       }
 
-      if (binding && binding.parentConversationId && binding.parentConversationId !== parentConvId) {
-        continue;
+      if (roleBindingsModified) {
+        try {
+          mkdirSync(dirname(roleBindingsPath), { recursive: true });
+          writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
+        } catch {}
       }
-      if (binding && (binding.taskIdentifier || binding.taskId) && activeState.taskId) {
-        const bTask = binding.taskIdentifier || binding.taskId;
-        if (bTask !== activeState.taskId) continue;
-      }
-      if (binding && binding.benchmarkRunId && activeState.benchmarkRunId) {
-        if (binding.benchmarkRunId !== activeState.benchmarkRunId) continue;
+
+      if (binding) {
+        if (binding.parentConversationId && binding.parentConversationId !== parentConvId) {
+          continue;
+        }
+        const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || null;
+        if ((binding.taskIdentifier || binding.taskId) && activeTaskId) {
+          const bTask = binding.taskIdentifier || binding.taskId;
+          if (bTask !== activeTaskId) continue;
+        }
+        const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || null;
+        if (binding.benchmarkRunId && activeRunId) {
+          if (binding.benchmarkRunId !== activeRunId) continue;
+        }
       }
 
       // Child Identity Resolution

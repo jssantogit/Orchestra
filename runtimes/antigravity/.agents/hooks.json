@@ -2,7 +2,7 @@
   "scope-enforcer": {
     "PreToolUse": [
       {
-        "matcher": "write_to_file|replace_file_content|invoke_subagent|define_subagent|run_command|manage_task",
+        "matcher": "write_to_file|replace_file_content|invoke_subagent|define_subagent|run_command|manage_task|manage_subagents",
         "hooks": [
           {
             "type": "command",
