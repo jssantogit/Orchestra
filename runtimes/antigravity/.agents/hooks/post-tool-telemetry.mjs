@@ -877,12 +877,22 @@ function main() {
       const inFlight = activeState.investigationInFlight || null;
       const inFlightToolCallId = inFlight?.toolCallId || inFlight?.tool_call_id || "";
       const inFlightParentConversationId = inFlight?.parentConversationId || inFlight?.parent_conversation_id || inFlight?.conversationId || inFlight?.conversation_id || null;
-      const isInvestigationAck = Boolean(
+      const sameInvestigationParent = Boolean(
         inFlight &&
+        (!inFlightParentConversationId || inFlightParentConversationId === conversationId)
+      );
+      // Potential ACK is intentionally conservative: if runtime omits toolCallId,
+      // do not let a successful invoke result close/teach the investigation outcome.
+      const isPotentialInvestigationAck = Boolean(
+        sameInvestigationParent &&
+        (!ackToolCallId || !inFlightToolCallId || inFlightToolCallId === ackToolCallId)
+      );
+      // State-changing dispatch failure and child-id enrichment require exact causal identity.
+      const isInvestigationAck = Boolean(
+        sameInvestigationParent &&
         inFlightToolCallId &&
         ackToolCallId &&
-        inFlightToolCallId === ackToolCallId &&
-        (!inFlightParentConversationId || inFlightParentConversationId === conversationId)
+        inFlightToolCallId === ackToolCallId
       );
       const invocationFailed = Boolean(
         payload.error ||
@@ -949,7 +959,7 @@ function main() {
             }
           }
 
-          if (pendingCheck.ok && (!isInvestigationAck || invocationFailed)) {
+          if (pendingCheck.ok && (!isPotentialInvestigationAck || (isInvestigationAck && invocationFailed))) {
             const outcomeResultStr = typeof payload.toolResult === "string"
               ? payload.toolResult
               : (payload.toolResult
