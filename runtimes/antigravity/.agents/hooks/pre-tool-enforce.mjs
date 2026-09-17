@@ -926,18 +926,35 @@ function main() {
         } catch {}
       }
 
-      // Check retry budget monotonicity
+      // Check retry budget monotonicity using factual state only.
+      // Never manufacture a retry attempt or remaining budget when the control-plane state is incomplete.
       if (activeState.retry || (activeState.attempt && activeState.attempt > 0) || activeState.retryReason || activeState.retry_reason) {
+        const attempt = activeState.attempt;
         const prevRemaining = activeState.prevRemainingAttempts ?? activeState.remainingAttempts ?? activeState.retry_remaining;
         const currentRemaining = toolArgs.remainingAttempts ?? activeState.remainingAttempts ?? activeState.retry_remaining;
-        if (prevRemaining !== undefined && currentRemaining !== undefined && currentRemaining > prevRemaining) {
+
+        if (!Number.isInteger(attempt) || attempt < 1) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: "RETRY_STATE_UNRESOLVED: Retry execution requires a factual attempt >= 1.",
+          }));
+          return;
+        }
+        if (!Number.isInteger(prevRemaining) || !Number.isInteger(currentRemaining)) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: "RETRY_BUDGET_UNRESOLVED: Retry execution requires factual previous and current remaining-attempt budgets.",
+          }));
+          return;
+        }
+        if (currentRemaining > prevRemaining) {
           console.log(JSON.stringify({
             decision: "deny",
             reason: `RETRY_BUDGET_VIOLATION: Retry budget cannot increase (attempted ${currentRemaining} > previous ${prevRemaining}).`,
           }));
           return;
         }
-        if ((prevRemaining !== undefined && prevRemaining <= 0) || (currentRemaining !== undefined && currentRemaining <= 0)) {
+        if (prevRemaining <= 0 || currentRemaining <= 0) {
           console.log(JSON.stringify({
             decision: "deny",
             reason: "RETRY_BUDGET_EXHAUSTED: Maximum retries exceeded. No remaining retry budget.",
@@ -1035,7 +1052,7 @@ function main() {
             complexity: activeState.complexity || "NORMAL",
             retry: isRetry,
             attempt: activeState.attempt || 0,
-            remainingAttempts: activeState.remainingAttempts ?? activeState.retry_remaining ?? 2,
+            remainingAttempts: activeState.remainingAttempts ?? activeState.retry_remaining ?? 0,
             retryReason,
             isDirectAction: false,
           };
