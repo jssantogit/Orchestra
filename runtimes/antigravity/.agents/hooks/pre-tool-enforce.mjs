@@ -2000,7 +2000,7 @@ function main() {
                 toolCallId: toolCall.id || payload.toolCallId || "",
                 branchOrdinal: 0,
               });
-              recordDecision({
+              const directDecision = recordDecision({
                 repoRoot,
                 snapshot: snapRes.snapshot,
                 decision: {
@@ -2020,6 +2020,18 @@ function main() {
                 },
                 correlationKey: corrKey,
               });
+              if (directDecision.recorded) {
+                activeState.directInvestigationDecisionInFlight = {
+                  correlationKey: corrKey,
+                  childConversationId: payload.conversationId || null,
+                  originToolCallId: toolCall.id || payload.toolCallId || null,
+                  decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                  chosenAction: "IMPLEMENT_DIRECT",
+                  startedAt: new Date().toISOString(),
+                };
+              } else {
+                activeState.dreamRecordingError = directDecision.reason || directDecision.error_code || "DIRECT_INVESTIGATION_DECISION_RECORD_FAILED";
+              }
             }
             activeState.investigationStrategyEvaluated = true;
             try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
