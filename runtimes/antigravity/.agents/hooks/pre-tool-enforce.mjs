@@ -18,6 +18,7 @@ import { buildSnapshot } from "../dream/snapshot.mjs";
 import { deriveDecisionState, deriveAvailableActions, classifyBaselineDecision } from "../dream/action-space.mjs";
 import { recordDecision, dreamCorrelationKey } from "../dream/decision-recorder.mjs";
 import { DREAM_SCHEMAS } from "../dream/records.mjs";
+import { evaluatePolicy } from "../dream/policy-engine.mjs";
 
 function readStdin() {
   try {
@@ -893,7 +894,6 @@ function main() {
             }
 
             const decisionState = deriveDecisionState(facts, activeState, evidenceObj);
-            const availableActions = deriveAvailableActions("WORKER_TIER", decisionState);
 
             const route = {
               kind: "worker",
@@ -901,6 +901,8 @@ function main() {
               model: sub.Model || (profile === "flash-low-worker" ? "gemini-3.8-flash-low" : (profile === "flash-medium-worker" ? "gemini-3.8-flash-medium" : "gemini-3.8-flash-high")),
             };
             const baselineDecision = classifyBaselineDecision(facts, route);
+            const decisionType = baselineDecision?.decisionType || "WORKER_TIER";
+            const availableActions = deriveAvailableActions(decisionType, decisionState);
 
             if (
               baselineDecision &&
@@ -917,12 +919,49 @@ function main() {
                 branchOrdinal: idx,
               });
 
+              let chosenAction = baselineDecision.chosenAction;
+              let policySource = "STATIC_ROUTING_FALLBACK";
+              let policyId = null;
+
+              try {
+                const policyCandidatePaths = [
+                  resolve(repoRoot || ".", "runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"),
+                  resolve(dirname(fileURLToPath(import.meta.url)), "../dream/policies/static-policy-v1.json"),
+                ];
+                let policyJson = null;
+                for (const p of policyCandidatePaths) {
+                  if (existsSync(p)) {
+                    policyJson = JSON.parse(readFileSync(p, "utf-8"));
+                    break;
+                  }
+                }
+                if (policyJson) {
+                  const evalResult = evaluatePolicy({
+                    policy: policyJson,
+                    decisionType: baselineDecision.decisionType,
+                    state: decisionState,
+                    availableActions,
+                    baselineAction: baselineDecision.chosenAction,
+                  });
+                  if (evalResult.ok) {
+                    chosenAction = evalResult.action;
+                    policySource = "STATIC_POLICY_V1";
+                    policyId = evalResult.policy_id;
+                  } else {
+                    policySource = "STATIC_ROUTING_FALLBACK";
+                  }
+                }
+              } catch {
+                policySource = "STATIC_ROUTING_FALLBACK";
+              }
+
               const decRecordInput = {
                 decision_type: baselineDecision.decisionType,
                 state: decisionState,
                 available_actions: availableActions,
-                chosen_action: baselineDecision.chosenAction,
-                policy_source: "STATIC_ROUTING_CURRENT",
+                chosen_action: chosenAction,
+                policy_source: policySource,
+                policy_id: policyId,
                 actor_identity: actor.role || "ORCHESTRATOR",
                 conversation_id: convId,
                 step_idx: payload.stepIdx ?? 0,

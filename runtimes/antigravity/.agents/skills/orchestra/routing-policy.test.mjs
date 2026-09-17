@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -96,6 +97,10 @@ import {
   deriveDecisionState,
   classifyBaselineDecision,
 } from "../../dream/action-space.mjs";
+import { evaluatePolicy } from "../../dream/policy-engine.mjs";
+
+const staticPolicyPath = new URL("../../dream/policies/static-policy-v1.json", import.meta.url);
+const staticPolicy = JSON.parse(readFileSync(staticPolicyPath, "utf-8"));
 
 test("D: routes normal product implementation to Flash Medium worker", () => {
   const res = decideRoute({ taskAction: "IMPLEMENT", implementationComplexity: "normal" });
@@ -1395,6 +1400,25 @@ test("dream routing parity matrix: preserves 100% routing parity across comprehe
           `[${fixture.name}] Mismatched available actions: [${availableActions.join(", ")}] vs [${fixture.expectedLegalActions.join(", ")}]`,
         );
       }
+
+      // Milestone D: declarative static-policy-v1 parity assertion
+      const policyRes = evaluatePolicy({
+        policy: staticPolicy,
+        decisionType: dreamDecision.decisionType,
+        state: decisionState,
+        availableActions,
+        baselineAction: dreamDecision.chosenAction,
+      });
+      assert.equal(
+        policyRes.ok,
+        true,
+        `[${fixture.name}] static-policy-v1 must match state: ${policyRes.diagnostic}`,
+      );
+      assert.equal(
+        policyRes.action,
+        dreamDecision.chosenAction,
+        `[${fixture.name}] static-policy-v1 must match baseline chosen action: got ${policyRes.action}, expected ${dreamDecision.chosenAction}`,
+      );
     }
   }
 });

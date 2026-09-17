@@ -59,7 +59,7 @@ test("Task 5 pre-tool: existing invoke_subagent allow fixtures return byte-compa
   }
 });
 
-test("Task 5 pre-tool: allowed worker delegation records pre-action DECISION event with STATIC_ROUTING_CURRENT", () => {
+test("Task 5 pre-tool: allowed worker delegation records pre-action DECISION event with STATIC_POLICY_V1", () => {
   cleanDreamTestState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -104,7 +104,8 @@ test("Task 5 pre-tool: allowed worker delegation records pre-action DECISION eve
     assert.equal(decEvents.length, 1, "Must have exactly 1 DECISION event recorded");
     const dec = decEvents[0];
     assert.equal(dec.schema, "orchestra.decision.v1");
-    assert.equal(dec.policy_source, "STATIC_ROUTING_CURRENT");
+    assert.equal(dec.policy_source, "STATIC_POLICY_V1");
+    assert.ok(dec.policy_id && dec.policy_id.startsWith("policy-"), "policy_id must be content-addressed");
     assert.equal(dec.decision_type, "WORKER_TIER");
     assert.equal(dec.chosen_action, "FLASH_MEDIUM");
     assert(Array.isArray(dec.available_actions));
@@ -116,6 +117,66 @@ test("Task 5 pre-tool: allowed worker delegation records pre-action DECISION eve
     const pendingDir = resolve(".agents/state/dream/pending-decisions");
     assert(existsSync(pendingDir), "pending-decisions dir must exist");
   } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 5 pre-tool: fallback to STATIC_ROUTING_FALLBACK when policy corrupted or mismatched", () => {
+  cleanDreamTestState();
+  const policyBackupPath = resolve(__testDir, "../.agents/dream/policies/static-policy-v1.json");
+  let originalPolicy = null;
+  if (existsSync(policyBackupPath)) {
+    originalPolicy = readFileSync(policyBackupPath, "utf-8");
+  }
+  try {
+    // Write corrupted policy
+    writeFileSync(policyBackupPath, JSON.stringify({ schema: "corrupted" }), "utf-8");
+
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+    }));
+
+    const input = JSON.stringify({
+      conversationId: "task5-fallback-conv",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_invoke_fallback",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            {
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Implement feature in src/fallback.ts. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+    const output = JSON.parse(rawOutput.trim());
+    assert.equal(output.decision, "allow");
+
+    const lines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(line => JSON.parse(line));
+
+    const decEvents = lines.filter(e => e.type === "DECISION");
+    assert.equal(decEvents.length, 1);
+    const dec = decEvents[0];
+    assert.equal(dec.policy_source, "STATIC_ROUTING_FALLBACK");
+    assert.equal(dec.chosen_action, "FLASH_MEDIUM");
+  } finally {
+    if (originalPolicy !== null) {
+      writeFileSync(policyBackupPath, originalPolicy, "utf-8");
+    }
     cleanDreamTestState();
   }
 });
