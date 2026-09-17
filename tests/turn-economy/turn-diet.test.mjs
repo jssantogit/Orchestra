@@ -2665,3 +2665,468 @@ export function formatPercentage(value) {
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("task5-v1.1: 1. grammar preservation rejects newly accepted syntax (+50%, -50%, .5%, 5.%)", () => {
+  // Correct parser implementation with smallest language extension
+  function parsePercentageCorrect(input) {
+    if (typeof input !== "string") throw new TypeError("Percentage input must be a string");
+    const trimmed = input.trim();
+    const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?)%$/);
+    if (!match) throw new RangeError(`Invalid percentage format: "${input}"`);
+    return Number(match[1] + "e-2");
+  }
+
+  // Naive overly permissive parser implementation
+  function parsePercentageBroad(input) {
+    if (typeof input !== "string") throw new TypeError("Percentage input must be a string");
+    const trimmed = input.trim();
+    const match = trimmed.match(/^([-+]?[0-9]+(?:\.[0-9]+)?)%$/);
+    if (!match) throw new RangeError(`Invalid percentage format: "${input}"`);
+    return Number(match[1]) / 100;
+  }
+
+  const unrelatedSyntax = ["+50%", "-50%", ".5%", "5.%", "+12.5%", "-12.5%", "1e2%"];
+
+  // Correct implementation must reject all unrelated syntax
+  for (const inv of unrelatedSyntax) {
+    assert.throws(() => parsePercentageCorrect(inv), RangeError);
+  }
+
+  // Broadened implementation incorrectly accepts +50% and -50%
+  assert.equal(parsePercentageBroad("+50%"), 0.5);
+  assert.equal(parsePercentageBroad("-50%"), -0.5);
+});
+
+test("task5-v1.1: 2. precision preservation detects and rejects arbitrary toPrecision(12) truncation", () => {
+  function parsePercentageExact(input) {
+    if (typeof input !== "string") throw new TypeError("Percentage input must be a string");
+    const trimmed = input.trim();
+    const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?)%$/);
+    if (!match) throw new RangeError(`Invalid percentage format: "${input}"`);
+    return Number(match[1] + "e-2");
+  }
+
+  function parsePercentageTruncated(input) {
+    if (typeof input !== "string") throw new TypeError("Percentage input must be a string");
+    const trimmed = input.trim();
+    const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?)%$/);
+    if (!match) throw new RangeError(`Invalid percentage format: "${input}"`);
+    return Number((Number(match[1]) / 100).toPrecision(12));
+  }
+
+  const longInput = "12.3456789012345%";
+  const expected = Number("12.3456789012345e-2");
+
+  // Exact implementation preserves full precision
+  assert.equal(parsePercentageExact(longInput), expected);
+
+  // Truncated implementation loses precision beyond 12 digits
+  assert.notEqual(parsePercentageTruncated(longInput), expected);
+  assert.equal(parsePercentageTruncated(longInput), 0.123456789012);
+});
+
+test("task5-v1.1: 3. flash-worker.md contains generic investigation fast path and precision/grammar preservation rules", () => {
+  const workerDocPath = resolve(runtimeRoot, ".agents/agents/flash-worker.md");
+  assert.ok(existsSync(workerDocPath));
+  const content = readFileSync(workerDocPath, "utf-8");
+
+  assert.ok(content.includes("LOCATE IF NEEDED -> REPRODUCE ONCE -> ONE BATCH READ -> ROOT CAUSE -> MINIMAL MUTATION -> FOCUSED VALIDATION -> HANDOFF -> STOP"));
+  assert.ok(content.includes("NEW REQUIRED BEHAVIOR != PERMISSION TO BROADEN THE INPUT LANGUAGE"));
+  assert.ok(content.includes("Behavioral Surface Preservation"));
+  assert.ok(content.includes("Precision Preservation"));
+  assert.ok(content.includes("toPrecision(N)"));
+  assert.ok(content.includes("worker_model_turns <= 8"));
+  assert.ok(content.includes("worker_pre_mutation_turns <= 3"));
+  assert.ok(content.includes("worker_search_turns <= 1"));
+
+  // Ensure no Task-5-specific benchmark answers leaked into runtime prompt
+  assert.ok(!content.includes("parsePercentage"), "Must not leak Task 5 symbol names into worker prompt");
+  assert.ok(!content.includes("12.5%"), "Must not leak Task 5 inputs into worker prompt");
+  assert.ok(!content.includes("99.9%"), "Must not leak Task 5 inputs into worker prompt");
+  assert.ok(!content.includes("parser.js"), "Must not leak Task 5 path into worker prompt");
+});
+
+test("task5-v1.2: 1. source orchestrator profile does not expose schedule and carries Terminal Delegation Protocol", () => {
+  const orchDocPath = resolve(runtimeRoot, ".agents/agents/flash-orchestrator.md");
+  assert.ok(existsSync(orchDocPath));
+  const content = readFileSync(orchDocPath, "utf-8");
+
+  // Verify YAML frontmatter tools does not include schedule
+  const frontmatter = content.split("---")[1] || "";
+  assert.ok(!frontmatter.includes("- schedule"), "Orchestrator frontmatter tools must not expose schedule");
+  assert.ok(frontmatter.includes("- invoke_subagent"));
+
+  // Verify high-salience Terminal Delegation Protocol is present
+  assert.ok(content.includes("TERMINAL DELEGATION PROTOCOL"));
+  assert.ok(content.includes("AFTER `invoke_subagent` SUCCEEDS:"));
+  assert.ok(content.includes("RETURN/YIELD IMMEDIATELY WITH ZERO TOOLS"));
+  assert.ok(content.includes("DO NOT SCHEDULE, POLL, WATCH, OR CREATE A WATCHDOG"));
+});
+
+test("task5-v1.2: 2. installed benchmark orchestrator profile preserves schedule absence and Terminal Delegation semantics", () => {
+  const tempProject = mkdtempSync(join(tmpdir(), "orch-test-install-parity-"));
+  const installAgyScript = resolve(runtimeRoot, "../../scripts/install-antigravity.mjs");
+  try {
+    execFileSync(process.execPath, [installAgyScript, tempProject], { encoding: "utf8" });
+    const installedOrchPath = join(tempProject, ".agents/agents/flash-orchestrator.md");
+    assert.ok(existsSync(installedOrchPath));
+    const installedContent = readFileSync(installedOrchPath, "utf-8");
+
+    const frontmatter = installedContent.split("---")[1] || "";
+    assert.ok(!frontmatter.includes("- schedule"));
+    assert.ok(installedContent.includes("TERMINAL DELEGATION PROTOCOL"));
+    assert.ok(installedContent.includes("RETURN/YIELD IMMEDIATELY WITH ZERO TOOLS"));
+
+    // Verify source and installed profiles are identical
+    const sourceContent = readFileSync(resolve(runtimeRoot, ".agents/agents/flash-orchestrator.md"), "utf-8");
+    assert.equal(installedContent, sourceContent);
+  } finally {
+    rmSync(tempProject, { recursive: true, force: true });
+  }
+});
+
+test("task5-v1.2: 3. no control-plane instruction positively recommends watchdog or timer polling after delegation", () => {
+  const controlPlaneFiles = [
+    resolve(runtimeRoot, ".agents/agents/flash-orchestrator.md"),
+    resolve(runtimeRoot, "GEMINI.md"),
+    resolve(runtimeRoot, ".agents/skills/orchestra/SKILL.md"),
+  ];
+
+  for (const filePath of controlPlaneFiles) {
+    assert.ok(existsSync(filePath));
+    const text = readFileSync(filePath, "utf-8");
+    // Assert any occurrences of schedule, timer, watchdog, poll are prohibitions, not recommendations
+    assert.ok(!/recommend.*(timer|watchdog|schedule|poll)/i.test(text));
+    assert.ok(!/should.*(schedule.*timer|poll.*subagent)/i.test(text));
+    assert.ok(!/use schedule to wait/i.test(text));
+  }
+});
+
+test("task5-v1.2: 4. schedule attempt during healthy delegation remains denied and enforces zero-tool yield", () => {
+  const preToolScript = resolve(runtimeRoot, ".agents/hooks/pre-tool-enforce.mjs");
+  const tempDir = mkdtempSync(join(tmpdir(), "orch-sched-deny-"));
+  try {
+    const stateDir = join(tempDir, ".agents/state");
+    mkdirSync(stateDir, { recursive: true });
+    const state = {
+      activeRole: "ORCHESTRATOR",
+      state: "DELEGATED",
+      subagent_invocations: 1,
+      activeSubagent: { conversationId: "sub-123", role: "WORKER", healthy: true },
+      deniedAttempts: [],
+    };
+    const statePath = join(stateDir, "active-state.json");
+    writeFileSync(statePath, JSON.stringify(state), "utf-8");
+
+    const payload = JSON.stringify({
+      conversationId: "orch-parent-conv",
+      toolCall: {
+        name: "schedule",
+        args: { DurationSeconds: 60, Prompt: "wait" },
+      },
+    });
+
+    const res = JSON.parse(execFileSync("node", [preToolScript], { input: payload, cwd: tempDir, encoding: "utf-8" }));
+    assert.equal(res.decision, "deny");
+    assert.ok(res.reason.includes("Reactive Wakeup policy"));
+    assert.ok(res.reason.includes("TERMINAL DELEGATION PROTOCOL"));
+    assert.ok(res.reason.includes("ZERO tools"));
+
+    const updatedState = JSON.parse(readFileSync(statePath, "utf-8"));
+    assert.equal(updatedState.deniedAttempts.length, 1);
+    assert.equal(updatedState.deniedAttempts[0].tool, "schedule");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task5-v1.2: 5. legitimate recovery or cancellation behavior remains intact", () => {
+  const preToolScript = resolve(runtimeRoot, ".agents/hooks/pre-tool-enforce.mjs");
+  const tempDir = mkdtempSync(join(tmpdir(), "orch-recovery-"));
+  try {
+    // Cancellation (manage_task kill) is always allowed even during delegation
+    const killPayload = JSON.stringify({
+      toolName: "manage_task",
+      toolArgs: { Action: "kill", TaskId: "task-999" },
+      cwdOverride: tempDir,
+    });
+    const killRes = JSON.parse(execFileSync("node", [preToolScript], { input: killPayload }));
+    assert.equal(killRes.decision, "allow");
+
+    // Outside healthy delegation (e.g. idle/direct action), schedule is not blocked by delegation lock
+    const idleState = { state: "IDLE" };
+    const idleStatePath = join(tempDir, "active-state.json");
+    writeFileSync(idleStatePath, JSON.stringify(idleState), "utf-8");
+
+    const idleSchedPayload = JSON.stringify({
+      toolName: "schedule",
+      toolArgs: { DurationSeconds: 10, Prompt: "remind" },
+      cwdOverride: tempDir,
+      customStatePath: idleStatePath,
+    });
+    const idleSchedRes = JSON.parse(execFileSync("node", [preToolScript], { input: idleSchedPayload }));
+    assert.equal(idleSchedRes.decision, "allow");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task5-v1.2: 6. flash-worker.md contains Complete Failing Data Path principle", () => {
+  const workerDocPath = resolve(runtimeRoot, ".agents/agents/flash-worker.md");
+  const content = readFileSync(workerDocPath, "utf-8");
+
+  assert.ok(content.includes("FIRST FIX MUST COVER THE COMPLETE OBSERVABLE FAILURE PATH") || content.includes("Complete Failing Data Path Before Mutation"));
+  assert.ok(content.includes("trace the failing input through the entire code path") || content.includes("inspect the complete data path from input acceptance to returned observable value"));
+  assert.ok(content.includes("account for every transformation"));
+  assert.ok(content.includes("Do NOT stop at the first obvious defect") || content.includes("Do not stop root-cause analysis at the first visible syntax/validation defect"));
+});
+
+test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
+  const preToolScript = resolve(runtimeRoot, ".agents/hooks/pre-tool-enforce.mjs");
+  const tempDir = mkdtempSync(join(tmpdir(), "orch-val-lock-"));
+  try {
+    const stateDir = join(tempDir, ".agents/state");
+    mkdirSync(stateDir, { recursive: true });
+
+    // Setup role bindings for worker
+    const roleBindings = {
+      mainConversationId: "orch-parent",
+      bindings: {
+        "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+        "worker-child": { role: "WORKER", profile: "flash-worker" },
+        "reviewer-child": { role: "REVIEWER", profile: "flash-reviewer" },
+      },
+    };
+    writeFileSync(join(stateDir, "role-bindings.json"), JSON.stringify(roleBindings), "utf-8");
+
+    const contract = {
+      contractId: "contract-val-lock",
+      allowedPaths: ["src/**", "test/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["node --test test/parser.test.js"],
+    };
+    writeFileSync(join(stateDir, "active-contract.json"), JSON.stringify(contract), "utf-8");
+
+    function runHook(convId, toolName, args) {
+      const payload = JSON.stringify({
+        conversationId: convId,
+        toolCall: {
+          name: toolName,
+          args,
+        },
+      });
+      return JSON.parse(execFileSync("node", [preToolScript], { input: payload, cwd: tempDir, encoding: "utf-8" }));
+    }
+
+    // A. required focused test passes after latest mutation -> additional equivalent/broader routine validation DENIED
+    const stateA = {
+      activeRole: "WORKER",
+      state: "DELEGATED",
+      mutationSeq: 1,
+      mutations: [{ seq: 1, path: "src/parser.js", actorRole: "WORKER" }],
+      evidenceLedger: [
+        {
+          command: "node --test test/parser.test.js",
+          exitCode: 0,
+          mutationSeq: 1,
+          actorRole: "WORKER",
+          confidence: "HIGH",
+        },
+      ],
+    };
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateA), "utf-8");
+    const resA = runHook("worker-child", "run_command", { CommandLine: "node --test" });
+    assert.equal(resA.decision, "deny", "Case A: broader routine validation must be denied");
+    assert.ok(resA.reason.includes("VALIDATION_ALREADY_SATISFIED"));
+
+    // B. same required passing test repeated -> DENIED
+    const resB = runHook("worker-child", "run_command", { CommandLine: "node --test test/parser.test.js" });
+    assert.equal(resB.decision, "deny", "Case B: repeated passing test must be denied");
+    assert.ok(resB.reason.includes("VALIDATION_ALREADY_SATISFIED"));
+
+    // C. loop/stress validation after required test already passed -> DENIED
+    const resC = runHook("worker-child", "run_command", { CommandLine: "for i in {1..5}; do node --test test/parser.test.js || exit 1; done" });
+    assert.equal(resC.decision, "deny", "Case C: stress loop after passing validation must be denied");
+    assert.ok(resC.reason.includes("VALIDATION_ALREADY_SATISFIED"));
+
+    // D. required validation fails -> next validation ALLOWED
+    const stateD = {
+      activeRole: "WORKER",
+      state: "DELEGATED",
+      mutationSeq: 1,
+      mutations: [{ seq: 1, path: "src/parser.js", actorRole: "WORKER" }],
+      evidenceLedger: [
+        {
+          command: "node --test test/parser.test.js",
+          exitCode: 1, // failed!
+          mutationSeq: 1,
+          actorRole: "WORKER",
+          confidence: "HIGH",
+        },
+      ],
+    };
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateD), "utf-8");
+    const resD = runHook("worker-child", "run_command", { CommandLine: "node --test test/parser.test.js" });
+    assert.equal(resD.decision, "allow", "Case D: next validation must be allowed after failure");
+
+    // E. mutation after previous passing validation -> next validation ALLOWED
+    const stateE = {
+      activeRole: "WORKER",
+      state: "DELEGATED",
+      mutationSeq: 2, // new mutation!
+      mutations: [
+        { seq: 1, path: "src/parser.js", actorRole: "WORKER" },
+        { seq: 2, path: "src/parser.js", actorRole: "WORKER" },
+      ],
+      evidenceLedger: [
+        {
+          command: "node --test test/parser.test.js",
+          exitCode: 0,
+          mutationSeq: 1, // stale!
+          actorRole: "WORKER",
+          confidence: "HIGH",
+        },
+      ],
+    };
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateE), "utf-8");
+    const resE = runHook("worker-child", "run_command", { CommandLine: "node --test test/parser.test.js" });
+    assert.equal(resE.decision, "allow", "Case E: validation after new mutation must be allowed");
+
+    // F. two distinct required commands, only first satisfied -> second required command ALLOWED
+    const contractMulti = {
+      contractId: "contract-multi",
+      allowedPaths: ["src/**", "test/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["node --test test/a.test.js", "node --test test/b.test.js"],
+    };
+    writeFileSync(join(stateDir, "active-contract.json"), JSON.stringify(contractMulti), "utf-8");
+    const stateF = {
+      activeRole: "WORKER",
+      state: "DELEGATED",
+      mutationSeq: 1,
+      mutations: [{ seq: 1, path: "src/a.js", actorRole: "WORKER" }],
+      evidenceLedger: [
+        {
+          command: "node --test test/a.test.js",
+          exitCode: 0,
+          mutationSeq: 1,
+          actorRole: "WORKER",
+          confidence: "HIGH",
+        },
+      ],
+    };
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateF), "utf-8");
+    const resF = runHook("worker-child", "run_command", { CommandLine: "node --test test/b.test.js" });
+    assert.equal(resF.decision, "allow", "Case F: unsatisfied second required command must be allowed");
+
+    // G. all required commands satisfied -> any further routine validation DENIED
+    const stateG = {
+      activeRole: "WORKER",
+      state: "DELEGATED",
+      mutationSeq: 1,
+      mutations: [{ seq: 1, path: "src/a.js", actorRole: "WORKER" }],
+      evidenceLedger: [
+        {
+          command: "node --test test/a.test.js",
+          exitCode: 0,
+          mutationSeq: 1,
+          actorRole: "WORKER",
+          confidence: "HIGH",
+        },
+        {
+          command: "node --test test/b.test.js",
+          exitCode: 0,
+          mutationSeq: 1,
+          actorRole: "WORKER",
+          confidence: "HIGH",
+        },
+      ],
+    };
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateG), "utf-8");
+    const resG = runHook("worker-child", "run_command", { CommandLine: "npm test" });
+    assert.equal(resG.decision, "deny", "Case G: further routine validation must be denied when all satisfied");
+    assert.ok(resG.reason.includes("VALIDATION_ALREADY_SATISFIED"));
+
+    // H. stale validation -> does not lock
+    const stateH = {
+      activeRole: "WORKER",
+      state: "DELEGATED",
+      mutationSeq: 1,
+      mutations: [{ seq: 1, path: "src/a.js", actorRole: "WORKER" }],
+      evidenceLedger: [
+        {
+          command: "node --test test/a.test.js",
+          exitCode: 0,
+          mutationSeq: 0, // stale pre-mutation!
+          actorRole: "WORKER",
+          confidence: "HIGH",
+        },
+      ],
+    };
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateH), "utf-8");
+    const resH = runHook("worker-child", "run_command", { CommandLine: "node --test test/a.test.js" });
+    assert.equal(resH.decision, "allow", "Case H: stale validation must not lock");
+
+    // I. UNKNOWN / REVIEWER evidence -> does not satisfy WORKER validation lock
+    const stateI = {
+      activeRole: "WORKER",
+      state: "DELEGATED",
+      mutationSeq: 1,
+      mutations: [{ seq: 1, path: "src/a.js", actorRole: "WORKER" }],
+      evidenceLedger: [
+        {
+          command: "node --test test/a.test.js",
+          exitCode: 0,
+          mutationSeq: 1,
+          actorRole: "REVIEWER", // REVIEWER, not WORKER!
+          confidence: "HIGH",
+        },
+      ],
+    };
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateI), "utf-8");
+    const resI = runHook("worker-child", "run_command", { CommandLine: "node --test test/a.test.js" });
+    assert.equal(resI.decision, "allow", "Case I: REVIEWER evidence cannot satisfy WORKER validation lock");
+
+    // J. handoff/send_message after validation completion -> ALLOWED
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(stateG), "utf-8");
+    const resJ = runHook("worker-child", "send_message", {
+      Recipient: "orch-parent",
+      Message: "STATUS: IMPLEMENTATION_COMPLETE",
+    });
+    assert.equal(resJ.decision, "allow", "Case J: send_message after validation completion must be allowed");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task5-v1.3: 2. Same-Turn Delegation invariant in Orchestrator profiles", () => {
+  const orchDocPath = resolve(runtimeRoot, ".agents/agents/flash-orchestrator.md");
+  const geminiDocPath = resolve(runtimeRoot, "GEMINI.md");
+  const skillDocPath = resolve(runtimeRoot, ".agents/skills/orchestra/SKILL.md");
+
+  for (const p of [orchDocPath, geminiDocPath, skillDocPath]) {
+    assert.ok(existsSync(p));
+    const content = readFileSync(p, "utf-8");
+    assert.ok(content.includes("SAME-TURN DELEGATION") || content.includes("Same-Turn Delegation"));
+    assert.ok(content.includes("define_subagent") && content.includes("invoke_subagent"));
+  }
+});
+
+test("task5-v1.3: 3. Worker Discovery Budget <= 1 and Whole Class Location Operations", () => {
+  const workerDocPath = resolve(runtimeRoot, ".agents/agents/flash-worker.md");
+  const content = readFileSync(workerDocPath, "utf-8");
+
+  assert.ok(content.includes("Discovery Budget <= 1"));
+  assert.ok(content.includes("list_dir"));
+  assert.ok(content.includes("find_by_name"));
+  assert.ok(content.includes("grep_search"));
+  assert.ok(content.includes("DISCOVERY IS PERMANENTLY CLOSED") || content.includes("DISCOVERY IS CLOSED"));
+  assert.ok(content.includes("VALIDATION COMPLETION LOCK"));
+  assert.ok(content.includes("VALIDATION_ALREADY_SATISFIED"));
+
+  // Ensure no Task 5 answers leaked
+  assert.ok(!content.includes("parsePercentage"));
+  assert.ok(!content.includes("12.5%"));
+  assert.ok(!content.includes("99.9%"));
+  assert.ok(!content.includes("parser.js"));
+});

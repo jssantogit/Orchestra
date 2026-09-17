@@ -29,15 +29,16 @@ Orchestra provides a 100% **ALL-GEMINI** local architecture in the Antigravity C
   3. Minimum context windows ($[L-35, L+45]$)
   4. Shell fallback (`run_command` for test, typecheck, build, git)
 
-### 3. Early Delegation & Scope Contracts
+### 3. Early Delegation & Same-Turn Delegation
 - Orchestrator does NOT explore implementation details for simple/standard tasks.
 - Worker owns implementation discovery.
+- **Same-Turn Delegation**: When worker profile is known, emit `define_subagent` and `invoke_subagent` together in the SAME first model response (`parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`).
 - Scope Contract is embedded directly in `invoke_subagent` prompt (`allowedPaths`, `forbiddenPaths`, `testsRequired`).
 - Runtime hooks auto-persist `active-contract.json` and transition state to `DELEGATED`.
 
 ### 4. Terminal Delegation Discipline (INVOKE_SUBAGENT IS TERMINAL)
 - INVOKE_SUBAGENT IS TERMINAL FOR ACTIVE PARENT WORK.
-- After calling `invoke_subagent`, the next parent action while the child is healthy MUST be: YIELD WITH ZERO TOOLS.
+- AFTER `invoke_subagent` SUCCEEDS: RETURN/YIELD IMMEDIATELY WITH ZERO TOOLS. DO NOT SCHEDULE, POLL, WATCH, OR CREATE A WATCHDOG.
 - Zero polling & zero side quests: DO NOT call `schedule`, `manage_task`, `manage_subagents`, `view_file`, `grep_search`, `find_by_name`, or `run_command` during healthy delegated execution. Routine polling, timer scheduling, and inspection side quests are strictly denied by runtime policy.
 - No tool is required to "wait". Await asynchronous reactive wakeup on child completion.
 

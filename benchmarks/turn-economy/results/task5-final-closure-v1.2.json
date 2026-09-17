@@ -1,0 +1,286 @@
+{
+  "benchmark": "TASK 5 FINAL CLOSURE v1.2 — Terminal Delegation Diagnosis + Complete Root-Cause Fast Path",
+  "task": "investigation",
+  "task_id": "task-5-investigation",
+  "version": "v1.2",
+  "runtime": "antigravity",
+  "status": "EVALUATED",
+  "overall_pass": false,
+  "task5_closed": false,
+  "ready_for_task6": false,
+  "summary": "Task 5 v1.2 successfully confirmed the Terminal Delegation Protocol, completely eliminating parent schedule/timer sidequest attempts (0 in v1.2 vs 6 in v1.1). Parent delegated sidequest attempts reached exactly 0, and all schedule calls were eliminated. Functional correctness, grammar preservation, precision preservation, and high-fidelity factual reproduction/validation all passed. However, Task 5 remains OPEN because worker economy exceeded limits (12 model turns vs target <= 8; 2 discovery searches, 2 mutations due to incomplete first root cause, 3 repeated passing validations) and parent model turns was 4 (target <= 3 due to separate define_subagent and invoke_subagent turns).",
+  "gates": {
+    "routing_gate": "PASS",
+    "reproduction_gate": "PASS",
+    "root_cause_gate": "PASS",
+    "functional_gate": "PASS",
+    "test_integrity_gate": "PASS",
+    "input_grammar_preservation_gate": "PASS",
+    "precision_preservation_gate": "PASS",
+    "scope_minimality_gate": "PASS",
+    "api_shape_gate": "PASS",
+    "worker_economy_gate": "FAIL",
+    "parent_zero_attempt_gate": "FAIL",
+    "fidelity_gate": "PASS",
+    "task5_closed": false
+  },
+  "parent_diagnosis": {
+    "classification": "PLATFORM_IMPLICIT_TOOL_EXPOSURE",
+    "evidence": "In Antigravity CLI, schedule is exposed as a platform-global built-in tool in the platform declarations (<declaration:default_api:schedule>), even though it was omitted from the YAML frontmatter tools list in flash-orchestrator.md. The built-in declaration explicitly recommended 'Usage: Use when you're waiting for an update from a specific subagent or task', prompting the model to invoke schedule with TimerCondition=<child-conv-id> in v1.1. Placing the high-salience TERMINAL DELEGATION PROTOCOL at the top of flash-orchestrator.md, GEMINI.md, and SKILL.md successfully eliminated schedule attempts entirely in v1.2 (0 attempts).",
+    "source_profile": "runtimes/antigravity/.agents/agents/flash-orchestrator.md (tools: view_file, grep_search, find_by_name, run_command, define_subagent, invoke_subagent, manage_subagents, send_message — schedule absent)",
+    "installed_profile": "Identical content to source profile via scripts/install-antigravity.mjs (installer parity verified; schedule absent from tools)",
+    "schedule_exposure": "Platform-global tool injection by CLI runtime engine despite omission from agent profile tools list",
+    "conflicting_instructions": "Zero positive recommendations in Orchestra control-plane files; all control-plane mentions were prohibitions. Platform schema doc was the source of suggestion."
+  },
+  "route": {
+    "expected": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-worker",
+      "worker_model": "gemini-3.8-flash-high",
+      "task_action": "INVESTIGATE"
+    },
+    "observed": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-worker",
+      "worker_model": "gemini-3.8-flash-high",
+      "task_action": "INVESTIGATE"
+    },
+    "routing_match": true
+  },
+  "history": {
+    "v1_0_baseline": {
+      "parent_model_turns": 4,
+      "worker_model_turns": 35,
+      "total_model_turns": 39,
+      "parent_delegated_sidequest_attempts": 0,
+      "duration_ms": 161733
+    },
+    "v1_0_optimized": {
+      "parent_model_turns": 4,
+      "worker_model_turns": 16,
+      "total_model_turns": 20,
+      "worker_pre_mutation_turns": 11,
+      "worker_searches": 2,
+      "worker_reads": 7,
+      "duplicate_reads": 2,
+      "worker_validations": 3,
+      "repeated_validation_without_mutation": 2,
+      "parent_delegated_sidequest_attempts": 1,
+      "parent_sidequest_tool": "manage_subagents",
+      "duration_ms": 83956
+    },
+    "v1_1": {
+      "parent_model_turns": 9,
+      "worker_model_turns": 9,
+      "total_model_turns": 18,
+      "worker_pre_mutation_turns": 3,
+      "worker_searches": 1,
+      "worker_reads": 2,
+      "duplicate_reads": 0,
+      "post_mutation_rereads": 0,
+      "worker_validations": 2,
+      "repeated_validation_without_mutation": 0,
+      "parent_delegated_sidequest_attempts": 6,
+      "parent_sidequest_tool": "schedule",
+      "duration_ms": 69787
+    }
+  },
+  "live_v1_2": {
+    "run_id": "run-1789614161827",
+    "timestamp": "2026-09-17T03:02:41Z",
+    "parent_conversation_id": "658787a4-732d-4a6b-9aa7-4017df9ab349",
+    "worker_conversation_id": "1381af02-2024-4410-8869-65bb1f9e8348",
+    "success": true,
+    "verification_detail": "OK",
+    "duration_ms": 94012,
+    "turns": {
+      "parent_model_turns": 4,
+      "worker_model_turns": 12,
+      "total_model_turns": 16,
+      "worker_pre_mutation_turns": 4,
+      "worker_post_mutation_turns": 7,
+      "parent_tool_calls": 2,
+      "worker_tool_calls": 12,
+      "total_tool_calls": 14,
+      "parent_per_turn_tool_counts": [1, 1, 0, 0],
+      "worker_per_turn_tool_counts": [1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 0]
+    },
+    "tokens": {
+      "input_tokens": 44537,
+      "cached_input_tokens": 32568,
+      "uncached_input_tokens": null,
+      "uncached_semantics": "NOT_DERIVABLE",
+      "output_tokens": 6583,
+      "reasoning_tokens": 5532,
+      "total_tokens": 51120,
+      "token_semantics_confidence": "MEDIUM"
+    },
+    "parent_sidequests": {
+      "parent_delegated_sidequest_attempts": 0,
+      "parent_delegated_sidequest_attempts_by_tool": {},
+      "parent_delegated_sidequest_denied": 0,
+      "parent_delegated_sidequest_succeeded": 0,
+      "schedule_attempts_during_delegation": 0,
+      "manage_task_poll_attempts": 0,
+      "manage_subagent_poll_attempts": 0,
+      "parent_workspace_read_attempts": 0,
+      "parent_repository_search_attempts": 0,
+      "parent_validation_attempts": 0
+    },
+    "parent_trace": [
+      {
+        "turn": 1,
+        "phase": "DEFINITION",
+        "tools": ["define_subagent"],
+        "tool_count": 1,
+        "summary": "Defined flash-worker profile."
+      },
+      {
+        "turn": 2,
+        "phase": "DELEGATION",
+        "tools": ["invoke_subagent"],
+        "tool_count": 1,
+        "summary": "Invoked flash-worker with Scope Contract for intermittent percentage test failure."
+      },
+      {
+        "turn": 3,
+        "phase": "YIELD",
+        "tools": [],
+        "tool_count": 0,
+        "summary": "Yielded with 0 tool calls ('The investigation and fix for the intermittently failing percentage parsing test has been delegated...'). Zero schedule calls emitted."
+      },
+      {
+        "turn": 4,
+        "phase": "ACCEPTANCE",
+        "tools": [],
+        "tool_count": 0,
+        "summary": "Reactively woken by worker completion message. Formally accepted with 0 tool calls."
+      }
+    ],
+    "worker_trace": [
+      {
+        "turn": 1,
+        "phase": "LOCATE_1",
+        "tools": ["find_by_name"],
+        "pattern": "*percent*",
+        "summary": "Searched for percentage-related files."
+      },
+      {
+        "turn": 2,
+        "phase": "LOCATE_2",
+        "tools": ["list_dir"],
+        "summary": "Listed root directory contents (redundant second search turn)."
+      },
+      {
+        "turn": 3,
+        "phase": "REPRODUCE",
+        "tools": ["run_command"],
+        "command": "node --test",
+        "exit_code": 1,
+        "summary": "Factual reproduction of test failure (exitCode 1)."
+      },
+      {
+        "turn": 4,
+        "phase": "BATCH_READ",
+        "tools": ["view_file", "view_file"],
+        "paths": ["src/parser.js", "test/parser.test.js"],
+        "summary": "Batch read source parser and test files in a single turn."
+      },
+      {
+        "turn": 5,
+        "phase": "MUTATION_1",
+        "tools": ["replace_file_content"],
+        "file": "src/parser.js",
+        "summary": "Updated regex to allow decimal percentages (incomplete first root cause: missed floating-point precision)."
+      },
+      {
+        "turn": 6,
+        "phase": "VALIDATION_1",
+        "tools": ["run_command"],
+        "command": "node --test test/parser.test.js",
+        "exit_code": 1,
+        "summary": "Validation exposed floating-point precision error on 99.9%."
+      },
+      {
+        "turn": 7,
+        "phase": "MUTATION_2",
+        "tools": ["replace_file_content"],
+        "file": "src/parser.js",
+        "summary": "Shifted decimal point directly via string exponent manipulation to avoid floating-point inaccuracies."
+      },
+      {
+        "turn": 8,
+        "phase": "VALIDATION_2",
+        "tools": ["run_command"],
+        "command": "node --test test/parser.test.js",
+        "exit_code": 0,
+        "summary": "Focused test passed cleanly with exitCode 0."
+      },
+      {
+        "turn": 9,
+        "phase": "VALIDATION_3",
+        "tools": ["run_command"],
+        "command": "node --test",
+        "exit_code": 0,
+        "summary": "Full suite test run (unsolicited extra validation turn)."
+      },
+      {
+        "turn": 10,
+        "phase": "VALIDATION_4",
+        "tools": ["run_command"],
+        "command": "for i in {1..5}; do node --test test/parser.test.js || exit 1; done",
+        "exit_code": 0,
+        "summary": "Flakiness check loop (unsolicited extra validation turn)."
+      },
+      {
+        "turn": 11,
+        "phase": "HANDOFF",
+        "tools": ["send_message"],
+        "summary": "Dispatched structured completion packet with evidence to orchestrator."
+      },
+      {
+        "turn": 12,
+        "phase": "FINAL",
+        "tools": [],
+        "tool_count": 0,
+        "summary": "Clean stop with 0 tool calls."
+      }
+    ],
+    "root_cause_completeness": {
+      "mechanisms_known_before_first_mutation": ["Syntax/grammar rejection of decimal percentages (/^([0-9]+)%$/)"],
+      "mechanisms_missed_before_first_mutation": ["IEEE-754 floating-point division precision in Number(val) / 100"],
+      "first_mutation_complete": false,
+      "correction_cycle_required": true,
+      "reason": "Worker addressed regex grammar in Turn 5, but did not inspect numerical transformation until Turn 6 failure forced Mutation 2 in Turn 7."
+    },
+    "behavioral_surface": {
+      "input_grammar_preservation": "PASS",
+      "precision_preservation": "PASS",
+      "regex_pattern": "/^([0-9]+(?:\\.[0-9]+)?)%$/",
+      "precision_mechanism": "Decimal exponent string shift Number(match[1] + 'e-2') avoiding toPrecision(12)",
+      "seeded_test_integrity": "PASS",
+      "api_signature_changed": false
+    },
+    "fidelity": {
+      "status": "PASS",
+      "confidence": "HIGH",
+      "writeActorValid": true,
+      "orchestrator_workspace_writes": 0,
+      "unknown_workspace_writes": 0,
+      "worker_validation_observed": true,
+      "worker_validation_command": "for i in {1..5}; do node --test test/parser.test.js || exit 1; done",
+      "worker_validation_exit_code": 0,
+      "worker_validation_actor": "WORKER",
+      "worker_validation_verified": true,
+      "worker_validation_fresh": true,
+      "acceptance_actor": "ORCHESTRATOR",
+      "acceptance_state": "ACCEPTED"
+    },
+    "task4_regression": {
+      "status": "NOT_RUN",
+      "reason": "Task 5 did not pass all closure gates (worker economy and parent turns exceeded targets). Task 4 LIVE run was preserved pursuant to Phase 14 invariant."
+    }
+  }
+}

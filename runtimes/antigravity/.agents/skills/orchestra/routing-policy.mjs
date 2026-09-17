@@ -4049,6 +4049,145 @@ export function isHealthyDelegatedExecution(activeState = {}, activeRole = "") {
   return true;
 }
 
+/**
+ * Generic Validation Command Detector.
+ */
+export function isValidationCommand(cmd) {
+  const trimmed = String(cmd || "").trim();
+  const redir = extractRealShellRedirections(cmd);
+  if (redir.targets.length > 0) return false;
+
+  return (
+    /\b(?:pnpm(?:\s+run)?\s+(?:test|typecheck|lint|build)|npm(?:\s+run)?\s+(?:test|typecheck|lint|build)|yarn(?:\s+run)?\s+(?:test|typecheck|lint|build)|node\s+--test|vitest|jest|npx\s+(?:vitest|jest|tsc)|tsc(?:\s+--noEmit)?|pytest|cargo\s+test|go\s+test|git\s+diff\s+--check)\b/.test(trimmed)
+  );
+}
+
+/**
+ * Generic Validation Completion Lock guard.
+ * Once a worker has produced fresh passing evidence that satisfies the complete Scope Contract
+ * for the current mutation state, VALIDATION IS COMPLETE.
+ * Further routine validation commands before another mutation are denied.
+ */
+export function checkValidationCompletionLock({ activeState = {}, activeContract = null, activeRole = "", commandLine = "" } = {}) {
+  // 1. Only applies to worker roles
+  if (!isWorkerRole(activeRole)) {
+    return { locked: false, reason: null };
+  }
+
+  // 2. Only applies to validation commands
+  if (!isValidationCommand(commandLine)) {
+    return { locked: false, reason: null };
+  }
+
+  // 3. Post-mutation check (pre-mutation reproduction is investigation evidence, not acceptance validation)
+  const currentSeq = typeof activeState.mutationSeq === "number" ? activeState.mutationSeq : 0;
+  const mutations = Array.isArray(activeState.mutations) ? activeState.mutations : [];
+  if (currentSeq === 0 && mutations.length === 0 && (!activeState.write_tool_calls || activeState.write_tool_calls === 0)) {
+    return { locked: false, reason: null };
+  }
+
+  // 4. Stalled or explicit recovery state bypasses the lock
+  if (activeState.stalled || activeState.recoveryRequired || activeState.invalidatedEvidence) {
+    return { locked: false, reason: null };
+  }
+
+  const ledger = Array.isArray(activeState.evidenceLedger) ? activeState.evidenceLedger : [];
+  const contract = activeContract || activeState.scopeContract || {};
+  const requiredTests = Array.isArray(contract.testsRequired)
+    ? contract.testsRequired
+    : (Array.isArray(activeState.testsRequired) ? activeState.testsRequired : []);
+
+  // Helper to check if a specific required test command is satisfied with fresh, passing WORKER evidence
+  function checkRequiredTestSatisfaction(rawTestCmd) {
+    const execCmd = extractExecutableCommand(rawTestCmd) || String(rawTestCmd).trim();
+    if (!execCmd) return { satisfied: false, evidence: null };
+
+    // Search ledger in reverse for the latest execution
+    for (const ev of ledger.slice().reverse()) {
+      if (!ev) continue;
+      const evCmd = String(ev.command || "").trim();
+      const matches = evCmd.includes(execCmd) || execCmd.includes(evCmd);
+      if (!matches) continue;
+
+      // Found a matching execution. Check exit code
+      if (ev.exitCode !== 0 || (ev.failed && ev.failed > 0)) {
+        return { satisfied: false, failed: true, evidence: ev };
+      }
+
+      // Check actor role (must be WORKER, not UNKNOWN or REVIEWER)
+      const evActor = ev.actorRole || (activeState.workerValidationObserved && activeState.workerValidationCommand === ev.command ? "WORKER" : "UNKNOWN");
+      if (!isWorkerRole(evActor) || ev.confidence === "LOW") {
+        return { satisfied: false, invalidActor: true, evidence: ev };
+      }
+
+      // Check freshness against current mutationSeq and mutations
+      const freshness = checkEvidenceFreshness(ev, currentSeq, mutations);
+      if (freshness.fresh) {
+        return { satisfied: true, evidence: ev };
+      } else {
+        return { satisfied: false, stale: true, evidence: ev };
+      }
+    }
+
+    return { satisfied: false, missing: true, evidence: null };
+  }
+
+  if (requiredTests.length > 0) {
+    const results = requiredTests.map((req) => ({
+      command: req,
+      ...checkRequiredTestSatisfaction(req),
+    }));
+
+    const allSatisfied = results.every((r) => r.satisfied);
+    if (allSatisfied) {
+      return {
+        locked: true,
+        reason: "VALIDATION_ALREADY_SATISFIED: Fresh worker evidence already satisfies the complete Scope Contract for the current mutation state. Stop testing and hand off immediately.",
+      };
+    }
+
+    // If some required tests are unsatisfied, allow executing any unsatisfied command
+    const cmdTrimmed = String(commandLine || "").trim();
+    const matchesSatisfied = results.find((r) => {
+      if (!r.satisfied) return false;
+      const exec = extractExecutableCommand(r.command) || r.command.trim();
+      return cmdTrimmed.includes(exec) || exec.includes(cmdTrimmed);
+    });
+
+    if (matchesSatisfied) {
+      const remaining = results.filter((r) => !r.satisfied).map((r) => r.command);
+      return {
+        locked: true,
+        reason: `VALIDATION_ALREADY_SATISFIED: Test "${matchesSatisfied.command}" already passed with fresh evidence. Remaining required tests: [${remaining.join(", ")}].`,
+      };
+    }
+
+    return { locked: false, reason: null };
+  }
+
+  // If no specific tests required in contract, check if ANY valid test run in ledger has fresh passing worker evidence
+  for (const ev of ledger.slice().reverse()) {
+    if (!ev) continue;
+    if (ev.exitCode !== 0 || (ev.failed && ev.failed > 0)) continue;
+    const isTest = ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(String(ev.command || "").trim());
+    if (!isTest) continue;
+
+    const evActor = ev.actorRole || (activeState.workerValidationObserved && activeState.workerValidationCommand === ev.command ? "WORKER" : "UNKNOWN");
+    if (!isWorkerRole(evActor) || ev.confidence === "LOW") continue;
+
+    const freshness = checkEvidenceFreshness(ev, currentSeq, mutations);
+    if (freshness.fresh) {
+      return {
+        locked: true,
+        reason: "VALIDATION_ALREADY_SATISFIED: Fresh worker evidence already satisfies the complete Scope Contract for the current mutation state. Stop testing and hand off immediately.",
+      };
+    }
+  }
+
+  return { locked: false, reason: null };
+}
+
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv[2] !== "--json") {
     throw new Error("Usage: node routing-policy.mjs --json < facts.json");

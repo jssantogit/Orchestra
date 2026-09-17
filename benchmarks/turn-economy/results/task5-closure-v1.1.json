@@ -1,0 +1,363 @@
+{
+  "benchmark": "TASK 5 CLOSURE v1.1 — Investigation Fast Path + Behavioral Surface Preservation",
+  "task": "investigation",
+  "task_id": "task-5-investigation",
+  "version": "v1.1",
+  "runtime": "antigravity",
+  "status": "EVALUATED",
+  "overall_pass": false,
+  "task5_closed": false,
+  "ready_for_task6": false,
+  "summary": "Task 5 v1.1 successfully demonstrated the Investigation Fast Path in Flash High, achieving 0 duplicate reads, 0 post-mutation rereads, 1 discovery search, factual single-command reproduction (node --test test/parser.test.js, exitCode 1), clean behavioral surface preservation (/^([0-9]+(?:\\.[0-9]+)?)%$/), and full precision preservation via decimal shifting without arbitrary toPrecision(12) ceilings. Worker turns dropped by 43.8% from v1.0 (16 -> 9) and 74.3% from baseline (35 -> 9). However, worker turns (9) remained 1 turn above the hard ceiling (<= 8), and parent orchestrator emitted 6 schedule tool attempts during healthy delegation (all denied by Reactive Delegation Lock), failing the parent_zero_attempt_gate. Task 5 remains open.",
+  "gates": {
+    "routing_gate": "PASS",
+    "reproduction_gate": "PASS",
+    "root_cause_gate": "PASS",
+    "functional_gate": "PASS",
+    "test_integrity_gate": "PASS",
+    "input_grammar_preservation_gate": "PASS",
+    "precision_preservation_gate": "PASS",
+    "scope_minimality_gate": "PASS",
+    "api_shape_gate": "PASS",
+    "worker_economy_gate": "FAIL",
+    "parent_zero_attempt_gate": "FAIL",
+    "fidelity_gate": "PASS",
+    "task5_closed": false
+  },
+  "route": {
+    "expected": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-worker",
+      "worker_model": "gemini-3.8-flash-high",
+      "task_action": "INVESTIGATE"
+    },
+    "observed": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-worker",
+      "worker_model": "gemini-3.8-flash-high",
+      "task_action": "INVESTIGATE"
+    },
+    "routing_match": true
+  },
+  "history": {
+    "v1_0_baseline": {
+      "parent_model_turns": 4,
+      "worker_model_turns": 35,
+      "total_model_turns": 39,
+      "parent_delegated_sidequest_attempts": 0,
+      "duration_ms": 161733
+    },
+    "v1_0_optimized": {
+      "parent_model_turns": 4,
+      "worker_model_turns": 16,
+      "total_model_turns": 20,
+      "worker_pre_mutation_turns": 11,
+      "worker_searches": 2,
+      "worker_reads": 7,
+      "duplicate_reads": 2,
+      "worker_validations": 3,
+      "repeated_validation_without_mutation": 2,
+      "parent_delegated_sidequest_attempts": 1,
+      "parent_sidequest_tool": "manage_subagents",
+      "duration_ms": 83956
+    }
+  },
+  "live_v1_1": {
+    "run_id": "run-1789613008016",
+    "timestamp": "2026-09-17T02:43:35Z",
+    "parent_conversation_id": "83d58de6-2386-4df5-b283-b618cf915b69",
+    "worker_conversation_id": "99b0e697-31b1-4ae2-ba69-d4374f52f368",
+    "success": true,
+    "verification_detail": "OK",
+    "duration_ms": 69787,
+    "turns": {
+      "parent_model_turns": 9,
+      "worker_model_turns": 9,
+      "total_model_turns": 18,
+      "worker_pre_mutation_turns": 3,
+      "worker_post_mutation_turns": 5,
+      "parent_tool_calls": 8,
+      "worker_tool_calls": 9,
+      "total_tool_calls": 17,
+      "parent_per_turn_tool_counts": [2, 1, 1, 1, 1, 1, 1, 0, 0],
+      "worker_per_turn_tool_counts": [1, 1, 2, 1, 1, 1, 1, 1, 0]
+    },
+    "parent_trace": [
+      {
+        "turn": 1,
+        "phase": "DELEGATION",
+        "tools": ["define_subagent", "invoke_subagent"],
+        "tool_count": 2,
+        "summary": "Defined flash-worker and invoked with Scope Contract for intermittent percentage test failure."
+      },
+      {
+        "turn": 2,
+        "phase": "SIDEQUEST_ATTEMPT_1",
+        "tools": ["schedule"],
+        "tool_count": 1,
+        "summary": "Attempted schedule DurationSeconds=600; denied by pre-tool hook (Reactive Delegation Lock)."
+      },
+      {
+        "turn": 3,
+        "phase": "SIDEQUEST_ATTEMPT_2",
+        "tools": ["schedule"],
+        "tool_count": 1,
+        "summary": "Attempted schedule DurationSeconds=300; denied by pre-tool hook."
+      },
+      {
+        "turn": 4,
+        "phase": "SIDEQUEST_ATTEMPT_3",
+        "tools": ["schedule"],
+        "tool_count": 1,
+        "summary": "Attempted schedule DurationSeconds=120; denied by pre-tool hook."
+      },
+      {
+        "turn": 5,
+        "phase": "SIDEQUEST_ATTEMPT_4",
+        "tools": ["schedule"],
+        "tool_count": 1,
+        "summary": "Attempted schedule DurationSeconds=60; denied by pre-tool hook."
+      },
+      {
+        "turn": 6,
+        "phase": "SIDEQUEST_ATTEMPT_5",
+        "tools": ["schedule"],
+        "tool_count": 1,
+        "summary": "Attempted schedule DurationSeconds=30; denied by pre-tool hook."
+      },
+      {
+        "turn": 7,
+        "phase": "SIDEQUEST_ATTEMPT_6",
+        "tools": ["schedule"],
+        "tool_count": 1,
+        "summary": "Attempted schedule DurationSeconds=10; denied by pre-tool hook."
+      },
+      {
+        "turn": 8,
+        "phase": "YIELD",
+        "tools": [],
+        "tool_count": 0,
+        "summary": "Yielded with 0 tool calls ('Standing by.')."
+      },
+      {
+        "turn": 9,
+        "phase": "ACCEPTANCE",
+        "tools": [],
+        "tool_count": 0,
+        "summary": "Reactively woken by worker completion message. Concluded formal acceptance with 0 tool calls."
+      }
+    ],
+    "worker_trace": [
+      {
+        "turn": 1,
+        "phase": "LOCATE",
+        "tools": ["grep_search"],
+        "query": "percent",
+        "summary": "Single focused discovery turn locating percentage references in README, formatter, parser, and tests."
+      },
+      {
+        "turn": 2,
+        "phase": "REPRODUCE",
+        "tools": ["run_command"],
+        "command": "node --test test/parser.test.js",
+        "exit_code": 1,
+        "summary": "Single pre-mutation focused reproduction command capturing exact failure: RangeError: Invalid percentage format: '12.5%' at parsePercentage (src/parser.js:87:11)."
+      },
+      {
+        "turn": 3,
+        "phase": "BATCH_READ",
+        "tools": ["view_file", "view_file"],
+        "files": ["src/parser.js", "test/parser.test.js"],
+        "summary": "Single batch-read turn inspecting both source and test files in parallel with 0 duplicate reads."
+      },
+      {
+        "turn": 4,
+        "phase": "MUTATION_1",
+        "tools": ["replace_file_content"],
+        "target": "src/parser.js",
+        "summary": "Updated parsePercentage regular expression to /^([0-9]+(?:\\.[0-9]+)?)%$/ (smallest language extension)."
+      },
+      {
+        "turn": 5,
+        "phase": "VALIDATION_1",
+        "tools": ["run_command"],
+        "command": "node --test test/parser.test.js",
+        "exit_code": 1,
+        "summary": "Focused test run revealed IEEE-754 precision drift on 99.9% (0.9990000000000001 !== 0.999)."
+      },
+      {
+        "turn": 6,
+        "phase": "MUTATION_2",
+        "tools": ["replace_file_content"],
+        "target": "src/parser.js",
+        "summary": "Replaced floating-point division with exact decimal string shifting before Number conversion, preserving precision without toPrecision(12) cutoff."
+      },
+      {
+        "turn": 7,
+        "phase": "VALIDATION_2",
+        "tools": ["run_command"],
+        "command": "node --test test/parser.test.js",
+        "exit_code": 0,
+        "summary": "Authoritative focused validation passed 6/6 tests cleanly with exit code 0."
+      },
+      {
+        "turn": 8,
+        "phase": "HANDOFF",
+        "tools": ["send_message"],
+        "recipient": "83d58de6-2386-4df5-b283-b618cf915b69",
+        "summary": "Sent structured completion packet with root cause, changes, tests, and acceptance evidence."
+      },
+      {
+        "turn": 9,
+        "phase": "FINAL",
+        "tools": [],
+        "summary": "Clean final stop with 0 tool calls."
+      }
+    ],
+    "reproduction": {
+      "command": "node --test test/parser.test.js",
+      "exit_code": 1,
+      "actor": "WORKER",
+      "observed": true,
+      "failing_tests": [
+        "parser: parses decimal percentage values"
+      ],
+      "failure_output_summary": "✖ parser: parses decimal percentage values (0.954808ms)\nRangeError: Invalid percentage format: \"12.5%\"\nat parsePercentage (file:///tmp/orch-turn-econ-investigation-hi82hl/src/parser.js:87:11)\nat test/parser.test.js:43:16"
+    },
+    "root_cause": {
+      "responsible_file": "src/parser.js",
+      "responsible_symbol": "parsePercentage(input)",
+      "concrete_mechanism": "1. Format restriction: parsePercentage matched strictly integer percentages via /^([0-9]+)%$/, throwing RangeError on valid decimal percentage strings ('12.5%', '99.9%'). 2. IEEE-754 binary division drift: dividing a decimal percentage by 100 via Number(match[1]) / 100 introduces binary floating-point representation drift (e.g. 99.9 / 100 === 0.9990000000000001 !== 0.999)."
+    },
+    "fix": {
+      "files_changed": ["src/parser.js"],
+      "smallest_correct_fix": "Expanded regular expression to /^([0-9]+(?:\\.[0-9]+)?)%$/ (minimal language extension) and replaced binary float division with exact string decimal point shifting before Number conversion, preserving full precision without hardcoded toPrecision ceilings."
+    },
+    "behavioral_surface": {
+      "newly_accepted_syntax": [
+        "12.5%",
+        "99.9%"
+      ],
+      "grammar_preservation": {
+        "gate": "PASS",
+        "rejected_inputs": [
+          "+50%",
+          "-50%",
+          ".5%",
+          "5.%",
+          "+12.5%",
+          "-12.5%",
+          ".99%",
+          "12.%",
+          "1e2%"
+        ],
+        "all_rejected_verified": true
+      },
+      "precision_preservation": {
+        "gate": "PASS",
+        "tested_inputs": [
+          "12.3456789012345%",
+          "99.1234567890123%",
+          "0.123456789012345%"
+        ],
+        "truncation_ceiling_present": false,
+        "exact_exponent_equivalence_verified": true
+      }
+    },
+    "validation_diet": {
+      "command": "node --test test/parser.test.js",
+      "exit_code": 0,
+      "actor": "WORKER",
+      "fresh": true,
+      "verified": true,
+      "output_summary": "6/6 tests passing",
+      "npm_test_run": false,
+      "repeated_passing_runs": 0
+    },
+    "economy": {
+      "parent_model_turns": 9,
+      "worker_model_turns": 9,
+      "total_model_turns": 18,
+      "worker_pre_mutation_turns": 3,
+      "worker_searches": 1,
+      "worker_reads": 1,
+      "duplicate_reads": 0,
+      "post_mutation_rereads": 0,
+      "worker_validations": 3,
+      "repeated_validation_without_mutation": 0,
+      "parent_delegated_sidequest_attempts": 6,
+      "parent_sidequest_tool": "schedule",
+      "tokens": {
+        "input_tokens": 75959,
+        "cached_input_tokens": 85268,
+        "uncached_input_tokens": null,
+        "uncached_semantics": "NOT_DERIVABLE",
+        "output_tokens": 3579,
+        "reasoning_tokens": 2049,
+        "confidence": "MEDIUM"
+      },
+      "duration_ms": 69787
+    },
+    "api_signature": {
+      "before": {
+        "src/parser.js": {
+          "validateNumericInput": "validateNumericInput(value, options = {})",
+          "parseNumber": "parseNumber(input, options = {})",
+          "parsePercentage": "parsePercentage(input)"
+        }
+      },
+      "after": {
+        "src/parser.js": {
+          "validateNumericInput": "validateNumericInput(value, options = {})",
+          "parseNumber": "parseNumber(input, options = {})",
+          "parsePercentage": "parsePercentage(input)"
+        }
+      },
+      "changed": false
+    },
+    "scope_audit": {
+      "files_read": [
+        "src/parser.js",
+        "test/parser.test.js"
+      ],
+      "files_mutated": [
+        "src/parser.js"
+      ],
+      "classification": {
+        "src/parser.js": "REQUIRED"
+      },
+      "pass": true
+    },
+    "fidelity": {
+      "status": "PASS",
+      "confidence": "HIGH",
+      "mutation_attribution_mode": "FACTUAL",
+      "orchestrator_workspace_writes": 0,
+      "unknown_workspace_writes": 0,
+      "worker_validation_command": "node --test test/parser.test.js",
+      "worker_validation_exit_code": 0,
+      "worker_validation_verified": true,
+      "worker_validation_fresh": true,
+      "acceptance_actor": "ORCHESTRATOR",
+      "acceptance_state": "ACCEPTED"
+    }
+  },
+  "delta_v1_0_opt_vs_v1_1": {
+    "worker_model_turns": -7,
+    "worker_model_turns_percentage": "-43.8%",
+    "worker_pre_mutation_turns": -8,
+    "worker_searches": -1,
+    "worker_reads": -6,
+    "duplicate_reads": -2,
+    "repeated_validation_without_mutation": -2,
+    "duration_ms": -14169,
+    "duration_percentage": "-16.9%",
+    "parent_delegated_sidequest_attempts": 5
+  },
+  "remaining_blockers": [
+    "PARENT_ZERO_ATTEMPT_GATE: Orchestrator parent in 83d58de6-2386-4df5-b283-b618cf915b69 attempted schedule 6 times during healthy delegation before yielding on Turn 8 (all 6 attempts denied by pre-tool hook Reactive Delegation Lock).",
+    "WORKER_ECONOMY_GATE: Flash High worker required 9 model turns (1 turn over the hard ceiling of <= 8) due to discovering the IEEE-754 precision drift on 99.9% in validation Turn 5, necessitating mutation Turn 6 and re-validation Turn 7."
+  ]
+}

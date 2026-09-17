@@ -163,6 +163,10 @@ test("parser: parses decimal percentage values", () => {
       }
 
       // 2. Direct functional verification of required and preserved behavior
+      let functionalPassed = false;
+      let grammarPreservationPassed = false;
+      let precisionPreservationPassed = false;
+
       try {
         const testCode = `
           import assert from "node:assert/strict";
@@ -188,8 +192,68 @@ test("parser: parses decimal percentage values", () => {
           }
         `;
         execFileSync("node", ["--input-type=module", "-e", testCode], { cwd: dir, stdio: "pipe" });
+        functionalPassed = true;
       } catch (err) {
         return { success: false, reason: `Functional acceptance failed: ${err.message}` };
+      }
+
+      // 2b. Grammar preservation: unrelated syntax must NOT be newly accepted
+      try {
+        const grammarTestCode = `
+          import assert from "node:assert/strict";
+          import { parsePercentage } from "./src/parser.js";
+
+          const unrelatedGrammar = [
+            "+50%",
+            "-50%",
+            ".5%",
+            "5.%",
+            "+12.5%",
+            "-12.5%",
+            ".99%",
+            "12.%",
+            "1e2%",
+          ];
+          for (const invalid of unrelatedGrammar) {
+            assert.throws(
+              () => parsePercentage(invalid),
+              (err) => err instanceof RangeError || err instanceof TypeError,
+              \`Grammar preservation failed: parsePercentage(\${JSON.stringify(invalid)}) should remain rejected\`
+            );
+          }
+        `;
+        execFileSync("node", ["--input-type=module", "-e", grammarTestCode], { cwd: dir, stdio: "pipe" });
+        grammarPreservationPassed = true;
+      } catch (err) {
+        return { success: false, reason: `Input grammar preservation failed: ${err.message}` };
+      }
+
+      // 2c. Precision preservation: high-precision decimal percentage must not suffer arbitrary precision truncation
+      try {
+        const precisionTestCode = `
+          import assert from "node:assert/strict";
+          import { parsePercentage } from "./src/parser.js";
+
+          const highPrecisionCases = [
+            "12.3456789012345%",
+            "99.1234567890123%",
+            "0.123456789012345%",
+          ];
+          for (const input of highPrecisionCases) {
+            const numStr = input.slice(0, -1);
+            const expected = Number(numStr + "e-2");
+            const actual = parsePercentage(input);
+            assert.equal(
+              actual,
+              expected,
+              \`Precision preservation failed for \${input}: expected \${expected}, got \${actual} (arbitrary precision truncation detected)\`
+            );
+          }
+        `;
+        execFileSync("node", ["--input-type=module", "-e", precisionTestCode], { cwd: dir, stdio: "pipe" });
+        precisionPreservationPassed = true;
+      } catch (err) {
+        return { success: false, reason: `Precision preservation failed: ${err.message}` };
       }
 
       // 3. Test integrity: seeded decimal-percentage assertions must remain present and active
@@ -206,7 +270,13 @@ test("parser: parses decimal percentage values", () => {
         return { success: false, reason: "Test integrity failed: seeded test was skipped or commented out" };
       }
 
-      return { success: true };
+      return {
+        success: true,
+        functional_passed: functionalPassed,
+        grammar_preservation_passed: grammarPreservationPassed,
+        precision_preservation_passed: precisionPreservationPassed,
+        test_integrity_passed: true,
+      };
     },
   },
   critical: {
@@ -1044,7 +1114,7 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
       }
       if (hasValidation) {
         workerValidationTurns++;
-        if (mutationsSinceLastValidation === 0) {
+        if (workerSeenMutation && mutationsSinceLastValidation === 0) {
           repeatedValidationWithoutMutation++;
         }
         mutationsSinceLastValidation = 0;
@@ -1514,12 +1584,43 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     const scopeAudit = auditScopeMinimality(uniqueMutatedFiles, taskKey);
 
     const zeroParentSidequestsGate = (metrics.parent_delegated_sidequest_attempts || 0) === 0 ? "PASS" : "FAIL";
-    const parentZeroAttemptGate = (metrics.parent_delegated_sidequest_attempts || 0) === 0 ? "PASS" : "FAIL";
+    const parentZeroAttemptGate = ((metrics.parent_delegated_sidequest_attempts || 0) === 0 && (metrics.parent_model_turns || 0) <= 3) ? "PASS" : "FAIL";
     const apiShapePreservationGate = (!sigAudit.changed && verification.success) ? "PASS" : "FAIL";
     const scopeMinimalityGate = scopeAudit.pass ? "PASS" : "FAIL";
     const reproductionGate = (taskKey !== "investigation")
       ? "PASS"
       : ((metrics.reproduction_observed && metrics.reproduction_actor === "WORKER" && metrics.reproduction_exit_code !== 0) ? "PASS" : "FAIL");
+    const inputGrammarPreservationGate = (taskKey !== "investigation")
+      ? "PASS"
+      : (verification.grammar_preservation_passed ? "PASS" : "FAIL");
+    const precisionPreservationGate = (taskKey !== "investigation")
+      ? "PASS"
+      : (verification.precision_preservation_passed ? "PASS" : "FAIL");
+    const testIntegrityGate = (taskKey !== "investigation")
+      ? "PASS"
+      : (verification.test_integrity_passed ? "PASS" : "FAIL");
+    const functionalGate = (taskKey !== "investigation")
+      ? (verification.success ? "PASS" : "FAIL")
+      : (verification.functional_passed ? "PASS" : "FAIL");
+    const routingGate = (fidelity.expectedRoute?.worker === fidelity.observed?.worker && (fidelity.fidelityStatus === "PASS" || fidelity.status === "PASS")) ? "PASS" : "FAIL";
+    const rootCauseGate = (metrics.worker_completion_claimed && verification.success) ? "PASS" : "FAIL";
+    const fidelityGate = (fidelity.fidelityStatus === "PASS" && fidelity.confidence === "HIGH") ? "PASS" : "FAIL";
+    const workerEconomyGate = (taskKey !== "investigation")
+      ? "PASS"
+      : ((
+          (metrics.worker_model_turns || 0) <= 8 &&
+          (metrics.worker_pre_mutation_turns || 0) <= 3 &&
+          (metrics.worker_search_turns || 0) <= 1 &&
+          (metrics.duplicate_reads || 0) === 0 &&
+          (metrics.post_mutation_rereads || 0) === 0 &&
+          (metrics.repeated_validation_without_mutation || 0) === 0
+        ) ? "PASS" : "FAIL");
+    const firstMutationComplete = taskKey !== "investigation"
+      ? true
+      : ((metrics.worker_mutation_turns || 0) === 1 && verification.success);
+    const firstMutationCompletenessGate = firstMutationComplete ? "PASS" : "FAIL";
+    const validationCompletionGate = ((metrics.repeated_validation_without_mutation || 0) === 0 && (metrics.worker_validation_verified || false)) ? "PASS" : "FAIL";
+    const parentSameTurnDelegationGate = ((metrics.parent_pre_delegation_turns || 0) <= 1 && (metrics.parent_model_turns || 0) <= 3) ? "PASS" : "FAIL";
 
     return {
       runtime,
@@ -1531,15 +1632,28 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       dry_run: false,
       duration_ms: durationMs,
       ...metrics,
+      first_mutation_complete: firstMutationComplete,
       api_signature_before: sigAudit.before,
       api_signature_after: sigAudit.after,
       api_signature_changed: sigAudit.changed,
       scope_minimality_audit: scopeAudit.classification,
       zero_parent_sidequests_gate: zeroParentSidequestsGate,
       parent_zero_attempt_gate: parentZeroAttemptGate,
+      parent_same_turn_delegation_gate: parentSameTurnDelegationGate,
       api_shape_preservation_gate: apiShapePreservationGate,
+      api_shape_gate: apiShapePreservationGate,
       scope_minimality_gate: scopeMinimalityGate,
       reproduction_gate: reproductionGate,
+      input_grammar_preservation_gate: inputGrammarPreservationGate,
+      precision_preservation_gate: precisionPreservationGate,
+      test_integrity_gate: testIntegrityGate,
+      functional_gate: functionalGate,
+      routing_gate: routingGate,
+      root_cause_gate: rootCauseGate,
+      worker_economy_gate: workerEconomyGate,
+      first_mutation_completeness_gate: firstMutationCompletenessGate,
+      validation_completion_gate: validationCompletionGate,
+      fidelity_gate: fidelityGate,
       fidelity: {
         status: fidelity.fidelityStatus,
         confidence: fidelity.confidence,
@@ -1651,6 +1765,24 @@ function main() {
           if ((taskKey === "multi" || taskKey === "investigation") && res.scope_minimality_gate === "FAIL") {
             console.error(`SCOPE_MINIMALITY_FAILED: ${runtime} on ${taskKey} mutated files outside required scope: ${JSON.stringify(res.scope_minimality_audit)}`);
             hasFidelityFailure = true;
+          }
+          if (taskKey === "investigation") {
+            if (res.input_grammar_preservation_gate === "FAIL") {
+              console.error(`INPUT_GRAMMAR_PRESERVATION_FAILED: ${runtime} on ${taskKey} newly accepted unrelated syntax`);
+              hasFidelityFailure = true;
+            }
+            if (res.precision_preservation_gate === "FAIL") {
+              console.error(`PRECISION_PRESERVATION_FAILED: ${runtime} on ${taskKey} suffered arbitrary precision truncation`);
+              hasFidelityFailure = true;
+            }
+            if (res.worker_economy_gate === "FAIL") {
+              console.error(`WORKER_ECONOMY_FAILED: ${runtime} on ${taskKey} exceeded worker turn economy targets`);
+              hasFidelityFailure = true;
+            }
+            if (res.parent_zero_attempt_gate === "FAIL") {
+              console.error(`PARENT_ZERO_ATTEMPT_FAILED: ${runtime} on ${taskKey} failed parent zero attempt gate`);
+              hasFidelityFailure = true;
+            }
           }
         }
       } catch (err) {

@@ -11,6 +11,8 @@ import {
   isConcretePath,
   isHealthyDelegatedExecution,
   isOrchestratorRole,
+  checkValidationCompletionLock,
+  isValidationCommand,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 
 function readStdin() {
@@ -425,41 +427,6 @@ function extractTargetPaths(commandLine, repoRoot) {
   return result;
 }
 
-function isValidationCommand(cmd) {
-  const trimmed = cmd.trim();
-  const redir = extractRealShellRedirections(cmd);
-  if (redir.targets.length > 0) return false;
-
-  return (
-    trimmed.startsWith("pnpm test") ||
-    trimmed.startsWith("pnpm --filter") ||
-    trimmed.startsWith("pnpm run test") ||
-    trimmed.startsWith("pnpm typecheck") ||
-    trimmed.startsWith("pnpm run typecheck") ||
-    trimmed.startsWith("pnpm lint") ||
-    trimmed.startsWith("pnpm run lint") ||
-    trimmed.startsWith("pnpm build") ||
-    trimmed.startsWith("pnpm run build") ||
-    trimmed.startsWith("npm test") ||
-    trimmed.startsWith("npm run test") ||
-    trimmed.startsWith("npm run build") ||
-    trimmed.startsWith("npm run typecheck") ||
-    trimmed.startsWith("npm run lint") ||
-    trimmed.startsWith("yarn test") ||
-    trimmed.startsWith("yarn run test") ||
-    trimmed.startsWith("yarn build") ||
-    trimmed.startsWith("yarn typecheck") ||
-    trimmed.startsWith("node --test") ||
-    trimmed.startsWith("vitest") ||
-    trimmed.startsWith("npx vitest") ||
-    trimmed.startsWith("jest") ||
-    trimmed.startsWith("npx jest") ||
-    trimmed.startsWith("tsc --noEmit") ||
-    trimmed.startsWith("npx tsc --noEmit") ||
-    trimmed.startsWith("tsc") ||
-    trimmed.startsWith("git diff --check")
-  );
-}
 
 function isReadOnlyCommand(cmd) {
   const trimmed = cmd.trim();
@@ -872,7 +839,7 @@ function main() {
   // Check 1a: schedule / timer policy during delegated execution
   if (toolName === "schedule") {
     if (isHealthyDelegatedExecution(activeState, activeRole)) {
-      const reason = "Reactive Wakeup policy: Routine schedule/timer calls are prohibited for Orchestrator during healthy delegated execution. Yield and await asynchronous reactive wakeup on child completion.";
+      const reason = "Reactive Wakeup policy: Routine schedule/timer calls are prohibited for Orchestrator during healthy delegated execution. TERMINAL DELEGATION PROTOCOL: Yield immediately with ZERO tools. Do NOT call schedule, timers, or polls; Antigravity will automatically wake you upon child completion.";
       recordDeniedAttempt(activeState, statePath, "schedule", toolArgs, reason);
       console.log(JSON.stringify({
         decision: "deny",
@@ -1091,10 +1058,30 @@ function main() {
 
     // 2c. Worker (Flash): validate mutating commands against Scope Contract
     if (isWorkerRole(activeRole)) {
-      if (isReadOnly || isValidation) {
+      if (isReadOnly) {
         allowCommand(cmd);
         return;
       }
+
+      if (isValidation) {
+        const valLock = checkValidationCompletionLock({
+          activeState,
+          activeContract,
+          activeRole,
+          commandLine: cmd,
+        });
+        if (valLock.locked) {
+          recordDeniedAttempt(activeState, statePath, "run_command", toolArgs, valLock.reason);
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: valLock.reason,
+          }));
+          return;
+        }
+        allowCommand(cmd);
+        return;
+      }
+
 
       if (activeContract) {
         const allowed = Array.isArray(activeContract.allowedPaths) ? activeContract.allowedPaths : [];
