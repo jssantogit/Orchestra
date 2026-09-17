@@ -74,6 +74,15 @@ Target Economy: `parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`.
    - Simple / Mechanical / Formatting / Minor Unit Test: `flash-low-worker` (`gemini-3.8-flash-low`)
    - Standard Implementation: `flash-medium-worker` (`gemini-3.8-flash-medium`)
    - Complex Implementation / Deep Investigation: `flash-worker` (`gemini-3.8-flash-high`)
+   - Two-Key Critical Review (`criticality == CRITICAL` or review requests):
+     - Dispatches TWO independent reviewers: Reviewer A (`flash-reviewer`) and Reviewer B (`flash-reviewer`).
+     - Both subagents are powered by `gemini-3.8-flash-high` and are strictly read-only (`enable_write_tools: false`).
+     - Reviewer A Focus: correctness, criteria adherence, zero regressions, edge cases.
+     - Reviewer B Focus: adversarial analysis, broken assumptions, hidden coupling, invariants, failure modes.
+     - Turn 1: Emit `define_subagent` (defining `flash-reviewer` with `enable_write_tools: false`) AND `invoke_subagent` invoking BOTH reviewers concurrently in the SAME Turn 1 batch (`Subagents: [ReviewerA, ReviewerB]`).
+     - Supply the shared factual review packet (goal, acceptance criteria, target path, invariants, known risks) without cross-talk or hidden reasoning.
+     - Turn 2: 0 tools / yield immediately.
+     - Turn 3: 0 tools / resolve consensus from both reviewer verdicts after Reactive Wakeup.
    - Embed Scope Contract (`allowedPaths`, `forbiddenPaths`, `testsRequired`) directly into the `invoke_subagent` prompt.
    - In `testsRequired`: specify focused deterministic test execution (`node --test <affected-test-file>`). Do NOT request stress loops or multi-run iterations in `testsRequired`. Deterministic fixes pass cleanly in a single run.
    - Instruct worker: EXISTING EXTENSION POINT FIRST. Preserve existing function signatures; use existing options/config objects; do not invent positional parameters, overloads, or wrapper APIs.
@@ -96,10 +105,15 @@ Target Economy: `parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`.
    - Routine polling, timer scheduling, transcript/file inspection, repository search, and test reruns are strictly denied by runtime policy during delegated execution.
    - Do NOT poll or check whether the subagent has started or is running. The runtime automatically wakes you upon child completion.
 
-6. **Fresh Evidence & Acceptance Diet**:
-   - When the worker returns `STATUS: IMPLEMENTATION_COMPLETE` with passing tests, inspect the compact completion packet delivered by Reactive Wakeup.
+6. **Fresh Evidence & Acceptance Diet / Two-Key Consensus**:
+   - **Implementation Acceptance**: When the worker returns `STATUS: IMPLEMENTATION_COMPLETE` with passing tests, inspect the compact completion packet delivered by Reactive Wakeup.
    - Fresh test evidence produced by the worker is reused without duplicate execution. Conclude formal acceptance without additional tool calls whenever acceptance gates are satisfied.
-   - **Acceptance Target**: 1 parent model turn to accept and provide final summary with 0 tool calls.
+   - **Two-Key Critical Review Consensus**: When both independent reviewers return structured verdicts:
+     - Both approval-class (`ACCEPT`, `ACCEPT_WITH_NOTES`) -> `ACCEPTED` / `DONE`.
+     - Any disagreement (one approval, one blocking) -> `HUMAN_GATE` (never spawn Reviewer C to break ties).
+     - Both blocking-class (`CHANGES_REQUIRED`) -> Delta Retry.
+     - Any `BLOCK` -> `BLOCKED` / `HUMAN_GATE`.
+   - **Acceptance Target**: 1 parent model turn to accept/resolve and provide final summary with 0 tool calls.
    - The runtime automatically records acceptance upon clean conclusion.
 
 7. **Direct Action Fast Path (`DIRECT_ACTION`)**:

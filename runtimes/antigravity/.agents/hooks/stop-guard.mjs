@@ -143,15 +143,15 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         // benchmarkRunId === current run
         let candidates = roleBindings.pendingSubagents.filter((p) => !p.consumed);
         if (parentConvId) {
-          candidates = candidates.filter((p) => !p.parentConversationId || p.parentConversationId === parentConvId);
+          candidates = candidates.filter((p) => p.parentConversationId && p.parentConversationId === parentConvId);
         }
-        const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || null;
+        const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || process.env.BENCHMARK_TASK_ID || null;
         if (activeTaskId) {
-          candidates = candidates.filter((p) => !(p.taskIdentifier || p.taskId) || (p.taskIdentifier || p.taskId) === activeTaskId);
+          candidates = candidates.filter((p) => (p.taskIdentifier || p.taskId) && (p.taskIdentifier || p.taskId) === activeTaskId);
         }
-        const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || null;
+        const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
         if (activeRunId) {
-          candidates = candidates.filter((p) => !p.benchmarkRunId || p.benchmarkRunId === activeRunId);
+          candidates = candidates.filter((p) => p.benchmarkRunId && p.benchmarkRunId === activeRunId);
         }
 
         // Step 2: Use role/profile evidence from descriptor
@@ -169,24 +169,42 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
           matchedCandidates = candidates;
         }
 
-        // Deterministic rule: exactly 1 valid candidate -> bind; 0 or >1 ambiguous -> UNKNOWN (fail closed, never guess)
+        let match = null;
         if (matchedCandidates.length === 1) {
-          const match = matchedCandidates[0];
+          match = matchedCandidates[0];
+        } else if (matchedCandidates.length > 1) {
+          const firstRole = matchedCandidates[0].role;
+          const firstProfile = matchedCandidates[0].profile;
+          const allSameRoleAndProfile = matchedCandidates.every((c) => c.role === firstRole && c.profile === firstProfile);
+          if (allSameRoleAndProfile) {
+            match = matchedCandidates[0];
+          } else {
+            match = null;
+          }
+        } else {
+          match = null;
+        }
+
+        if (match) {
           const consumedAt = new Date().toISOString();
           match.consumed = true;
           match.consumedBy = childConvId;
           match.consumedAt = consumedAt;
 
+          const childRole = match.role || null;
+          const childProfile = match.profile || match.typeName || (descTypeName || null);
+          const isFactual = Boolean(childRole && childProfile);
+
           const boundRecord = {
             conversationId: childConvId,
-            role: match.role || "WORKER",
-            profile: match.profile || match.typeName || descTypeName || "flash-low-worker",
+            role: childRole || "UNKNOWN",
+            profile: childProfile || null,
             model: match.model || null,
             parentConversationId: match.parentConversationId || parentConvId,
             taskIdentifier: match.taskIdentifier || activeTaskId || null,
             benchmarkRunId: match.benchmarkRunId || activeRunId || null,
-            confidence: "HIGH",
-            source: "RUNTIME_IDENTITY",
+            confidence: isFactual ? "HIGH" : "LOW",
+            source: isFactual ? "RUNTIME_IDENTITY" : "UNRESOLVED",
             consumed: true,
             consumedBy: childConvId,
             consumedAt,

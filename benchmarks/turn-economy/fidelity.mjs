@@ -147,6 +147,8 @@ export function getExpectedRoute(taskKey, runtime) {
       } else if (taskKey === "investigation") {
         const wRoute = decideAgyRoute({ taskAction: "INVESTIGATE" });
         workerDef = { profile: "flash-worker", model: wRoute.model, reasoningEffort: wRoute.effort };
+      } else if (taskKey === "critical") {
+        workerDef = { profile: "flash-reviewer", model: GEMINI_MODELS.REVIEWER_A, reasoningEffort: "high" };
       }
     }
     return {
@@ -302,26 +304,34 @@ export function evaluateTaskFidelity({
       violations.push("EXPECTED_WORKER_ABSENT");
     }
 
-    if (normEvents.length > 0) {
-      // Mutation events present: check that at least one is attributed to WORKER
-      if (workerMutations.length === 0) {
+    if (req.allowedMutationActors.includes("NONE")) {
+      // Read-only delegated task (e.g. critical review)
+      if (effectiveActor !== "NONE" && effectiveActor !== null) {
         writeActorValid = false;
-        violations.push("FIDELITY_VIOLATION: NO_WORKER_MUTATIONS");
+        violations.push(`UNEXPECTED_MUTATION_IN_READONLY_TASK: actor=${effectiveActor}`);
       }
     } else {
-      // normEvents is empty — typical for AGY multi-agent architecture.
-      // Worker writes happen in the child conversation context; the parent's
-      // post-tool-telemetry cannot observe them. Use subagent presence as proxy.
-      if (!isWorkerPresent) {
-        // No subagent was ever invoked — definitively absent
-        writeActorValid = false;
-        violations.push("EXPECTED_WORKER_ABSENT");
+      if (normEvents.length > 0) {
+        // Mutation events present: check that at least one is attributed to WORKER
+        if (workerMutations.length === 0) {
+          writeActorValid = false;
+          violations.push("FIDELITY_VIOLATION: NO_WORKER_MUTATIONS");
+        }
+      } else {
+        // normEvents is empty — typical for AGY multi-agent architecture.
+        // Worker writes happen in the child conversation context; the parent's
+        // post-tool-telemetry cannot observe them. Use subagent presence as proxy.
+        if (!isWorkerPresent) {
+          // No subagent was ever invoked — definitively absent
+          writeActorValid = false;
+          violations.push("EXPECTED_WORKER_ABSENT");
+        }
+        // If isWorkerPresent && mutationActor === "NONE": worker delegated normally,
+        // parent cannot see child mutations. This is expected. Treat as PASS-eligible.
       }
-      // If isWorkerPresent && mutationActor === "NONE": worker delegated normally,
-      // parent cannot see child mutations. This is expected. Treat as PASS-eligible.
     }
   } else {
-    // Non-delegation tasks (status, lookup, critical)
+    // Non-delegation tasks (status, lookup)
     if (effectiveActor !== "NONE" && effectiveActor !== null) {
       writeActorValid = false;
       violations.push(`UNEXPECTED_MUTATION_IN_READONLY_TASK: actor=${effectiveActor}`);

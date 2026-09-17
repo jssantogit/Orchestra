@@ -138,15 +138,15 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         // Filter by parent/task/run context before matching role/profile:
         const parentConvId = payload.parentConversationId || activeState.parentConversationId || roleBindings.mainConversationId || null;
         if (parentConvId) {
-          candidates = candidates.filter((c) => !c.parentConversationId || c.parentConversationId === parentConvId);
+          candidates = candidates.filter((c) => c.parentConversationId && c.parentConversationId === parentConvId);
         }
-        const activeTaskId = payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || null;
+        const activeTaskId = payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null;
         if (activeTaskId) {
-          candidates = candidates.filter((c) => !(c.taskIdentifier || c.taskId) || (c.taskIdentifier || c.taskId) === activeTaskId);
+          candidates = candidates.filter((c) => (c.taskIdentifier || c.taskId) && (c.taskIdentifier || c.taskId) === activeTaskId);
         }
-        const activeRunId = payload.benchmarkRunId || activeState.benchmarkRunId || null;
+        const activeRunId = payload.benchmarkRunId || activeState.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
         if (activeRunId) {
-          candidates = candidates.filter((c) => !c.benchmarkRunId || c.benchmarkRunId === activeRunId);
+          candidates = candidates.filter((c) => c.benchmarkRunId && c.benchmarkRunId === activeRunId);
         }
 
         if (reqRole) {
@@ -182,22 +182,26 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           matched.consumedBy = convId;
           matched.consumedAt = consumedAt;
 
-          const childRole = matched.role || "WORKER";
-          const childProfile = matched.profile || matched.typeName || (childRole === "REVIEWER" ? "flash-reviewer" : "flash-worker");
-          const childModel = matched.model || payload.modelName || (childRole === "REVIEWER" ? "gemini-3.8-flash-high" : "gemini-3.8-flash");
+          const childRole = matched.role || null;
+          const childProfile = matched.profile || matched.typeName || null;
+          const childModel = matched.model || payload.modelName || (childRole === "REVIEWER" ? "gemini-3.8-flash-high" : null);
+
+          const isFactualIdentity = Boolean(childRole && childProfile);
+          const confidence = isFactualIdentity ? "HIGH" : "LOW";
+          const source = isFactualIdentity ? "RUNTIME_IDENTITY" : "UNRESOLVED";
 
           if (!roleBindings.bindings) roleBindings.bindings = {};
           if (!roleBindings.conversations) roleBindings.conversations = {};
           const record = {
             conversationId: convId,
-            role: childRole,
-            profile: childProfile,
+            role: childRole || "UNKNOWN",
+            profile: childProfile || null,
             model: childModel,
             parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             taskIdentifier: matched.taskIdentifier || activeTaskId || null,
             benchmarkRunId: matched.benchmarkRunId || activeRunId || null,
-            confidence: "HIGH",
-            source: "RUNTIME_IDENTITY",
+            confidence,
+            source,
             consumed: true,
             consumedBy: convId,
             consumedAt,
@@ -206,6 +210,14 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           roleBindings.conversations[convId] = record;
           if (roleBindingsPath) {
             saveRoleBindings(roleBindingsPath, roleBindings);
+          }
+          if (!isFactualIdentity) {
+            return {
+              role: "UNKNOWN",
+              source: "UNRESOLVED",
+              confidence: "LOW",
+              actorId: convId,
+            };
           }
           return {
             role: childRole,

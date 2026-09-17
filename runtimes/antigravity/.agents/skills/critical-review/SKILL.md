@@ -42,6 +42,7 @@ When `criticality == "CRITICAL"` (e.g. core DSP math, optimizer convergence, raw
 2. **Zero Cross-Talk**: Neither reviewer sees the other reviewer's evaluation or verdict.
 3. **Strictly Read-Only**: Neither reviewer can modify files or execute mutating commands.
 4. **Consensus Required**:
-   - Both `ACCEPT` $\to$ Task accepted (`DONE`).
-   - Disagreement $\to$ `HUMAN_GATE`. Never spawn Reviewer C to vote.
+   - Both approval-class (`ACCEPT`, `ACCEPT_WITH_NOTES`) $\to$ Task accepted (`DONE`).
+   - Disagreement (one approval-class, one blocking-class) $\to$ `HUMAN_GATE`. Never spawn Reviewer C to vote.
    - Both `CHANGES_REQUIRED` $\to$ Orchestrator issues Delta Retry.
+   - Any `BLOCK` $\to$ `BLOCKED` or `HUMAN_GATE`.

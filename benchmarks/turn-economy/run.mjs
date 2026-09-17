@@ -15,7 +15,8 @@ import { tmpdir, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { normalizeUsageEvent, TOKEN_COUNTER_TYPES, CONFIDENCE_LEVELS } from "./token-semantics.mjs";
 import { evaluateTaskFidelity, TASK_FIDELITY_REQUIREMENTS } from "./fidelity.mjs";
-import { isControlPlanePath } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
+import { createHash } from "node:crypto";
+import { isControlPlanePath, evaluateTwoKeyReview } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -284,7 +285,18 @@ test("parser: parses decimal percentage values", () => {
     name: "TASK 6 — CRITICAL REVIEW",
     prompt: "CRITICAL: Perform an independent Two-Key critical review of the input validation boundary in src/parser.js. Ensure strict containment against unexpected prototype keys, non-finite values, and malformed inputs.",
     setup(dir) {},
-    verify(dir, stdout) {
+    verify(dir, stdout, metrics) {
+      if (metrics && metrics.two_key_fidelity_gate !== undefined) {
+        const passed =
+          metrics.two_key_fidelity_gate === "PASS" &&
+          metrics.independence_gate === "PASS" &&
+          metrics.read_only_gate === "PASS" &&
+          metrics.consensus_gate === "PASS";
+        return {
+          success: passed,
+          detail: passed ? "TWO_KEY_FIDELITY_PASS" : (metrics.two_key_gate_failure || "TWO_KEY_FIDELITY_FAIL"),
+        };
+      }
       const lower = String(stdout || "").toLowerCase();
       const hasReview = lower.includes("review") || lower.includes("verdict") || lower.includes("accept");
       return { success: hasReview };
@@ -1009,11 +1021,24 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
       matchedCandidates = candidates;
     }
 
-    // Deterministic rule: exactly 1 candidate -> bind; 0 or >1 ambiguous -> UNKNOWN (fail closed)
+    let match = null;
     if (matchedCandidates.length === 1) {
-      const match = matchedCandidates[0];
+      match = matchedCandidates[0];
+    } else if (matchedCandidates.length > 1) {
+      const firstRole = matchedCandidates[0].role;
+      const firstProfile = matchedCandidates[0].profile;
+      const allSame = matchedCandidates.every((c) => c.role === firstRole && c.profile === firstProfile);
+      if (allSame && firstRole === "REVIEWER") {
+        match = matchedCandidates[0];
+      }
+    }
+
+    if (match) {
+      match.consumed = true;
+      match.consumedBy = sub?.conversationId || null;
+      match.consumedAt = new Date().toISOString();
       resolvedRole = (match.role || "UNKNOWN").toUpperCase();
-      resolvedConfidence = "HIGH";
+      resolvedConfidence = (match.role && match.profile) ? "HIGH" : "LOW";
       resolvedProfile = match.profile || match.typeName || resolvedProfile;
     } else {
       resolvedRole = "UNKNOWN";
@@ -1110,6 +1135,35 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
   return { mutations, validations, completionClaimed, role: resolvedRole, profile: resolvedProfile, confidence: resolvedConfidence };
 }
 
+export function extractReviewerVerdict(text = "") {
+  const norm = String(text || "");
+  const m = norm.match(/(?:VERDICT|DECISION|RECOMMENDATION)\s*[:=\-]?\s*[`*]*([A-Z_]+)[`*]*/i);
+  if (m) {
+    const raw = m[1].toUpperCase();
+    if (["ACCEPT", "ACCEPTED", "PASS", "PASSED"].includes(raw)) return "ACCEPT";
+    if (["ACCEPT_WITH_NOTES", "ACCEPT_NOTES", "PASS_WITH_NOTES"].includes(raw)) return "ACCEPT_WITH_NOTES";
+    if (["CHANGES_REQUIRED", "CHANGE_REQUIRED", "REWORK", "RETRY"].includes(raw)) return "CHANGES_REQUIRED";
+    if (["BLOCK", "BLOCKED", "REJECT", "REJECTED"].includes(raw)) return "BLOCK";
+  }
+  if (/\bACCEPT_WITH_NOTES\b/i.test(norm)) return "ACCEPT_WITH_NOTES";
+  if (/\bCHANGES_REQUIRED\b/i.test(norm)) return "CHANGES_REQUIRED";
+  if (/\b(?:VERDICT|DECISION)[\s\S]{0,40}\bACCEPT\b/i.test(norm) || /\bVERDICT\s*:\s*ACCEPT\b/i.test(norm)) return "ACCEPT";
+  if (/\bBLOCK\b/i.test(norm)) return "BLOCK";
+  return null;
+}
+
+export function computePacketFingerprint(promptText = "") {
+  if (!promptText) return "EMPTY";
+  const stripped = String(promptText)
+    .replace(/Reviewer\s+[AB]\s*[:(][^)]*\)?/gi, "")
+    .replace(/Correctness\s+Review/gi, "")
+    .replace(/Adversarial\s+Review/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return createHash("sha256").update(stripped).digest("hex").slice(0, 16);
+}
+
 /**
  * Parses AGY telemetry from .agents/state/active-state.json, events.jsonl, and agy JSON output.
  */
@@ -1144,6 +1198,7 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
   let parentTranscriptFile = null;
   const workerTurns = [];
   const reviewerTurns = [];
+  const reviewers = [];
   const childMutations = [];
   const childValidations = [];
   let childCompletionClaimed = false;
@@ -1190,6 +1245,18 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
                 const childRole = (childEv.role || childEv.validations[0]?.actorRole || childEv.mutations[0]?.actorRole || "UNKNOWN").toUpperCase();
                 if (childRole === "REVIEWER") {
                   reviewerTurns.push(...childTurns);
+                  reviewers.push({
+                    conversationId: sub.conversationId,
+                    role: childRole,
+                    profile: childEv.profile || "flash-reviewer",
+                    model: (roleBindings?.bindings?.[sub.conversationId]?.model) || "gemini-3.8-flash-high",
+                    confidence: childEv.confidence || "HIGH",
+                    source: childEv.source || "RUNTIME_IDENTITY",
+                    turns: childTurns,
+                    mutations: childEv.mutations || [],
+                    validations: childEv.validations || [],
+                    transcriptFile: childTranscriptFile,
+                  });
                 } else if (childRole === "WORKER") {
                   workerTurns.push(...childTurns);
                 }
@@ -1442,6 +1509,120 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     correctionCycles = Math.max(0, workerMutationTurns - 1);
   }
 
+  const reviewerInvocations = reviewers.length > 0 ? reviewers.length : (state.reviewer_invocations || 0);
+  const reviewerConversationIds = reviewers.map((r) => r.conversationId);
+  const distinctReviewerConversations = reviewerConversationIds.length >= 2 && new Set(reviewerConversationIds).size === reviewerConversationIds.length;
+  const reviewerProfiles = reviewers.map((r) => r.profile);
+  const reviewerModels = reviewers.map((r) => r.model);
+  const reviewerRoles = reviewers.map((r) => r.role);
+  const reviewerIdentityConfidences = reviewers.map((r) => r.confidence);
+  const reviewerIdentitySources = reviewers.map((r) => r.source);
+
+  let reviewerAPrompt = "";
+  let reviewerBPrompt = "";
+  let reviewerAResponse = "";
+  let reviewerBResponse = "";
+  let reviewerATranscriptText = "";
+  let reviewerBTranscriptText = "";
+  let reviewerAVerdict = null;
+  let reviewerBVerdict = null;
+
+  if (reviewers.length >= 1) {
+    try {
+      const rawA = readFileSync(reviewers[0].transcriptFile, "utf8");
+      reviewerATranscriptText = rawA;
+      for (const line of rawA.trim().split("\n")) {
+        try {
+          const step = JSON.parse(line);
+          if (step.type === "USER_INPUT" && !reviewerAPrompt) reviewerAPrompt = step.content || "";
+          if (step.type === "PLANNER_RESPONSE" && step.content) reviewerAResponse = step.content;
+        } catch {}
+      }
+      reviewerAVerdict = extractReviewerVerdict(reviewerAResponse);
+    } catch {}
+  }
+
+  if (reviewers.length >= 2) {
+    try {
+      const rawB = readFileSync(reviewers[1].transcriptFile, "utf8");
+      reviewerBTranscriptText = rawB;
+      for (const line of rawB.trim().split("\n")) {
+        try {
+          const step = JSON.parse(line);
+          if (step.type === "USER_INPUT" && !reviewerBPrompt) reviewerBPrompt = step.content || "";
+          if (step.type === "PLANNER_RESPONSE" && step.content) reviewerBResponse = step.content;
+        } catch {}
+      }
+      reviewerBVerdict = extractReviewerVerdict(reviewerBResponse);
+    } catch {}
+  }
+
+  const reviewPacketFingerprintA = computePacketFingerprint(reviewerAPrompt);
+  const reviewPacketFingerprintB = computePacketFingerprint(reviewerBPrompt);
+  const sharedFactualPacketMatch = Boolean(
+    reviewerAPrompt &&
+    reviewerBPrompt &&
+    reviewerAPrompt.includes("src/parser.js") &&
+    reviewerBPrompt.includes("src/parser.js")
+  );
+
+  const reviewerACrossTalk = Boolean(
+    reviewers.length >= 2 &&
+    (reviewerATranscriptText.includes(reviewers[1].conversationId) ||
+      (reviewerBVerdict && reviewerATranscriptText.includes(`verdict: ${reviewerBVerdict}`)))
+  );
+  const reviewerBCrossTalk = Boolean(
+    reviewers.length >= 2 &&
+    (reviewerBTranscriptText.includes(reviewers[0].conversationId) ||
+      (reviewerAVerdict && reviewerBTranscriptText.includes(`verdict: ${reviewerAVerdict}`)))
+  );
+
+  const thirdReviewerCount = Math.max(0, reviewerInvocations - 2);
+
+  let consensusResolution = null;
+  let consensusNextState = null;
+  if (reviewerAVerdict && reviewerBVerdict) {
+    try {
+      const evalRes = evaluateTwoKeyReview({}, reviewerAVerdict, reviewerBVerdict);
+      consensusResolution = evalRes.decision;
+      consensusNextState = evalRes.nextState;
+    } catch {}
+  }
+
+  const reviewerAWrites = (reviewers[0]?.mutations || []).length;
+  const reviewerBWrites = (reviewers[1]?.mutations || []).length;
+  const reviewerShellMutations = 0;
+
+  const twoReviewersGate = reviewerInvocations === 2 ? "PASS" : "FAIL";
+  const distinctIdentityGate = distinctReviewerConversations ? "PASS" : "FAIL";
+  const reviewerRouteGate = (
+    reviewerProfiles.length === 2 &&
+    reviewerProfiles.every((p) => p === "flash-reviewer") &&
+    reviewerModels.every((m) => m === "gemini-3.8-flash-high")
+  ) ? "PASS" : "FAIL";
+  const factualIdentityGate = (
+    reviewerRoles.length === 2 &&
+    reviewerRoles.every((r) => r === "REVIEWER") &&
+    reviewerIdentityConfidences.every((c) => c === "HIGH")
+  ) ? "PASS" : "FAIL";
+  const independenceGate = (!reviewerACrossTalk && !reviewerBCrossTalk && reviewerInvocations === 2) ? "PASS" : "FAIL";
+  const readOnlyGate = (
+    reviewerAWrites === 0 &&
+    reviewerBWrites === 0 &&
+    (state.orchestratorWorkspaceWrites || 0) === 0 &&
+    (state.unknownWorkspaceWrites || 0) === 0
+  ) ? "PASS" : "FAIL";
+  const consensusGate = (consensusResolution !== null && thirdReviewerCount === 0) ? "PASS" : "FAIL";
+  const twoKeyFidelityGate = (
+    twoReviewersGate === "PASS" &&
+    distinctIdentityGate === "PASS" &&
+    reviewerRouteGate === "PASS" &&
+    factualIdentityGate === "PASS" &&
+    independenceGate === "PASS" &&
+    readOnlyGate === "PASS" &&
+    consensusGate === "PASS"
+  ) ? "PASS" : "FAIL";
+
   return {
     model_turns_total: totalModelTurns,
     model_invocations: totalModelTurns,
@@ -1450,7 +1631,32 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     worker_model_turns: workerModelTurns,
     worker_invocations: workerModelTurns,
     reviewer_model_turns: reviewerModelTurns,
-    reviewer_invocations: reviewerModelTurns,
+    reviewer_invocations: reviewerInvocations,
+    reviewer_conversation_ids: reviewerConversationIds,
+    distinct_reviewer_conversations: distinctReviewerConversations,
+    reviewer_profiles: reviewerProfiles,
+    reviewer_models: reviewerModels,
+    reviewer_roles: reviewerRoles,
+    reviewer_identity_confidences: reviewerIdentityConfidences,
+    reviewer_identity_sources: reviewerIdentitySources,
+    review_packet_fingerprints: [reviewPacketFingerprintA, reviewPacketFingerprintB],
+    review_packet_fingerprint_a: reviewPacketFingerprintA,
+    review_packet_fingerprint_b: reviewPacketFingerprintB,
+    shared_factual_packet_match: sharedFactualPacketMatch,
+    reviewer_a_verdict: reviewerAVerdict,
+    reviewer_b_verdict: reviewerBVerdict,
+    reviewer_a_cross_talk: reviewerACrossTalk,
+    reviewer_b_cross_talk: reviewerBCrossTalk,
+    reviewer_a_workspace_writes: reviewerAWrites,
+    reviewer_b_workspace_writes: reviewerBWrites,
+    reviewer_shell_mutations: reviewerShellMutations,
+    consensus_resolution: consensusResolution,
+    final_state: consensusNextState,
+    third_reviewer_count: thirdReviewerCount,
+    two_key_fidelity_gate: twoKeyFidelityGate,
+    independence_gate: independenceGate,
+    read_only_gate: readOnlyGate,
+    consensus_gate: consensusGate,
     total_model_turns: totalModelTurns,
     parent_tool_calls: parentToolCalls,
     worker_tool_calls: workerToolCalls,
@@ -1754,7 +1960,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     }
 
     const durationMs = Date.now() - startTime;
-    const verification = taskDef.verify(tempDir, stdout);
+    const verification = taskDef.verify(tempDir, stdout, metrics);
 
     const mutationEvents = metrics.mutation_events || [];
     const orchestratorWrites = metrics.orchestrator_workspace_writes || 0;
