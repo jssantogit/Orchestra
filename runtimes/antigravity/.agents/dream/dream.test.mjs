@@ -33,6 +33,10 @@ import {
   BRANCH_STATUS,
   buildDiscoveryTree,
 } from "./discovery-tree-builder.mjs";
+import {
+  REPLAY_STATUS,
+  replayExact,
+} from "./replay-simulator.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -2340,4 +2344,521 @@ test("Task 7: Rejects unsealed or invalid world input", () => {
     created_at: "2026-09-17T12:00:00.000Z",
   };
   assert.throws(() => buildDiscoveryTree(tamperedWorld), /INVALID_SEALED_WORLD|WORLD_MANIFEST_HASH_MISMATCH/i);
+});
+
+test("Task 8: Baseline replay reproducing historical path -> EXACT_REPLAY_COMPLETE", () => {
+  const rootSnapshotId = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+  const step1SnapshotId = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+  const terminalSnapshotId = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+  const runtimeFp = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+  const dec1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-base-1",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "plan" },
+    available_actions: ["PLAN", "EXECUTE"],
+    chosen_action: "PLAN",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-base-1",
+    observation_id: "obs-base-1",
+    result: "PLAN_DONE",
+    resulting_snapshot_id: step1SnapshotId,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 100, latency_ms: 250 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const dec2 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-base-2",
+    parent_decision_id: "dec-base-1",
+    snapshot_id: step1SnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "execute" },
+    available_actions: ["EXECUTE_FAST", "EXECUTE_DEEP"],
+    chosen_action: "EXECUTE_FAST",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "WORKER",
+    step_idx: 2,
+    created_at: "2026-09-17T12:00:10.000Z",
+  });
+  const out2 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-base-2",
+    observation_id: "obs-base-2",
+    result: "ALL_SUCCESS",
+    resulting_snapshot_id: terminalSnapshotId,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 200, latency_ms: 500 },
+    created_at: "2026-09-17T12:00:15.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec1, out1, dec2, out2],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  // Replay callback reproduces the historical action at each step
+  const historicalActions = {
+    [rootSnapshotId]: "PLAN",
+    [step1SnapshotId]: "EXECUTE_FAST",
+  };
+  const calls = [];
+  const chooseAction = ({ decisionType, state, availableActions, snapshotId, prefix }) => {
+    calls.push({ decisionType, state, availableActions, snapshotId, prefixLength: prefix.length });
+    return historicalActions[snapshotId];
+  };
+
+  const replayRes = replayExact({ world: sealRes.world, chooseAction });
+
+  assert.equal(replayRes.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
+  assert.equal(replayRes.trajectories.length, 1);
+
+  const traj = replayRes.trajectories[0];
+  assert.equal(traj.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
+  assert.equal(traj.steps.length, 2);
+  assert.equal(traj.steps[0].chosen_action, "PLAN");
+  assert.equal(traj.steps[0].observation_id, "obs-base-1");
+  assert.equal(traj.steps[1].chosen_action, "EXECUTE_FAST");
+  assert.equal(traj.steps[1].observation_id, "obs-base-2");
+  assert.equal(traj.terminal_state, "ACCEPTED");
+  assert.equal(traj.cost_metrics.tokens, 300);
+  assert.equal(traj.cost_metrics.latency_ms, 750);
+
+  assert.equal(replayRes.metadata.total_trajectories, 1);
+  assert.equal(replayRes.metadata.complete_trajectories, 1);
+  assert.equal(replayRes.metadata.unknown_trajectories, 0);
+  assert.equal(replayRes.metadata.invalid_policy_trajectories, 0);
+  assert.equal(calls.length, 2);
+});
+
+test("Task 8: Callback selecting unobserved legal action -> UNKNOWN_BRANCH with zero manufactured outcome", () => {
+  const rootSnapshotId = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+  const runtimeFp = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+  const dec = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-unobserved-1",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "start" },
+    available_actions: ["PLAN", "EXECUTE_DIRECT"],
+    chosen_action: "PLAN",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-unobserved-1",
+    observation_id: "obs-unobserved-1",
+    result: "PLAN_DONE",
+    resulting_snapshot_id: null,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 50 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec, out],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  // Legal action, but NEVER observed in the factual world
+  const chooseAction = ({ availableActions }) => {
+    assert.ok(availableActions.includes("EXECUTE_DIRECT"));
+    return "EXECUTE_DIRECT";
+  };
+
+  const replayRes = replayExact({ world: sealRes.world, chooseAction });
+
+  assert.equal(replayRes.status, REPLAY_STATUS.UNKNOWN_BRANCH);
+  assert.equal(replayRes.trajectories.length, 1);
+  assert.equal(replayRes.trajectories[0].status, REPLAY_STATUS.UNKNOWN_BRANCH);
+  // Zero manufactured outcome
+  assert.equal(replayRes.trajectories[0].steps.length, 0);
+  assert.equal(replayRes.trajectories[0].terminal_state, null);
+  assert.equal(replayRes.metadata.unknown_trajectories, 1);
+  assert.equal(replayRes.metadata.complete_trajectories, 0);
+  assert.equal(replayRes.metadata.invalid_policy_trajectories, 0);
+});
+
+test("Task 8: Callback selecting illegal action -> POLICY_INVALID_ACTION", () => {
+  const rootSnapshotId = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+  const runtimeFp = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+  const dec = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-illegal-1",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "start" },
+    available_actions: ["PLAN"],
+    chosen_action: "PLAN",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-illegal-1",
+    observation_id: "obs-illegal-1",
+    result: "PLAN_DONE",
+    resulting_snapshot_id: null,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec, out],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  // Chooses action outside available_actions
+  const chooseAction = () => "UNAUTHORIZED_ESCALATION";
+
+  const replayRes = replayExact({ world: sealRes.world, chooseAction });
+
+  assert.equal(replayRes.status, REPLAY_STATUS.POLICY_INVALID_ACTION);
+  assert.equal(replayRes.trajectories.length, 1);
+  assert.equal(replayRes.trajectories[0].status, REPLAY_STATUS.POLICY_INVALID_ACTION);
+  assert.equal(replayRes.trajectories[0].steps.length, 0);
+  assert.equal(replayRes.metadata.invalid_policy_trajectories, 1);
+  assert.equal(replayRes.metadata.complete_trajectories, 0);
+});
+
+test("Task 8: Hindsight trap test: prefix provided to chooseAction contains strictly previous steps and zero future data", () => {
+  const rootSnapshotId = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+  const step1SnapshotId = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+  const step2SnapshotId = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+  const runtimeFp = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+  const FUTURE_SECRET_OBS_ID = "obs-future-secret-winning-id";
+  const FUTURE_SECRET_RESULT = "SUPER_SECRET_WINNING_RESULT_VALUE";
+
+  const dec1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-hindsight-1",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { step: 0 },
+    available_actions: ["ACT_0"],
+    chosen_action: "ACT_0",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-hindsight-1",
+    observation_id: "obs-hindsight-1",
+    result: "RESULT_0",
+    resulting_snapshot_id: step1SnapshotId,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const dec2 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-hindsight-2",
+    parent_decision_id: "dec-hindsight-1",
+    snapshot_id: step1SnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { step: 1 },
+    available_actions: ["ACT_1"],
+    chosen_action: "ACT_1",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 2,
+    created_at: "2026-09-17T12:00:10.000Z",
+  });
+  const out2 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-hindsight-2",
+    observation_id: FUTURE_SECRET_OBS_ID,
+    result: FUTURE_SECRET_RESULT,
+    resulting_snapshot_id: step2SnapshotId,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:15.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec1, out1, dec2, out2],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  let step0PrefixSeen = null;
+  let step1PrefixSeen = null;
+
+  const chooseAction = ({ snapshotId, prefix }) => {
+    const prefixStr = JSON.stringify(prefix);
+    // CRITICAL: Future observation ID and future result MUST NEVER appear in prefix
+    assert.equal(prefixStr.includes(FUTURE_SECRET_OBS_ID), false, "Future observation ID leaked to policy prefix!");
+    assert.equal(prefixStr.includes(FUTURE_SECRET_RESULT), false, "Future result leaked to policy prefix!");
+
+    if (snapshotId === rootSnapshotId) {
+      step0PrefixSeen = [...prefix];
+      assert.equal(prefix.length, 0, "Prefix at step 0 must be empty");
+      return "ACT_0";
+    }
+    if (snapshotId === step1SnapshotId) {
+      step1PrefixSeen = [...prefix];
+      assert.equal(prefix.length, 1, "Prefix at step 1 must contain exactly step 0");
+      assert.equal(prefix[0].snapshot_id, rootSnapshotId);
+      assert.equal(prefix[0].chosen_action, "ACT_0");
+      assert.equal(prefix[0].observation_id, "obs-hindsight-1");
+      return "ACT_1";
+    }
+    throw new Error(`Unexpected snapshotId: ${snapshotId}`);
+  };
+
+  const replayRes = replayExact({ world: sealRes.world, chooseAction });
+
+  assert.equal(replayRes.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
+  assert.ok(step0PrefixSeen !== null);
+  assert.ok(step1PrefixSeen !== null);
+});
+
+test("Task 8: Multi-observation branching: decision with 2 recorded observations forks into 2 distinct derived trajectories", () => {
+  const rootSnapshotId = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+  const snapBranchA = "sha256:222222222222222222222222222222222222222222222222222222222222222a";
+  const snapBranchB = "sha256:222222222222222222222222222222222222222222222222222222222222222b";
+  const runtimeFp = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+  // Two runs recorded from rootSnapshotId with the same chosen action "RUN_TEST"
+  const decA = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-branch-A",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "test" },
+    available_actions: ["RUN_TEST"],
+    chosen_action: "RUN_TEST",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const outA = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-branch-A",
+    observation_id: "obs-branch-A",
+    result: { status: "ACCEPTED", variant: "A" },
+    resulting_snapshot_id: snapBranchA,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 100 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const decB = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-branch-B",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "test" },
+    available_actions: ["RUN_TEST"],
+    chosen_action: "RUN_TEST",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:10.000Z",
+  });
+  const outB = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-branch-B",
+    observation_id: "obs-branch-B",
+    result: { status: "ACCEPTED", variant: "B" },
+    resulting_snapshot_id: snapBranchB,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 120 },
+    created_at: "2026-09-17T12:00:15.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [decA, outA, decB, outB],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  const chooseAction = () => "RUN_TEST";
+
+  const replayRes = replayExact({ world: sealRes.world, chooseAction });
+
+  assert.equal(replayRes.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
+  assert.equal(replayRes.trajectories.length, 2);
+  assert.equal(replayRes.metadata.total_trajectories, 2);
+  assert.equal(replayRes.metadata.complete_trajectories, 2);
+
+  const obsIds = replayRes.trajectories.map((t) => t.steps[0].observation_id).sort();
+  assert.deepEqual(obsIds, ["obs-branch-A", "obs-branch-B"]);
+
+  const resSnapshots = replayRes.trajectories.map((t) => t.steps[0].resulting_snapshot_id).sort();
+  assert.deepEqual(resSnapshots, [snapBranchA, snapBranchB]);
+});
+
+test("Task 8: Complexity limit: exceeding maxTrajectories returns REPLAY_COMPLEXITY_LIMIT", () => {
+  const rootSnapshotId = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+  const snapBranchA = "sha256:222222222222222222222222222222222222222222222222222222222222222a";
+  const snapBranchB = "sha256:222222222222222222222222222222222222222222222222222222222222222b";
+  const runtimeFp = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+
+  const decA = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-limit-A",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "test" },
+    available_actions: ["RUN_TEST"],
+    chosen_action: "RUN_TEST",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const outA = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-limit-A",
+    observation_id: "obs-limit-A",
+    result: "SUCCESS_A",
+    resulting_snapshot_id: snapBranchA,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const decB = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-limit-B",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "test" },
+    available_actions: ["RUN_TEST"],
+    chosen_action: "RUN_TEST",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:10.000Z",
+  });
+  const outB = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-limit-B",
+    observation_id: "obs-limit-B",
+    result: "SUCCESS_B",
+    resulting_snapshot_id: snapBranchB,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:15.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [decA, outA, decB, outB],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  // With maxTrajectories = 1, branching into 2 exceeds limit
+  const replayRes = replayExact({
+    world: sealRes.world,
+    chooseAction: () => "RUN_TEST",
+    maxTrajectories: 1,
+  });
+
+  assert.equal(replayRes.status, REPLAY_STATUS.REPLAY_COMPLEXITY_LIMIT);
+});
+
+test("Task 8: Static test asserting replay-simulator.mjs has zero model-call surface or network/child_process imports", () => {
+  const replaySimPath = resolve(__dirname, "replay-simulator.mjs");
+  const source = readFileSync(replaySimPath, "utf8");
+
+  // Invariant 1: Zero model calls, SDKs, agent profiles, invoke_subagent
+  assert.doesNotMatch(source, /@google\/genai/);
+  assert.doesNotMatch(source, /@google\/generative-ai/);
+  assert.doesNotMatch(source, /openai/);
+  assert.doesNotMatch(source, /anthropic/);
+  assert.doesNotMatch(source, /invoke_subagent/);
+  assert.doesNotMatch(source, /flash-orchestrator/);
+  assert.doesNotMatch(source, /flash-worker/);
+  assert.doesNotMatch(source, /luna-/);
+  assert.doesNotMatch(source, /terra-/);
+
+  // Invariant 2: Pure deterministic local simulation (no network, no child_process)
+  assert.doesNotMatch(source, /child_process/);
+  assert.doesNotMatch(source, /node:net/);
+  assert.doesNotMatch(source, /node:http/);
+  assert.doesNotMatch(source, /node:https/);
+  assert.doesNotMatch(source, /\bfetch\b/);
+
+  // Allowed imports: only local dream modules
+  const importLines = source.match(/import\s+.*?\s+from\s+["'].*?["']/g) || [];
+  for (const line of importLines) {
+    const match = line.match(/from\s+["'](.*?)["']/);
+    assert.ok(match, `Invalid import line: ${line}`);
+    const importPath = match[1];
+    assert.ok(
+      importPath.startsWith("./"),
+      `replay-simulator.mjs may only import local modules within dream, got: ${importPath}`
+    );
+  }
+});
+
+test("Task 8: Rejects invalid or unsealed world with WORLD_INVALID", () => {
+  const res1 = replayExact({ world: null, chooseAction: () => "ACT" });
+  assert.equal(res1.status, REPLAY_STATUS.WORLD_INVALID);
+  assert.ok(res1.errors.length > 0);
+
+  const res2 = replayExact({ world: { status: "WORLD_INCOMPLETE" }, chooseAction: () => "ACT" });
+  assert.equal(res2.status, REPLAY_STATUS.WORLD_INVALID);
+  assert.ok(res2.errors.length > 0);
 });
