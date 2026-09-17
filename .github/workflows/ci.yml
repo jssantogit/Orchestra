@@ -36,6 +36,14 @@ jobs:
         run: |
           node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
 
+      - name: Run Dream Layer Tests
+        run: |
+          npm run test:dream
+
+      - name: Run Turn Economy Tests
+        run: |
+          npm run test:turn-economy
+
       - name: Run Dream Architecture Invariants
         run: |
           node --test tests/architecture-invariants/dream-authority.test.mjs
