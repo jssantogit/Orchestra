@@ -20,6 +20,7 @@ import {
   deriveDecisionState,
   deriveAvailableActions,
   classifyBaselineDecision,
+  deriveValidatedStaticBaseline,
 } from "../dream/action-space.mjs";
 import { recordDecision, dreamCorrelationKey } from "../dream/decision-recorder.mjs";
 import { DREAM_SCHEMAS } from "../dream/records.mjs";
@@ -907,15 +908,14 @@ function main() {
           consumedAt: null,
         });
 
-        const isWorker = isWorkerRole(profile.toUpperCase()) || isWorkerRole(String(sub.Role || "").toUpperCase()) || profile.includes("worker");
+        const rawProfile = sub.TypeName || sub.agent || sub.subagent_profile || sub.profile || "";
+        const isDreamWorker = Boolean(
+          PROFILE_TO_WORKER_ACTION[String(rawProfile).toLowerCase()] ||
+          PROFILE_TO_WORKER_ACTION[String(sub.TypeName || "").toLowerCase()]
+        );
         const isCritical = (activeState.criticality === "CRITICAL" || activeContract?.criticality === "CRITICAL");
 
-        if (isWorker && !isReviewer && !isDirectAction && !isCritical) {
-          let defaultComplexity = "NORMAL";
-          if (profile === "flash-low-worker") defaultComplexity = "SIMPLE";
-          else if (profile === "flash-worker") defaultComplexity = "DIFFICULT";
-          else if (profile === "flash-medium-worker") defaultComplexity = "NORMAL";
-
+        if (subagents.length === 1 && isDreamWorker && !isReviewer && !isDirectAction && !isCritical) {
           const isRetry = Boolean(activeState.retry || (activeState.attempt && activeState.attempt > 0) || activeState.retryReason || activeState.retry_reason);
           const rawReason = activeState.retryReason || activeState.retry_reason || null;
           const retryReason = typeof rawReason === "string" ? rawReason.trim().toUpperCase().replace(/[\s-]+/g, "_") : null;
@@ -924,7 +924,7 @@ function main() {
             taskAction: activeState.taskAction || "IMPLEMENT",
             taskDomain: activeState.taskDomain || "CODE",
             criticality: activeState.criticality || "NORMAL",
-            complexity: activeState.complexity || defaultComplexity,
+            complexity: activeState.complexity || "NORMAL",
             retry: isRetry,
             attempt: activeState.attempt || 0,
             remainingAttempts: activeState.remainingAttempts ?? activeState.retry_remaining ?? 2,
@@ -932,7 +932,7 @@ function main() {
             isDirectAction: false,
           };
 
-          const taskSpec = sub.Prompt || activeState.taskSpec || activeState.taskDescription || activeState.prompt || "Worker delegation";
+          const taskSpec = activeState.taskSpec || activeState.taskDescription || activeState.prompt || "Worker delegation";
           const taskObj = {
             spec: taskSpec,
             task_action: facts.taskAction,
@@ -994,11 +994,16 @@ function main() {
           ) {
             const invAvailable = deriveAvailableActions(DECISION_TYPES.INVESTIGATION_STRATEGY, decisionState);
             if (invAvailable.length > 0) {
+              const invBaseline = deriveValidatedStaticBaseline({
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                facts,
+                state: decisionState,
+              }) || "IMPLEMENT_DIRECT";
               const invEval = evaluatePolicyWithFallback({
                 decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
                 state: decisionState,
                 availableActions: invAvailable,
-                baselineAction: "IMPLEMENT_DIRECT",
+                baselineAction: invBaseline,
               });
               if (invEval.action === "INVESTIGATE_FIRST") {
                 console.log(JSON.stringify({
@@ -1011,17 +1016,13 @@ function main() {
           }
 
           // 2. Determine decision type: RETRY_ACTION vs WORKER_TIER
-          const route = {
-            kind: "worker",
-            profile,
-            model: modelStr,
-            retry: isRetry,
-            retryReason,
-          };
-          const baselineDecision = classifyBaselineDecision(facts, route);
           const decisionType = (isRetry && retryReason) ? DECISION_TYPES.RETRY_ACTION : DECISION_TYPES.WORKER_TIER;
           const availableActions = deriveAvailableActions(decisionType, decisionState);
-          const baselineAction = baselineDecision?.chosenAction || (decisionType === DECISION_TYPES.WORKER_TIER ? "FLASH_MEDIUM" : "RETRY_SAME");
+          const baselineAction = deriveValidatedStaticBaseline({
+            decisionType,
+            facts,
+            state: decisionState,
+          }) || (decisionType === DECISION_TYPES.WORKER_TIER ? "FLASH_MEDIUM" : "RETRY_SAME");
 
           const evalResult = evaluatePolicyWithFallback({
             decisionType,
@@ -1642,11 +1643,16 @@ function main() {
         const invState = deriveDecisionState(facts, activeState);
         const invAvailable = deriveAvailableActions(DECISION_TYPES.INVESTIGATION_STRATEGY, invState);
         if (invAvailable.length > 0) {
+          const invBaseline = deriveValidatedStaticBaseline({
+            decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+            facts,
+            state: invState,
+          }) || "IMPLEMENT_DIRECT";
           const invRes = evaluatePolicyWithFallback({
             decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
             state: invState,
             availableActions: invAvailable,
-            baselineAction: "IMPLEMENT_DIRECT",
+            baselineAction: invBaseline,
           });
           if (invRes.action === "INVESTIGATE_FIRST") {
             console.log(JSON.stringify({

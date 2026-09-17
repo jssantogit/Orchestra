@@ -818,4 +818,134 @@ test("Task 5: Self-host isolation (hook resolves active image policy, ignoring c
   }
 });
 
+test("Task 1 Action Leakage RED test: different requested worker profiles must produce same Decision State, same baseline, same policy action", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    // State without explicit complexity: router default semantics must apply (NORMAL), not requested profile
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+
+    // Profile 1: flash-low-worker
+    const inputLow = JSON.stringify({
+      conversationId: "task1-leakage-conv-low",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_leakage_low",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [{ TypeName: "flash-low-worker", Role: "worker", Prompt: "Implement feature" }]
+        }
+      }
+    });
+
+    const rawLow = execFileSync("node", [preToolScript], { input: inputLow, encoding: "utf-8" });
+    const resLow = JSON.parse(rawLow.trim());
+
+    // Profile 2: flash-worker (FLASH_HIGH)
+    const inputHigh = JSON.stringify({
+      conversationId: "task1-leakage-conv-high",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_leakage_high",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [{ TypeName: "flash-worker", Role: "worker", Prompt: "Implement feature" }]
+        }
+      }
+    });
+
+    const rawHigh = execFileSync("node", [preToolScript], { input: inputHigh, encoding: "utf-8" });
+    const resHigh = JSON.parse(rawHigh.trim());
+
+    // Both should be evaluated against the true baseline (FLASH_MEDIUM) and policy (FLASH_MEDIUM).
+    // Therefore, flash-low-worker and flash-worker should be DENIED as POLICY_MISMATCH,
+    // and must NOT alter the baseline or policy choice to match their own profile!
+    assert.equal(resLow.decision, "deny", "flash-low-worker must be denied for normal implementation");
+    assert.match(resLow.reason, /POLICY_MISMATCH.*FLASH_MEDIUM/);
+
+    assert.equal(resHigh.decision, "deny", "flash-worker must be denied for normal implementation");
+    assert.match(resHigh.reason, /POLICY_MISMATCH.*FLASH_MEDIUM/);
+
+    // Profile 3: flash-medium-worker (matching profile) -> ALLOW
+    const inputMed = JSON.stringify({
+      conversationId: "task1-leakage-conv-med",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_leakage_med",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [{ TypeName: "flash-medium-worker", Role: "worker", Prompt: "Implement feature" }]
+        }
+      }
+    });
+
+    const rawMed = execFileSync("node", [preToolScript], { input: inputMed, encoding: "utf-8" });
+    const resMed = JSON.parse(rawMed.trim());
+    assert.equal(resMed.decision, "allow");
+
+    // Check recorded DECISION event
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const medDec = events.find(e => e.conversation_id === "task1-leakage-conv-med" && e.type === "DECISION");
+    assert.ok(medDec);
+    assert.equal(medDec.state.complexity, "NORMAL", "Decision state complexity must be NORMAL, not leaked from requested profile");
+    assert.equal(medDec.baseline_action, "FLASH_MEDIUM");
+    assert.equal(medDec.chosen_action, "FLASH_MEDIUM");
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 1 Fallback RED test: normal implementation, requested FLASH_HIGH, real baseline FLASH_MEDIUM, corrupted policy -> deny requested", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+
+    // Corrupt the active policy in image temporarily to trigger fallback
+    const policyPath = resolve(dirname(fileURLToPath(import.meta.url)), "../.agents/dream/policies/static-policy-v1.json");
+    const originalPolicyRaw = readFileSync(policyPath, "utf-8");
+    try {
+      writeFileSync(policyPath, JSON.stringify({ schema: "corrupted" }), "utf-8");
+
+      // Orchestrator attempts to request flash-worker (FLASH_HIGH)
+      const inputHigh = JSON.stringify({
+        conversationId: "task1-fallback-conv",
+        stepIdx: 1,
+        toolCall: {
+          id: "call_fallback_high",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [{ TypeName: "flash-worker", Role: "worker", Prompt: "Implement feature" }]
+          }
+        }
+      });
+
+      const rawHigh = execFileSync("node", [preToolScript], { input: inputHigh, encoding: "utf-8" });
+      const resHigh = JSON.parse(rawHigh.trim());
+
+      // Under fallback, baseline_action must be FLASH_MEDIUM, chosen_action must be FLASH_MEDIUM,
+      // and requested flash-worker MUST NOT EXECUTE (decision must be deny)
+      assert.equal(resHigh.decision, "deny", "Requested flash-worker must be denied under fallback");
+      assert.match(resHigh.reason, /POLICY_MISMATCH.*FLASH_MEDIUM.*flash-worker/);
+    } finally {
+      writeFileSync(policyPath, originalPolicyRaw, "utf-8");
+    }
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+
 

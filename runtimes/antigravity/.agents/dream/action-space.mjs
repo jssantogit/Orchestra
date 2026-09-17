@@ -1,4 +1,5 @@
 import {
+  decideRoute,
   normalizeComplexity,
   normalizeTaskDomain,
   canonicalTaskDomain,
@@ -449,3 +450,86 @@ export function classifyBaselineDecision(facts = {}, route = null) {
 
   return null;
 }
+
+/**
+ * Authoritative pure static baseline derivation.
+ * Shared across online runtime hooks, parity tests, and fallback resolution.
+ * Invariant: The candidate action MUST NEVER participate in this derivation.
+ *
+ * @param {object} params
+ * @param {string} params.decisionType - "WORKER_TIER" | "INVESTIGATION_STRATEGY" | "RETRY_ACTION"
+ * @param {Record<string, unknown>} [params.facts] - Factual task inputs
+ * @param {Record<string, unknown>} [params.state] - Policy-visible decision state
+ * @returns {string | null} Authoritative baseline action string or null if not eligible
+ */
+export function deriveValidatedStaticBaseline({ decisionType, facts = {}, state = {} } = {}) {
+  const normState = state && typeof state === "object" ? state : {};
+  const normFacts = facts && typeof facts === "object" ? facts : {};
+
+  if (decisionType === DECISION_TYPES.WORKER_TIER) {
+    const rawComplexity = normFacts.complexity || normFacts.implementationComplexity || normState.complexity || "NORMAL";
+    const effectiveFacts = {
+      taskAction: normFacts.taskAction || normState.task_action || "IMPLEMENT",
+      taskDomain: normFacts.taskDomain || normState.task_domain || "CODE",
+      criticality: normFacts.criticality || normState.criticality || "NORMAL",
+      complexity: rawComplexity,
+      implementationComplexity: String(rawComplexity).toLowerCase(),
+      integration: Boolean(normFacts.integration || normState.complexity === "INTEGRATION" || normFacts.operation === "INTEGRATE"),
+      postInvestigation: Boolean(normState.post_investigation ?? normFacts.postInvestigation ?? normFacts.post_investigation ?? false),
+    };
+
+    const route = decideRoute(effectiveFacts);
+    const baseline = classifyBaselineDecision(effectiveFacts, route);
+    if (!baseline || baseline.decisionType !== DECISION_TYPES.WORKER_TIER) {
+      return null;
+    }
+    return baseline.chosenAction;
+  }
+
+  if (decisionType === DECISION_TYPES.INVESTIGATION_STRATEGY) {
+    const available = deriveAvailableActions(DECISION_TYPES.INVESTIGATION_STRATEGY, normState);
+    if (!available || !available.includes("IMPLEMENT_DIRECT")) {
+      return null;
+    }
+    return "IMPLEMENT_DIRECT";
+  }
+
+  if (decisionType === DECISION_TYPES.RETRY_ACTION) {
+    const rawReason = normState.retry_reason ?? normState.retryReason ?? normFacts.retryReason ?? normFacts.retry_reason ?? "";
+    const retryReason = typeof rawReason === "string" ? rawReason.trim().toUpperCase().replace(/[\s-]+/g, "_") : "";
+
+    const available = deriveAvailableActions(DECISION_TYPES.RETRY_ACTION, normState);
+    if (!available || available.length === 0) {
+      return null;
+    }
+
+    let candidateBaseline = null;
+    switch (retryReason) {
+      case "FAILED_TEST":
+      case "INCOMPLETE_IMPLEMENTATION":
+        candidateBaseline = "RETRY_SAME";
+        break;
+      case "MISSING_CONTEXT":
+        candidateBaseline = "INVESTIGATE_FIRST";
+        break;
+      case "MISINTERPRETED_REQUIREMENT":
+      case "SCOPE_GAP":
+        candidateBaseline = "REPLAN";
+        break;
+      case "INTEGRATION_FAILURE":
+        candidateBaseline = "ESCALATE_WORKER";
+        break;
+      default:
+        candidateBaseline = null;
+        break;
+    }
+
+    if (candidateBaseline && available.includes(candidateBaseline)) {
+      return candidateBaseline;
+    }
+    return null;
+  }
+
+  return null;
+}
+
