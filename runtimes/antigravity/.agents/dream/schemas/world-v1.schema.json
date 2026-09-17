@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchestra.dev/schemas/dream/world-v1.json",
+  "title": "orchestra.world.v1",
+  "description": "Sealed factual world record containing verified event sequence",
+  "type": "object",
+  "required": [
+    "schema",
+    "world_id",
+    "root_snapshot_id",
+    "runtime_fingerprint",
+    "event_hashes",
+    "world_manifest_hash",
+    "status",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "orchestra.world.v1"
+    },
+    "world_id": {
+      "type": "string"
+    },
+    "root_snapshot_id": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "runtime_fingerprint": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "event_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^sha256:[a-f0-9]{64}$"
+      }
+    },
+    "world_manifest_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "SEALED",
+        "WORLD_INCOMPLETE",
+        "WORLD_INVALID"
+      ]
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

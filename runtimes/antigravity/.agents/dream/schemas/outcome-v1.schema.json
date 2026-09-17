@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchestra.dev/schemas/dream/outcome-v1.json",
+  "title": "orchestra.outcome.v1",
+  "description": "Factual decision outcome record correlated with evidence",
+  "type": "object",
+  "required": [
+    "schema",
+    "decision_id",
+    "observation_id",
+    "result",
+    "evidence_summary",
+    "retry_state",
+    "cost_metrics",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "orchestra.outcome.v1"
+    },
+    "type": {
+      "type": "string",
+      "const": "DECISION_OUTCOME"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "observation_id": {
+      "type": "string"
+    },
+    "branch_instance_id": {
+      "type": ["string", "null"]
+    },
+    "result": {
+      "type": ["string", "object"]
+    },
+    "resulting_snapshot_id": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "evidence_summary": {
+      "type": "object"
+    },
+    "retry_state": {
+      "type": "object"
+    },
+    "cost_metrics": {
+      "type": "object"
+    },
+    "terminal_state": {
+      "type": ["string", "null"],
+      "enum": [
+        "ACCEPTED",
+        "RETRY_REQUIRED",
+        "HUMAN_GATE",
+        "BLOCKED",
+        "FAILED",
+        "UNKNOWN",
+        "ABORTED",
+        null
+      ]
+    },
+    "evidence_provenance": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "event_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  },
+  "additionalProperties": false
+}

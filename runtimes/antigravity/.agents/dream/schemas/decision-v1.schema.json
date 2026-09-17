@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchestra.dev/schemas/dream/decision-v1.json",
+  "title": "orchestra.decision.v1",
+  "description": "Factual decision record captured before tool execution",
+  "type": "object",
+  "required": [
+    "schema",
+    "decision_id",
+    "snapshot_id",
+    "decision_type",
+    "state",
+    "available_actions",
+    "chosen_action",
+    "policy_source",
+    "actor_identity",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "orchestra.decision.v1"
+    },
+    "type": {
+      "type": "string",
+      "const": "DECISION"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "parent_decision_id": {
+      "type": ["string", "null"]
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "decision_type": {
+      "type": "string",
+      "enum": [
+        "WORKER_TIER",
+        "INVESTIGATION_STRATEGY",
+        "RETRY_ACTION"
+      ]
+    },
+    "state": {
+      "type": "object"
+    },
+    "available_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "chosen_action": {
+      "type": "string"
+    },
+    "policy_id": {
+      "type": ["string", "null"]
+    },
+    "policy_source": {
+      "type": "string"
+    },
+    "actor_identity": {
+      "type": ["string", "object"]
+    },
+    "conversation_id": {
+      "type": "string"
+    },
+    "step_idx": {
+      "type": "integer"
+    },
+    "tool_call_id": {
+      "type": "string"
+    },
+    "branch_ordinal": {
+      "type": "integer"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "event_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  },
+  "additionalProperties": false
+}
