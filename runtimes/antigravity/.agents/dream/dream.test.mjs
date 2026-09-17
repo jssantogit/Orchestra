@@ -326,6 +326,21 @@ test("validateDreamRecord rejects unexpected authority escalation fields", () =>
   }
 });
 
+import {
+  normalizeTaskSpec,
+  buildWorkspaceManifest,
+  buildTaskFingerprint,
+  buildContractFingerprint,
+  buildRuntimeFingerprint,
+  buildEnvironmentFingerprint,
+  buildExecutionStateIdentity,
+  buildEvidenceFingerprint,
+  buildSnapshot,
+} from "./snapshot.mjs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 test("JSON schema files exist and are valid JSON Schema draft-07/2020-12 documents", () => {
   const schemaNames = [
     "snapshot-v1.schema.json",
@@ -348,4 +363,334 @@ test("JSON schema files exist and are valid JSON Schema draft-07/2020-12 documen
     assert.equal(typeof parsed.properties, "object");
     assert.equal(Array.isArray(parsed.required), true);
   }
+});
+
+test("normalizeTaskSpec normalizes CRLF and trailing whitespace while preserving indentation and blank lines", () => {
+  const input = "  line 1   \r\n\r\n    line 2\t\t\r\n\n  line 3 ";
+  const expected = "  line 1\n\n    line 2\n\n  line 3";
+  assert.equal(normalizeTaskSpec(input), expected);
+});
+
+test("buildEnvironmentFingerprint stores only hashes of allowlisted variables and never cleartext", () => {
+  const env = {
+    NODE_ENV: "production",
+    SECRET_API_KEY: "super-secret-token",
+    CI: "true",
+  };
+  const fp = buildEnvironmentFingerprint(env, ["NODE_ENV", "CI"]);
+  assert.equal("SECRET_API_KEY" in fp, false);
+  assert.match(fp.NODE_ENV, /^sha256:[0-9a-f]{64}$/);
+  assert.match(fp.CI, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(fp.NODE_ENV.includes("production"), false);
+  assert.equal(fp.CI.includes("true"), false);
+});
+
+test("buildRuntimeFingerprint excludes active exploration policy from runtime identity", () => {
+  const rt1 = {
+    node_version: "v24.20.0",
+    platform: "linux",
+    arch: "x64",
+    active_policy: "policy-alpha",
+  };
+  const rt2 = {
+    node_version: "v24.20.0",
+    platform: "linux",
+    arch: "x64",
+    active_policy: "policy-beta",
+  };
+  assert.equal(buildRuntimeFingerprint(rt1), buildRuntimeFingerprint(rt2));
+
+  // Changing runtime property alters fingerprint
+  const rt3 = { ...rt1, node_version: "v22.0.0" };
+  assert.notEqual(buildRuntimeFingerprint(rt1), buildRuntimeFingerprint(rt3));
+});
+
+test("buildContractFingerprint treats set-like arrays as unordered sets", () => {
+  const c1 = {
+    allowed_paths: ["b.js", "a.js"],
+    forbidden_paths: ["dir2/**", "dir1/**"],
+    do_not_change: ["AGENTS.md", "README.md"],
+    criteria: ["c2", "c1"],
+    retry_budget: 2,
+    domain: "CODE",
+    criticality: "NORMAL",
+  };
+  const c2 = {
+    allowed_paths: ["a.js", "b.js"],
+    forbidden_paths: ["dir1/**", "dir2/**"],
+    do_not_change: ["README.md", "AGENTS.md"],
+    criteria: ["c1", "c2"],
+    retry_budget: 2,
+    domain: "CODE",
+    criticality: "NORMAL",
+  };
+  assert.equal(buildContractFingerprint(c1), buildContractFingerprint(c2));
+
+  // Modifying retry budget changes fingerprint
+  const c3 = { ...c1, retry_budget: 3 };
+  assert.notEqual(buildContractFingerprint(c1), buildContractFingerprint(c3));
+});
+
+test("snapshot builder and workspace manifest: comprehensive fixture tests", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-snapshot-test-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // Setup initial fixture files
+  mkdirSync(join(tempDir, "src"), { recursive: true });
+  writeFileSync(join(tempDir, "src", "index.js"), "console.log('hello');\n");
+  writeFileSync(join(tempDir, "README.md"), "# Test Project\n");
+
+  // Add internal symlink
+  symlinkSync("index.js", join(tempDir, "src", "link-to-index.js"));
+
+  const baseTask = {
+    spec: "Implement feature A   \r\n",
+    task_action: "IMPLEMENT",
+    task_domain: "CODE",
+    criticality: "NORMAL",
+  };
+
+  const baseContract = {
+    allowed_paths: ["src/**"],
+    forbidden_paths: ["secrets/**"],
+    do_not_change: ["README.md"],
+    criteria: ["unit tests pass"],
+    retry_budget: 2,
+    domain: "CODE",
+    criticality: "NORMAL",
+  };
+
+  const baseRuntime = {
+    node_version: process.version,
+    platform: process.platform,
+    arch: process.arch,
+  };
+
+  const baseEnv = {
+    NODE_ENV: "test",
+    CI: "1",
+  };
+
+  const baseExecState = {
+    step_sequence: 1,
+    attempt: 1,
+    retry_remaining: 2,
+    mutation_seq: 1,
+  };
+
+  const baseEvidence = {
+    tests: "PASS",
+    typecheck: "PASS",
+    build: "PASS",
+    validation_fresh: true,
+  };
+
+  const baseInput = {
+    repoRoot: tempDir,
+    task: baseTask,
+    contract: baseContract,
+    runtime: baseRuntime,
+    environment: baseEnv,
+    executionState: baseExecState,
+    evidence: baseEvidence,
+  };
+
+  // 1. Two consecutive snapshots of identical fixture workspace return identical snapshot_id
+  const first = buildSnapshot(baseInput);
+  assert.equal(first.ok, true);
+  assert.match(first.snapshot.snapshot_id, /^sha256:[0-9a-f]{64}$/);
+
+  const second = buildSnapshot(baseInput);
+  assert.equal(second.ok, true);
+  assert.equal(first.snapshot.snapshot_id, second.snapshot.snapshot_id);
+
+  // 2. Modifying file content in workspace changes snapshot_id
+  writeFileSync(join(tempDir, "src", "index.js"), "console.log('modified');\n");
+  const afterContentChange = buildSnapshot(baseInput);
+  assert.notEqual(first.snapshot.snapshot_id, afterContentChange.snapshot.snapshot_id);
+  // Restore
+  writeFileSync(join(tempDir, "src", "index.js"), "console.log('hello');\n");
+  const restored = buildSnapshot(baseInput);
+  assert.equal(first.snapshot.snapshot_id, restored.snapshot.snapshot_id);
+
+  // 3. Modifying executable bit (chmod) changes snapshot_id
+  chmodSync(join(tempDir, "src", "index.js"), 0o755);
+  const afterChmod = buildSnapshot(baseInput);
+  assert.notEqual(first.snapshot.snapshot_id, afterChmod.snapshot.snapshot_id);
+  // Restore chmod
+  chmodSync(join(tempDir, "src", "index.js"), 0o644);
+  const restoredChmod = buildSnapshot(baseInput);
+  assert.equal(first.snapshot.snapshot_id, restoredChmod.snapshot.snapshot_id);
+
+  // 4. Modifying task spec changes snapshot_id
+  const taskModified = { ...baseTask, spec: "Implement feature B" };
+  const afterTaskChange = buildSnapshot({ ...baseInput, task: taskModified });
+  assert.notEqual(first.snapshot.snapshot_id, afterTaskChange.snapshot.snapshot_id);
+
+  // 5. Modifying contract changes snapshot_id
+  const contractModified = { ...baseContract, retry_budget: 5 };
+  const afterContractChange = buildSnapshot({ ...baseInput, contract: contractModified });
+  assert.notEqual(first.snapshot.snapshot_id, afterContractChange.snapshot.snapshot_id);
+
+  // 6. Modifying retry/evidence state changes snapshot_id
+  const execModified = { ...baseExecState, retry_remaining: 0 };
+  const afterExecChange = buildSnapshot({ ...baseInput, executionState: execModified });
+  assert.notEqual(first.snapshot.snapshot_id, afterExecChange.snapshot.snapshot_id);
+
+  const evidenceModified = { ...baseEvidence, tests: "FAIL" };
+  const afterEvidenceChange = buildSnapshot({ ...baseInput, evidence: evidenceModified });
+  assert.notEqual(first.snapshot.snapshot_id, afterEvidenceChange.snapshot.snapshot_id);
+
+  // 7. Modifying runtime fingerprint changes snapshot_id
+  const runtimeModified = { ...baseRuntime, node_version: "v18.0.0" };
+  const afterRuntimeChange = buildSnapshot({ ...baseInput, runtime: runtimeModified });
+  assert.notEqual(first.snapshot.snapshot_id, afterRuntimeChange.snapshot.snapshot_id);
+
+  // 8. Adding or modifying files ONLY inside .agents/telemetry/, .agents/state/, .agents/dream-data/, node_modules/, dist/, or .git/ does NOT change snapshot_id
+  const excludedDirs = [
+    join(tempDir, ".agents", "telemetry"),
+    join(tempDir, ".agents", "state"),
+    join(tempDir, ".agents", "dream-data"),
+    join(tempDir, "node_modules", "some-pkg"),
+    join(tempDir, "dist"),
+    join(tempDir, ".git", "objects"),
+  ];
+  for (const dir of excludedDirs) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "temp-file.log"), "some ephemeral content\n");
+    const snap = buildSnapshot(baseInput);
+    assert.equal(
+      snap.snapshot.snapshot_id,
+      first.snapshot.snapshot_id,
+      `Writing in ${dir} must not alter snapshot_id`,
+    );
+  }
+
+  // 9. Symlink escaping repoRoot returns ok: false, reason: "EXTERNAL_SYMLINK_UNSAFE"
+  const unsafeLink = join(tempDir, "src", "escaping-link");
+  symlinkSync("/etc/passwd", unsafeLink);
+  const unsafeRes = buildSnapshot(baseInput);
+  assert.equal(unsafeRes.ok, false);
+  assert.equal(unsafeRes.reason, "EXTERNAL_SYMLINK_UNSAFE");
+  rmSync(unsafeLink, { force: true });
+
+  // Relative escaping symlink
+  symlinkSync("../../outside", unsafeLink);
+  const unsafeRelativeRes = buildSnapshot(baseInput);
+  assert.equal(unsafeRelativeRes.ok, false);
+  assert.equal(unsafeRelativeRes.reason, "EXTERNAL_SYMLINK_UNSAFE");
+  rmSync(unsafeLink, { force: true });
+
+  // 10. Metadata cache reuse test (measure cache hits > 0 on second run)
+  const cacheFile = join(tempDir, ".agents", "state", "dream", "test-metadata-cache.json");
+  const manifestFirst = buildWorkspaceManifest(tempDir, { cacheFilePath: cacheFile });
+  assert.equal(manifestFirst.ok, true);
+  assert.equal(manifestFirst.cache_hits, 0);
+
+  const manifestSecond = buildWorkspaceManifest(tempDir, { cacheFilePath: cacheFile });
+  assert.equal(manifestSecond.ok, true);
+  assert.ok(manifestSecond.cache_hits > 0, `Expected cache hits > 0, got ${manifestSecond.cache_hits}`);
+});
+
+test("buildExecutionStateIdentity produces deterministic identity sensitive to state fields", () => {
+  const s1 = { step_sequence: 1, attempt: 1, retry_remaining: 2, mutation_seq: 1 };
+  const s2 = { step_sequence: 1, attempt: 1, retry_remaining: 2, mutation_seq: 1 };
+  assert.equal(buildExecutionStateIdentity(s1), buildExecutionStateIdentity(s2));
+
+  assert.notEqual(
+    buildExecutionStateIdentity(s1),
+    buildExecutionStateIdentity({ ...s1, mutation_seq: 2 }),
+  );
+  assert.notEqual(
+    buildExecutionStateIdentity(s1),
+    buildExecutionStateIdentity({ ...s1, retry_remaining: 1 }),
+  );
+  assert.notEqual(
+    buildExecutionStateIdentity(s1),
+    buildExecutionStateIdentity({ ...s1, attempt: 2 }),
+  );
+  assert.notEqual(
+    buildExecutionStateIdentity(s1),
+    buildExecutionStateIdentity({ ...s1, step_sequence: 2 }),
+  );
+});
+
+test("buildEvidenceFingerprint produces deterministic identity and treats ledger_hashes as a set", () => {
+  const e1 = {
+    tests: "PASS",
+    typecheck: "PASS",
+    build: "PASS",
+    validation_fresh: true,
+    ledger_hashes: ["sha256:bbbb", "sha256:aaaa"],
+  };
+  const e2 = {
+    tests: "PASS",
+    typecheck: "PASS",
+    build: "PASS",
+    validation_fresh: true,
+    ledger_hashes: ["sha256:aaaa", "sha256:bbbb"],
+  };
+  assert.equal(buildEvidenceFingerprint(e1), buildEvidenceFingerprint(e2));
+
+  assert.notEqual(
+    buildEvidenceFingerprint(e1),
+    buildEvidenceFingerprint({ ...e1, validation_fresh: false }),
+  );
+  assert.notEqual(
+    buildEvidenceFingerprint(e1),
+    buildEvidenceFingerprint({ ...e1, tests: "FAIL" }),
+  );
+});
+
+test("buildWorkspaceManifest validates entry structure and handles corrupted cache gracefully", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-manifest-corrupt-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  writeFileSync(join(tempDir, "sample.txt"), "some content");
+  const cacheDir = join(tempDir, ".agents", "state", "dream");
+  mkdirSync(cacheDir, { recursive: true });
+  const cacheFile = join(cacheDir, "corrupt-cache.json");
+  writeFileSync(cacheFile, "CORRUPT JSON NOT A DICT {{{");
+
+  // Should not throw, should successfully hash and produce valid manifest
+  const res = buildWorkspaceManifest(tempDir, { cacheFilePath: cacheFile });
+  assert.equal(res.ok, true);
+  assert.equal(res.cache_hits, 0);
+  assert.equal(res.manifest.length, 1);
+  assert.deepEqual(Object.keys(res.manifest[0]).sort(), [
+    "content_hash",
+    "executable",
+    "path",
+    "size",
+    "type",
+  ]);
+  assert.equal(res.manifest[0].path, "sample.txt");
+  assert.equal(res.manifest[0].type, "file");
+  assert.match(res.manifest[0].content_hash, /^sha256:[0-9a-f]{64}$/);
+});
+
+test("buildSnapshot handles missing required parameters with descriptive reasons", () => {
+  assert.equal(buildSnapshot({}).ok, false);
+  assert.equal(buildSnapshot({}).reason, "MISSING_REPO_ROOT");
+  assert.equal(buildSnapshot({ repoRoot: "/tmp" }).reason, "MISSING_TASK");
+  assert.equal(buildSnapshot({ repoRoot: "/tmp", task: {} }).reason, "MISSING_CONTRACT");
+  assert.equal(buildSnapshot({ repoRoot: "/tmp", task: {}, contract: {} }).reason, "MISSING_RUNTIME");
+  assert.equal(
+    buildSnapshot({ repoRoot: "/tmp", task: {}, contract: {}, runtime: {} }).reason,
+    "MISSING_EXECUTION_STATE",
+  );
+  assert.equal(
+    buildSnapshot({
+      repoRoot: "/tmp",
+      task: {},
+      contract: {},
+      runtime: {},
+      executionState: {},
+    }).reason,
+    "MISSING_EVIDENCE",
+  );
 });
