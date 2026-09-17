@@ -38,6 +38,24 @@ export function getPendingDecision({ repoRoot, pendingDir, correlationKey } = {}
   }
 }
 
+function findRecordedOutcome(telemetryPath, decisionId) {
+  try {
+    if (!telemetryPath || !decisionId || !existsSync(telemetryPath)) return null;
+    const lines = readFileSync(telemetryPath, "utf8").split("\n");
+    for (let idx = lines.length - 1; idx >= 0; idx--) {
+      const line = lines[idx].trim();
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line);
+        if (event?.type === "DECISION_OUTCOME" && event?.decision_id === decisionId) {
+          return event;
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 /**
  * Records a post-action DECISION_OUTCOME event into telemetry and consumes the pending decision.
  * Idempotent: a second call with the same correlationKey returns OUTCOME_ALREADY_RECORDED and does not write again.
@@ -95,6 +113,40 @@ export function recordDecisionOutcome({
 
     const pending = pendingRes.pending;
 
+    const resolvedTelemetryPath =
+      telemetryPath ||
+      (repoRoot
+        ? resolve(repoRoot, ".agents/telemetry/events.jsonl")
+        : resolve(".agents/telemetry/events.jsonl"));
+
+    // Crash/retry recovery: if the outcome event was already appended but the
+    // pending->consumed rename did not complete, finalize consumption without
+    // appending a duplicate telemetry event.
+    const existingOutcome = findRecordedOutcome(resolvedTelemetryPath, pending.decision_id);
+    if (existingOutcome) {
+      const pendingPath = join(resolvedPendingDir, `${key}.json`);
+      try {
+        renameSync(pendingPath, consumedPath);
+      } catch (consumeErr) {
+        if (!existsSync(consumedPath)) {
+          return {
+            recorded: false,
+            reason: "OUTCOME_RECOVERY_FAILED",
+            error_code: consumeErr.code || "ERR_RECOVERY_FAILED",
+            details: consumeErr.message,
+          };
+        }
+      }
+      return {
+        recorded: false,
+        reason: "OUTCOME_ALREADY_RECORDED",
+        decision_id: existingOutcome.decision_id,
+        observation_id: existingOutcome.observation_id,
+        event_hash: existingOutcome.event_hash,
+        recovered: true,
+      };
+    }
+
     if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
       return {
         recorded: false,
@@ -131,12 +183,6 @@ export function recordDecisionOutcome({
     }
 
     const event = createDreamEvent("DECISION_OUTCOME", outcomeRecord);
-
-    const resolvedTelemetryPath =
-      telemetryPath ||
-      (repoRoot
-        ? resolve(repoRoot, ".agents/telemetry/events.jsonl")
-        : resolve(".agents/telemetry/events.jsonl"));
 
     // 1. Append DECISION_OUTCOME event to telemetry file
     mkdirSync(dirname(resolvedTelemetryPath), { recursive: true });
