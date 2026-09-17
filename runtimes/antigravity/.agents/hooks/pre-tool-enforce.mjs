@@ -1372,8 +1372,9 @@ function main() {
       activeState.taskDomain = activeState.taskDomain || "CODE";
       activeState.handoffObserved = true;
       activeState.handoffStatus = "MESSAGE_DELIVERED";
-      if (candidatePending.length > 0) {
-        activeState.lastWorkerProfile = candidatePending[candidatePending.length - 1].profile;
+      const implementationDelegations = candidatePending.filter((pending) => pending.delegationKind === "WORK");
+      if (implementationDelegations.length > 0) {
+        activeState.lastWorkerProfile = implementationDelegations[implementationDelegations.length - 1].profile;
       }
       try {
         mkdirSync(dirname(statePath), { recursive: true });
