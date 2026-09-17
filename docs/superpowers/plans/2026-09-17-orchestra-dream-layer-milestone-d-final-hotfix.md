@@ -13,12 +13,12 @@
 ## Task Breakdown
 
 ### Task 1 — REPLAN State-Machine Integrity
-- [ ] **Remove `PLANNING` from All Surfaces**:
+- [x] **Remove `PLANNING` from All Surfaces**:
   - Remove `"PLANNING"` from `VALID_ENUMS.state` in `runtimes/antigravity/.agents/dream/policy-engine.mjs`.
   - Remove `"PLANNING"` from `state` enum in `runtimes/antigravity/.agents/dream/schemas/policy-v1.schema.json`.
   - Remove `activeState.state = "PLANNING"` from `pre-tool-enforce.mjs`.
   - Ensure any policy specifying `state: ["PLANNING"]` is rejected by both `policy-v1.schema.json` and `validatePolicy()`.
-- [ ] **Authoritative REPLAN Transition**:
+- [x] **Authoritative REPLAN Transition**:
   - Implement and export `executeReplanTransition({ activeState, statePath, repoRoot, payload, toolCall, activeRole, activeContract })`.
   - Validates current state transition to `PLANNED` using authoritative state machine helper `validateStateTransition(currentState, "PLANNED")`.
   - Eligible retry states (`EXECUTING`, `DELEGATED`, `ACCEPTANCE`, `CRITICAL_REVIEW`, `BLOCKED`, `HUMAN_GATE`) legally transition to `PLANNED`.
@@ -26,21 +26,21 @@
   - Executes transition: `activeState.state = "PLANNED"`.
   - Consumes `activeState.pendingPolicyRequirement`.
   - Zero state produced can ever be `PLANNING`.
-- [ ] **RED Tests**:
+- [x] **RED Tests**:
   - Worker retry denied when retry policy selects `REPLAN`, establishing `pendingPolicyRequirement(REPLAN)` without changing state to `PLANNING` and without premature `DECISION`.
   - Factual replan execution records `DECISION(REPLAN)`, transitions state to `PLANNED`, and consumes pending requirement.
   - Zero state produced is `PLANNING`.
   - Schema and validator reject `state: ["PLANNING"]`.
-- [ ] Confirm GREEN and commit Task 1.
+- [x] Confirm GREEN and commit Task 1.
 
 ---
 
 ### Task 2 — Factual Investigation Lifecycle
-- [ ] **Root Cause Elimination**:
+- [x] **Root Cause Elimination**:
   - Remove `satisfyPendingInvestigationRequirement` from generic tool paths:
     - `allowCommand` (e.g. `git status`, shell commands);
     - inspection locks (`view_file`, `grep_search`, `find_by_name`).
-- [ ] **Three-Moment Lifecycle Implementation**:
+- [x] **Three-Moment Lifecycle Implementation**:
   - **Moment 1 (REQUIREMENT)**: When policy selects `INVESTIGATE_FIRST` on clean implementation or retry:
     - Worker retry / implementation denied.
     - Deterministic `pendingPolicyRequirement` established with `decision_type` preserved (`INVESTIGATION_STRATEGY` or `RETRY_ACTION`).
@@ -56,7 +56,7 @@
     - If investigation succeeds: set `post_investigation = true`, remove `investigationInFlight`.
     - If investigation fails/cancels: `post_investigation` MUST remain `false`, remove `investigationInFlight`.
   - If implementation worker is attempted while pending or in-flight: DENY execution.
-- [ ] **RED Tests**:
+- [x] **RED Tests**:
   - `pendingPolicyRequirement` + orchestrator `git status` -> pending remains, `post_investigation = false`, no `DECISION`.
   - `pendingPolicyRequirement` + orchestrator `view_file` -> pending remains.
   - `pendingPolicyRequirement` + orchestrator `grep_search` -> pending remains.
@@ -64,12 +64,12 @@
   - Full simulation: pending -> investigator starts -> `DECISION` recorded -> in flight (`post_investigation = false`) -> completion -> `post_investigation = true` -> implementation worker allowed.
   - Investigation failure/cancel -> `post_investigation` remains `false`.
   - Both `INVESTIGATION_STRATEGY` and `RETRY_ACTION` origins preserved.
-- [ ] Confirm GREEN and commit Task 2.
+- [x] Confirm GREEN and commit Task 2.
 
 ---
 
 ### Task 3 — Policy Contract Truthfulness + Closure
-- [ ] **Structural Schema vs Normative Semantic Validator Alignment**:
+- [x] **Structural Schema vs Normative Semantic Validator Alignment**:
   - Update `runtimes/antigravity/.agents/dream/schemas/policy-v1.schema.json`:
     - `rules`: add `"minItems": 1`, `"maxItems": 128`.
     - `rule.id`: add `"minLength": 1`.
@@ -77,20 +77,20 @@
   - Document the two explicit layers:
     1. Structural Schema (`policy-v1.schema.json`): Constraints expressible in standard Draft 2020-12.
     2. Normative Semantic Validator (`validatePolicy()`): Structural constraints + relational/semantic invariants (`min <= max`, unique rule IDs, content-addressed `policy_id`, <=64 KiB canonical size).
-- [ ] **Differential Test Suite**:
+- [x] **Differential Test Suite**:
   - Rename to "Policy structural contract parity and semantic invariants".
   - Partition fixtures:
     - Structural fixtures: JSON Schema and validator strictly agree.
     - Semantic-only fixtures: JSON Schema may accept, validator MUST reject.
-- [ ] **Documentation**:
+- [x] **Documentation**:
   - Update `docs/superpowers/specs/2026-09-17-orchestra-dream-layer-spec.md`, `docs/dream-layer.md`, and `runtimes/antigravity/README.md`.
   - Ensure zero `file:///root/` URIs.
-- [ ] Confirm GREEN and commit Task 3.
+- [x] Confirm GREEN and commit Task 3.
 
 ---
 
 ### Task 4 — Regressions, Parity, Two-Key Review & Final Push
-- [ ] Run full 9-suite regression check:
+- [x] Run full 9-suite regression check:
   - `npm run test:dream`
   - `npm run test:antigravity`
   - `npm run test:hooks`
@@ -100,7 +100,7 @@
   - `npm run check:contamination`
   - `npm run doctor`
   - `git diff --check`
-- [ ] Verify 100% coverage and 100% parity across all eligible states.
+- [x] Verify 100% coverage and 100% parity across all eligible states.
 - [ ] Two-Key Final Review (Reviewer A & Reviewer B, Flash High, read-only, ACCEPT + ACCEPT).
 - [ ] Push to `origin/main`.
 - [ ] Final self-host report.
