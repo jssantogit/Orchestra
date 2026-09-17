@@ -232,3 +232,34 @@ governance -> decision state -> available_actions -> declarative policy -> autho
    - Any failure (missing file, JSON syntax error, schema mismatch, content-address hash mismatch, validation error, rule conflict, invalid action, unhandled condition, or exception) falls back safely to `STATIC_ROUTING_FALLBACK` recording the exact factual diagnostic code from the 9 canonical diagnostic cases:
      `MISSING_POLICY`, `MALFORMED_JSON`, `UNSUPPORTED_SCHEMA`, `POLICY_HASH_MISMATCH`, `INVALID_POLICY`, `POLICY_CONFLICT`, `POLICY_INVALID_ACTION`, `NO_MATCHING_RULE`, `INTERPRETER_EXCEPTION`.
 8. **Exact Replay Model-Free Callbacks**: Exact Replay uses `evaluatePolicy` directly as a zero-model-call callback function.
+
+---
+
+## 10. Milestone D Integration Hotfix & Architecture Invariant Gate
+
+The Milestone D Integration Hotfix hardens the runtime against edge cases discovered during full-lifecycle testing and formalizes the 14 Architecture Invariants:
+
+1. **Exact Investigation Correlation Lifecycle**:
+   - `pre-tool-enforce.mjs` captures complete minimal factual identity (`correlationKey`, `toolCallId`, `stepIdx`, `conversationId`, `parentConversationId`, `subagentRole`, `subagentProfile`, `decision_type`).
+   - `post-tool-telemetry.mjs` only consumes `investigationInFlight` when the completion matches exact identity across all correlation dimensions. Unrelated subagent tool invocations or cancellations never erroneously close an investigation.
+2. **Explicit REPLAN State Machine Transition**:
+   - Generic tool triggers (`write_to_file`, `run_command`) no longer induce implicit replans.
+   - When `RETRY_ACTION` policy evaluates to `REPLAN`, the transition `currentState -> PLANNED` is validated against Orchestra state machine rules (`validateStateTransition`), `DECISION(REPLAN)` is recorded immediately pre-transition, state is deterministically set to `PLANNED`, and the worker retry is denied with no lingering pending requirement. Invalid transitions fail closed to `HUMAN_GATE`.
+3. **Structural Policy Contract Parity**:
+   - Strict structural alignment between JSON Schema Draft 2020-12 and pure JavaScript `validatePolicy()` across all properties (`base_policy`, `description`, `created_at`, `rule.description`).
+4. **Architecture Invariant Gate (ARCH-001 to ARCH-014)**:
+   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 14 architectural boundaries:
+     - `ARCH-001`: Immutable Governance Over Dream
+     - `ARCH-002`: Zero Online Context Overhead & No Raw History In Context
+     - `ARCH-003`: Exact Replay Epistemic Invariant
+     - `ARCH-004`: Declarative Schema-Valid Policy Invariant
+     - `ARCH-005`: Fail-Safe Fallback to Validated Static Routing
+     - `ARCH-006`: Cross-Runtime Isolation
+     - `ARCH-007`: Phase 1 Record-Only Baseline Behavioral Identity
+     - `ARCH-008`: Dream Never Increases Authority or Budgets
+     - `ARCH-009`: Action-Space Governance Construction
+     - `ARCH-010`: Pure Content-Addressed Cryptographic Integrity
+     - `ARCH-011`: Independent Baseline & Action-Leakage Freedom
+     - `ARCH-012`: Causal Pre-Action Decision Recording
+     - `ARCH-013`: Exact Investigation Correlation Lifecycle
+     - `ARCH-014`: Authoritative REPLAN State Transition
