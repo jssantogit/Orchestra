@@ -202,6 +202,9 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             taskIdentifier: matched.taskIdentifier || activeTaskId || null,
             benchmarkRunId: matched.benchmarkRunId || activeRunId || null,
+            originToolCallId: matched.originToolCallId || matched.toolCallId || null,
+            pendingSeq: matched.seq ?? null,
+            delegationKind: matched.delegationKind || null,
             confidence,
             source,
             consumed: true,
@@ -870,7 +873,53 @@ function main() {
         }
       }
 
-      // Phase 1 Dream Record-Only Adapter: Record DECISION_OUTCOME for matching pending decisions
+      const ackToolCallId = payload.toolCall?.id || payload.toolCallId || "";
+      const inFlight = activeState.investigationInFlight || null;
+      const inFlightToolCallId = inFlight?.toolCallId || inFlight?.tool_call_id || "";
+      const inFlightParentConversationId = inFlight?.parentConversationId || inFlight?.parent_conversation_id || inFlight?.conversationId || inFlight?.conversation_id || null;
+      const sameInvestigationParent = Boolean(
+        inFlight &&
+        (!inFlightParentConversationId || inFlightParentConversationId === conversationId)
+      );
+      // Potential ACK is intentionally conservative: if runtime omits toolCallId,
+      // do not let a successful invoke result close/teach the investigation outcome.
+      const isPotentialInvestigationAck = Boolean(
+        sameInvestigationParent &&
+        (!ackToolCallId || !inFlightToolCallId || inFlightToolCallId === ackToolCallId)
+      );
+      // State-changing dispatch failure and child-id enrichment require exact causal identity.
+      const isInvestigationAck = Boolean(
+        sameInvestigationParent &&
+        inFlightToolCallId &&
+        ackToolCallId &&
+        inFlightToolCallId === ackToolCallId
+      );
+      const invocationFailed = Boolean(
+        payload.error ||
+        payload.toolResult?.error ||
+        payload.cancelled ||
+        payload.result?.cancelled ||
+        payload.result?.status === "FAILED" ||
+        payload.result?.status === "CANCELLED" ||
+        (typeof payload.toolResult === "string" && /FAILED|CANCELLED/i.test(payload.toolResult))
+      );
+      const returnedChildId = payload.result?.conversationId || payload.result?.subagentId || payload.childConversationId || payload.subagentId || null;
+
+      // Successful invoke_subagent is only an acknowledgement that delegation was accepted.
+      // It is NOT factual completion of an asynchronous investigation.
+      if (isInvestigationAck && !invocationFailed) {
+        activeState.investigationInFlight.acknowledged_at = new Date().toISOString();
+        if (returnedChildId && !activeState.investigationInFlight.childConversationId) {
+          activeState.investigationInFlight.childConversationId = returnedChildId;
+          activeState.investigationInFlight.child_conversation_id = returnedChildId;
+          activeState.investigationInFlight.subagentId = returnedChildId;
+          activeState.investigationInFlight.subagent_id = returnedChildId;
+        }
+      }
+
+      // Phase 1 Dream Record-Only Adapter: Record DECISION_OUTCOME for matching pending decisions.
+      // Investigation decisions stay pending across a successful dispatch ACK and close only at
+      // factual child termination. A factual dispatch failure may close as failure here.
       try {
         const branchCount = Math.max(1, subagents.length);
         const toolCallId = payload.toolCall?.id || payload.toolCallId || "";
@@ -910,7 +959,7 @@ function main() {
             }
           }
 
-          if (pendingCheck.ok) {
+          if (pendingCheck.ok && (!isPotentialInvestigationAck || (isInvestigationAck && invocationFailed))) {
             const outcomeResultStr = typeof payload.toolResult === "string"
               ? payload.toolResult
               : (payload.toolResult
@@ -968,28 +1017,12 @@ function main() {
         // Fail-open: NEVER throw on Dream error
       }
 
-      // Correlated investigation completion
-      if (activeState.investigationInFlight && isMatchingInvestigationCompletion(activeState.investigationInFlight, payload, toolName, toolArgs, conversationId)) {
-        const isFailed = Boolean(
-          payload.error ||
-          payload.toolResult?.error ||
-          (payload.result && payload.result.status === "FAILED") ||
-          (typeof payload.toolResult === "string" && payload.toolResult.includes("FAILED"))
-        );
-        const isCancelled = Boolean(
-          payload.cancelled ||
-          payload.result?.status === "CANCELLED" ||
-          payload.result?.cancelled ||
-          toolArgs.Action === "kill" ||
-          toolArgs.Action === "kill_all"
-        );
-        if (!isFailed && !isCancelled) {
-          activeState.post_investigation = true;
-          activeState.postInvestigation = true;
-        } else {
-          activeState.post_investigation = false;
-          activeState.postInvestigation = false;
-        }
+      // Only a factual invocation failure may terminate the attempt here.
+      // Successful ACKs remain in-flight until the investigator child reaches its terminal Stop boundary.
+      if (isInvestigationAck && invocationFailed) {
+        activeState.post_investigation = false;
+        activeState.postInvestigation = false;
+        activeState.investigation_dispatch_failed_at = new Date().toISOString();
         delete activeState.investigationInFlight;
       }
     } else if (toolName === "manage_subagents") {
@@ -1002,29 +1035,8 @@ function main() {
         activeState.handoffBytes = (activeState.handoffBytes || 0) + compBytes;
         activeState.handoffStatus = "COMPLETION_RECEIVED";
       }
-      if (activeState.investigationInFlight && isMatchingInvestigationCompletion(activeState.investigationInFlight, payload, toolName, toolArgs, conversationId)) {
-        const isFailed = Boolean(
-          payload.error ||
-          payload.toolResult?.error ||
-          (payload.result && payload.result.status === "FAILED") ||
-          (typeof payload.toolResult === "string" && payload.toolResult.includes("FAILED"))
-        );
-        const isCancelled = Boolean(
-          payload.cancelled ||
-          payload.result?.status === "CANCELLED" ||
-          payload.result?.cancelled ||
-          toolArgs.Action === "kill" ||
-          toolArgs.Action === "kill_all"
-        );
-        if (!isFailed && !isCancelled) {
-          activeState.post_investigation = true;
-          activeState.postInvestigation = true;
-        } else {
-          activeState.post_investigation = false;
-          activeState.postInvestigation = false;
-        }
-        delete activeState.investigationInFlight;
-      }
+      // manage_subagents is observability/recovery, not a causal completion boundary.
+      // It must never satisfy post_investigation. Factual investigator termination is handled by Stop.
     } else if (toolName === "send_message") {
       activeState.send_message_calls = (activeState.send_message_calls || 0) + 1;
       const msg = toolArgs.Message || "";

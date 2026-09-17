@@ -45,6 +45,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 const preToolScript = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
 const postToolScript = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs");
+const stopToolScript = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/stop-guard.mjs");
 
 function cleanTestState() {
   try { rmSync(resolve(repoRoot, ".agents/state"), { recursive: true, force: true }); } catch {}
@@ -596,14 +597,14 @@ test("ARCH-012: Causal Pre-Action Decision Recording (Valid & Adversarial)", () 
 
 // ---------------------------------------------------------------------------
 // ARCH-013: Exact Investigation Correlation Lifecycle
-// Completion only consumes in-flight investigation matching exact identity.
+// Invocation acknowledgement and manage_subagents observations are not completion.
 // ---------------------------------------------------------------------------
 test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)", () => {
   cleanTestState();
   try {
     mkdirSync(".agents/state", { recursive: true });
 
-    // 1. Adversarial: Uncorrelated completion (different conv, different call) -> in-flight must NOT be consumed
+    // 1. Exact successful invoke_subagent ACK must NOT consume the investigation.
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
       activeRole: "ORCHESTRATOR",
       conversationId: "arch-013-conv",
@@ -612,6 +613,7 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
         toolCallId: "call-013",
         stepIdx: 1,
         conversationId: "arch-013-conv",
+        parentConversationId: "arch-013-conv",
         subagentRole: "investigator",
         subagentProfile: "flash-worker",
         started_at: new Date().toISOString(),
@@ -621,73 +623,20 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
 
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
-        conversationId: "different-conv",
-        toolCallId: "different-call",
+        conversationId: "arch-013-conv",
+        toolCallId: "call-013",
+        stepIdx: 1,
         toolName: "invoke_subagent",
-        result: { status: "SUCCESS" },
+        result: { status: "SUCCESS", conversationId: "child-inv-A" },
       }),
       encoding: "utf-8",
     });
     let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.ok(state.investigationInFlight, "Uncorrelated completion must NOT consume in-flight investigation");
-    assert.equal(state.post_investigation, false);
+    assert.ok(state.investigationInFlight, "Successful invoke_subagent ACK must remain in flight");
+    assert.equal(state.post_investigation, false, "ACK cannot satisfy post_investigation");
+    assert.equal(state.investigationInFlight.childConversationId, "child-inv-A", "ACK may enrich factual child identity");
 
-    // 2. Adversarial: Missing hard identity -> NO MATCH
-    execFileSync("node", [postToolScript], {
-      input: JSON.stringify({
-        conversationId: "arch-013-conv",
-        toolName: "invoke_subagent",
-        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
-        result: { status: "SUCCESS" },
-      }),
-      encoding: "utf-8",
-    });
-    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.ok(state.investigationInFlight, "Missing toolCallId must NOT consume in-flight");
-    assert.equal(state.post_investigation, false);
-
-    // 3. Adversarial: In manage_subagents, same parent conversation and role only -> NO MATCH
-    writeFileSync(".agents/state/active-state.json", JSON.stringify({
-      activeRole: "ORCHESTRATOR",
-      conversationId: "arch-013-conv",
-      investigationInFlight: {
-        parentConversationId: "arch-013-conv",
-        childConversationId: "child-inv-A",
-        subagentRole: "investigator",
-        subagentProfile: "flash-worker",
-        started_at: new Date().toISOString(),
-      },
-      post_investigation: false,
-    }, null, 2), "utf-8");
-
-    execFileSync("node", [postToolScript], {
-      input: JSON.stringify({
-        conversationId: "arch-013-conv",
-        toolName: "manage_subagents",
-        toolArgs: { Role: "investigator", TypeName: "flash-worker" },
-        result: { status: "SUCCESS", role: "investigator" },
-      }),
-      encoding: "utf-8",
-    });
-    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.ok(state.investigationInFlight, "Role/profile alone without hard child identity must NOT match");
-    assert.equal(state.post_investigation, false);
-
-    // 4. Adversarial: In manage_subagents, child mismatch (child-inv-B vs child-inv-A) -> NO MATCH
-    execFileSync("node", [postToolScript], {
-      input: JSON.stringify({
-        conversationId: "arch-013-conv",
-        toolName: "manage_subagents",
-        toolArgs: { ConversationId: "child-inv-B", Role: "investigator", TypeName: "flash-worker" },
-        result: { status: "SUCCESS", subagentId: "child-inv-B", role: "investigator" },
-      }),
-      encoding: "utf-8",
-    });
-    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.ok(state.investigationInFlight, "Mismatched child ID must NOT match");
-    assert.equal(state.post_investigation, false);
-
-    // 5. Valid: In manage_subagents, exact child match -> MATCH
+    // 2. Even exact manage_subagents child observation is not a terminal lifecycle event.
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
         conversationId: "arch-013-conv",
@@ -698,43 +647,35 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
       encoding: "utf-8",
     });
     state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(state.investigationInFlight, undefined, "Exact child ID match consumes in-flight");
-    assert.equal(state.post_investigation, true, "Successful investigation sets post_investigation = true");
+    assert.ok(state.investigationInFlight, "manage_subagents observation must not consume investigation");
+    assert.equal(state.post_investigation, false);
 
-    // 6. Valid: In invoke_subagent, exact toolCallId match -> MATCH
-    writeFileSync(".agents/state/active-state.json", JSON.stringify({
-      activeRole: "ORCHESTRATOR",
-      conversationId: "arch-013-conv",
-      investigationInFlight: {
-        toolCallId: "call-013-valid",
-        conversationId: "arch-013-conv",
-        subagentRole: "investigator",
-        started_at: new Date().toISOString(),
-      },
-      post_investigation: false,
-    }, null, 2), "utf-8");
-
+    // 3. Uncorrelated ACK also leaves the active investigation untouched.
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
-        conversationId: "arch-013-conv",
-        toolCallId: "call-013-valid",
+        conversationId: "different-conv",
+        toolCallId: "different-call",
         toolName: "invoke_subagent",
         result: { status: "SUCCESS" },
       }),
       encoding: "utf-8",
     });
     state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(state.investigationInFlight, undefined, "Correlated completion consumes in-flight");
-    assert.equal(state.post_investigation, true, "Successful investigation marks post_investigation = true");
+    assert.ok(state.investigationInFlight, "Uncorrelated ACK must not consume investigation");
+    assert.equal(state.post_investigation, false);
 
-    // 7. Preserves failure/cancelled semantics: failure clears in-flight but post_investigation remains false
+    // 4. Factual invocation failure is different from ACK: dispatch attempt ends, but never succeeds investigation.
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
       activeRole: "ORCHESTRATOR",
       conversationId: "arch-013-conv",
       investigationInFlight: {
+        correlationKey: "corr-013-fail",
         toolCallId: "call-013-fail",
+        stepIdx: 2,
         conversationId: "arch-013-conv",
+        parentConversationId: "arch-013-conv",
         subagentRole: "investigator",
+        subagentProfile: "flash-worker",
         started_at: new Date().toISOString(),
       },
       post_investigation: false,
@@ -744,14 +685,15 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
       input: JSON.stringify({
         conversationId: "arch-013-conv",
         toolCallId: "call-013-fail",
+        stepIdx: 2,
         toolName: "invoke_subagent",
-        error: "Subagent crashed",
+        error: "Subagent dispatch failed",
       }),
       encoding: "utf-8",
     });
     state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(state.investigationInFlight, undefined, "Failed completion clears in-flight");
-    assert.equal(state.post_investigation, false, "Failed investigation preserves post_investigation = false");
+    assert.equal(state.investigationInFlight, undefined, "Factual dispatch failure terminates the attempt");
+    assert.equal(state.post_investigation, false, "Dispatch failure can never satisfy investigation");
   } finally {
     cleanTestState();
   }
@@ -1110,4 +1052,145 @@ test("ARCH-018: Exact Replay Remains Model-Free (Valid & Adversarial)", () => {
   assert.equal(unobservedReplay.status, REPLAY_STATUS.UNKNOWN_BRANCH);
   assert.equal(unobservedReplay.trajectories[0].steps.length, 0, "Zero manufactured/hallucinated outcome on unobserved branch");
   assert.equal(unobservedReplay.trajectories[0].terminal_state, null);
+});
+
+// ---------------------------------------------------------------------------
+// ARCH-019: Factual Investigator Completion Boundary
+// Only terminal Stop of the exact causally-bound investigator child may close investigation/outcome.
+// ---------------------------------------------------------------------------
+test("ARCH-019: Factual Investigator Completion Boundary (Valid & Adversarial)", () => {
+  cleanTestState();
+  try {
+    const corr = "corr-019";
+    const parent = "arch-019-parent";
+    const child = "arch-019-child";
+    const wrongChild = "arch-019-wrong-child";
+    const toolCallId = "call-019";
+
+    mkdirSync(".agents/state/dream/pending-decisions", { recursive: true });
+    mkdirSync(".agents/telemetry", { recursive: true });
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: parent,
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      investigationInFlight: {
+        correlationKey: corr,
+        correlation_key: corr,
+        toolCallId,
+        tool_call_id: toolCallId,
+        stepIdx: 4,
+        step_idx: 4,
+        conversationId: parent,
+        conversation_id: parent,
+        parentConversationId: parent,
+        parent_conversation_id: parent,
+        subagentRole: "investigator",
+        subagentProfile: "flash-worker",
+        started_at: new Date().toISOString(),
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    writeFileSync(".agents/state/dream/pending-decisions/" + corr + ".json", JSON.stringify({
+      decision_id: "dec-019",
+      conversation_id: parent,
+      step_idx: 4,
+      tool_call_id: toolCallId,
+    }, null, 2), "utf-8");
+
+    const bindings = {
+      mainConversationId: parent,
+      bindings: {
+        [parent]: {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        [child]: {
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: parent,
+          originToolCallId: toolCallId,
+          delegationKind: "INVESTIGATION",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
+        [wrongChild]: {
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: parent,
+          originToolCallId: toolCallId,
+          delegationKind: "INVESTIGATION",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    };
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(bindings, null, 2), "utf-8");
+
+    // A. Exact ACK enriches child identity but cannot close state or Dream outcome.
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: parent,
+        stepIdx: 4,
+        toolCallId,
+        toolName: "invoke_subagent",
+        result: { status: "SUCCESS", conversationId: child },
+      }),
+      encoding: "utf-8",
+    });
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.investigationInFlight);
+    assert.equal(state.post_investigation, false);
+    assert.equal(existsSync(".agents/state/dream/pending-decisions/" + corr + ".json"), true, "ACK must leave pending Dream decision open");
+    assert.equal(existsSync(".agents/state/dream/pending-decisions/" + corr + ".consumed"), false);
+
+    // B. Parent yield is explicitly non-terminal while async child work exists.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: parent, fullyIdle: false, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.investigationInFlight, "Parent yield must not complete child investigation");
+    assert.equal(state.post_investigation, false);
+
+    // C. Wrong child terminal Stop cannot close the current investigation.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: wrongChild, fullyIdle: true, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.investigationInFlight, "Wrong child Stop must not consume investigation");
+    assert.equal(state.post_investigation, false);
+    assert.equal(existsSync(".agents/state/dream/pending-decisions/" + corr + ".json"), true);
+
+    // D. Exact terminal child Stop is the factual completion boundary.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, fullyIdle: true, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.investigationInFlight, undefined, "Exact child terminal Stop consumes investigation");
+    assert.equal(state.post_investigation, true, "Exact child terminal Stop satisfies post_investigation");
+    assert.equal(state.investigationCompletion.childConversationId, child);
+    assert.equal(existsSync(".agents/state/dream/pending-decisions/" + corr + ".json"), false);
+    assert.equal(existsSync(".agents/state/dream/pending-decisions/" + corr + ".consumed"), true, "Factual completion must consume Dream pending decision");
+
+    const events1 = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(events1.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === "dec-019").length, 1, "Exactly one investigation outcome must be recorded");
+
+    // E. Replayed duplicate terminal Stop is idempotent.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, fullyIdle: true, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    const events2 = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(events2.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === "dec-019").length, 1, "Duplicate Stop must not duplicate outcome");
+  } finally {
+    cleanTestState();
+  }
 });

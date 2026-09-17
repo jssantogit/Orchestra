@@ -205,8 +205,10 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
     step_idx: payload?.stepIdx ?? 0,
     conversationId: payload?.conversationId || activeState.conversationId || "default",
     conversation_id: payload?.conversationId || activeState.conversationId || "default",
-    parentConversationId: payload?.parentConversationId || activeState.parentConversationId || null,
-    parent_conversation_id: payload?.parentConversationId || activeState.parentConversationId || null,
+    parentConversationId: payload?.parentConversationId || activeState.parentConversationId || payload?.conversationId || activeState.conversationId || null,
+    parent_conversation_id: payload?.parentConversationId || activeState.parentConversationId || payload?.conversationId || activeState.conversationId || null,
+    delegationKind: "INVESTIGATION",
+    delegation_kind: "INVESTIGATION",
     subagentRole: sub?.Role || sub?.role || "investigator",
     subagent_role: sub?.Role || sub?.role || "investigator",
     subagentProfile: sub?.TypeName || sub?.profile || "flash-worker",
@@ -1047,7 +1049,9 @@ function main() {
         const typeName = sub.TypeName || sub.name || "";
         const roleStr = String(sub.Role || typeName).toLowerCase();
         const isReviewer = roleStr.includes("reviewer") || typeName === "flash-reviewer";
+        const isInvestigator = roleStr === "investigator" || roleStr.includes("investig");
         const subRole = isReviewer ? "REVIEWER" : "WORKER";
+        const delegationKind = isInvestigator ? "INVESTIGATION" : (isReviewer ? "REVIEW" : "WORK");
         let profile = typeName;
         if (!profile || profile.toLowerCase() === "worker") {
           const normModel = String(sub.Model || "").toLowerCase();
@@ -1076,7 +1080,7 @@ function main() {
 
         const taskId = activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null;
         const benchmarkRunId = activeState.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
-        const toolCallId = payload.toolCallId || null;
+        const toolCallId = toolCall.id || payload.toolCallId || null;
 
         candidatePending.push({
           seq,
@@ -1089,6 +1093,9 @@ function main() {
           taskIdentifier: taskId,
           benchmarkRunId,
           toolCallId,
+          originToolCallId: toolCallId,
+          originStepIdx: payload.stepIdx ?? null,
+          delegationKind,
           creationOrder: idx,
           timestamp: new Date().toISOString(),
           consumed: false,

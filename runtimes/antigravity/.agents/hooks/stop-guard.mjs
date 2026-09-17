@@ -3,6 +3,7 @@ import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
+import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
 
 function readStdin() {
   try {
@@ -203,6 +204,9 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
             parentConversationId: match.parentConversationId || parentConvId,
             taskIdentifier: match.taskIdentifier || activeTaskId || null,
             benchmarkRunId: match.benchmarkRunId || activeRunId || null,
+            originToolCallId: match.originToolCallId || match.toolCallId || null,
+            pendingSeq: match.seq ?? null,
+            delegationKind: match.delegationKind || null,
             confidence: isFactual ? "HIGH" : "LOW",
             source: isFactual ? "RUNTIME_IDENTITY" : "UNRESOLVED",
             consumed: true,
@@ -393,6 +397,113 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
   } catch {}
 }
 
+function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings) {
+  const inFlight = activeState.investigationInFlight;
+  if (!inFlight || payload.fullyIdle === false) {
+    return { matched: false, reason: "NOT_TERMINAL_INVESTIGATION_STOP" };
+  }
+
+  const childConversationId = payload.conversationId || null;
+  const parentConversationId = inFlight.parentConversationId
+    || inFlight.parent_conversation_id
+    || inFlight.conversationId
+    || inFlight.conversation_id
+    || null;
+
+  // Parent yield/finalization can never masquerade as child completion.
+  if (!childConversationId || childConversationId === parentConversationId) {
+    return { matched: false, reason: "PARENT_OR_MISSING_CHILD_IDENTITY" };
+  }
+
+  const binding = (roleBindings.bindings && roleBindings.bindings[childConversationId])
+    || (roleBindings.conversations && roleBindings.conversations[childConversationId])
+    || null;
+  if (!binding) {
+    return { matched: false, reason: "CHILD_BINDING_NOT_FOUND" };
+  }
+
+  if (binding.parentConversationId && parentConversationId && binding.parentConversationId !== parentConversationId) {
+    return { matched: false, reason: "PARENT_IDENTITY_MISMATCH" };
+  }
+  if (binding.delegationKind !== "INVESTIGATION") {
+    return { matched: false, reason: "NOT_INVESTIGATION_DELEGATION" };
+  }
+
+  const inFlightToolCallId = inFlight.toolCallId || inFlight.tool_call_id || null;
+  const originToolCallId = binding.originToolCallId || binding.toolCallId || null;
+  if (!inFlightToolCallId || !originToolCallId || inFlightToolCallId !== originToolCallId) {
+    return { matched: false, reason: "ORIGIN_TOOL_CALL_MISMATCH" };
+  }
+
+  const expectedChildId = inFlight.childConversationId
+    || inFlight.child_conversation_id
+    || inFlight.subagentId
+    || inFlight.subagent_id
+    || null;
+  if (expectedChildId && expectedChildId !== childConversationId) {
+    return { matched: false, reason: "CHILD_IDENTITY_MISMATCH" };
+  }
+
+  const activeTaskId = activeState.taskId || activeState.taskKey || null;
+  if ((binding.taskIdentifier || binding.taskId) && activeTaskId) {
+    const boundTaskId = binding.taskIdentifier || binding.taskId;
+    if (boundTaskId !== activeTaskId) {
+      return { matched: false, reason: "TASK_IDENTITY_MISMATCH" };
+    }
+  }
+  if (binding.benchmarkRunId && activeState.benchmarkRunId && binding.benchmarkRunId !== activeState.benchmarkRunId) {
+    return { matched: false, reason: "RUN_IDENTITY_MISMATCH" };
+  }
+
+  const terminationReason = String(payload.terminationReason || "");
+  const failed = Boolean(
+    payload.error ||
+    payload.cancelled ||
+    /(?:error|fail|cancel|kill|abort|max[_ -]?step|timeout)/i.test(terminationReason)
+  );
+
+  const correlationKey = inFlight.correlationKey || inFlight.correlation_key || null;
+  let dreamOutcome = null;
+  if (correlationKey) {
+    dreamOutcome = recordDecisionOutcome({
+      repoRoot,
+      correlationKey,
+      outcome: {
+        result: failed
+          ? { status: "FAILED", termination_reason: terminationReason || null, error: payload.error || null }
+          : { status: "COMPLETED", child_conversation_id: childConversationId },
+        evidence_summary: activeState.evidenceSummary || activeState.evidence || {},
+        retry_state: {
+          attempt: activeState.attempt || 0,
+          retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+          retry_reason: activeState.retryReason || activeState.retry_reason || null,
+        },
+        cost_metrics: {
+          tool_calls: activeState.tool_calls || 0,
+          context_proxy_bytes: activeState.context_proxy_bytes || 0,
+        },
+        terminal_state: failed ? "FAILED" : "UNKNOWN",
+      },
+    });
+  }
+
+  activeState.post_investigation = !failed;
+  activeState.postInvestigation = !failed;
+  activeState.investigationCompletion = {
+    childConversationId,
+    parentConversationId,
+    originToolCallId,
+    terminationReason: terminationReason || null,
+    success: !failed,
+    completedAt: new Date().toISOString(),
+    dreamOutcomeRecorded: Boolean(dreamOutcome?.recorded),
+    dreamOutcomeReason: dreamOutcome?.reason || null,
+  };
+  delete activeState.investigationInFlight;
+
+  return { matched: true, success: !failed, dreamOutcome };
+}
+
 function main() {
   const rawInput = readStdin();
   let payload = {};
@@ -447,8 +558,25 @@ function main() {
 
   const isOrchestrator = (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR");
 
-  // Sync child execution evidence from brain transcripts if available
-  syncChildEvidence(activeState, convId, { repoRoot, roleBindings });
+  // Sync child execution evidence from the authoritative parent brain. During a
+  // child Stop hook, payload.conversationId is the child, so use the in-flight
+  // investigation's parent identity to resolve the parent's subagent metadata.
+  const investigationParentConvId = activeState.investigationInFlight?.parentConversationId
+    || activeState.investigationInFlight?.parent_conversation_id
+    || activeState.investigationInFlight?.conversationId
+    || activeState.investigationInFlight?.conversation_id
+    || null;
+  syncChildEvidence(activeState, investigationParentConvId || convId, { repoRoot, roleBindings });
+
+  // Factual investigation completion boundary: terminal Stop of the exact bound
+  // investigator child. Dispatch ACKs and manage_subagents observations cannot reach here.
+  const investigationStop = finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings);
+  if (investigationStop.matched) {
+    try {
+      mkdirSync(dirname(statePath), { recursive: true });
+      writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+    } catch {}
+  }
 
   // Re-evaluate worker validation verification against authoritative Evidence Ledger
   const valEval = verifyWorkerValidation(activeState);
