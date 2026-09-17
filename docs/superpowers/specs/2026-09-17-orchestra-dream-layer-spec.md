@@ -195,6 +195,16 @@ Constraints:
 
 Policy corruption, incompatibility, illegal action, schema failure, or hash failure MUST fall back to the validated static policy and record diagnostics.
 
+### 6.1 Two-Layer Policy Specification & Verification Architecture
+
+Policy validation is structured into two explicit complementary layers:
+1. **Structural Schema (`policy-v1.schema.json`)**: Formally defined under standard JSON Schema Draft 2020-12. Enforces top-level shape, permitted fields, types, enum domains, minimum/maximum lengths and items (`rules` `minItems: 1`, `maxItems: 128`; `rule.id` `minLength: 1`; `additionalProperties: false`, boolean `post_investigation`, authoritative state enum without deprecated states like `PLANNING`).
+2. **Normative Semantic Validator (`validatePolicy()`)**: Pure deterministic evaluator in `policy-engine.mjs`. Enforces structural conformity plus relational and cryptographic invariants that standard Draft 2020-12 cannot express directly (`min <= max` on numeric ranges, rule ID uniqueness within a policy, content-addressed `policy_id` matching `policy-<sha256(canonical(policy_without_id))>`, and strict <= 64 KiB canonical size limit).
+
+> [!NOTE]
+> Structural constraints are aligned with policy-v1.schema.json; validatePolicy additionally enforces normative semantic invariants that standard Draft 2020-12 cannot express directly.
+
+
 ## 7. Static-policy migration
 
 Adoption MUST be staged:

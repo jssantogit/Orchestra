@@ -3990,7 +3990,7 @@ test("Milestone D: Exact replay with declarative policy engine callback", () => 
   assert.equal(replayResult.trajectories[0].steps[0].chosen_action, "FLASH_MEDIUM");
 });
 
-test("Milestone D: Differential contract fixture suite (JSON Schema draft 2020-12 and validatePolicy 100% parity)", () => {
+test("Policy structural contract parity and semantic invariants", () => {
   const schemaPath = resolve(__dirname, "schemas/policy-v1.schema.json");
   const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
 
@@ -4014,6 +4014,7 @@ test("Milestone D: Differential contract fixture suite (JSON Schema draft 2020-1
     if (s.const !== undefined && data !== s.const) return false;
     if (s.enum && !s.enum.includes(data)) return false;
     if (s.pattern && typeof data === "string" && !new RegExp(s.pattern).test(data)) return false;
+    if (s.minLength !== undefined && typeof data === "string" && data.length < s.minLength) return false;
     if (s.minimum !== undefined && typeof data === "number" && data < s.minimum) return false;
 
     if (Array.isArray(data)) {
@@ -4092,7 +4093,7 @@ test("Milestone D: Differential contract fixture suite (JSON Schema draft 2020-1
     ],
   };
 
-  const fixtures = [
+  const structuralFixtures = [
     {
       name: "valid_minimal",
       policy: makePolicy(baseRaw),
@@ -4282,10 +4283,61 @@ test("Milestone D: Differential contract fixture suite (JSON Schema draft 2020-1
       }),
       expectedValid: false,
     },
+    {
+      name: "invalid_empty_rules_array",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_empty_rule_id",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], id: "" }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_state_planning_enum",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { state: ["PLANNING"] } }],
+      }),
+      expectedValid: false,
+    },
   ];
 
-  let passedComparisons = 0;
-  for (const fixture of fixtures) {
+  const semanticFixtures = [
+    {
+      name: "semantic_attempt_min_greater_than_max",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { attempt: { min: 5, max: 2 } } }],
+      }),
+    },
+    {
+      name: "semantic_duplicate_rule_id",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [
+          { ...baseRaw.rules[0], id: "duplicate-rule-id" },
+          { ...baseRaw.rules[0], id: "duplicate-rule-id", priority: 20 },
+        ],
+      }),
+    },
+    {
+      name: "semantic_corrupted_policy_id",
+      policy: {
+        ...baseRaw,
+        policy_id: "policy-0000000000000000000000000000000000000000000000000000000000000000",
+      },
+    },
+  ];
+
+  let passedStructural = 0;
+  for (const fixture of structuralFixtures) {
     const schemaValid = validateJsonSchema(schema, fixture.policy);
     const engineRes = validatePolicy(fixture.policy);
     const engineValid = engineRes.valid;
@@ -4293,20 +4345,39 @@ test("Milestone D: Differential contract fixture suite (JSON Schema draft 2020-1
     assert.equal(
       schemaValid,
       fixture.expectedValid,
-      `Fixture "${fixture.name}" schema validation mismatch: expected ${fixture.expectedValid}, got ${schemaValid}`
+      `Structural fixture "${fixture.name}" schema validation mismatch: expected ${fixture.expectedValid}, got ${schemaValid}`
     );
     assert.equal(
       engineValid,
       fixture.expectedValid,
-      `Fixture "${fixture.name}" engine validation mismatch: expected ${fixture.expectedValid}, got ${engineValid} (${engineRes.errors?.join("; ")})`
+      `Structural fixture "${fixture.name}" engine validation mismatch: expected ${fixture.expectedValid}, got ${engineValid} (${engineRes.errors?.join("; ")})`
     );
     assert.equal(
       schemaValid,
       engineValid,
-      `Fixture "${fixture.name}" contract divergence: schema=${schemaValid}, engine=${engineValid}`
+      `Structural fixture "${fixture.name}" contract divergence: schema=${schemaValid}, engine=${engineValid}`
     );
-    passedComparisons++;
+    passedStructural++;
   }
+  assert.equal(passedStructural, structuralFixtures.length);
 
-  assert.equal(passedComparisons, fixtures.length);
+  let passedSemantic = 0;
+  for (const fixture of semanticFixtures) {
+    const schemaValid = validateJsonSchema(schema, fixture.policy);
+    const engineRes = validatePolicy(fixture.policy);
+    const engineValid = engineRes.valid;
+
+    assert.equal(
+      schemaValid,
+      true,
+      `Semantic fixture "${fixture.name}" should be valid under JSON Schema draft 2020-12 structural rules, got false`
+    );
+    assert.equal(
+      engineValid,
+      false,
+      `Semantic fixture "${fixture.name}" must be rejected by validatePolicy semantic invariants, got true`
+    );
+    passedSemantic++;
+  }
+  assert.equal(passedSemantic, semanticFixtures.length);
 });

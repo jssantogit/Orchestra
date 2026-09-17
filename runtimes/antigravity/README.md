@@ -93,7 +93,8 @@ The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–D
 
 - **Real Online Policy Authority (Milestone D Corrective Closure)**: PreToolUse hook enforces `RECORDED_CHOSEN_ACTION == ACTUAL_EXECUTED_ACTION`. Invocations diverging from policy action are deterministically denied pre-execution without recording false DECISION events.
 - **Three Decision Points**: Strict policy governance over `WORKER_TIER`, `INVESTIGATION_STRATEGY` (enforced gate before implementation), and `RETRY_ACTION` (governs retry path and enforces retry budget monotonicity).
-- **Declarative Static Policy Engine**: Evaluates `static-policy-v1.json` via pure policy engine [`policy-engine.mjs`](.agents/dream/policy-engine.mjs).
+- **Declarative Static Policy Engine & Two-Layer Verification**: Evaluates `static-policy-v1.json` via pure policy engine [`policy-engine.mjs`](.agents/dream/policy-engine.mjs). Combines standard Draft 2020-12 Structural Schema (`policy-v1.schema.json`) with Normative Semantic Validation (`validatePolicy()`) enforcing relational constraints (`min <= max`), rule ID uniqueness, content-addressed `policy_id`, and canonical size limits.
+  *Note: Structural constraints are aligned with policy-v1.schema.json; validatePolicy additionally enforces normative semantic invariants that standard Draft 2020-12 cannot express directly.*
 - **100% Shadow Parity & Coverage**: Verified across all eligible state combinations against the production router (`decideRoute` -> `classifyBaselineDecision`).
 - **Factual Fallback & Self-Host Isolation**: Policy loads relative to `import.meta.url` isolating active self-host execution from repository edits. Fallback attributes `STATIC_ROUTING_FALLBACK` with exact diagnostics covering all 9 failure modes.
 - **Zero Online Turn Overhead**: Telemetry and declarative policy evaluation run synchronously in hooks (<0.2 ms overhead) with zero online model turns and zero tokens consumed.

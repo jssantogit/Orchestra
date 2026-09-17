@@ -212,7 +212,11 @@ governance -> decision state -> available_actions -> declarative policy -> autho
 
 1. **Governance Derives Action Space First**: Policy NEVER creates available actions. `deriveAvailableActions` computes the legal action set prior to policy evaluation.
 2. **Pure Policy Engine**: [`policy-engine.mjs`](../runtimes/antigravity/.agents/dream/policy-engine.mjs) evaluates declarative policy rules with zero filesystem access, zero network, zero clock access, zero LLM calls, and zero history.
-3. **Deterministic Schema & Content Addressing**: Policies follow `orchestra.exploration-policy.v1` (`schemas/policy-v1.schema.json`). Policy IDs are content-addressed: `policy-<sha256(canonical(policy_without_id))>`. Action names are strictly restricted per declared decision type, `when` conditions combine fields with AND and values with OR, numeric ranges are constrained to `attempt` and `retry_remaining`, and `mutation_seq` is removed from `when`.
+3. **Deterministic Schema & Two-Layer Policy Verification Architecture**:
+   - **Structural Schema (`policy-v1.schema.json`)**: Formally defined under standard JSON Schema Draft 2020-12 (`rules` `minItems: 1`, `maxItems: 128`; `rule.id` `minLength: 1`; `additionalProperties: false`, boolean `post_investigation`, authoritative state enum without deprecated states like `PLANNING`).
+   - **Normative Semantic Validator (`validatePolicy()`)**: Pure deterministic evaluator in [`policy-engine.mjs`](../runtimes/antigravity/.agents/dream/policy-engine.mjs). Enforces structural conformity plus relational and cryptographic invariants (`min <= max` on numeric ranges, rule ID uniqueness within a policy, content-addressed `policy_id` matching `policy-<sha256(canonical(policy_without_id))>`, and strict <= 64 KiB canonical size limit).
+   > [!NOTE]
+   > Structural constraints are aligned with policy-v1.schema.json; validatePolicy additionally enforces normative semantic invariants that standard Draft 2020-12 cannot express directly.
 4. **Real Router Parity**: `static-policy-v1.json` provides 100% explicit coverage and 100% action parity with the production router (`decideRoute(facts)` -> `classifyBaselineDecision(facts, route)`) across all eligible state combinations, verified by shadow tests.
 5. **Real Online Policy Authority**: The PreToolUse hook enforces strict execution identity:
    ```text
