@@ -12,9 +12,11 @@ import {
   validateDreamRecord,
 } from "./records.mjs";
 import {
+  DECISION_TYPES,
   deriveAvailableActions,
   deriveDecisionState,
   classifyBaselineDecision,
+  deriveValidatedStaticBaseline,
 } from "./action-space.mjs";
 import {
   dreamCorrelationKey,
@@ -3713,6 +3715,7 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
   const staticPolicy = JSON.parse(readFileSync(policyPath, "utf-8"));
 
   let eligible_cases = 0;
+  let baseline_resolved_cases = 0;
   let router_legal_cases = 0;
   let explicit_policy_matches = 0;
   let action_matches = 0;
@@ -3764,31 +3767,35 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
   }
 
   for (const facts of workerTierCases) {
-    const route = decideRoute(facts);
-    const baseline = classifyBaselineDecision(facts, route);
-    if (!baseline) continue;
-
     const state = deriveDecisionState(facts);
-    const availableActions = deriveAvailableActions(baseline.decisionType, state);
+    const availableActions = deriveAvailableActions(DECISION_TYPES.WORKER_TIER, state);
     if (!availableActions || availableActions.length === 0) continue;
 
     eligible_cases++;
-    if (availableActions.includes(baseline.chosenAction)) {
+    const baselineAction = deriveValidatedStaticBaseline({
+      decisionType: DECISION_TYPES.WORKER_TIER,
+      facts,
+      state,
+    });
+    if (baselineAction) {
+      baseline_resolved_cases++;
+    }
+    if (baselineAction && availableActions.includes(baselineAction)) {
       router_legal_cases++;
     }
 
     const evalResult = evaluatePolicy({
       policy: staticPolicy,
-      decisionType: baseline.decisionType,
+      decisionType: DECISION_TYPES.WORKER_TIER,
       state,
       availableActions,
-      baselineAction: baseline.chosenAction,
+      baselineAction,
     });
 
     if (evalResult.ok) {
       explicit_policy_matches++;
     }
-    if (evalResult.action === baseline.chosenAction) {
+    if (evalResult.action === baselineAction) {
       action_matches++;
     }
   }
@@ -3809,20 +3816,27 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
               state: "INTAKE"
             };
 
-            const availableActions = deriveAvailableActions("INVESTIGATION_STRATEGY", state);
+            const availableActions = deriveAvailableActions(DECISION_TYPES.INVESTIGATION_STRATEGY, state);
             if (!availableActions || availableActions.length === 0) {
               continue;
             }
 
             eligible_cases++;
-            const baselineAction = "IMPLEMENT_DIRECT";
-            if (availableActions.includes(baselineAction)) {
+            const baselineAction = deriveValidatedStaticBaseline({
+              decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+              facts: state,
+              state,
+            });
+            if (baselineAction) {
+              baseline_resolved_cases++;
+            }
+            if (baselineAction && availableActions.includes(baselineAction)) {
               router_legal_cases++;
             }
 
             const evalResult = evaluatePolicy({
               policy: staticPolicy,
-              decisionType: "INVESTIGATION_STRATEGY",
+              decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
               state,
               availableActions,
               baselineAction
@@ -3850,15 +3864,6 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
     "INTEGRATION_FAILURE"
   ];
 
-  const expectedRetryBaseline = {
-    FAILED_TEST: "RETRY_SAME",
-    INCOMPLETE_IMPLEMENTATION: "RETRY_SAME",
-    MISSING_CONTEXT: "INVESTIGATE_FIRST",
-    MISINTERPRETED_REQUIREMENT: "REPLAN",
-    SCOPE_GAP: "REPLAN",
-    INTEGRATION_FAILURE: "ESCALATE_WORKER"
-  };
-
   for (const reason of retryReasons) {
     for (const attempt of [1, 2]) {
       for (const remaining of [0, 1, 2]) {
@@ -3870,20 +3875,27 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
           state: "EXECUTING"
         };
 
-        const availableActions = deriveAvailableActions("RETRY_ACTION", state);
+        const availableActions = deriveAvailableActions(DECISION_TYPES.RETRY_ACTION, state);
         if (!availableActions || availableActions.length === 0) {
           continue;
         }
 
         eligible_cases++;
-        const baselineAction = expectedRetryBaseline[reason];
-        if (availableActions.includes(baselineAction)) {
+        const baselineAction = deriveValidatedStaticBaseline({
+          decisionType: DECISION_TYPES.RETRY_ACTION,
+          facts: state,
+          state,
+        });
+        if (baselineAction) {
+          baseline_resolved_cases++;
+        }
+        if (baselineAction && availableActions.includes(baselineAction)) {
           router_legal_cases++;
         }
 
         const evalResult = evaluatePolicy({
           policy: staticPolicy,
-          decisionType: "RETRY_ACTION",
+          decisionType: DECISION_TYPES.RETRY_ACTION,
           state,
           availableActions,
           baselineAction
@@ -3904,6 +3916,7 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
 
   console.log(`\n--- REAL ROUTER PARITY SHADOW VERIFICATION REPORT ---`);
   console.log(`eligible_cases: ${eligible_cases}`);
+  console.log(`baseline_resolved_cases: ${baseline_resolved_cases}`);
   console.log(`router_legal_cases: ${router_legal_cases}`);
   console.log(`explicit_policy_matches: ${explicit_policy_matches}`);
   console.log(`action_matches: ${action_matches}`);
@@ -3911,7 +3924,10 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
   console.log(`parity_percent: ${parity_percent}%`);
   console.log(`-----------------------------------------------------\n`);
 
+  assert.equal(baseline_resolved_cases, eligible_cases, `baseline_resolved_cases must equal eligible_cases`);
   assert.equal(router_legal_cases, eligible_cases, `router_legal_cases must equal eligible_cases`);
+  assert.equal(explicit_policy_matches, eligible_cases, `explicit_policy_matches must equal eligible_cases`);
+  assert.equal(action_matches, eligible_cases, `action_matches must equal eligible_cases`);
   assert.equal(coverage_percent, 100, `explicit_policy_coverage must be 100%, got ${coverage_percent}%`);
   assert.equal(parity_percent, 100, `action_parity must be 100%, got ${parity_percent}%`);
 });

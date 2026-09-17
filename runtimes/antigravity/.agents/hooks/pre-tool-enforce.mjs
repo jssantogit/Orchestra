@@ -133,6 +133,60 @@ function evaluatePolicyWithFallback({ decisionType, state, availableActions, bas
   }
 }
 
+function satisfyPendingInvestigationRequirement({ activeState, statePath, repoRoot, payload, toolCall, activeRole, activeContract }) {
+  const req = activeState.pendingPolicyRequirement;
+  if (!req || req.selected_action !== "INVESTIGATE_FIRST") return;
+
+  const taskObj = {
+    spec: activeState.taskSpec || "Investigation execution",
+    task_action: activeState.taskAction || activeState.task_action || "IMPLEMENT",
+    task_domain: activeState.taskDomain || activeState.task_domain || "CODE",
+    criticality: activeState.criticality || "NORMAL",
+  };
+  const snapRes = buildSnapshot({
+    repoRoot,
+    task: taskObj,
+    contract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
+    runtime: { node_version: process.version, platform: process.platform, arch: process.arch, schema_version: DREAM_SCHEMAS.SNAPSHOT },
+    executionState: { step_sequence: payload?.stepIdx ?? 0, attempt: activeState.attempt || 0, retry_remaining: activeState.retry_remaining ?? 0, mutation_seq: activeState.mutationSeq || 0 },
+    evidence: activeState.evidenceSummary || activeState.evidence || { tests: "UNKNOWN", typecheck: "UNKNOWN", build: "UNKNOWN", validation_fresh: false, scope_check: "UNKNOWN" },
+  });
+  if (snapRes.ok) {
+    const corrKey = dreamCorrelationKey({
+      conversationId: payload?.conversationId || activeState.conversationId || "default",
+      stepIdx: payload?.stepIdx ?? 0,
+      toolCallId: toolCall?.id || payload?.toolCallId || "",
+      branchOrdinal: 0,
+    });
+    const decState = deriveDecisionState(taskObj, activeState, activeState.evidenceSummary || activeState.evidence || {});
+    const availableActions = deriveAvailableActions(req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY, decState);
+    recordDecision({
+      repoRoot,
+      snapshot: snapRes.snapshot,
+      decision: {
+        decision_type: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
+        state: decState,
+        available_actions: availableActions.length > 0 ? availableActions : ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+        chosen_action: "INVESTIGATE_FIRST",
+        policy_source: req.policy_source || "STATIC_POLICY_V1",
+        policy_id: req.policy_id || null,
+        baseline_action: req.baseline_action || "IMPLEMENT_DIRECT",
+        policy_diagnostic: req.policy_diagnostic || null,
+        actor_identity: activeRole || "ORCHESTRATOR",
+        conversation_id: payload?.conversationId || activeState.conversationId || "default",
+        step_idx: payload?.stepIdx ?? 0,
+        tool_call_id: toolCall?.id || payload?.toolCallId || "",
+        branch_ordinal: 0,
+      },
+      correlationKey: corrKey,
+    });
+  }
+  delete activeState.pendingPolicyRequirement;
+  activeState.post_investigation = true;
+  activeState.postInvestigation = true;
+  try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+}
+
 function readStdin() {
   try {
     return readFileSync(0, "utf-8");
@@ -985,6 +1039,27 @@ function main() {
 
           const decisionState = deriveDecisionState(facts, activeState, evidenceObj);
 
+          if (activeState.pendingPolicyRequirement?.selected_action === "INVESTIGATE_FIRST") {
+            const isInvestigationWorker = sub.Role === "investigator" || String(sub.TypeName || "").toLowerCase().includes("investig");
+            if (!isInvestigationWorker) {
+              console.log(JSON.stringify({
+                decision: "deny",
+                reason: "POLICY_MISMATCH: Pending policy requirement INVESTIGATE_FIRST must be satisfied before implementation worker can be delegated.",
+              }));
+              return;
+            } else {
+              satisfyPendingInvestigationRequirement({
+                activeState,
+                statePath,
+                repoRoot,
+                payload,
+                toolCall,
+                activeRole: actor.role || "ORCHESTRATOR",
+                activeContract,
+              });
+            }
+          }
+
           // 1. Check INVESTIGATION_STRATEGY gate if this is a clean implementation
           if (
             decisionState.task_action === "IMPLEMENT" &&
@@ -1006,6 +1081,15 @@ function main() {
                 baselineAction: invBaseline,
               });
               if (invEval.action === "INVESTIGATE_FIRST") {
+                activeState.pendingPolicyRequirement = {
+                  decision_type: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                  selected_action: "INVESTIGATE_FIRST",
+                  policy_source: invEval.source,
+                  policy_id: invEval.policy_id,
+                  baseline_action: invBaseline,
+                  policy_diagnostic: invEval.policy_diagnostic,
+                };
+                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
                 console.log(JSON.stringify({
                   decision: "deny",
                   reason: "POLICY_MISMATCH: Investigation strategy requires INVESTIGATE_FIRST before implementation worker can be delegated.",
@@ -1043,6 +1127,15 @@ function main() {
             }
           } else if (decisionType === DECISION_TYPES.RETRY_ACTION) {
             if (evalResult.action === "INVESTIGATE_FIRST") {
+              activeState.pendingPolicyRequirement = {
+                decision_type: DECISION_TYPES.RETRY_ACTION,
+                selected_action: "INVESTIGATE_FIRST",
+                policy_source: evalResult.source,
+                policy_id: evalResult.policy_id,
+                baseline_action: baselineAction,
+                policy_diagnostic: evalResult.policy_diagnostic,
+              };
+              try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
               console.log(JSON.stringify({
                 decision: "deny",
                 reason: `POLICY_MISMATCH: Retry policy selected INVESTIGATE_FIRST for retry reason "${retryReason}". Investigation required before worker execution.`,
@@ -1050,6 +1143,16 @@ function main() {
               return;
             }
             if (evalResult.action === "REPLAN") {
+              activeState.pendingPolicyRequirement = {
+                decision_type: DECISION_TYPES.RETRY_ACTION,
+                selected_action: "REPLAN",
+                policy_source: evalResult.source,
+                policy_id: evalResult.policy_id,
+                baseline_action: baselineAction,
+                policy_diagnostic: evalResult.policy_diagnostic,
+              };
+              activeState.state = "PLANNING";
+              try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
               console.log(JSON.stringify({
                 decision: "deny",
                 reason: `POLICY_MISMATCH: Retry policy selected REPLAN for retry reason "${retryReason}". Replanning required before worker execution.`,
@@ -1057,20 +1160,23 @@ function main() {
               return;
             }
             if (evalResult.action === "ESCALATE_WORKER") {
-              if (profile !== "flash-worker") {
+              const profileTiers = { "flash-low-worker": 0, "flash-medium-worker": 1, "flash-worker": 2 };
+              const lastTier = profileTiers[activeState.lastWorkerProfile] ?? 1;
+              const currentTier = profileTiers[profile] ?? -1;
+              if (currentTier <= lastTier && lastTier < 2) {
                 console.log(JSON.stringify({
                   decision: "deny",
-                  reason: `POLICY_MISMATCH: Retry policy selected ESCALATE_WORKER (expected flash-worker) for retry reason "${retryReason}" but requested "${profile}". Execution blocked.`,
+                  reason: `POLICY_MISMATCH: Retry policy selected ESCALATE_WORKER for retry reason "${retryReason}" but requested "${profile}". Execution blocked.`,
                 }));
                 return;
               }
             }
             if (evalResult.action === "RETRY_SAME") {
               const lastProfile = activeState.lastWorkerProfile;
-              if (lastProfile && lastProfile !== "flash-worker" && profile === "flash-worker") {
+              if (lastProfile && profile !== lastProfile) {
                 console.log(JSON.stringify({
                   decision: "deny",
-                  reason: `POLICY_MISMATCH: Retry policy selected RETRY_SAME for retry reason "${retryReason}" but requested escalated worker "${profile}". Execution blocked.`,
+                  reason: `POLICY_MISMATCH: Retry policy selected RETRY_SAME for retry reason "${retryReason}" but requested worker "${profile}" does not match previous worker "${lastProfile}". Execution blocked.`,
                 }));
                 return;
               }
@@ -1176,6 +1282,15 @@ function main() {
   }
 
   function allowCommand(commandToRun) {
+    satisfyPendingInvestigationRequirement({
+      activeState,
+      statePath,
+      repoRoot,
+      payload,
+      toolCall,
+      activeRole,
+      activeContract,
+    });
     const runnerPath = resolve(repoRoot, ".agents/hooks/output-gate-runner.mjs");
     if (existsSync(runnerPath) && !commandToRun.includes("output-gate-runner.mjs")) {
       const executionId = `exec-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1305,6 +1420,15 @@ function main() {
       }));
       return;
     }
+    satisfyPendingInvestigationRequirement({
+      activeState,
+      statePath,
+      repoRoot,
+      payload,
+      toolCall,
+      activeRole,
+      activeContract,
+    });
     console.log(JSON.stringify({ decision: "allow" }));
     return;
   }
