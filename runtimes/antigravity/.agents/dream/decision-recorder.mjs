@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
 
@@ -115,11 +115,8 @@ export function recordDecision({
         ? resolve(repoRoot, ".agents/state/dream/pending-decisions")
         : resolve(".agents/state/dream/pending-decisions"));
 
-    // 1. Append DECISION event to telemetry file
-    mkdirSync(dirname(resolvedTelemetryPath), { recursive: true });
-    appendFileSync(resolvedTelemetryPath, JSON.stringify(event) + "\n", "utf8");
-
-    // 2. Persist pending correlation file atomically
+    // Prepare pending correlation before publishing the DECISION event.
+    // This prevents a normal I/O failure from leaving an uncorrelatable DECISION in telemetry.
     mkdirSync(resolvedPendingDir, { recursive: true });
 
     const pendingData = {
@@ -141,13 +138,29 @@ export function recordDecision({
       `.${effectiveCorrelationKey}.${randomUUID()}.tmp`,
     );
 
+    let pendingCommitted = false;
     try {
+      if (existsSync(targetFile)) {
+        return {
+          recorded: false,
+          reason: "DECISION_ALREADY_PENDING",
+          error_code: "ERR_CORRELATION_ALREADY_PENDING",
+          correlationKey: effectiveCorrelationKey,
+        };
+      }
       writeFileSync(tempFile, JSON.stringify(pendingData, null, 2), "utf8");
       renameSync(tempFile, targetFile);
+      pendingCommitted = true;
+
+      // Publish only after the correlation state is durable. If telemetry append
+      // fails synchronously, roll the pending record back so no phantom execution remains.
+      mkdirSync(dirname(resolvedTelemetryPath), { recursive: true });
+      appendFileSync(resolvedTelemetryPath, JSON.stringify(event) + "\n", "utf8");
     } catch (writeErr) {
-      try {
-        unlinkSync(tempFile);
-      } catch {}
+      try { unlinkSync(tempFile); } catch {}
+      if (pendingCommitted) {
+        try { unlinkSync(targetFile); } catch {}
+      }
       throw writeErr;
     }
 
