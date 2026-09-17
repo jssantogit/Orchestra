@@ -313,6 +313,95 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
   };
 }
 
+function isMatchingInvestigationCompletion(inFlight, payload = {}, toolName = "", toolArgs = {}, fallbackConv = "") {
+  if (!inFlight || typeof inFlight !== "object") return false;
+
+  const inFlightConv = inFlight.conversationId || inFlight.conversation_id;
+  const inFlightToolCall = inFlight.toolCallId || inFlight.tool_call_id;
+  const inFlightCorrKey = inFlight.correlationKey || inFlight.correlation_key;
+  const inFlightStepIdx = inFlight.stepIdx ?? inFlight.step_idx;
+
+  const currentConv = payload.conversationId || fallbackConv || null;
+  const currentToolCall = payload.toolCall?.id || payload.toolCallId || toolArgs.toolCallId || null;
+  const currentStepIdx = payload.stepIdx ?? null;
+  const currentCorrKey = payload.correlationKey || toolArgs.correlationKey || null;
+
+  if (toolName === "invoke_subagent") {
+    // 1. Conversation identity must match if both are specified
+    if (inFlightConv && currentConv && inFlightConv !== currentConv) {
+      return false;
+    }
+    // 2. Tool call / execution identity must match if both are specified
+    if (inFlightToolCall && currentToolCall && inFlightToolCall !== currentToolCall) {
+      return false;
+    }
+    // 3. Correlation key must match if both are specified
+    if (inFlightCorrKey && currentCorrKey && inFlightCorrKey !== currentCorrKey) {
+      return false;
+    }
+    // If incoming toolCallId and inFlightToolCall are both absent, verify stepIdx
+    if (!currentToolCall && !inFlightToolCall) {
+      if (inFlightStepIdx !== undefined && currentStepIdx !== null && inFlightStepIdx !== currentStepIdx) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (toolName === "manage_subagents") {
+    // manage_subagents NÃO pode fechar investigação apenas porque investigationInFlight existe;
+    // somente se o resultado contiver identidade suficiente provando que o child completado é o investigator in flight.
+    const candidateConv = toolArgs.ConversationId
+      || (Array.isArray(toolArgs.ConversationIds) && toolArgs.ConversationIds[0])
+      || payload.result?.conversationId
+      || payload.result?.subagentId
+      || payload.subagentId
+      || null;
+    const candidateRole = String(toolArgs.Role || payload.result?.role || payload.result?.subagentRole || "").toLowerCase();
+    const candidateProfile = String(toolArgs.TypeName || payload.result?.profile || payload.result?.subagentProfile || "").toLowerCase();
+    const candidateToolCall = payload.toolCall?.id || payload.toolCallId || toolArgs.toolCallId || null;
+    const candidateCorrKey = payload.correlationKey || toolArgs.correlationKey || null;
+
+    if (candidateCorrKey && inFlightCorrKey && candidateCorrKey === inFlightCorrKey) {
+      return true;
+    }
+    if (candidateToolCall && inFlightToolCall && candidateToolCall === inFlightToolCall) {
+      if (!currentConv || !inFlightConv || currentConv === inFlightConv) {
+        return true;
+      }
+    }
+
+    const inFlightChildConv = inFlight.childConversationId || inFlight.child_conversation_id;
+    if (candidateConv && inFlightChildConv && candidateConv === inFlightChildConv) {
+      return true;
+    }
+
+    const inFlightRole = (inFlight.subagentRole || inFlight.subagent_role || "investigator").toLowerCase();
+    const inFlightProfile = (inFlight.subagentProfile || inFlight.subagent_profile || "").toLowerCase();
+
+    // If candidate specifies a non-investigator role, reject
+    if (candidateRole && candidateRole !== inFlightRole && !candidateRole.includes("investig")) {
+      return false;
+    }
+
+    if (currentConv && inFlightConv && currentConv === inFlightConv) {
+      if (candidateRole && (candidateRole === inFlightRole || candidateRole.includes("investig"))) {
+        return true;
+      }
+      if (candidateProfile && inFlightProfile && candidateProfile === inFlightProfile) {
+        return true;
+      }
+      if (candidateConv && (candidateConv === inFlightConv || candidateConv.includes("investig"))) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  return false;
+}
+
 function main() {
   const rawInput = readStdin();
   if (!rawInput.trim()) {
@@ -402,7 +491,7 @@ function main() {
     const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot);
 
     const toolName = payload.toolName ?? payload.toolCall?.name ?? null;
-    const toolArgs = payload.toolCall?.args || {};
+    const toolArgs = payload.toolCall?.args || payload.toolArgs || {};
     let shellClassification = null;
     let shellMutation = null;
 
@@ -769,14 +858,21 @@ function main() {
       }
 
       // Correlated investigation completion
-      if (activeState.investigationInFlight) {
+      if (activeState.investigationInFlight && isMatchingInvestigationCompletion(activeState.investigationInFlight, payload, toolName, toolArgs, conversationId)) {
         const isFailed = Boolean(
           payload.error ||
           payload.toolResult?.error ||
           (payload.result && payload.result.status === "FAILED") ||
           (typeof payload.toolResult === "string" && payload.toolResult.includes("FAILED"))
         );
-        if (!isFailed) {
+        const isCancelled = Boolean(
+          payload.cancelled ||
+          payload.result?.status === "CANCELLED" ||
+          payload.result?.cancelled ||
+          toolArgs.Action === "kill" ||
+          toolArgs.Action === "kill_all"
+        );
+        if (!isFailed && !isCancelled) {
           activeState.post_investigation = true;
           activeState.postInvestigation = true;
         } else {
@@ -795,9 +891,21 @@ function main() {
         activeState.handoffBytes = (activeState.handoffBytes || 0) + compBytes;
         activeState.handoffStatus = "COMPLETION_RECEIVED";
       }
-      if (activeState.investigationInFlight) {
-        const isFailed = Boolean(payload.error || (payload.result && payload.result.status === "FAILED"));
-        if (!isFailed) {
+      if (activeState.investigationInFlight && isMatchingInvestigationCompletion(activeState.investigationInFlight, payload, toolName, toolArgs, conversationId)) {
+        const isFailed = Boolean(
+          payload.error ||
+          payload.toolResult?.error ||
+          (payload.result && payload.result.status === "FAILED") ||
+          (typeof payload.toolResult === "string" && payload.toolResult.includes("FAILED"))
+        );
+        const isCancelled = Boolean(
+          payload.cancelled ||
+          payload.result?.status === "CANCELLED" ||
+          payload.result?.cancelled ||
+          toolArgs.Action === "kill" ||
+          toolArgs.Action === "kill_all"
+        );
+        if (!isFailed && !isCancelled) {
           activeState.post_investigation = true;
           activeState.postInvestigation = true;
         } else {

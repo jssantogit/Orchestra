@@ -186,12 +186,22 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
   // Convert pending requirement to investigationInFlight (post_investigation remains false until completed)
   activeState.investigationInFlight = {
     correlationKey: corrKey,
+    correlation_key: corrKey,
     decision_type: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
     policy_source: req.policy_source || "STATIC_POLICY_V1",
     policy_id: req.policy_id || null,
     toolCallId: toolCall?.id || payload?.toolCallId || "",
+    tool_call_id: toolCall?.id || payload?.toolCallId || "",
     stepIdx: payload?.stepIdx ?? 0,
+    step_idx: payload?.stepIdx ?? 0,
     conversationId: payload?.conversationId || activeState.conversationId || "default",
+    conversation_id: payload?.conversationId || activeState.conversationId || "default",
+    parentConversationId: payload?.parentConversationId || activeState.parentConversationId || null,
+    parent_conversation_id: payload?.parentConversationId || activeState.parentConversationId || null,
+    subagentRole: sub?.Role || sub?.role || "investigator",
+    subagent_role: sub?.Role || sub?.role || "investigator",
+    subagentProfile: sub?.TypeName || sub?.profile || "flash-worker",
+    subagent_profile: sub?.TypeName || sub?.profile || "flash-worker",
     started_at: new Date().toISOString(),
   };
   delete activeState.pendingPolicyRequirement;
