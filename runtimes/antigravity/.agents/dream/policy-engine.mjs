@@ -110,7 +110,6 @@ const VALID_ENUMS = Object.freeze({
     "BLOCKED",
     "HUMAN_GATE",
     "CRITICAL_REVIEW",
-    "PLANNING",
   ]),
   retry_reason: new Set([
     "MISINTERPRETED_REQUIREMENT",

@@ -13,6 +13,7 @@ import {
   isOrchestratorRole,
   checkValidationCompletionLock,
   isValidationCommand,
+  validateStateTransition,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 import { buildSnapshot } from "../dream/snapshot.mjs";
 import {
@@ -133,7 +134,7 @@ function evaluatePolicyWithFallback({ decisionType, state, availableActions, bas
   }
 }
 
-function satisfyPendingInvestigationRequirement({ activeState, statePath, repoRoot, payload, toolCall, activeRole, activeContract }) {
+export function startPendingInvestigationRequirement({ activeState, statePath, repoRoot, payload, toolCall, sub, activeRole, activeContract }) {
   const req = activeState.pendingPolicyRequirement;
   if (!req || req.selected_action !== "INVESTIGATE_FIRST") return;
 
@@ -151,13 +152,13 @@ function satisfyPendingInvestigationRequirement({ activeState, statePath, repoRo
     executionState: { step_sequence: payload?.stepIdx ?? 0, attempt: activeState.attempt || 0, retry_remaining: activeState.retry_remaining ?? 0, mutation_seq: activeState.mutationSeq || 0 },
     evidence: activeState.evidenceSummary || activeState.evidence || { tests: "UNKNOWN", typecheck: "UNKNOWN", build: "UNKNOWN", validation_fresh: false, scope_check: "UNKNOWN" },
   });
+  const corrKey = dreamCorrelationKey({
+    conversationId: payload?.conversationId || activeState.conversationId || "default",
+    stepIdx: payload?.stepIdx ?? 0,
+    toolCallId: toolCall?.id || payload?.toolCallId || "",
+    branchOrdinal: 0,
+  });
   if (snapRes.ok) {
-    const corrKey = dreamCorrelationKey({
-      conversationId: payload?.conversationId || activeState.conversationId || "default",
-      stepIdx: payload?.stepIdx ?? 0,
-      toolCallId: toolCall?.id || payload?.toolCallId || "",
-      branchOrdinal: 0,
-    });
     const decState = deriveDecisionState(taskObj, activeState, activeState.evidenceSummary || activeState.evidence || {});
     const availableActions = deriveAvailableActions(req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY, decState);
     recordDecision({
@@ -181,10 +182,121 @@ function satisfyPendingInvestigationRequirement({ activeState, statePath, repoRo
       correlationKey: corrKey,
     });
   }
+
+  // Convert pending requirement to investigationInFlight (post_investigation remains false until completed)
+  activeState.investigationInFlight = {
+    correlationKey: corrKey,
+    decision_type: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
+    policy_source: req.policy_source || "STATIC_POLICY_V1",
+    policy_id: req.policy_id || null,
+    toolCallId: toolCall?.id || payload?.toolCallId || "",
+    stepIdx: payload?.stepIdx ?? 0,
+    conversationId: payload?.conversationId || activeState.conversationId || "default",
+    started_at: new Date().toISOString(),
+  };
   delete activeState.pendingPolicyRequirement;
-  activeState.post_investigation = true;
-  activeState.postInvestigation = true;
-  try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+  activeState.post_investigation = false;
+  activeState.postInvestigation = false;
+  if (statePath) {
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+  }
+}
+
+export function completeInvestigation({ activeState, statePath, success = true }) {
+  if (!activeState.investigationInFlight) return;
+  if (success) {
+    activeState.post_investigation = true;
+    activeState.postInvestigation = true;
+  } else {
+    activeState.post_investigation = false;
+    activeState.postInvestigation = false;
+  }
+  delete activeState.investigationInFlight;
+  if (statePath) {
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+  }
+}
+
+export function executeReplanTransition({ activeState, statePath, repoRoot, payload, toolCall, activeRole, activeContract }) {
+  const req = activeState.pendingPolicyRequirement;
+  if (!req || req.selected_action !== "REPLAN") {
+    return { ok: false, reason: "NO_PENDING_REPLAN_REQUIREMENT" };
+  }
+
+  const currentState = activeState.state || "EXECUTING";
+  const transitionCheck = validateStateTransition(currentState, "PLANNED", {
+    retry: true,
+    retry_reason: activeState.retryReason || activeState.retry_reason,
+  });
+  if (!transitionCheck.valid) {
+    return { ok: false, reason: transitionCheck.reason || "INVALID_STATE_TRANSITION" };
+  }
+
+  const taskObj = {
+    spec: activeState.taskSpec || "Replan execution",
+    task_action: activeState.taskAction || activeState.task_action || "IMPLEMENT",
+    task_domain: activeState.taskDomain || activeState.task_domain || "CODE",
+    criticality: activeState.criticality || "NORMAL",
+  };
+
+  const snapRes = buildSnapshot({
+    repoRoot,
+    task: taskObj,
+    contract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
+    runtime: { node_version: process.version, platform: process.platform, arch: process.arch, schema_version: DREAM_SCHEMAS.SNAPSHOT },
+    executionState: {
+      step_sequence: payload?.stepIdx ?? 0,
+      attempt: activeState.attempt || 0,
+      retry_remaining: activeState.retry_remaining ?? 0,
+      mutation_seq: activeState.mutationSeq || 0,
+    },
+    evidence: activeState.evidenceSummary || activeState.evidence || {
+      tests: "UNKNOWN",
+      typecheck: "UNKNOWN",
+      build: "UNKNOWN",
+      validation_fresh: false,
+      scope_check: "UNKNOWN",
+    },
+  });
+
+  if (snapRes.ok) {
+    const corrKey = dreamCorrelationKey({
+      conversationId: payload?.conversationId || activeState.conversationId || "default",
+      stepIdx: payload?.stepIdx ?? 0,
+      toolCallId: toolCall?.id || payload?.toolCallId || "",
+      branchOrdinal: 0,
+    });
+    const decState = deriveDecisionState(taskObj, activeState, activeState.evidenceSummary || activeState.evidence || {});
+    const availableActions = deriveAvailableActions(req.decision_type || DECISION_TYPES.RETRY_ACTION, decState);
+    recordDecision({
+      repoRoot,
+      snapshot: snapRes.snapshot,
+      decision: {
+        decision_type: req.decision_type || DECISION_TYPES.RETRY_ACTION,
+        state: decState,
+        available_actions: availableActions.length > 0 ? availableActions : ["REPLAN"],
+        chosen_action: "REPLAN",
+        policy_source: req.policy_source || "STATIC_POLICY_V1",
+        policy_id: req.policy_id || null,
+        baseline_action: req.baseline_action || "REPLAN",
+        policy_diagnostic: req.policy_diagnostic || null,
+        actor_identity: activeRole || "ORCHESTRATOR",
+        conversation_id: payload?.conversationId || activeState.conversationId || "default",
+        step_idx: payload?.stepIdx ?? 0,
+        tool_call_id: toolCall?.id || payload?.toolCallId || "",
+        branch_ordinal: 0,
+      },
+      correlationKey: corrKey,
+    });
+  }
+
+  // Authoritative state transition to PLANNED
+  activeState.state = "PLANNED";
+  delete activeState.pendingPolicyRequirement;
+  if (statePath) {
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+  }
+  return { ok: true, state: "PLANNED" };
 }
 
 function readStdin() {
@@ -964,7 +1076,12 @@ function main() {
 
         const rawProfile = sub.TypeName || sub.agent || sub.subagent_profile || sub.profile || "";
         const subRoleNormalized = String(sub.Role || sub.role || "").toLowerCase();
-        const isDreamWorker = (subRoleNormalized === "worker" || activeState.complexity !== undefined) && Boolean(
+        const isDreamWorker = (
+          subRoleNormalized === "worker" ||
+          subRoleNormalized === "investigator" ||
+          subRoleNormalized.includes("investig") ||
+          activeState.complexity !== undefined
+        ) && Boolean(
           PROFILE_TO_WORKER_ACTION[String(rawProfile).toLowerCase()] ||
           PROFILE_TO_WORKER_ACTION[String(sub.TypeName || "").toLowerCase()]
         );
@@ -1040,24 +1157,38 @@ function main() {
 
           const decisionState = deriveDecisionState(facts, activeState, evidenceObj);
 
-          if (activeState.pendingPolicyRequirement?.selected_action === "INVESTIGATE_FIRST") {
-            const isInvestigationWorker = sub.Role === "investigator" || String(sub.TypeName || "").toLowerCase().includes("investig");
+          const hasPendingInvestigation = activeState.pendingPolicyRequirement?.selected_action === "INVESTIGATE_FIRST";
+          const hasInvestigationInFlight = Boolean(activeState.investigationInFlight);
+
+          if (hasPendingInvestigation || hasInvestigationInFlight) {
+            const isInvestigationWorker =
+              String(sub.Role || "").toLowerCase() === "investigator" ||
+              String(sub.TypeName || "").toLowerCase().includes("investig") ||
+              facts.taskAction === "INVESTIGATE" ||
+              facts.action === "INVESTIGATE";
+
             if (!isInvestigationWorker) {
               console.log(JSON.stringify({
                 decision: "deny",
-                reason: "POLICY_MISMATCH: Pending policy requirement INVESTIGATE_FIRST must be satisfied before implementation worker can be delegated.",
+                reason: hasInvestigationInFlight
+                  ? "POLICY_MISMATCH: Investigation is currently in flight. Investigation completion required before worker execution."
+                  : "POLICY_MISMATCH: Pending policy requirement INVESTIGATE_FIRST must be satisfied before implementation worker can be delegated.",
               }));
               return;
             } else {
-              satisfyPendingInvestigationRequirement({
-                activeState,
-                statePath,
-                repoRoot,
-                payload,
-                toolCall,
-                activeRole: actor.role || "ORCHESTRATOR",
-                activeContract,
-              });
+              if (hasPendingInvestigation) {
+                startPendingInvestigationRequirement({
+                  activeState,
+                  statePath,
+                  repoRoot,
+                  payload,
+                  toolCall,
+                  sub,
+                  activeRole: actor.role || "ORCHESTRATOR",
+                  activeContract,
+                });
+              }
+              continue;
             }
           }
 
@@ -1152,7 +1283,6 @@ function main() {
                 baseline_action: baselineAction,
                 policy_diagnostic: evalResult.policy_diagnostic,
               };
-              activeState.state = "PLANNING";
               try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
               console.log(JSON.stringify({
                 decision: "deny",
@@ -1283,15 +1413,6 @@ function main() {
   }
 
   function allowCommand(commandToRun) {
-    satisfyPendingInvestigationRequirement({
-      activeState,
-      statePath,
-      repoRoot,
-      payload,
-      toolCall,
-      activeRole,
-      activeContract,
-    });
     const runnerPath = resolve(repoRoot, ".agents/hooks/output-gate-runner.mjs");
     if (existsSync(runnerPath) && !commandToRun.includes("output-gate-runner.mjs")) {
       const executionId = `exec-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1421,15 +1542,6 @@ function main() {
       }));
       return;
     }
-    satisfyPendingInvestigationRequirement({
-      activeState,
-      statePath,
-      repoRoot,
-      payload,
-      toolCall,
-      activeRole,
-      activeContract,
-    });
     console.log(JSON.stringify({ decision: "allow" }));
     return;
   }
@@ -1699,6 +1811,17 @@ function main() {
     // 4. Orchestrator: only control-plane allowed; product code / workspace writes prohibited
     if (isOrchestratorRole(activeRole)) {
       if (isControlPlane) {
+        if (activeState.pendingPolicyRequirement?.selected_action === "REPLAN") {
+          executeReplanTransition({
+            activeState,
+            statePath,
+            repoRoot,
+            payload,
+            toolCall,
+            activeRole,
+            activeContract,
+          });
+        }
         console.log(JSON.stringify({ decision: "allow" }));
         return;
       }

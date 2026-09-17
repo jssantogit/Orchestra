@@ -6,7 +6,8 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { computePolicyId } from "../.agents/dream/policy-engine.mjs";
+import { computePolicyId, validatePolicy } from "../.agents/dream/policy-engine.mjs";
+import { executeReplanTransition } from "../.agents/hooks/pre-tool-enforce.mjs";
 
 const __testDir = dirname(fileURLToPath(import.meta.url));
 const preToolScript = resolve(__testDir, "../.agents/hooks/pre-tool-enforce.mjs");
@@ -1072,7 +1073,7 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
     assert.equal(res2.decision, "deny");
     assert.match(res2.reason, /Pending policy requirement INVESTIGATE_FIRST must be satisfied/);
 
-    // 3. Congruent investigation executes (e.g. view_file) -> ALLOWED, records factual DECISION, clears requirement, marks post_investigation
+    // 3. Generic operations (view_file, grep_search, git status) do NOT consume INVESTIGATE_FIRST
     const inputView = JSON.stringify({
       conversationId: "task2-lifecycle-conv",
       stepIdx: 2,
@@ -1090,22 +1091,220 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
     assert.equal(res3.decision, "allow");
 
     const savedState3 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(savedState3.pendingPolicyRequirement, undefined, "pendingPolicyRequirement must be consumed");
-    assert.equal(savedState3.post_investigation, true, "post_investigation must be set to true");
+    assert.ok(savedState3.pendingPolicyRequirement, "Generic view_file must NOT consume pending requirement");
+    assert.equal(savedState3.post_investigation, undefined, "Generic view_file must NOT set post_investigation");
 
+    // 4. Investigator subagent starts -> ALLOWED, records factual DECISION, converts to investigationInFlight
+    const inputInvestigator = JSON.stringify({
+      conversationId: "task2-lifecycle-conv",
+      stepIdx: 3,
+      toolCall: {
+        id: "call_investigator",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [{ TypeName: "flash-worker", Role: "investigator", Prompt: "Investigate root cause" }]
+        }
+      }
+    });
+
+    const raw4 = execFileSync("node", [preToolScript], { input: inputInvestigator, encoding: "utf-8" });
+    const res4 = JSON.parse(raw4.trim());
+    assert.equal(res4.decision, "allow");
+
+    const savedState4 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(savedState4.pendingPolicyRequirement, undefined, "pending requirement must be converted");
+    assert.ok(savedState4.investigationInFlight, "investigationInFlight must be active");
+    assert.equal(savedState4.post_investigation, false, "post_investigation must remain false while in flight");
+
+    // Factual DECISION must be recorded immediately pre-action
     assert.ok(existsSync(eventsPath), "events.jsonl must exist");
-    const events3 = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
-    const dec3 = events3.find(e => e.type === "DECISION" && e.decision_type === "INVESTIGATION_STRATEGY");
-    assert.ok(dec3, "Factual DECISION event must be recorded immediately pre-action");
-    assert.equal(dec3.chosen_action, "INVESTIGATE_FIRST");
-    assert.equal(dec3.baseline_action, "IMPLEMENT_DIRECT");
+    const events4 = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const dec4 = events4.find(e => e.type === "DECISION" && e.decision_type === "INVESTIGATION_STRATEGY");
+    assert.ok(dec4, "Factual DECISION event must be recorded on investigator start");
+    assert.equal(dec4.chosen_action, "INVESTIGATE_FIRST");
+
+    // 5. While in flight, implementation worker delegation is blocked
+    const raw5 = execFileSync("node", [preToolScript], { input: inputInvoke, encoding: "utf-8" });
+    const res5 = JSON.parse(raw5.trim());
+    assert.equal(res5.decision, "deny");
+    assert.match(res5.reason, /Investigation is currently in flight/);
+
+    // 6. Correlated completion arrives via post-tool telemetry -> post_investigation = true, in-flight cleared
+    const postPayload = JSON.stringify({
+      conversationId: "task2-lifecycle-conv",
+      stepIdx: 3,
+      toolName: "invoke_subagent",
+      toolArgs: {
+        Subagents: [{ TypeName: "flash-worker", Role: "investigator", Prompt: "Investigate root cause" }]
+      },
+      toolResult: { status: "SUCCESS", summary: "Root cause found" },
+    });
+    execFileSync("node", [postToolScript], { input: postPayload, encoding: "utf-8" });
+
+    const savedState6 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(savedState6.investigationInFlight, undefined, "in flight must be cleared");
+    assert.equal(savedState6.post_investigation, true, "post_investigation must now be true");
+
+    // 7. Post-investigation implementation worker delegation is now ALLOWED (post-investigation routes to FLASH_HIGH)
+    const inputInvokeHigh = JSON.stringify({
+      conversationId: "task2-lifecycle-conv",
+      stepIdx: 4,
+      toolCall: {
+        id: "call_invoke_high",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [{ TypeName: "flash-worker", Role: "worker", Prompt: "Implement feature post-investigation" }]
+        }
+      }
+    });
+    const raw7 = execFileSync("node", [preToolScript], { input: inputInvokeHigh, encoding: "utf-8" });
+    const res7 = JSON.parse(raw7.trim());
+    assert.equal(res7.decision, "allow");
   } finally {
     writeFileSync(policyBackupPath, originalPolicy, "utf-8");
     cleanDreamTestState();
   }
 });
 
-test("Task 2 Causal Lifecycle: RETRY_ACTION with MISSING_CONTEXT establishes pending requirement and consumes on investigation", () => {
+test("Task 2 Causal Lifecycle: Generic operations (git status, grep_search) do NOT consume requirement", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      criticality: "NORMAL",
+      pendingPolicyRequirement: {
+        decision_type: "INVESTIGATION_STRATEGY",
+        selected_action: "INVESTIGATE_FIRST",
+        policy_source: "STATIC_POLICY_V1",
+        baseline_action: "IMPLEMENT_DIRECT",
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    // 1. git status does NOT consume requirement
+    const inputCmd = JSON.stringify({
+      conversationId: "generic-check-conv",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_status",
+        name: "run_command",
+        args: { CommandLine: "git status" }
+      }
+    });
+    const res1 = JSON.parse(execFileSync("node", [preToolScript], { input: inputCmd, encoding: "utf-8" }).trim());
+    assert.equal(res1.decision, "allow");
+
+    const state1 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state1.pendingPolicyRequirement, "git status must NOT consume requirement");
+    assert.equal(state1.post_investigation, false);
+
+    // 2. grep_search does NOT consume requirement
+    const inputGrep = JSON.stringify({
+      conversationId: "generic-check-conv",
+      stepIdx: 2,
+      toolCall: {
+        id: "call_grep",
+        name: "grep_search",
+        args: { Query: "foo", SearchPath: process.cwd() }
+      }
+    });
+    const res2 = JSON.parse(execFileSync("node", [preToolScript], { input: inputGrep, encoding: "utf-8" }).trim());
+    assert.equal(res2.decision, "allow");
+
+    const state2 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state2.pendingPolicyRequirement, "grep_search must NOT consume requirement");
+    assert.equal(state2.post_investigation, false);
+
+    // 3. Worker implementation attempt is DENIED
+    const inputWorker = JSON.stringify({
+      conversationId: "generic-check-conv",
+      stepIdx: 3,
+      toolCall: {
+        id: "call_worker",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [{ TypeName: "flash-medium-worker", Role: "worker", Prompt: "Build feature" }]
+        }
+      }
+    });
+    const res3 = JSON.parse(execFileSync("node", [preToolScript], { input: inputWorker, encoding: "utf-8" }).trim());
+    assert.equal(res3.decision, "deny");
+    assert.match(res3.reason, /Pending policy requirement INVESTIGATE_FIRST must be satisfied/);
+
+    // No DECISION events were recorded
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    if (existsSync(eventsPath)) {
+      const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+      const dec = events.find(e => e.type === "DECISION");
+      assert.equal(dec, undefined, "Zero DECISION event on generic operations");
+    }
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 2 Causal Lifecycle: Investigation failure preserves post_investigation = false", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      criticality: "NORMAL",
+      retry: true,
+      attempt: 1,
+      remainingAttempts: 1,
+      prevRemainingAttempts: 1,
+      retryReason: "MISSING_CONTEXT",
+      lastWorkerProfile: "flash-medium-worker",
+      investigationInFlight: {
+        correlationKey: "test-corr-key",
+        decision_type: "RETRY_ACTION",
+        started_at: new Date().toISOString(),
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    // Subagent failed
+    const postPayload = JSON.stringify({
+      conversationId: "fail-conv",
+      stepIdx: 1,
+      toolName: "invoke_subagent",
+      toolArgs: { Subagents: [{ TypeName: "flash-worker", Role: "investigator" }] },
+      error: "Investigation subagent crashed with timeout",
+    });
+    execFileSync("node", [postToolScript], { input: postPayload, encoding: "utf-8" });
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.investigationInFlight, undefined, "In flight must be cleared");
+    assert.equal(state.post_investigation, false, "post_investigation MUST remain false on failure");
+
+    // Subsequent worker attempt must still be denied because post_investigation remains false
+    const inputWorker = JSON.stringify({
+      conversationId: "fail-conv",
+      stepIdx: 2,
+      toolCall: {
+        id: "call_worker_after_fail",
+        name: "invoke_subagent",
+        args: {
+          remainingAttempts: 1,
+          Subagents: [{ TypeName: "flash-medium-worker", Role: "worker", Prompt: "Retry feature" }]
+        }
+      }
+    });
+    const resWorker = JSON.parse(execFileSync("node", [preToolScript], { input: inputWorker, encoding: "utf-8" }).trim());
+    assert.equal(resWorker.decision, "deny");
+    assert.match(resWorker.reason, /POLICY_MISMATCH: Retry policy selected INVESTIGATE_FIRST/);
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 2 Causal Lifecycle: Preserves origin decision_type for RETRY_ACTION", () => {
   cleanDreamTestState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -1122,7 +1321,7 @@ test("Task 2 Causal Lifecycle: RETRY_ACTION with MISSING_CONTEXT establishes pen
       lastWorkerProfile: "flash-medium-worker",
     }, null, 2), "utf-8");
 
-    // 1. Worker retry attempted -> DENIED, pending requirement set
+    // 1. Worker retry attempted -> DENIED, pending requirement set with RETRY_ACTION
     const inputRetry = JSON.stringify({
       conversationId: "task2-retry-conv",
       stepIdx: 1,
@@ -1146,33 +1345,152 @@ test("Task 2 Causal Lifecycle: RETRY_ACTION with MISSING_CONTEXT establishes pen
     assert.equal(savedState1.pendingPolicyRequirement.selected_action, "INVESTIGATE_FIRST");
     assert.equal(savedState1.pendingPolicyRequirement.decision_type, "RETRY_ACTION");
 
-    // 2. Congruent investigation command executes -> ALLOWED, records factual DECISION
-    const inputCmd = JSON.stringify({
+    // 2. Investigator starts -> ALLOWED, records DECISION with decision_type: RETRY_ACTION
+    const inputInvestigator = JSON.stringify({
       conversationId: "task2-retry-conv",
       stepIdx: 2,
       toolCall: {
-        id: "call_cmd_inspect",
-        name: "run_command",
+        id: "call_investigator_retry",
+        name: "invoke_subagent",
         args: {
-          CommandLine: "git status"
+          Subagents: [{ TypeName: "flash-worker", Role: "investigator", Prompt: "Investigate context gap" }]
         }
       }
     });
 
-    const raw2 = execFileSync("node", [preToolScript], { input: inputCmd, encoding: "utf-8" });
+    const raw2 = execFileSync("node", [preToolScript], { input: inputInvestigator, encoding: "utf-8" });
     const res2 = JSON.parse(raw2.trim());
     assert.equal(res2.decision, "allow");
-
-    const savedState2 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(savedState2.pendingPolicyRequirement, undefined);
-    assert.equal(savedState2.post_investigation, true);
 
     const eventsPath = ".agents/telemetry/events.jsonl";
     assert.ok(existsSync(eventsPath));
     const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
     const dec = events.find(e => e.type === "DECISION" && e.decision_type === "RETRY_ACTION" && e.chosen_action === "INVESTIGATE_FIRST");
-    assert.ok(dec, "RETRY_ACTION INVESTIGATE_FIRST DECISION must be recorded");
+    assert.ok(dec, "RETRY_ACTION origin must be preserved in DECISION record");
   } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 1 REPLAN State-Machine Integrity: worker retry denied, state never PLANNING, factual replan transition to PLANNED", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      criticality: "NORMAL",
+      state: "EXECUTING",
+      retry: true,
+      attempt: 1,
+      remainingAttempts: 1,
+      prevRemainingAttempts: 1,
+      retryReason: "MISINTERPRETED_REQUIREMENT",
+      lastWorkerProfile: "flash-medium-worker",
+    }, null, 2), "utf-8");
+
+    // 1. Worker retry attempted -> DENIED because policy chooses REPLAN
+    const inputRetry = JSON.stringify({
+      conversationId: "replan-integrity-conv",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_worker_retry_replan",
+        name: "invoke_subagent",
+        args: {
+          remainingAttempts: 1,
+          Subagents: [{ TypeName: "flash-medium-worker", Role: "worker", Prompt: "Retry feature" }]
+        }
+      }
+    });
+
+    const raw1 = execFileSync("node", [preToolScript], { input: inputRetry, encoding: "utf-8" });
+    const res1 = JSON.parse(raw1.trim());
+    assert.equal(res1.decision, "deny");
+    assert.match(res1.reason, /POLICY_MISMATCH: Retry policy selected REPLAN/);
+
+    const savedState1 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(savedState1.pendingPolicyRequirement, "Pending requirement must be established");
+    assert.equal(savedState1.pendingPolicyRequirement.selected_action, "REPLAN");
+    assert.equal(savedState1.pendingPolicyRequirement.decision_type, "RETRY_ACTION");
+
+    // State MUST NOT be changed to PLANNING (governance has PLANNED, never PLANNING)
+    assert.equal(savedState1.state, "EXECUTING");
+    assert.notEqual(savedState1.state, "PLANNING");
+
+    // Zero DECISION event recorded on denial
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    if (existsSync(eventsPath)) {
+      const events1 = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+      const dec1 = events1.find(e => e.type === "DECISION");
+      assert.equal(dec1, undefined, "Zero DECISION event on worker retry denial");
+    }
+
+    // 2. Factual replan execution (orchestrator writes plan file on control plane)
+    const inputPlanWrite = JSON.stringify({
+      conversationId: "replan-integrity-conv",
+      stepIdx: 2,
+      activeRole: "ORCHESTRATOR",
+      toolCall: {
+        id: "call_write_plan",
+        name: "write_to_file",
+        args: {
+          TargetFile: resolve(process.cwd(), ".agents/plans/test-replan.md"),
+          CodeContent: "# Corrected Replan",
+          Overwrite: true,
+        }
+      }
+    });
+
+    const raw2 = execFileSync("node", [preToolScript], { input: inputPlanWrite, encoding: "utf-8" });
+    const res2 = JSON.parse(raw2.trim());
+    assert.equal(res2.decision, "allow");
+
+    // State transitioned to authoritative PLANNED and pending requirement consumed
+    const savedState2 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(savedState2.state, "PLANNED", "State must legally transition to PLANNED");
+    assert.notEqual(savedState2.state, "PLANNING", "State must NEVER be PLANNING");
+    assert.equal(savedState2.pendingPolicyRequirement, undefined, "pending requirement consumed");
+
+    // Immediately before transition, DECISION(REPLAN) is recorded
+    assert.ok(existsSync(eventsPath), "events.jsonl must exist");
+    const events2 = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const dec2 = events2.find(e => e.type === "DECISION" && e.decision_type === "RETRY_ACTION" && e.chosen_action === "REPLAN");
+    assert.ok(dec2, "Factual DECISION(REPLAN) must be recorded immediately before transition");
+    assert.equal(dec2.baseline_action, "REPLAN");
+
+    // Clean up created test plan file
+    try { unlinkSync(".agents/plans/test-replan.md"); } catch {}
+
+    // 3. Rejection of PLANNING in validatePolicy and policy schema
+    const basePolicy = {
+      schema: "orchestra.exploration-policy.v1",
+      policy_id: "placeholder",
+      base_policy: null,
+      description: "Test policy",
+      created_at: "2026-09-17T00:00:00Z",
+      rules: [
+        {
+          id: "rule-planning-test",
+          decision_type: "WORKER_TIER",
+          priority: 10,
+          when: {
+            task_action: ["IMPLEMENT"],
+            state: ["PLANNING"],
+          },
+          choose: "FLASH_MEDIUM",
+        }
+      ]
+    };
+    try {
+      basePolicy.policy_id = computePolicyId(basePolicy);
+    } catch {}
+
+    const valRes = validatePolicy(basePolicy);
+    assert.equal(valRes.valid, false, "validatePolicy MUST reject state: ['PLANNING']");
+    assert.match(valRes.errors.join("; "), /elements must be valid enum strings/, "Validator error mentions enum strings");
+  } finally {
+    try { unlinkSync(".agents/plans/test-replan.md"); } catch {}
     cleanDreamTestState();
   }
 });

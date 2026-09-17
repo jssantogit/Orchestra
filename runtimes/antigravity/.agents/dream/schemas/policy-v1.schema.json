@@ -141,8 +141,7 @@
                     "DONE",
                     "BLOCKED",
                     "HUMAN_GATE",
-                    "CRITICAL_REVIEW",
-                    "PLANNING"
+                    "CRITICAL_REVIEW"
                   ]
                 }
               },

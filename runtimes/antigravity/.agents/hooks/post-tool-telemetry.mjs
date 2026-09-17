@@ -767,6 +767,24 @@ function main() {
       } catch (dreamOutcomeErr) {
         // Fail-open: NEVER throw on Dream error
       }
+
+      // Correlated investigation completion
+      if (activeState.investigationInFlight) {
+        const isFailed = Boolean(
+          payload.error ||
+          payload.toolResult?.error ||
+          (payload.result && payload.result.status === "FAILED") ||
+          (typeof payload.toolResult === "string" && payload.toolResult.includes("FAILED"))
+        );
+        if (!isFailed) {
+          activeState.post_investigation = true;
+          activeState.postInvestigation = true;
+        } else {
+          activeState.post_investigation = false;
+          activeState.postInvestigation = false;
+        }
+        delete activeState.investigationInFlight;
+      }
     } else if (toolName === "manage_subagents") {
       activeState.manage_subagents_calls = (activeState.manage_subagents_calls || 0) + 1;
       if (payload.result) {
@@ -776,6 +794,17 @@ function main() {
         activeState.handoffObserved = true;
         activeState.handoffBytes = (activeState.handoffBytes || 0) + compBytes;
         activeState.handoffStatus = "COMPLETION_RECEIVED";
+      }
+      if (activeState.investigationInFlight) {
+        const isFailed = Boolean(payload.error || (payload.result && payload.result.status === "FAILED"));
+        if (!isFailed) {
+          activeState.post_investigation = true;
+          activeState.postInvestigation = true;
+        } else {
+          activeState.post_investigation = false;
+          activeState.postInvestigation = false;
+        }
+        delete activeState.investigationInFlight;
       }
     } else if (toolName === "send_message") {
       activeState.send_message_calls = (activeState.send_message_calls || 0) + 1;
