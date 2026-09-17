@@ -15,10 +15,122 @@ import {
   isValidationCommand,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 import { buildSnapshot } from "../dream/snapshot.mjs";
-import { deriveDecisionState, deriveAvailableActions, classifyBaselineDecision } from "../dream/action-space.mjs";
+import {
+  DECISION_TYPES,
+  deriveDecisionState,
+  deriveAvailableActions,
+  classifyBaselineDecision,
+} from "../dream/action-space.mjs";
 import { recordDecision, dreamCorrelationKey } from "../dream/decision-recorder.mjs";
 import { DREAM_SCHEMAS } from "../dream/records.mjs";
-import { evaluatePolicy } from "../dream/policy-engine.mjs";
+import {
+  evaluatePolicy,
+  computePolicyId,
+  validatePolicy,
+} from "../dream/policy-engine.mjs";
+
+const WORKER_ACTION_TO_PROFILE = Object.freeze({
+  FLASH_LOW: "flash-low-worker",
+  FLASH_MEDIUM: "flash-medium-worker",
+  FLASH_HIGH: "flash-worker",
+});
+
+const PROFILE_TO_WORKER_ACTION = Object.freeze({
+  "flash-low-worker": "FLASH_LOW",
+  "flash-medium-worker": "FLASH_MEDIUM",
+  "flash-worker": "FLASH_HIGH",
+});
+
+function loadActivePolicy() {
+  const activePolicyPath = resolve(dirname(fileURLToPath(import.meta.url)), "../dream/policies/static-policy-v1.json");
+  if (!existsSync(activePolicyPath)) {
+    return { policy: null, diagnostic: "MISSING_POLICY" };
+  }
+  let raw = "";
+  try {
+    raw = readFileSync(activePolicyPath, "utf-8");
+  } catch {
+    return { policy: null, diagnostic: "MISSING_POLICY" };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { policy: null, diagnostic: "MALFORMED_JSON" };
+  }
+  if (!parsed || typeof parsed !== "object" || parsed.schema !== DREAM_SCHEMAS.POLICY) {
+    return { policy: parsed, diagnostic: "UNSUPPORTED_SCHEMA" };
+  }
+  try {
+    const computedId = computePolicyId(parsed);
+    if (parsed.policy_id !== computedId) {
+      return { policy: parsed, diagnostic: "POLICY_HASH_MISMATCH" };
+    }
+  } catch {
+    return { policy: parsed, diagnostic: "INVALID_POLICY" };
+  }
+  const val = validatePolicy(parsed);
+  if (!val.valid) {
+    return { policy: parsed, diagnostic: "INVALID_POLICY" };
+  }
+  return { policy: parsed, diagnostic: null };
+}
+
+function evaluatePolicyWithFallback({ decisionType, state, availableActions, baselineAction }) {
+  const loaded = loadActivePolicy();
+  const safeBaseline = typeof baselineAction === "string" ? baselineAction : "";
+  if (loaded.diagnostic) {
+    return {
+      ok: false,
+      action: safeBaseline,
+      source: "STATIC_ROUTING_FALLBACK",
+      policy_id: loaded.policy?.policy_id || null,
+      baseline_action: safeBaseline,
+      policy_diagnostic: loaded.diagnostic,
+    };
+  }
+  try {
+    const evalRes = evaluatePolicy({
+      policy: loaded.policy,
+      decisionType,
+      state,
+      availableActions,
+      baselineAction: safeBaseline,
+    });
+    if (evalRes.ok) {
+      return {
+        ok: true,
+        action: evalRes.action,
+        source: "STATIC_POLICY_V1",
+        policy_id: evalRes.policy_id,
+        baseline_action: safeBaseline,
+        policy_diagnostic: null,
+      };
+    }
+    let diag = "INTERPRETER_EXCEPTION";
+    if (evalRes.diagnostic?.includes("POLICY_CONFLICT")) diag = "POLICY_CONFLICT";
+    else if (evalRes.diagnostic?.includes("POLICY_INVALID_ACTION")) diag = "POLICY_INVALID_ACTION";
+    else if (evalRes.diagnostic?.includes("NO_MATCHING_RULE")) diag = "NO_MATCHING_RULE";
+    else if (evalRes.diagnostic?.includes("INVALID_POLICY")) diag = "INVALID_POLICY";
+    return {
+      ok: false,
+      action: evalRes.action || safeBaseline,
+      source: "STATIC_ROUTING_FALLBACK",
+      policy_id: evalRes.policy_id || loaded.policy?.policy_id || null,
+      baseline_action: safeBaseline,
+      policy_diagnostic: diag,
+    };
+  } catch {
+    return {
+      ok: false,
+      action: safeBaseline,
+      source: "STATIC_ROUTING_FALLBACK",
+      policy_id: loaded.policy?.policy_id || null,
+      baseline_action: safeBaseline,
+      policy_diagnostic: "INTERPRETER_EXCEPTION",
+    };
+  }
+}
 
 function readStdin() {
   try {
@@ -722,7 +834,24 @@ function main() {
           if (Array.isArray(parsed)) subagents = parsed;
         } catch {}
       }
+
+      // Check retry budget monotonicity
+      if (activeState.retry || (activeState.attempt && activeState.attempt > 0) || activeState.retryReason || activeState.retry_reason) {
+        const prevRemaining = activeState.prevRemainingAttempts ?? activeState.remainingAttempts ?? activeState.retry_remaining;
+        const currentRemaining = toolArgs.remainingAttempts ?? activeState.remainingAttempts ?? activeState.retry_remaining;
+        if (prevRemaining !== undefined && currentRemaining !== undefined && currentRemaining > prevRemaining) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: `RETRY_BUDGET_VIOLATION: Retry budget cannot increase (attempted ${currentRemaining} > previous ${prevRemaining}).`,
+          }));
+          return;
+        }
+      }
+
+      const candidatePending = [];
+      const decisionsToRecord = [];
       let seq = roleBindings.pendingSeq || 0;
+
       for (let idx = 0; idx < subagents.length; idx++) {
         seq++;
         const sub = subagents[idx];
@@ -731,8 +860,17 @@ function main() {
         const isReviewer = roleStr.includes("reviewer") || typeName === "flash-reviewer";
         const subRole = isReviewer ? "REVIEWER" : "WORKER";
         let profile = typeName;
-        if (!profile) {
-          profile = isReviewer ? "flash-reviewer" : (activeState.requested_agent || "flash-worker");
+        if (!profile || profile.toLowerCase() === "worker") {
+          const normModel = String(sub.Model || "").toLowerCase();
+          if (normModel === "flash_lite" || normModel.includes("flash-low") || normModel === "low") {
+            profile = "flash-low-worker";
+          } else if (normModel === "flash" || normModel === "flash_medium" || normModel.includes("flash-medium") || normModel === "medium") {
+            profile = "flash-medium-worker";
+          } else if (normModel === "pro" || normModel === "high" || normModel.includes("flash-high")) {
+            profile = "flash-worker";
+          } else {
+            profile = isReviewer ? "flash-reviewer" : (activeState.requested_agent || "flash-worker");
+          }
         }
         let modelStr = sub.Model || null;
         if (!modelStr || modelStr === "inherit" || modelStr === "pro" || modelStr === "high") {
@@ -751,7 +889,7 @@ function main() {
         const benchmarkRunId = activeState.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
         const toolCallId = payload.toolCallId || null;
 
-        roleBindings.pendingSubagents.push({
+        candidatePending.push({
           seq,
           conversationId: null,
           parentConversationId: convId,
@@ -768,11 +906,214 @@ function main() {
           consumedBy: null,
           consumedAt: null,
         });
+
+        const isWorker = isWorkerRole(profile.toUpperCase()) || isWorkerRole(String(sub.Role || "").toUpperCase()) || profile.includes("worker");
+        const isCritical = (activeState.criticality === "CRITICAL" || activeContract?.criticality === "CRITICAL");
+
+        if (isWorker && !isReviewer && !isDirectAction && !isCritical) {
+          let defaultComplexity = "NORMAL";
+          if (profile === "flash-low-worker") defaultComplexity = "SIMPLE";
+          else if (profile === "flash-worker") defaultComplexity = "DIFFICULT";
+          else if (profile === "flash-medium-worker") defaultComplexity = "NORMAL";
+
+          const isRetry = Boolean(activeState.retry || (activeState.attempt && activeState.attempt > 0) || activeState.retryReason || activeState.retry_reason);
+          const rawReason = activeState.retryReason || activeState.retry_reason || null;
+          const retryReason = typeof rawReason === "string" ? rawReason.trim().toUpperCase().replace(/[\s-]+/g, "_") : null;
+
+          const facts = {
+            taskAction: activeState.taskAction || "IMPLEMENT",
+            taskDomain: activeState.taskDomain || "CODE",
+            criticality: activeState.criticality || "NORMAL",
+            complexity: activeState.complexity || defaultComplexity,
+            retry: isRetry,
+            attempt: activeState.attempt || 0,
+            remainingAttempts: activeState.remainingAttempts ?? activeState.retry_remaining ?? 2,
+            retryReason,
+            isDirectAction: false,
+          };
+
+          const taskSpec = sub.Prompt || activeState.taskSpec || activeState.taskDescription || activeState.prompt || "Worker delegation";
+          const taskObj = {
+            spec: taskSpec,
+            task_action: facts.taskAction,
+            task_domain: facts.taskDomain,
+            criticality: facts.criticality,
+          };
+
+          const contractObj = activeContract || {
+            allowed_paths: [],
+            forbidden_paths: [".agents/**"],
+            criticality: "NORMAL",
+          };
+
+          const runtimeObj = {
+            node_version: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            schema_version: DREAM_SCHEMAS.SNAPSHOT,
+          };
+
+          const execStateObj = {
+            step_sequence: payload.stepIdx ?? activeState.stepIdx ?? 0,
+            attempt: facts.attempt,
+            retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+            mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
+          };
+
+          const evidenceObj = activeState.evidenceSummary || activeState.evidence || {
+            tests: activeState.workerValidationVerified ? "PASS" : "UNKNOWN",
+            typecheck: "UNKNOWN",
+            build: "UNKNOWN",
+            validation_fresh: Boolean(activeState.workerValidationFresh),
+            scope_check: "UNKNOWN",
+          };
+
+          const snapRes = buildSnapshot({
+            repoRoot,
+            task: taskObj,
+            contract: contractObj,
+            runtime: runtimeObj,
+            executionState: execStateObj,
+            evidence: evidenceObj,
+          });
+
+          if (!snapRes.ok) {
+            activeState.dreamRecordingError = snapRes.reason || "SNAPSHOT_BUILD_FAILED";
+            try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+            continue;
+          }
+
+          const decisionState = deriveDecisionState(facts, activeState, evidenceObj);
+
+          // 1. Check INVESTIGATION_STRATEGY gate if this is a clean implementation
+          if (
+            decisionState.task_action === "IMPLEMENT" &&
+            (decisionState.mutation_seq === 0 || decisionState.mutation_seq === undefined) &&
+            !decisionState.post_investigation &&
+            !isRetry
+          ) {
+            const invAvailable = deriveAvailableActions(DECISION_TYPES.INVESTIGATION_STRATEGY, decisionState);
+            if (invAvailable.length > 0) {
+              const invEval = evaluatePolicyWithFallback({
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                state: decisionState,
+                availableActions: invAvailable,
+                baselineAction: "IMPLEMENT_DIRECT",
+              });
+              if (invEval.action === "INVESTIGATE_FIRST") {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: "POLICY_MISMATCH: Investigation strategy requires INVESTIGATE_FIRST before implementation worker can be delegated.",
+                }));
+                return;
+              }
+            }
+          }
+
+          // 2. Determine decision type: RETRY_ACTION vs WORKER_TIER
+          const route = {
+            kind: "worker",
+            profile,
+            model: modelStr,
+            retry: isRetry,
+            retryReason,
+          };
+          const baselineDecision = classifyBaselineDecision(facts, route);
+          const decisionType = (isRetry && retryReason) ? DECISION_TYPES.RETRY_ACTION : DECISION_TYPES.WORKER_TIER;
+          const availableActions = deriveAvailableActions(decisionType, decisionState);
+          const baselineAction = baselineDecision?.chosenAction || (decisionType === DECISION_TYPES.WORKER_TIER ? "FLASH_MEDIUM" : "RETRY_SAME");
+
+          const evalResult = evaluatePolicyWithFallback({
+            decisionType,
+            state: decisionState,
+            availableActions,
+            baselineAction,
+          });
+
+          // 3. Real Online Policy Authority Enforcements
+          if (decisionType === DECISION_TYPES.WORKER_TIER) {
+            const expectedProfile = WORKER_ACTION_TO_PROFILE[evalResult.action];
+            if (expectedProfile && profile !== expectedProfile) {
+              console.log(JSON.stringify({
+                decision: "deny",
+                reason: `POLICY_MISMATCH: Policy selected ${evalResult.action} (${expectedProfile}) but requested subagent was "${profile}". Execution blocked.`,
+              }));
+              return;
+            }
+          } else if (decisionType === DECISION_TYPES.RETRY_ACTION) {
+            if (evalResult.action === "INVESTIGATE_FIRST") {
+              console.log(JSON.stringify({
+                decision: "deny",
+                reason: `POLICY_MISMATCH: Retry policy selected INVESTIGATE_FIRST for retry reason "${retryReason}". Investigation required before worker execution.`,
+              }));
+              return;
+            }
+            if (evalResult.action === "REPLAN") {
+              console.log(JSON.stringify({
+                decision: "deny",
+                reason: `POLICY_MISMATCH: Retry policy selected REPLAN for retry reason "${retryReason}". Replanning required before worker execution.`,
+              }));
+              return;
+            }
+            if (evalResult.action === "ESCALATE_WORKER") {
+              if (profile !== "flash-worker") {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: `POLICY_MISMATCH: Retry policy selected ESCALATE_WORKER (expected flash-worker) for retry reason "${retryReason}" but requested "${profile}". Execution blocked.`,
+                }));
+                return;
+              }
+            }
+            if (evalResult.action === "RETRY_SAME") {
+              const lastProfile = activeState.lastWorkerProfile;
+              if (lastProfile && lastProfile !== "flash-worker" && profile === "flash-worker") {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: `POLICY_MISMATCH: Retry policy selected RETRY_SAME for retry reason "${retryReason}" but requested escalated worker "${profile}". Execution blocked.`,
+                }));
+                return;
+              }
+            }
+          }
+
+          const corrKey = dreamCorrelationKey({
+            conversationId: convId,
+            stepIdx: payload.stepIdx ?? 0,
+            toolCallId: toolCall.id || payload.toolCallId || "",
+            branchOrdinal: idx,
+          });
+
+          const decRecordInput = {
+            decision_type: decisionType,
+            state: decisionState,
+            available_actions: availableActions,
+            chosen_action: evalResult.action,
+            policy_source: evalResult.source,
+            policy_id: evalResult.policy_id,
+            baseline_action: evalResult.baseline_action,
+            policy_diagnostic: evalResult.policy_diagnostic,
+            actor_identity: actor.role || "ORCHESTRATOR",
+            conversation_id: convId,
+            step_idx: payload.stepIdx ?? 0,
+            tool_call_id: toolCall.id || payload.toolCallId || "",
+            branch_ordinal: idx,
+          };
+
+          decisionsToRecord.push({
+            snapshot: snapRes.snapshot,
+            decision: decRecordInput,
+            correlationKey: corrKey,
+            profile,
+          });
+        }
       }
+
+      // All subagents approved: commit state, bindings, and record decisions
+      roleBindings.pendingSubagents.push(...candidatePending);
       roleBindings.pendingSeq = seq;
       saveRoleBindings(roleBindingsPath, roleBindings);
 
-      // Deterministic Bookkeeping: auto-persist Scope Contract from invoke_subagent payload/prompt
+      // Auto-persist Scope Contract from invoke_subagent payload/prompt
       for (const sub of subagents) {
         const promptText = sub.Prompt || "";
         const extracted = extractScopeContractFromPrompt(promptText, sub);
@@ -806,191 +1147,31 @@ function main() {
       activeState.taskDomain = activeState.taskDomain || "CODE";
       activeState.handoffObserved = true;
       activeState.handoffStatus = "MESSAGE_DELIVERED";
+      if (candidatePending.length > 0) {
+        activeState.lastWorkerProfile = candidatePending[candidatePending.length - 1].profile;
+      }
       try {
         mkdirSync(dirname(statePath), { recursive: true });
         writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
       } catch {}
 
-      // Phase 1 Dream Record-Only Adapter for supported worker delegations
-      try {
-        const isCritical = (activeState.criticality === "CRITICAL" || activeContract?.criticality === "CRITICAL");
-        if (!isDirectAction && !isCritical) {
-          for (let idx = 0; idx < subagents.length; idx++) {
-            const sub = subagents[idx];
-            const typeName = sub.TypeName || sub.name || "";
-            const roleStr = String(sub.Role || typeName).toLowerCase();
-            const isReviewer = roleStr.includes("reviewer") || typeName === "flash-reviewer";
-            if (isReviewer) continue;
-
-            const profile = typeName || activeState.requested_agent || "flash-worker";
-            const isWorker = isWorkerRole(profile.toUpperCase()) || isWorkerRole(String(sub.Role || "").toUpperCase()) || profile.includes("worker");
-            if (!isWorker) continue;
-
-            let defaultComplexity = "NORMAL";
-            if (profile === "flash-low-worker") defaultComplexity = "SIMPLE";
-            else if (profile === "flash-worker") defaultComplexity = "DIFFICULT";
-            else if (profile === "flash-medium-worker") defaultComplexity = "NORMAL";
-
-            const facts = {
-              taskAction: activeState.taskAction || "IMPLEMENT",
-              taskDomain: activeState.taskDomain || "CODE",
-              criticality: activeState.criticality || "NORMAL",
-              complexity: activeState.complexity || defaultComplexity,
-              retry: Boolean(activeState.retry || (activeState.attempt && activeState.attempt > 0)),
-              attempt: activeState.attempt || 0,
-              retryReason: activeState.retryReason || activeState.retry_reason || null,
-              isDirectAction: false,
-            };
-
-            const taskSpec = sub.Prompt || activeState.taskSpec || activeState.taskDescription || activeState.prompt || "Worker delegation";
-            const taskObj = {
-              spec: taskSpec,
-              task_action: facts.taskAction,
-              task_domain: facts.taskDomain,
-              criticality: facts.criticality,
-            };
-
-            const contractObj = activeContract || {
-              allowed_paths: [],
-              forbidden_paths: [".agents/**"],
-              criticality: "NORMAL",
-            };
-
-            const runtimeObj = {
-              node_version: process.version,
-              platform: process.platform,
-              arch: process.arch,
-              schema_version: DREAM_SCHEMAS.SNAPSHOT,
-            };
-
-            const execStateObj = {
-              step_sequence: payload.stepIdx ?? activeState.stepIdx ?? 0,
-              attempt: facts.attempt,
-              retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
-              mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
-            };
-
-            const evidenceObj = activeState.evidenceSummary || activeState.evidence || {
-              tests: activeState.workerValidationVerified ? "PASS" : "UNKNOWN",
-              typecheck: "UNKNOWN",
-              build: "UNKNOWN",
-              validation_fresh: Boolean(activeState.workerValidationFresh),
-              scope_check: "UNKNOWN",
-            };
-
-            const snapRes = buildSnapshot({
-              repoRoot,
-              task: taskObj,
-              contract: contractObj,
-              runtime: runtimeObj,
-              executionState: execStateObj,
-              evidence: evidenceObj,
-            });
-
-            if (!snapRes.ok) {
-              activeState.dreamRecordingError = snapRes.reason || "SNAPSHOT_BUILD_FAILED";
-              try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-              continue;
-            }
-
-            const decisionState = deriveDecisionState(facts, activeState, evidenceObj);
-
-            const route = {
-              kind: "worker",
-              profile,
-              model: sub.Model || (profile === "flash-low-worker" ? "gemini-3.8-flash-low" : (profile === "flash-medium-worker" ? "gemini-3.8-flash-medium" : "gemini-3.8-flash-high")),
-            };
-            const baselineDecision = classifyBaselineDecision(facts, route);
-            const decisionType = baselineDecision?.decisionType || "WORKER_TIER";
-            const availableActions = deriveAvailableActions(decisionType, decisionState);
-
-            if (
-              baselineDecision &&
-              baselineDecision.decisionType &&
-              baselineDecision.chosenAction &&
-              Array.isArray(availableActions) &&
-              availableActions.length > 0 &&
-              availableActions.includes(baselineDecision.chosenAction)
-            ) {
-              const corrKey = dreamCorrelationKey({
-                conversationId: convId,
-                stepIdx: payload.stepIdx ?? 0,
-                toolCallId: toolCall.id || payload.toolCallId || "",
-                branchOrdinal: idx,
-              });
-
-              let chosenAction = baselineDecision.chosenAction;
-              let policySource = "STATIC_ROUTING_FALLBACK";
-              let policyId = null;
-
-              try {
-                const policyCandidatePaths = [
-                  resolve(repoRoot || ".", "runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"),
-                  resolve(dirname(fileURLToPath(import.meta.url)), "../dream/policies/static-policy-v1.json"),
-                ];
-                let policyJson = null;
-                for (const p of policyCandidatePaths) {
-                  if (existsSync(p)) {
-                    policyJson = JSON.parse(readFileSync(p, "utf-8"));
-                    break;
-                  }
-                }
-                if (policyJson) {
-                  const evalResult = evaluatePolicy({
-                    policy: policyJson,
-                    decisionType: baselineDecision.decisionType,
-                    state: decisionState,
-                    availableActions,
-                    baselineAction: baselineDecision.chosenAction,
-                  });
-                  if (evalResult.ok) {
-                    chosenAction = evalResult.action;
-                    policySource = "STATIC_POLICY_V1";
-                    policyId = evalResult.policy_id;
-                  } else {
-                    policySource = "STATIC_ROUTING_FALLBACK";
-                  }
-                }
-              } catch {
-                policySource = "STATIC_ROUTING_FALLBACK";
-              }
-
-              const decRecordInput = {
-                decision_type: baselineDecision.decisionType,
-                state: decisionState,
-                available_actions: availableActions,
-                chosen_action: chosenAction,
-                policy_source: policySource,
-                policy_id: policyId,
-                actor_identity: actor.role || "ORCHESTRATOR",
-                conversation_id: convId,
-                step_idx: payload.stepIdx ?? 0,
-                tool_call_id: toolCall.id || payload.toolCallId || "",
-                branch_ordinal: idx,
-              };
-
-              const decRes = recordDecision({
-                repoRoot,
-                snapshot: snapRes.snapshot,
-                decision: decRecordInput,
-                correlationKey: corrKey,
-              });
-
-              if (!decRes.recorded) {
-                activeState.dreamRecordingError = decRes.reason || decRes.error_code || "DECISION_RECORD_FAILED";
-                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-              }
-            }
-          }
+      // Record factual decisions immediately pre-action
+      for (const item of decisionsToRecord) {
+        const decRes = recordDecision({
+          repoRoot,
+          snapshot: item.snapshot,
+          decision: item.decision,
+          correlationKey: item.correlationKey,
+        });
+        if (!decRes.recorded) {
+          activeState.dreamRecordingError = decRes.reason || decRes.error_code || "DECISION_RECORD_FAILED";
+          try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
         }
-      } catch (dreamErr) {
-        activeState.dreamRecordingError = dreamErr.code || dreamErr.message || "DREAM_RECORD_ERROR";
-        try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
       }
-    }
 
-    console.log(JSON.stringify({ decision: "allow" }));
-    return;
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
+    }
   }
 
   function allowCommand(commandToRun) {
@@ -1440,6 +1621,87 @@ function main() {
           reason: `SCOPE_VIOLATION: "${relTarget}" is outside allowedPaths [${allowed.join(", ")}]. If required, return CROSS_DOMAIN_REQUEST to Orchestrator.`
         }));
         return;
+      }
+
+      // Check INVESTIGATION_STRATEGY before first mutation of eligible implementation
+      if (
+        !isControlPlane &&
+        (activeState.taskAction === "IMPLEMENT" || !activeState.taskAction) &&
+        (!activeState.mutationSeq || activeState.mutationSeq === 0) &&
+        !activeState.postInvestigation &&
+        !isDirectAction
+      ) {
+        const facts = {
+          taskAction: activeState.taskAction || "IMPLEMENT",
+          taskDomain: activeState.taskDomain || "CODE",
+          criticality: activeState.criticality || "NORMAL",
+          complexity: activeState.complexity || "NORMAL",
+          postInvestigation: false,
+          isDirectAction: false,
+        };
+        const invState = deriveDecisionState(facts, activeState);
+        const invAvailable = deriveAvailableActions(DECISION_TYPES.INVESTIGATION_STRATEGY, invState);
+        if (invAvailable.length > 0) {
+          const invRes = evaluatePolicyWithFallback({
+            decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+            state: invState,
+            availableActions: invAvailable,
+            baselineAction: "IMPLEMENT_DIRECT",
+          });
+          if (invRes.action === "INVESTIGATE_FIRST") {
+            console.log(JSON.stringify({
+              decision: "deny",
+              reason: "INVESTIGATION_REQUIRED: Investigation strategy policy requires INVESTIGATE_FIRST before implementation mutations can execute.",
+            }));
+            return;
+          }
+          if (invRes.action === "IMPLEMENT_DIRECT" && !activeState.investigationStrategyEvaluated) {
+            const taskObj = {
+              spec: activeState.taskSpec || "Implementation mutation",
+              task_action: facts.taskAction,
+              task_domain: facts.taskDomain,
+              criticality: facts.criticality,
+            };
+            const snapRes = buildSnapshot({
+              repoRoot,
+              task: taskObj,
+              contract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
+              runtime: { node_version: process.version, platform: process.platform, arch: process.arch, schema_version: DREAM_SCHEMAS.SNAPSHOT },
+              executionState: { step_sequence: payload.stepIdx ?? 0, attempt: activeState.attempt || 0, retry_remaining: activeState.retry_remaining ?? 0, mutation_seq: 0 },
+              evidence: activeState.evidenceSummary || activeState.evidence || { tests: "UNKNOWN", typecheck: "UNKNOWN", build: "UNKNOWN", validation_fresh: false, scope_check: "UNKNOWN" },
+            });
+            if (snapRes.ok) {
+              const corrKey = dreamCorrelationKey({
+                conversationId: payload.conversationId || activeState.conversationId || "default",
+                stepIdx: payload.stepIdx ?? 0,
+                toolCallId: toolCall.id || payload.toolCallId || "",
+                branchOrdinal: 0,
+              });
+              recordDecision({
+                repoRoot,
+                snapshot: snapRes.snapshot,
+                decision: {
+                  decision_type: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                  state: invState,
+                  available_actions: invAvailable,
+                  chosen_action: "IMPLEMENT_DIRECT",
+                  policy_source: invRes.source,
+                  policy_id: invRes.policy_id,
+                  baseline_action: invRes.baseline_action,
+                  policy_diagnostic: invRes.policy_diagnostic,
+                  actor_identity: activeRole || "WORKER",
+                  conversation_id: payload.conversationId || activeState.conversationId || "default",
+                  step_idx: payload.stepIdx ?? 0,
+                  tool_call_id: toolCall.id || payload.toolCallId || "",
+                  branch_ordinal: 0,
+                },
+                correlationKey: corrKey,
+              });
+            }
+            activeState.investigationStrategyEvaluated = true;
+            try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+          }
+        }
       }
 
       console.log(JSON.stringify({ decision: "allow" }));

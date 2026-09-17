@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, chmodSync, readdirSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { computePolicyId } from "../.agents/dream/policy-engine.mjs";
 
 const __testDir = dirname(fileURLToPath(import.meta.url));
 const preToolScript = resolve(__testDir, "../.agents/hooks/pre-tool-enforce.mjs");
@@ -409,3 +410,412 @@ test("Task 5 pre-tool: unwritable telemetry fails open and still returns decisio
     cleanDreamTestState();
   }
 });
+
+test("Task 2: online policy authority denies mismatched worker delegation and forbids false DECISION recording", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+
+    // Requested worker is flash-worker (FLASH_HIGH), but policy selects FLASH_MEDIUM
+    const input = JSON.stringify({
+      conversationId: "task2-mismatch-conv",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_mismatch_1",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            {
+              TypeName: "flash-worker",
+              Role: "worker",
+              Prompt: "Implement feature X in src/foo.ts. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+    const output = JSON.parse(rawOutput.trim());
+
+    // Must be DENIED before execution
+    assert.equal(output.decision, "deny", "Mismatched worker delegation must be denied");
+    assert.match(output.reason, /POLICY_MISMATCH/i, "Reason must indicate policy mismatch");
+    assert.match(output.reason, /FLASH_MEDIUM/i, "Reason must inform expected deterministic action");
+
+    // Invariant: no false DECISION record may be created
+    const recordsPath = ".agents/telemetry/events.jsonl";
+    if (existsSync(recordsPath)) {
+      const records = readFileSync(recordsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+      const decisionEvents = records.filter(r => r.type === "DECISION");
+      assert.equal(decisionEvents.length, 0, "No DECISION event should be recorded on denied delegation");
+    }
+
+    // Role bindings must not register the denied subagent
+    const roleBindingsPath = ".agents/state/role-bindings.json";
+    if (existsSync(roleBindingsPath)) {
+      const bindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+      assert.equal(bindings.pendingSubagents?.length ?? 0, 0, "Denied subagent must not be in pendingSubagents");
+    }
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 2: execution identity invariant (policy selected action == accepted execution identity == recorded chosen_action)", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+
+    // Requested worker matches policy expectation (flash-medium-worker)
+    const input = JSON.stringify({
+      conversationId: "task2-match-conv",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_match_1",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            {
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Implement feature X in src/foo.ts. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+    const output = JSON.parse(rawOutput.trim());
+
+    assert.equal(output.decision, "allow");
+
+    // Verify DECISION record
+    const recordsPath = ".agents/telemetry/events.jsonl";
+    assert.ok(existsSync(recordsPath), "events.jsonl must exist");
+    const records = readFileSync(recordsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const dec = records.find(r => r.type === "DECISION");
+    assert.ok(dec, "DECISION event must be recorded");
+
+    // Execution identity assertions
+    const policySelectedAction = "FLASH_MEDIUM";
+    const acceptedExecutionIdentity = "flash-medium-worker";
+    assert.equal(dec.chosen_action, policySelectedAction, "recorded chosen_action must match policy action");
+    assert.equal(dec.chosen_action, "FLASH_MEDIUM");
+
+    // Role bindings check
+    const roleBindingsPath = ".agents/state/role-bindings.json";
+    const bindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    const pending = bindings.pendingSubagents?.[0];
+    assert.ok(pending, "pendingSubagents must have registered worker");
+    assert.equal(pending.profile, acceptedExecutionIdentity, "Registered profile must match accepted execution identity");
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 3: INVESTIGATION_STRATEGY congruence (IMPLEMENT_DIRECT allows and records factual DECISION)", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "WORKER",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+      mutationSeq: 0,
+      postInvestigation: false,
+    }, null, 2), "utf-8");
+
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "contract-inv-direct",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["npm test"],
+    }, null, 2), "utf-8");
+
+    // Worker attempts first write to product code
+    const input = JSON.stringify({
+      conversationId: "task3-inv-direct-conv",
+      stepIdx: 2,
+      toolCall: {
+        id: "call_write_direct",
+        name: "write_to_file",
+        args: {
+          TargetFile: "src/feature.ts",
+          CodeContent: "export const x = 1;",
+          Description: "implement feature",
+        }
+      }
+    });
+
+    const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+    const output = JSON.parse(rawOutput.trim());
+
+    assert.equal(output.decision, "allow");
+
+    // Check that INVESTIGATION_STRATEGY DECISION was factually recorded pre-action
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    assert.ok(existsSync(eventsPath));
+    const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const invDecision = events.find(e => e.type === "DECISION" && e.decision_type === "INVESTIGATION_STRATEGY");
+    assert.ok(invDecision, "INVESTIGATION_STRATEGY decision must be recorded");
+    assert.equal(invDecision.chosen_action, "IMPLEMENT_DIRECT");
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 3: INVESTIGATION_STRATEGY blocked mismatch (INVESTIGATE_FIRST blocks worker mutation)", () => {
+  cleanDreamTestState();
+  const policyBackupPath = resolve(__testDir, "../.agents/dream/policies/static-policy-v1.json");
+  let originalPolicy = null;
+  if (existsSync(policyBackupPath)) {
+    originalPolicy = readFileSync(policyBackupPath, "utf-8");
+  }
+
+  try {
+    // Temporarily insert high-priority INVESTIGATE_FIRST rule
+    const parsed = JSON.parse(originalPolicy);
+    parsed.rules.unshift({
+      id: "force-investigate-first",
+      decision_type: "INVESTIGATION_STRATEGY",
+      priority: 150,
+      when: { task_action: ["IMPLEMENT"] },
+      choose: "INVESTIGATE_FIRST",
+      description: "Force investigation first for test",
+    });
+    parsed.policy_id = computePolicyId(parsed);
+    writeFileSync(policyBackupPath, JSON.stringify(parsed, null, 2), "utf-8");
+
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "WORKER",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+      mutationSeq: 0,
+      postInvestigation: false,
+    }, null, 2), "utf-8");
+
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "contract-inv-gate",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["npm test"],
+    }, null, 2), "utf-8");
+
+    const input = JSON.stringify({
+      conversationId: "task3-inv-block-conv",
+      stepIdx: 2,
+      toolCall: {
+        id: "call_write_blocked",
+        name: "write_to_file",
+        args: {
+          TargetFile: "src/feature.ts",
+          CodeContent: "export const x = 1;",
+          Description: "implement feature",
+        }
+      }
+    });
+
+    const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+    const output = JSON.parse(rawOutput.trim());
+
+    // Deterministic denial gate trips
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /INVESTIGATION_REQUIRED/i);
+
+    // No DECISION record created on denial
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    if (existsSync(eventsPath)) {
+      const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+      const invDec = events.find(e => e.type === "DECISION" && e.decision_type === "INVESTIGATION_STRATEGY");
+      assert.equal(invDec, undefined);
+    }
+  } finally {
+    if (originalPolicy !== null) {
+      writeFileSync(policyBackupPath, originalPolicy, "utf-8");
+    }
+    cleanDreamTestState();
+  }
+});
+
+test("Task 3: RETRY_ACTION semantics (congruence allows, mismatch and budget inflation blocked)", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+      retry: true,
+      attempt: 1,
+      remainingAttempts: 1,
+      prevRemainingAttempts: 1,
+      retryReason: "FAILED_TEST",
+      lastWorkerProfile: "flash-medium-worker",
+    }, null, 2), "utf-8");
+
+    // Case A: Congruent retry (RETRY_SAME with same worker) -> ALLOW
+    const inputMatch = JSON.stringify({
+      conversationId: "task3-retry-conv",
+      stepIdx: 5,
+      toolCall: {
+        id: "call_retry_match",
+        name: "invoke_subagent",
+        args: {
+          remainingAttempts: 1,
+          Subagents: [
+            {
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Retry fix for failed test. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutputMatch = execFileSync("node", [preToolScript], { input: inputMatch, encoding: "utf-8" });
+    const outputMatch = JSON.parse(rawOutputMatch.trim());
+    assert.equal(outputMatch.decision, "allow");
+
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    assert.ok(existsSync(eventsPath));
+    const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const retryDec = events.find(e => e.type === "DECISION" && e.decision_type === "RETRY_ACTION");
+    assert.ok(retryDec, "RETRY_ACTION decision must be recorded");
+    assert.equal(retryDec.chosen_action, "RETRY_SAME");
+
+    // Case B: Retry budget inflation attempted -> DENY
+    const inputInflation = JSON.stringify({
+      conversationId: "task3-retry-conv",
+      stepIdx: 6,
+      toolCall: {
+        id: "call_retry_inflate",
+        name: "invoke_subagent",
+        args: {
+          remainingAttempts: 5, // inflated!
+          Subagents: [
+            {
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Retry fix with inflated budget. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutputInflate = execFileSync("node", [preToolScript], { input: inputInflation, encoding: "utf-8" });
+    const outputInflate = JSON.parse(rawOutputInflate.trim());
+    assert.equal(outputInflate.decision, "deny");
+    assert.match(outputInflate.reason, /RETRY_BUDGET_VIOLATION/i);
+
+    // Case C: Mismatched escalation on RETRY_SAME -> DENY
+    const inputEscalate = JSON.stringify({
+      conversationId: "task3-retry-conv",
+      stepIdx: 7,
+      toolCall: {
+        id: "call_retry_escalate",
+        name: "invoke_subagent",
+        args: {
+          remainingAttempts: 1,
+          Subagents: [
+            {
+              TypeName: "flash-worker", // escalated when policy wants RETRY_SAME
+              Role: "worker",
+              Prompt: "Retry fix with unauthorized escalation. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutputEscalate = execFileSync("node", [preToolScript], { input: inputEscalate, encoding: "utf-8" });
+    const outputEscalate = JSON.parse(rawOutputEscalate.trim());
+    assert.equal(outputEscalate.decision, "deny");
+    assert.match(outputEscalate.reason, /POLICY_MISMATCH/i);
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("Task 5: Self-host isolation (hook resolves active image policy, ignoring candidate repo source)", () => {
+  cleanDreamTestState();
+  const fakeRepoDir = resolve(".agents/scratch/fake-repo-candidate");
+  try {
+    mkdirSync(resolve(fakeRepoDir, "runtimes/antigravity/.agents/dream/policies"), { recursive: true });
+    // Write corrupted/mismatched candidate policy into fakeRepoDir
+    writeFileSync(
+      resolve(fakeRepoDir, "runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"),
+      JSON.stringify({ schema: "corrupted-candidate-policy" }),
+      "utf-8"
+    );
+
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+
+    const input = JSON.stringify({
+      conversationId: "task5-isolation-conv",
+      repoRoot: fakeRepoDir, // Pass candidate repoRoot containing corrupted candidate policy
+      stepIdx: 1,
+      toolCall: {
+        id: "call_isolation_1",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            {
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Implement feature in isolated repo. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+    const output = JSON.parse(rawOutput.trim());
+
+    // Hook must succeed using active runtime image policy
+    assert.equal(output.decision, "allow");
+
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    assert.ok(existsSync(eventsPath));
+    const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const dec = events.find(e => e.type === "DECISION");
+    assert.ok(dec);
+    assert.equal(dec.policy_source, "STATIC_POLICY_V1", "Must load STATIC_POLICY_V1 from active image, NOT corrupted candidate source");
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+
