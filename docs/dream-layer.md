@@ -237,18 +237,24 @@ governance -> decision state -> available_actions -> declarative policy -> autho
 
 ## 10. Milestone D Integration Hotfix & Architecture Invariant Gate
 
-The Milestone D Integration Hotfix hardens the runtime against edge cases discovered during full-lifecycle testing and formalizes the 14 Architecture Invariants:
+The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime against edge cases discovered during full-lifecycle testing and formalize the 18 Architecture Invariants:
 
-1. **Exact Investigation Correlation Lifecycle**:
-   - `pre-tool-enforce.mjs` captures complete minimal factual identity (`correlationKey`, `toolCallId`, `stepIdx`, `conversationId`, `parentConversationId`, `subagentRole`, `subagentProfile`, `decision_type`).
-   - `post-tool-telemetry.mjs` only consumes `investigationInFlight` when the completion matches exact identity across all correlation dimensions. Unrelated subagent tool invocations or cancellations never erroneously close an investigation.
+1. **Exact Investigation Correlation Lifecycle (Hard Identity Enforced)**:
+   - `pre-tool-enforce.mjs` captures complete verifiable factual identity (`correlationKey`, `toolCallId`, `executionId`, `childConversationId`, `subagentId`, `stepIdx`, `conversationId`, `parentConversationId`, `subagentRole`, `subagentProfile`, `decision_type`).
+   - `post-tool-telemetry.mjs` only consumes `investigationInFlight` when at least one verifiable HARD IDENTITY (`toolCallId`, `executionId`, `childConversationId`/`subagentId`) is present on both sides and exactly equal, and additional identity dimensions do not conflict.
+   - In `invoke_subagent`: requires shared causal identity (`toolCallId` / `executionId`).
+   - In `manage_subagents`: requires exact child identity (`childConversationId` / `subagentId` / `executionId`). Role/profile/parent alone NEVER matches.
+   - Missing hard identity -> NO MATCH. Ambiguous identity -> NO MATCH.
+   - Preserves failure/cancelled semantics: SUCCESS sets `post_investigation = true` & clears `inFlight`; FAILED/CANCELLED clears `inFlight` but preserves `post_investigation = false`; no match leaves `inFlight` intact.
+   - Zero new `DECISION` records created on completion.
 2. **Explicit REPLAN State Machine Transition**:
-   - Generic tool triggers (`write_to_file`, `run_command`) no longer induce implicit replans.
+   - Generic tool triggers (`write_to_file`, `run_command`) never induce implicit replans.
    - When `RETRY_ACTION` policy evaluates to `REPLAN`, the transition `currentState -> PLANNED` is validated against Orchestra state machine rules (`validateStateTransition`), `DECISION(REPLAN)` is recorded immediately pre-transition, state is deterministically set to `PLANNED`, and the worker retry is denied with no lingering pending requirement. Invalid transitions fail closed to `HUMAN_GATE`.
-3. **Structural Policy Contract Parity**:
+3. **Structural Policy Contract Parity & Truthfulness**:
    - Strict structural alignment between JSON Schema Draft 2020-12 and pure JavaScript `validatePolicy()` across all properties (`base_policy`, `description`, `created_at`, `rule.description`).
-4. **Architecture Invariant Gate (ARCH-001 to ARCH-014)**:
-   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 14 architectural boundaries:
+   - Truthfulness is enforced: structural representable constraints (schema) and normative semantic invariants (`validatePolicy()`) are explicitly partitioned and verified.
+4. **Architecture Invariant Gate (ARCH-001 to ARCH-018)**:
+   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 18 architectural boundaries:
      - `ARCH-001`: Immutable Governance Over Dream
      - `ARCH-002`: Zero Online Context Overhead & No Raw History In Context
      - `ARCH-003`: Exact Replay Epistemic Invariant
@@ -263,3 +269,7 @@ The Milestone D Integration Hotfix hardens the runtime against edge cases discov
      - `ARCH-012`: Causal Pre-Action Decision Recording
      - `ARCH-013`: Exact Investigation Correlation Lifecycle
      - `ARCH-014`: Authoritative REPLAN State Transition
+     - `ARCH-015`: RETRY_SAME Exact Worker Identity
+     - `ARCH-016`: Active Self-Host Image Isolation
+     - `ARCH-017`: Policy Contract Truthfulness
+     - `ARCH-018`: Exact Replay Remains Model-Free
