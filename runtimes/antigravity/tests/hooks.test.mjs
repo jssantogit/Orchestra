@@ -285,6 +285,46 @@ test("Task 5 delegated worker: ACK stays pending and factual child Stop records 
   }
 });
 
+test("review/investigation delegation must not overwrite last implementation worker profile", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "REVIEW",
+      taskDomain: "CODE",
+      criticality: "CRITICAL",
+      lastWorkerProfile: "flash-medium-worker",
+    }, null, 2), "utf-8");
+
+    const reviewInput = JSON.stringify({
+      conversationId: "last-worker-review-parent",
+      stepIdx: 1,
+      toolCall: {
+        id: "call-review-pair",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Reviewer A. allowedPaths: [src/**]" },
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Reviewer B. allowedPaths: [src/**]" },
+          ],
+        },
+      },
+    });
+
+    const reviewRes = JSON.parse(execFileSync("node", [preToolScript], { input: reviewInput, encoding: "utf-8" }).trim());
+    assert.equal(reviewRes.decision, "allow");
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.lastWorkerProfile, "flash-medium-worker", "Reviewer delegation must preserve last implementation worker identity");
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf-8"));
+    assert.equal(bindings.pendingSubagents.filter(p => p.delegationKind === "REVIEW").length, 2);
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
 test("Task 5 pre-tool: Direct Action and CRITICAL review paths do NOT record DECISION events", () => {
   cleanDreamTestState();
   try {
