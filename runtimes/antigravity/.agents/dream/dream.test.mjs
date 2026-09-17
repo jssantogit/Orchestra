@@ -1478,6 +1478,7 @@ test("Task 5 hook integration: record-only hook integration without routing auth
 
   const preToolScript = resolve(__dirname, "../hooks/pre-tool-enforce.mjs");
   const postToolScript = resolve(__dirname, "../hooks/post-tool-telemetry.mjs");
+  const stopToolScript = resolve(__dirname, "../hooks/stop-guard.mjs");
 
   const toolCall = {
     id: "call_worker_delegation_1",
@@ -1517,7 +1518,7 @@ test("Task 5 hook integration: record-only hook integration without routing auth
   assert.equal(dec.decision_type, "WORKER_TIER");
   assert(dec.available_actions.includes("FLASH_MEDIUM"));
 
-  // 2. Post-tool execution: records DECISION_OUTCOME and consumes pending
+  // 2. Post-tool execution is only dispatch ACK: outcome remains pending.
   const postInput = JSON.stringify({
     workspacePaths: [tempDir],
     conversationId: "conv-dream-5",
@@ -1531,18 +1532,58 @@ test("Task 5 hook integration: record-only hook integration without routing auth
   const postRes = JSON.parse(postRaw.trim());
   assert.deepEqual(postRes, {});
 
-  // Verify DECISION_OUTCOME record in events.jsonl
+  const ackEvents = readFileSync(telemetryPath, "utf8").trim().split("\n").map(l => JSON.parse(l));
+  assert.equal(ackEvents.filter(e => e.type === "DECISION_OUTCOME").length, 0, "Dispatch ACK must not close WORKER_TIER outcome");
+  assert.equal(readdirSync(dreamPendingDir).filter(f => f.endsWith(".json")).length, 1, "Pending decision must remain open after ACK");
+
+  // 3. Bind factual worker child to the decision correlation and emit terminal child Stop.
+  const roleBindingsPath = join(stateDir, "role-bindings.json");
+  const roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf8"));
+  const pendingBinding = roleBindings.pendingSubagents.find(p => !p.consumed);
+  assert.ok(pendingBinding?.decisionCorrelationKey, "Pending worker binding must carry decision correlation");
+  roleBindings.bindings = roleBindings.bindings || {};
+  roleBindings.conversations = roleBindings.conversations || {};
+  const childBinding = {
+    conversationId: "worker-child-5",
+    role: "WORKER",
+    profile: pendingBinding.profile,
+    model: pendingBinding.model,
+    parentConversationId: "conv-dream-5",
+    originToolCallId: pendingBinding.originToolCallId,
+    delegationKind: "WORK",
+    decisionCorrelationKey: pendingBinding.decisionCorrelationKey,
+    decisionType: pendingBinding.decisionType,
+    decisionBranchOrdinal: pendingBinding.decisionBranchOrdinal,
+    confidence: "HIGH",
+    source: "RUNTIME_IDENTITY",
+    consumed: true,
+  };
+  roleBindings.bindings["worker-child-5"] = childBinding;
+  roleBindings.conversations["worker-child-5"] = childBinding;
+  writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf8");
+
+  execFileSync("node", [stopToolScript], {
+    input: JSON.stringify({
+      workspacePaths: [tempDir],
+      conversationId: "worker-child-5",
+      fullyIdle: true,
+      terminationReason: "end_turn",
+    }),
+    encoding: "utf8",
+  });
+
+  // Verify DECISION_OUTCOME is produced only at factual child completion.
   const postEvents = readFileSync(telemetryPath, "utf8").trim().split("\n").map(l => JSON.parse(l));
   const outcomeEvents = postEvents.filter(e => e.type === "DECISION_OUTCOME");
   assert.equal(outcomeEvents.length, 1);
   const out = outcomeEvents[0];
   assert.equal(out.decision_id, dec.decision_id);
-  assert.equal(out.result, "SUCCESS");
+  assert.equal(out.result.status, "COMPLETED");
+  assert.equal(out.result.child_conversation_id, "worker-child-5");
   assert.equal(out.terminal_state, "UNKNOWN");
   assert(out.observation_id && out.observation_id.startsWith("obs-"));
   assert(out.event_hash && out.event_hash.startsWith("sha256:"));
 
-  // Pending file must be consumed
   const remainingPending = readdirSync(dreamPendingDir).filter(f => f.endsWith(".json"));
   assert.equal(remainingPending.length, 0);
 });
