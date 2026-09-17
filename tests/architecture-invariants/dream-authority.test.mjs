@@ -835,6 +835,7 @@ test("ARCH-015: RETRY_SAME Exact Worker Identity (Valid & Adversarial)", () => {
       { last: "flash-medium-worker", req: "flash-worker", expected: "deny" },
       { last: "flash-low-worker", req: "flash-medium-worker", expected: "deny" },
       { last: "flash-worker", req: "flash-medium-worker", expected: "deny" },
+      { last: null, req: "flash-medium-worker", expected: "deny", missingIdentity: true },
     ];
 
     for (const [idx, t] of transitions.entries()) {
@@ -876,7 +877,11 @@ test("ARCH-015: RETRY_SAME Exact Worker Identity (Valid & Adversarial)", () => {
       const res = JSON.parse(raw.trim());
       assert.equal(res.decision, t.expected, `Transition ${t.last} -> ${t.req} must yield ${t.expected}`);
       if (t.expected === "deny") {
-        assert.match(res.reason, /POLICY_MISMATCH.*RETRY_SAME/);
+        if (t.missingIdentity) {
+          assert.match(res.reason, /RETRY_IDENTITY_UNRESOLVED.*RETRY_SAME/);
+        } else {
+          assert.match(res.reason, /POLICY_MISMATCH.*RETRY_SAME/);
+        }
       }
     }
   } finally {
@@ -1456,6 +1461,70 @@ test("ARCH-021: IMPLEMENT_DIRECT Decision Completes With Its Worker", () => {
     state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
     assert.equal(state.directInvestigationDecisionInFlight, undefined);
     assert.equal(existsSync(".agents/state/dream/pending-decisions/" + correlationKey + ".consumed"), true);
+  } finally {
+    cleanTestState();
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// ARCH-022: Retry Escalation Requires Factual Previous Worker Identity
+// The runtime must never invent a prior tier when deciding ESCALATE_WORKER.
+// ---------------------------------------------------------------------------
+test("ARCH-022: Retry Escalation Requires Factual Previous Worker Identity", () => {
+  cleanTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    const runCase = (lastWorkerProfile, requestedProfile, suffix) => {
+      writeFileSync(".agents/state/active-state.json", JSON.stringify({
+        activeRole: "ORCHESTRATOR",
+        taskAction: "IMPLEMENT",
+        taskDomain: "CODE",
+        criticality: "NORMAL",
+        retry: true,
+        attempt: 1,
+        remainingAttempts: 1,
+        prevRemainingAttempts: 1,
+        retryReason: "INTEGRATION_FAILURE",
+        ...(lastWorkerProfile ? { lastWorkerProfile } : {}),
+      }, null, 2), "utf-8");
+
+      const raw = execFileSync("node", [preToolScript], {
+        input: JSON.stringify({
+          conversationId: "arch-022-" + suffix,
+          stepIdx: 1,
+          toolCall: {
+            id: "call-022-" + suffix,
+            name: "invoke_subagent",
+            args: {
+              remainingAttempts: 1,
+              Subagents: [{
+                TypeName: requestedProfile,
+                Role: "worker",
+                Prompt: "Retry integration. allowedPaths: [src/**]",
+              }],
+            },
+          },
+        }),
+        encoding: "utf-8",
+      });
+      return JSON.parse(raw.trim());
+    };
+
+    const missing = runCase(null, "flash-worker", "missing");
+    assert.equal(missing.decision, "deny");
+    assert.match(missing.reason, /RETRY_IDENTITY_UNRESOLVED.*ESCALATE_WORKER/);
+
+    cleanTestState();
+    mkdirSync(".agents/state", { recursive: true });
+    const factual = runCase("flash-medium-worker", "flash-worker", "factual");
+    assert.equal(factual.decision, "allow", "Known medium -> high is a factual escalation");
+
+    cleanTestState();
+    mkdirSync(".agents/state", { recursive: true });
+    const fakeEscalation = runCase("flash-low-worker", "flash-medium-worker", "low-to-medium");
+    assert.equal(fakeEscalation.decision, "allow", "Known low -> medium is a factual escalation");
   } finally {
     cleanTestState();
   }
