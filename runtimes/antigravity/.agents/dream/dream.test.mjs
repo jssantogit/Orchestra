@@ -381,7 +381,7 @@ import {
   buildEvidenceFingerprint,
   buildSnapshot,
 } from "./snapshot.mjs";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1292,6 +1292,128 @@ test("recordDecisionOutcome idempotency: second call returns OUTCOME_ALREADY_REC
   // Verify telemetry file STILL has exactly 2 lines (DECISION + 1 DECISION_OUTCOME)
   const lines = readFileSync(telemetryPath, "utf8").trim().split("\n");
   assert.equal(lines.length, 2);
+});
+
+test("recordDecision rejects duplicate live correlation without duplicating telemetry", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-duplicate-correlation-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const correlationKey = "corr-duplicate-live";
+  const decision = {
+    snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+  };
+
+  const first = recordDecision({ telemetryPath, pendingDir, correlationKey, decision });
+  assert.equal(first.recorded, true);
+
+  const second = recordDecision({ telemetryPath, pendingDir, correlationKey, decision });
+  assert.equal(second.recorded, false);
+  assert.equal(second.reason, "DECISION_ALREADY_PENDING");
+  assert.equal(second.error_code, "ERR_CORRELATION_ALREADY_PENDING");
+
+  const events = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(events.filter(e => e.type === "DECISION").length, 1);
+  assert.equal(readdirSync(pendingDir).filter(name => name.endsWith(".json")).length, 1);
+});
+
+test("recordDecision does not publish DECISION when pending persistence fails", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-pending-failure-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const badPendingDir = join(tempDir, "pending-is-a-file");
+  writeFileSync(badPendingDir, "not-a-directory", "utf8");
+
+  const result = recordDecision({
+    telemetryPath,
+    pendingDir: badPendingDir,
+    correlationKey: "corr-pending-failure",
+    decision: {
+      snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      decision_type: "WORKER_TIER",
+      state: {},
+      available_actions: ["FLASH_MEDIUM"],
+      chosen_action: "FLASH_MEDIUM",
+      policy_source: "STATIC_POLICY_V1",
+      actor_identity: "ORCHESTRATOR",
+    },
+  });
+
+  assert.equal(result.recorded, false);
+  assert.equal(result.reason, "DREAM_TELEMETRY_WRITE_FAILED");
+  assert.equal(existsSync(telemetryPath), false, "Telemetry must not publish a DECISION without durable correlation state");
+});
+
+test("recordDecisionOutcome recovers append-before-consume crash without duplicate event", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-outcome-recovery-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const correlationKey = "corr-outcome-recovery";
+
+  const decision = recordDecision({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    decision: {
+      snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      decision_type: "WORKER_TIER",
+      state: {},
+      available_actions: ["FLASH_MEDIUM"],
+      chosen_action: "FLASH_MEDIUM",
+      policy_source: "STATIC_POLICY_V1",
+      actor_identity: "ORCHESTRATOR",
+    },
+  });
+  assert.equal(decision.recorded, true);
+
+  const simulatedOutcome = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: decision.decision_id,
+    observation_id: "obs-recovery-existing",
+    result: "COMPLETED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    terminal_state: "UNKNOWN",
+    created_at: "2026-09-17T23:59:00.000Z",
+  });
+  appendFileSync(telemetryPath, JSON.stringify(simulatedOutcome) + "\n", "utf8");
+
+  const before = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean);
+  assert.equal(before.length, 2);
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".json")), true);
+
+  const recovered = recordDecisionOutcome({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    outcome: {
+      result: "SHOULD_NOT_BE_APPENDED",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+    },
+  });
+
+  assert.equal(recovered.recorded, false);
+  assert.equal(recovered.reason, "OUTCOME_ALREADY_RECORDED");
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.observation_id, "obs-recovery-existing");
+
+  const after = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean);
+  assert.equal(after.length, 2, "Recovery must not append a duplicate DECISION_OUTCOME");
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".json")), false);
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".consumed")), true);
 });
 
 test("recordDecisionOutcome returns PENDING_DECISION_NOT_FOUND when correlation missing", (t) => {
