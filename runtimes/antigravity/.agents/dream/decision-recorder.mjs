@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
 
@@ -25,6 +25,22 @@ export function dreamCorrelationKey({
   const encTool = encodeURIComponent(String(toolCallId ?? ""));
   const bOrd = String(branchOrdinal ?? 0);
   return `dec-${encConv}_${sIdx}_${encTool}_${bOrd}`;
+}
+
+function findRecordedDecision(telemetryPath, decisionId) {
+  try {
+    if (!telemetryPath || !decisionId || !existsSync(telemetryPath)) return null;
+    const lines = readFileSync(telemetryPath, "utf8").split("\n");
+    for (let idx = lines.length - 1; idx >= 0; idx--) {
+      const line = lines[idx].trim();
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line);
+        if (event?.type === "DECISION" && event?.decision_id === decisionId) return event;
+      } catch {}
+    }
+  } catch {}
+  return null;
 }
 
 /**
@@ -130,6 +146,7 @@ export function recordDecision({
       branch_ordinal: decisionRecord.branch_ordinal ?? null,
       created_at: event.created_at,
       event_hash: event.event_hash,
+      decision_event: event,
     };
 
     const targetFile = join(resolvedPendingDir, `${effectiveCorrelationKey}.json`);
@@ -141,6 +158,23 @@ export function recordDecision({
     let pendingCommitted = false;
     try {
       if (existsSync(targetFile)) {
+        let existingPending = null;
+        try { existingPending = JSON.parse(readFileSync(targetFile, "utf8")); } catch {}
+        const existingDecisionId = existingPending?.decision_id || null;
+        const alreadyPublished = findRecordedDecision(resolvedTelemetryPath, existingDecisionId);
+        if (!alreadyPublished && existingPending?.decision_event) {
+          // Crash recovery for the only vulnerable interval in the pending-first protocol:
+          // pending correlation became durable but the DECISION append did not complete.
+          mkdirSync(dirname(resolvedTelemetryPath), { recursive: true });
+          appendFileSync(resolvedTelemetryPath, JSON.stringify(existingPending.decision_event) + "\n", "utf8");
+          return {
+            recorded: true,
+            recovered: true,
+            decision_id: existingPending.decision_id,
+            event_hash: existingPending.event_hash,
+            correlationKey: effectiveCorrelationKey,
+          };
+        }
         return {
           recorded: false,
           reason: "DECISION_ALREADY_PENDING",
