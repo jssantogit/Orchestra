@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1424,4 +1425,94 @@ test("recordDecisionOutcome validates factual fields without subjective quality 
   });
   assert.equal(rejectedEscalation.recorded, false);
   assert.equal(rejectedEscalation.reason, "VALIDATION_FAILED");
+});
+
+test("Task 5 hook integration: record-only hook integration without routing authority", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-hook-int-"));
+  t.after(() => {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  });
+
+  const stateDir = join(tempDir, ".agents", "state");
+  const dreamPendingDir = join(stateDir, "dream", "pending-decisions");
+  const telemetryPath = join(tempDir, ".agents", "telemetry", "events.jsonl");
+  mkdirSync(stateDir, { recursive: true });
+
+  const activeState = {
+    activeRole: "ORCHESTRATOR",
+    taskAction: "IMPLEMENT",
+    taskDomain: "CODE",
+    complexity: "NORMAL",
+  };
+  writeFileSync(join(stateDir, "active-state.json"), JSON.stringify(activeState, null, 2), "utf8");
+
+  const preToolScript = resolve(__dirname, "../hooks/pre-tool-enforce.mjs");
+  const postToolScript = resolve(__dirname, "../hooks/post-tool-telemetry.mjs");
+
+  const toolCall = {
+    id: "call_worker_delegation_1",
+    name: "invoke_subagent",
+    args: {
+      Subagents: [
+        {
+          TypeName: "flash-medium-worker",
+          Role: "worker",
+          Prompt: "Implement feature X in src/app.ts. allowedPaths: [src/**]",
+        },
+      ],
+    },
+  };
+
+  // 1. Pre-tool execution: records pre-action DECISION
+  const preInput = JSON.stringify({
+    workspacePaths: [tempDir],
+    conversationId: "conv-dream-5",
+    stepIdx: 1,
+    toolCall,
+  });
+
+  const preRaw = execFileSync("node", [preToolScript], { input: preInput, encoding: "utf8" });
+  const preRes = JSON.parse(preRaw.trim());
+  assert.equal(preRes.decision, "allow");
+  assert.equal(preRes.overwrite, undefined, "Output must be byte-compatible without overwrite");
+
+  // Verify DECISION record in events.jsonl
+  assert(existsSync(telemetryPath), "Telemetry file must exist");
+  const preEvents = readFileSync(telemetryPath, "utf8").trim().split("\n").map(l => JSON.parse(l));
+  const decEvents = preEvents.filter(e => e.type === "DECISION");
+  assert.equal(decEvents.length, 1);
+  const dec = decEvents[0];
+  assert.equal(dec.policy_source, "STATIC_ROUTING_CURRENT");
+  assert.equal(dec.chosen_action, "FLASH_MEDIUM");
+  assert.equal(dec.decision_type, "WORKER_TIER");
+  assert(dec.available_actions.includes("FLASH_MEDIUM"));
+
+  // 2. Post-tool execution: records DECISION_OUTCOME and consumes pending
+  const postInput = JSON.stringify({
+    workspacePaths: [tempDir],
+    conversationId: "conv-dream-5",
+    stepIdx: 1,
+    toolName: "invoke_subagent",
+    toolCall,
+    toolResult: "SUCCESS",
+  });
+
+  const postRaw = execFileSync("node", [postToolScript], { input: postInput, encoding: "utf8" });
+  const postRes = JSON.parse(postRaw.trim());
+  assert.deepEqual(postRes, {});
+
+  // Verify DECISION_OUTCOME record in events.jsonl
+  const postEvents = readFileSync(telemetryPath, "utf8").trim().split("\n").map(l => JSON.parse(l));
+  const outcomeEvents = postEvents.filter(e => e.type === "DECISION_OUTCOME");
+  assert.equal(outcomeEvents.length, 1);
+  const out = outcomeEvents[0];
+  assert.equal(out.decision_id, dec.decision_id);
+  assert.equal(out.result, "SUCCESS");
+  assert.equal(out.terminal_state, "UNKNOWN");
+  assert(out.observation_id && out.observation_id.startsWith("obs-"));
+  assert(out.event_hash && out.event_hash.startsWith("sha256:"));
+
+  // Pending file must be consumed
+  const remainingPending = readdirSync(dreamPendingDir).filter(f => f.endsWith(".json"));
+  assert.equal(remainingPending.length, 0);
 });

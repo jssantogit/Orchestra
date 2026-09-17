@@ -16,6 +16,8 @@ import {
   isControlPlanePath,
   verifyWorkerValidation,
 } from "../skills/agy-orchestra/routing-policy.mjs";
+import { recordDecisionOutcome, getPendingDecision } from "../dream/outcome-recorder.mjs";
+import { dreamCorrelationKey } from "../dream/decision-recorder.mjs";
 
 function readStdin() {
   try {
@@ -666,6 +668,104 @@ function main() {
           activeState.worker_invocations = (activeState.worker_invocations || 0) + 1;
           activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + pBytes;
         }
+      }
+
+      // Phase 1 Dream Record-Only Adapter: Record DECISION_OUTCOME for matching pending decisions
+      try {
+        const branchCount = Math.max(1, subagents.length);
+        const toolCallId = payload.toolCall?.id || payload.toolCallId || "";
+        const stepIdx = payload.stepIdx ?? 0;
+
+        for (let idx = 0; idx < branchCount; idx++) {
+          let corrKey = dreamCorrelationKey({
+            conversationId,
+            stepIdx,
+            toolCallId,
+            branchOrdinal: idx,
+          });
+
+          let pendingCheck = getPendingDecision({ repoRoot, correlationKey: corrKey });
+
+          // Fallback resolution: scan pending-decisions dir for matching conversation_id and step_idx / tool_call_id
+          if (!pendingCheck.ok) {
+            const pendingDir = resolve(repoRoot, ".agents/state/dream/pending-decisions");
+            if (existsSync(pendingDir)) {
+              try {
+                const entries = readdirSync(pendingDir).filter(f => f.endsWith(".json"));
+                for (const f of entries) {
+                  const candidateKey = f.slice(0, -5);
+                  const pRes = getPendingDecision({ repoRoot, correlationKey: candidateKey });
+                  if (pRes.ok && pRes.pending) {
+                    if (
+                      pRes.pending.conversation_id === conversationId &&
+                      (pRes.pending.step_idx === stepIdx || pRes.pending.tool_call_id === toolCallId)
+                    ) {
+                      corrKey = candidateKey;
+                      pendingCheck = pRes;
+                      break;
+                    }
+                  }
+                }
+              } catch {}
+            }
+          }
+
+          if (pendingCheck.ok) {
+            const outcomeResultStr = typeof payload.toolResult === "string"
+              ? payload.toolResult
+              : (payload.toolResult
+                  ? JSON.stringify(payload.toolResult)
+                  : (typeof payload.result === "string"
+                      ? payload.result
+                      : (payload.result ? JSON.stringify(payload.result) : (payload.error ? "FAILED" : "SUCCESS"))));
+
+            const evidenceSummary = activeState.evidenceSummary || activeState.evidence || {
+              tests: activeState.workerValidationVerified ? "PASS" : (activeState.workerValidationExitCode !== null && activeState.workerValidationExitCode !== 0 ? "FAIL" : "UNKNOWN"),
+              typecheck: "UNKNOWN",
+              build: "UNKNOWN",
+              validation_fresh: Boolean(activeState.workerValidationFresh),
+              scope_check: "UNKNOWN",
+            };
+
+            const retryState = {
+              attempt: activeState.attempt || 0,
+              retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+              retry_reason: activeState.retryReason || activeState.retry_reason || null,
+            };
+
+            const costMetrics = {
+              tool_calls: activeState.tool_calls || 1,
+              context_proxy_bytes: activeState.context_proxy_bytes || 0,
+              worker_packet_bytes: activeState.toolMix?.worker_packet_bytes || activeState.worker_packet_bytes || 0,
+              duration_ms: payload.durationMs ?? 0,
+            };
+
+            const terminalState = payload.error
+              ? "FAILED"
+              : (activeState.state === "ACCEPTED"
+                  ? "ACCEPTED"
+                  : (activeState.state === "HUMAN_GATE"
+                      ? "HUMAN_GATE"
+                      : "UNKNOWN"));
+
+            const outcomeInput = {
+              result: outcomeResultStr,
+              evidence_summary: evidenceSummary,
+              mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
+              retry_state: retryState,
+              cost_metrics: costMetrics,
+              terminal_state: terminalState,
+            };
+
+            recordDecisionOutcome({
+              repoRoot,
+              correlationKey: corrKey,
+              outcome: outcomeInput,
+            });
+          }
+        }
+      } catch (dreamOutcomeErr) {
+        // Fail-open: NEVER throw on Dream error
       }
     } else if (toolName === "manage_subagents") {
       activeState.manage_subagents_calls = (activeState.manage_subagents_calls || 0) + 1;

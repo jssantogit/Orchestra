@@ -14,6 +14,10 @@ import {
   checkValidationCompletionLock,
   isValidationCommand,
 } from "../skills/agy-orchestra/routing-policy.mjs";
+import { buildSnapshot } from "../dream/snapshot.mjs";
+import { deriveDecisionState, deriveAvailableActions, classifyBaselineDecision } from "../dream/action-space.mjs";
+import { recordDecision, dreamCorrelationKey } from "../dream/decision-recorder.mjs";
+import { DREAM_SCHEMAS } from "../dream/records.mjs";
 
 function readStdin() {
   try {
@@ -805,6 +809,145 @@ function main() {
         mkdirSync(dirname(statePath), { recursive: true });
         writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
       } catch {}
+
+      // Phase 1 Dream Record-Only Adapter for supported worker delegations
+      try {
+        const isCritical = (activeState.criticality === "CRITICAL" || activeContract?.criticality === "CRITICAL");
+        if (!isDirectAction && !isCritical) {
+          for (let idx = 0; idx < subagents.length; idx++) {
+            const sub = subagents[idx];
+            const typeName = sub.TypeName || sub.name || "";
+            const roleStr = String(sub.Role || typeName).toLowerCase();
+            const isReviewer = roleStr.includes("reviewer") || typeName === "flash-reviewer";
+            if (isReviewer) continue;
+
+            const profile = typeName || activeState.requested_agent || "flash-worker";
+            const isWorker = isWorkerRole(profile.toUpperCase()) || isWorkerRole(String(sub.Role || "").toUpperCase()) || profile.includes("worker");
+            if (!isWorker) continue;
+
+            let defaultComplexity = "NORMAL";
+            if (profile === "flash-low-worker") defaultComplexity = "SIMPLE";
+            else if (profile === "flash-worker") defaultComplexity = "DIFFICULT";
+            else if (profile === "flash-medium-worker") defaultComplexity = "NORMAL";
+
+            const facts = {
+              taskAction: activeState.taskAction || "IMPLEMENT",
+              taskDomain: activeState.taskDomain || "CODE",
+              criticality: activeState.criticality || "NORMAL",
+              complexity: activeState.complexity || defaultComplexity,
+              retry: Boolean(activeState.retry || (activeState.attempt && activeState.attempt > 0)),
+              attempt: activeState.attempt || 0,
+              retryReason: activeState.retryReason || activeState.retry_reason || null,
+              isDirectAction: false,
+            };
+
+            const taskSpec = sub.Prompt || activeState.taskSpec || activeState.taskDescription || activeState.prompt || "Worker delegation";
+            const taskObj = {
+              spec: taskSpec,
+              task_action: facts.taskAction,
+              task_domain: facts.taskDomain,
+              criticality: facts.criticality,
+            };
+
+            const contractObj = activeContract || {
+              allowed_paths: [],
+              forbidden_paths: [".agents/**"],
+              criticality: "NORMAL",
+            };
+
+            const runtimeObj = {
+              node_version: process.version,
+              platform: process.platform,
+              arch: process.arch,
+              schema_version: DREAM_SCHEMAS.SNAPSHOT,
+            };
+
+            const execStateObj = {
+              step_sequence: payload.stepIdx ?? activeState.stepIdx ?? 0,
+              attempt: facts.attempt,
+              retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+              mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
+            };
+
+            const evidenceObj = activeState.evidenceSummary || activeState.evidence || {
+              tests: activeState.workerValidationVerified ? "PASS" : "UNKNOWN",
+              typecheck: "UNKNOWN",
+              build: "UNKNOWN",
+              validation_fresh: Boolean(activeState.workerValidationFresh),
+              scope_check: "UNKNOWN",
+            };
+
+            const snapRes = buildSnapshot({
+              repoRoot,
+              task: taskObj,
+              contract: contractObj,
+              runtime: runtimeObj,
+              executionState: execStateObj,
+              evidence: evidenceObj,
+            });
+
+            if (!snapRes.ok) {
+              activeState.dreamRecordingError = snapRes.reason || "SNAPSHOT_BUILD_FAILED";
+              try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+              continue;
+            }
+
+            const decisionState = deriveDecisionState(facts, activeState, evidenceObj);
+            const availableActions = deriveAvailableActions("WORKER_TIER", decisionState);
+
+            const route = {
+              kind: "worker",
+              profile,
+              model: sub.Model || (profile === "flash-low-worker" ? "gemini-3.8-flash-low" : (profile === "flash-medium-worker" ? "gemini-3.8-flash-medium" : "gemini-3.8-flash-high")),
+            };
+            const baselineDecision = classifyBaselineDecision(facts, route);
+
+            if (
+              baselineDecision &&
+              baselineDecision.decisionType &&
+              baselineDecision.chosenAction &&
+              Array.isArray(availableActions) &&
+              availableActions.length > 0 &&
+              availableActions.includes(baselineDecision.chosenAction)
+            ) {
+              const corrKey = dreamCorrelationKey({
+                conversationId: convId,
+                stepIdx: payload.stepIdx ?? 0,
+                toolCallId: toolCall.id || payload.toolCallId || "",
+                branchOrdinal: idx,
+              });
+
+              const decRecordInput = {
+                decision_type: baselineDecision.decisionType,
+                state: decisionState,
+                available_actions: availableActions,
+                chosen_action: baselineDecision.chosenAction,
+                policy_source: "STATIC_ROUTING_CURRENT",
+                actor_identity: actor.role || "ORCHESTRATOR",
+                conversation_id: convId,
+                step_idx: payload.stepIdx ?? 0,
+                tool_call_id: toolCall.id || payload.toolCallId || "",
+                branch_ordinal: idx,
+              };
+
+              const decRes = recordDecision({
+                repoRoot,
+                snapshot: snapRes.snapshot,
+                decision: decRecordInput,
+                correlationKey: corrKey,
+              });
+
+              if (!decRes.recorded) {
+                activeState.dreamRecordingError = decRes.reason || decRes.error_code || "DECISION_RECORD_FAILED";
+                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+              }
+            }
+          }
+        }
+      } catch (dreamErr) {
+        activeState.dreamRecordingError = dreamErr.code || dreamErr.message || "DREAM_RECORD_ERROR";
+        try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+      }
     }
 
     console.log(JSON.stringify({ decision: "allow" }));
