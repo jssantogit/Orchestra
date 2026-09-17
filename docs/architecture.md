@@ -32,6 +32,8 @@ Modern software development often leverages different foundation model ecosystem
          │ • Terra High/Max Invest   │                   │ • Two-Key Flash Reviewers │
          │ • Sol Low/Medium Review   │                   │ • Engine Tool Hooks       │
          │ • Astra Manual Only       │                   │ • Automatic Ledger & Gate │
+         │                           │                   │ • Dream Layer Foundation  │
+         │                           │                   │   (Record-Only & Replay)  │
          └───────────────────────────┘                   └───────────────────────────┘
 ```
 
@@ -82,3 +84,15 @@ INTAKE ──> CLASSIFIED ──> PLANNED ──> DELEGATED ──> EXECUTING �
 - **Scope Enforcement**: File writes outside `allowedPaths` are blocked immediately.
 - **Side-Quest Prevention**: Direct operational tasks (git status, commit, test runs) follow a lightweight fast path with zero subagents and strict bounds against unsolicited refactoring.
 - **Evidence Freshness**: Subsequent code mutations invalidate previous test results, ensuring that acceptance is based only on fresh verification facts.
+
+---
+
+## 5. Dream Layer Foundation (Offline Recursive Policy Improvement)
+
+Orchestra incorporates an offline, deterministic recursive policy evaluation subsystem grounded in Dream-RSI:
+
+- **Record-Only Operational Boundary**: During online execution, static routing remains fully authoritative. Lifecycle hooks record decisions, available legal action sets, compact decision states, and pre-action workspace snapshots (`.agents/dream/decision-recorder.mjs`). Subsequent Evidence Ledger outcomes are correlated to decisions (`.agents/dream/outcome-recorder.mjs`) with zero new model turns.
+- **Fail-Closed World Sealing**: Offline tools validate provenance, verify canonical manifest hashes, and seal immutable execution worlds (`.agents/dream/world-sealer.mjs`). Worlds lacking verified evidence or containing unresolved actors fail closed and are excluded from replay.
+- **Model-Free Exact Replay**: Replay simulates alternative policies over historical discovery trees with zero foundation model calls (`.agents/dream/replay-simulator.mjs`). Any unobserved counterfactual path terminates in `UNKNOWN_BRANCH` without hallucinated outcomes.
+- **8-Tier Lexicographic Evaluator**: Trajectories are ranked strictly by Safety, Contract Integrity, Governance, Acceptance, First-Pass Acceptance, Turns, Tokens, and Latency (`.agents/dream/evaluator.mjs`) without composite scoring heuristics.
+- **Zero Context Pollution**: Discovery trees and replay artifacts remain strictly offline and are never placed in online LLM prompt context.

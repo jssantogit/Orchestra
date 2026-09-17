@@ -41,11 +41,14 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
   - `flash-reviewer.md`: Independent reviewer for Two-Key reviews (Flash High).
 - `.agents/skills/orchestra/` — Pure deterministic routing policy and state machine governance.
 - `.agents/skills/{critical-review,evidence-validation,implementation-contract,integration,progressive-testing}/` — Specialized modular runbooks.
+- `.agents/dream/` — Dream Layer Foundation components (canonicalization, deterministic snapshots, record-only decision/outcome instrumentation, world sealing, discovery trees, prefix-only exact replay, 8-tier lexicographic evaluation).
 
-### State Generated at Execution (DO NOT COMMIT / Ignored)
+### State & Telemetry Generated at Execution (DO NOT COMMIT / Ignored)
 - `.agents/state/` — Ephemeral run state (`active-state.json`, `active-contract.json`, execution records).
+- `.agents/state/dream/` — Ephemeral dream correlation files (`pending-decisions/`) and workspace hash cache (`workspace-hash-cache.json`).
 - `.agents/telemetry/` — Telemetry events (`events.jsonl`).
 - `.agents/artifacts/outputs/` — Truncated command outputs (`output-*.log`).
+- `.agents/dream-data/` — Durable offline sealed worlds (`sealed-worlds/*.json`).
 
 ---
 
@@ -84,7 +87,21 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 
 ---
 
-## 5. Verification & Tests
+## 5. Dream Layer Foundation (Record-Only & Exact Replay)
+
+The Antigravity runtime incorporates the Orchestra Dream Layer Foundation (Milestones A–C) for offline, model-free recursive policy evaluation:
+
+- **Record-Only Authority Boundary**: Online routing decisions are strictly owned by static policy (`routing-policy.mjs`). Dream instrumentation observes and records decisions and outcomes without altering model or tier selection.
+- **Zero Online Turn Overhead**: Telemetry instrumentation runs synchronously in hooks (<0.1 ms decision overhead) without adding model turns or consuming model tokens.
+- **Fail-Open Telemetry**: Telemetry capture errors record diagnostic markers in ephemeral state and fall back safely to static routing without blocking user tasks.
+- **World Sealing & Exact Replay**: Sealed execution worlds are verified against workspace hashes and Evidence Ledger provenance. Exact replay executes strictly offline with zero model calls and returns `UNKNOWN_BRANCH` for unobserved paths.
+- **No Context Contamination**: Historical discovery trajectories never enter online prompt context.
+
+For architecture and specification details, see [docs/dream-layer.md](../../docs/dream-layer.md).
+
+---
+
+## 6. Verification & Tests
 
 Run the Antigravity test suites:
 
@@ -94,11 +111,16 @@ node --test runtimes/antigravity/tests/routing-policy.test.mjs
 
 # Deterministic hook lifecycle test (run with concurrency 1)
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+
+# Dream Layer Foundation unit and integration tests (63 tests)
+npm run test:dream
+# or directly:
+node --test runtimes/antigravity/.agents/dream/dream.test.mjs
 ```
 
 ---
 
-## 6. Limitations
+## 7. Limitations
 
 - Requires Google Antigravity environment with support for tool hooks (`PreToolUse`, `PostToolUse`, `PreInvocation`, `Stop`).
 - Does not permit external model fallbacks (Claude, GPT, or Sonnet).

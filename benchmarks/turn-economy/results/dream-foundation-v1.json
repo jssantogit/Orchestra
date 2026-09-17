@@ -1,0 +1,37 @@
+{
+  "schema": "orchestra.dream-foundation-closure.v1",
+  "scope": [
+    "MILESTONE_A",
+    "MILESTONE_B",
+    "MILESTONE_C"
+  ],
+  "timestamp": "2026-09-17T13:24:47.173Z",
+  "baseline_commit": "80c34a9",
+  "closure_commit_target": "HEAD",
+  "routing_parity_percent": 100,
+  "routing_parity_mismatches": 0,
+  "new_model_turns": 0,
+  "exact_replay_model_calls": 0,
+  "unknown_branch_is_non_inferred": true,
+  "invalid_world_excluded": true,
+  "history_in_online_context": false,
+  "cross_runtime_firewall": "PASS",
+  "offline_suites": "PASS",
+  "performance": {
+    "decision_recording_cpu_ms": 0.023,
+    "workspace_hash_initial_ms": 202.043,
+    "workspace_hash_cached_ms": 105.272
+  },
+  "definition_of_done": {
+    "static_orchestra_behavior_unchanged": true,
+    "decision_reconstructed_factually": true,
+    "outcomes_correlated_to_provenance": true,
+    "invalid_worlds_excluded": true,
+    "exact_replay_no_invention": true,
+    "replay_zero_model_calls": true,
+    "history_excluded_from_online_context": true,
+    "dream_failure_returns_to_static": true,
+    "cross_runtime_firewall_clean": true,
+    "test_and_doc_explain_replay": true
+  }
+}
