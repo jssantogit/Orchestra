@@ -1275,19 +1275,34 @@ function main() {
             }
             if (evalResult.action === "ESCALATE_WORKER") {
               const profileTiers = { "flash-low-worker": 0, "flash-medium-worker": 1, "flash-worker": 2 };
-              const lastTier = profileTiers[activeState.lastWorkerProfile] ?? 1;
-              const currentTier = profileTiers[profile] ?? -1;
-              if (currentTier <= lastTier && lastTier < 2) {
+              const lastProfile = activeState.lastWorkerProfile || null;
+              if (!lastProfile || profileTiers[lastProfile] === undefined) {
                 console.log(JSON.stringify({
                   decision: "deny",
-                  reason: `POLICY_MISMATCH: Retry policy selected ESCALATE_WORKER for retry reason "${retryReason}" but requested "${profile}". Execution blocked.`,
+                  reason: "RETRY_IDENTITY_UNRESOLVED: ESCALATE_WORKER requires a factual previous implementation worker profile.",
+                }));
+                return;
+              }
+              const lastTier = profileTiers[lastProfile];
+              const currentTier = profileTiers[profile] ?? -1;
+              if (currentTier <= lastTier || lastTier >= 2) {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: `POLICY_MISMATCH: Retry policy selected ESCALATE_WORKER for retry reason "${retryReason}" but requested "${profile}" after "${lastProfile}". Execution blocked.`,
                 }));
                 return;
               }
             }
             if (evalResult.action === "RETRY_SAME") {
-              const lastProfile = activeState.lastWorkerProfile;
-              if (lastProfile && profile !== lastProfile) {
+              const lastProfile = activeState.lastWorkerProfile || null;
+              if (!lastProfile) {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: "RETRY_IDENTITY_UNRESOLVED: RETRY_SAME requires a factual previous implementation worker profile.",
+                }));
+                return;
+              }
+              if (profile !== lastProfile) {
                 console.log(JSON.stringify({
                   decision: "deny",
                   reason: `POLICY_MISMATCH: Retry policy selected RETRY_SAME for retry reason "${retryReason}" but requested worker "${profile}" does not match previous worker "${lastProfile}". Execution blocked.`,
