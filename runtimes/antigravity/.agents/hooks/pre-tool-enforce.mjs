@@ -183,6 +183,9 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
     });
   }
 
+  const childId = sub?.childConversationId || sub?.child_conversation_id || sub?.conversationId || sub?.subagentId || sub?.subagent_id || null;
+  const execId = payload?.executionId || toolCall?.args?.executionId || sub?.executionId || null;
+
   // Convert pending requirement to investigationInFlight (post_investigation remains false until completed)
   activeState.investigationInFlight = {
     correlationKey: corrKey,
@@ -192,6 +195,12 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
     policy_id: req.policy_id || null,
     toolCallId: toolCall?.id || payload?.toolCallId || "",
     tool_call_id: toolCall?.id || payload?.toolCallId || "",
+    executionId: execId,
+    execution_id: execId,
+    childConversationId: childId,
+    child_conversation_id: childId,
+    subagentId: childId,
+    subagent_id: childId,
     stepIdx: payload?.stepIdx ?? 0,
     step_idx: payload?.stepIdx ?? 0,
     conversationId: payload?.conversationId || activeState.conversationId || "default",

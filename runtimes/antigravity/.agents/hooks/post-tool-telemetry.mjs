@@ -313,90 +313,201 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
   };
 }
 
-function isMatchingInvestigationCompletion(inFlight, payload = {}, toolName = "", toolArgs = {}, fallbackConv = "") {
+export function isMatchingInvestigationCompletion(inFlight, payload = {}, toolName = "", toolArgs = {}, fallbackConv = "") {
   if (!inFlight || typeof inFlight !== "object") return false;
 
-  const inFlightConv = inFlight.conversationId || inFlight.conversation_id;
-  const inFlightToolCall = inFlight.toolCallId || inFlight.tool_call_id;
-  const inFlightCorrKey = inFlight.correlationKey || inFlight.correlation_key;
-  const inFlightStepIdx = inFlight.stepIdx ?? inFlight.step_idx;
+  // 1. Hard identity dimensions on inFlight
+  const inFlightToolCall = inFlight.toolCallId || inFlight.tool_call_id || null;
+  const inFlightExecId = inFlight.executionId || inFlight.execution_id || null;
+  const inFlightChildId = inFlight.childConversationId || inFlight.child_conversation_id || inFlight.subagentId || inFlight.subagent_id || null;
+  const inFlightCorrKey = inFlight.correlationKey || inFlight.correlation_key || null;
 
+  // Additional context dimensions on inFlight
+  const inFlightConv = inFlight.conversationId || inFlight.conversation_id || null;
+  const inFlightParentConv = inFlight.parentConversationId || inFlight.parent_conversation_id || null;
+  const inFlightRole = String(inFlight.subagentRole || inFlight.subagent_role || "").toLowerCase() || null;
+  const inFlightProfile = String(inFlight.subagentProfile || inFlight.subagent_profile || "").toLowerCase() || null;
+  const inFlightStepIdx = inFlight.stepIdx ?? inFlight.step_idx ?? null;
+
+  // 2. Incoming identifiers from payload/args
   const currentConv = payload.conversationId || fallbackConv || null;
-  const currentToolCall = payload.toolCall?.id || payload.toolCallId || toolArgs.toolCallId || null;
+  const currentParentConv = payload.parentConversationId || null;
   const currentStepIdx = payload.stepIdx ?? null;
+  const currentToolCall = payload.toolCall?.id || payload.toolCallId || toolArgs.toolCallId || null;
+  const currentExecId = payload.executionId || payload.toolResult?.executionId || payload.result?.executionId || toolArgs.executionId || null;
   const currentCorrKey = payload.correlationKey || toolArgs.correlationKey || null;
 
   if (toolName === "invoke_subagent") {
-    // 1. Conversation identity must match if both are specified
-    if (inFlightConv && currentConv && inFlightConv !== currentConv) {
-      return false;
-    }
-    // 2. Tool call / execution identity must match if both are specified
-    if (inFlightToolCall && currentToolCall && inFlightToolCall !== currentToolCall) {
-      return false;
-    }
-    // 3. Correlation key must match if both are specified
-    if (inFlightCorrKey && currentCorrKey && inFlightCorrKey !== currentCorrKey) {
-      return false;
-    }
-    // If incoming toolCallId and inFlightToolCall are both absent, verify stepIdx
-    if (!currentToolCall && !inFlightToolCall) {
-      if (inFlightStepIdx !== undefined && currentStepIdx !== null && inFlightStepIdx !== currentStepIdx) {
+    // In invoke_subagent: require shared causal identity (toolCallId / executionId).
+    const matchedHard = [];
+
+    if (inFlightToolCall && currentToolCall) {
+      if (inFlightToolCall === currentToolCall) {
+        matchedHard.push("toolCallId");
+      } else {
         return false;
       }
     }
+
+    if (inFlightExecId && currentExecId) {
+      if (inFlightExecId === currentExecId) {
+        matchedHard.push("executionId");
+      } else {
+        return false;
+      }
+    }
+
+    if (inFlightCorrKey && currentCorrKey) {
+      if (inFlightCorrKey === currentCorrKey) {
+        matchedHard.push("correlationKey");
+      } else {
+        return false;
+      }
+    }
+
+    // Candidate child identity if present on both sides
+    const candidateChild = payload.result?.conversationId || payload.result?.subagentId || payload.subagentId || payload.childConversationId || null;
+    if (inFlightChildId && candidateChild) {
+      if (inFlightChildId === candidateChild) {
+        matchedHard.push("childId");
+      } else {
+        return false;
+      }
+    }
+
+    // Condition A: At least one verifiable HARD IDENTITY present on BOTH sides
+    if (matchedHard.length === 0) {
+      return false;
+    }
+
+    // Condition C: Any additional identity dimensions on both sides do not conflict
+    if (inFlightConv && currentConv && inFlightConv !== currentConv) {
+      return false;
+    }
+    if (inFlightParentConv && currentParentConv && inFlightParentConv !== currentParentConv) {
+      return false;
+    }
+    if (inFlightStepIdx !== null && currentStepIdx !== null && inFlightStepIdx !== currentStepIdx) {
+      return false;
+    }
+
+    const incomingRole = String(
+      toolArgs.Role
+      || toolArgs.Subagents?.[0]?.Role
+      || payload.result?.role
+      || payload.result?.subagentRole
+      || ""
+    ).toLowerCase();
+    if (incomingRole && inFlightRole && incomingRole !== inFlightRole) {
+      return false;
+    }
+
+    const incomingProfile = String(
+      toolArgs.TypeName
+      || toolArgs.Subagents?.[0]?.TypeName
+      || payload.result?.profile
+      || payload.result?.subagentProfile
+      || ""
+    ).toLowerCase();
+    if (incomingProfile && inFlightProfile && incomingProfile !== inFlightProfile) {
+      return false;
+    }
+
     return true;
   }
 
   if (toolName === "manage_subagents") {
-    // manage_subagents NÃO pode fechar investigação apenas porque investigationInFlight existe;
-    // somente se o resultado contiver identidade suficiente provando que o child completado é o investigator in flight.
-    const candidateConv = toolArgs.ConversationId
-      || (Array.isArray(toolArgs.ConversationIds) && toolArgs.ConversationIds[0])
-      || payload.result?.conversationId
-      || payload.result?.subagentId
-      || payload.subagentId
-      || null;
-    const candidateRole = String(toolArgs.Role || payload.result?.role || payload.result?.subagentRole || "").toLowerCase();
-    const candidateProfile = String(toolArgs.TypeName || payload.result?.profile || payload.result?.subagentProfile || "").toLowerCase();
-    const candidateToolCall = payload.toolCall?.id || payload.toolCallId || toolArgs.toolCallId || null;
-    const candidateCorrKey = payload.correlationKey || toolArgs.correlationKey || null;
+    // In manage_subagents: require exact child identity (childConversationId / subagentId / executionId).
+    // Role/profile alone NEVER matches.
+    let candidateChildId = null;
+    let isAmbiguous = false;
 
-    if (candidateCorrKey && inFlightCorrKey && candidateCorrKey === inFlightCorrKey) {
-      return true;
-    }
-    if (candidateToolCall && inFlightToolCall && candidateToolCall === inFlightToolCall) {
-      if (!currentConv || !inFlightConv || currentConv === inFlightConv) {
-        return true;
+    if (payload.result?.subagentId) {
+      candidateChildId = payload.result.subagentId;
+    } else if (payload.result?.conversationId) {
+      candidateChildId = payload.result.conversationId;
+    } else if (payload.subagentId) {
+      candidateChildId = payload.subagentId;
+    } else if (payload.childConversationId) {
+      candidateChildId = payload.childConversationId;
+    } else if (toolArgs.ConversationId) {
+      candidateChildId = toolArgs.ConversationId;
+    } else if (toolArgs.subagentId) {
+      candidateChildId = toolArgs.subagentId;
+    } else if (Array.isArray(toolArgs.ConversationIds)) {
+      if (toolArgs.ConversationIds.length === 1) {
+        candidateChildId = toolArgs.ConversationIds[0];
+      } else if (toolArgs.ConversationIds.length > 1) {
+        isAmbiguous = true;
       }
     }
 
-    const inFlightChildConv = inFlight.childConversationId || inFlight.child_conversation_id;
-    if (candidateConv && inFlightChildConv && candidateConv === inFlightChildConv) {
-      return true;
-    }
-
-    const inFlightRole = (inFlight.subagentRole || inFlight.subagent_role || "investigator").toLowerCase();
-    const inFlightProfile = (inFlight.subagentProfile || inFlight.subagent_profile || "").toLowerCase();
-
-    // If candidate specifies a non-investigator role, reject
-    if (candidateRole && candidateRole !== inFlightRole && !candidateRole.includes("investig")) {
+    if (isAmbiguous) {
       return false;
     }
 
-    if (currentConv && inFlightConv && currentConv === inFlightConv) {
-      if (candidateRole && (candidateRole === inFlightRole || candidateRole.includes("investig"))) {
-        return true;
-      }
-      if (candidateProfile && inFlightProfile && candidateProfile === inFlightProfile) {
-        return true;
-      }
-      if (candidateConv && (candidateConv === inFlightConv || candidateConv.includes("investig"))) {
-        return true;
+    const matchedHard = [];
+
+    if (inFlightChildId && candidateChildId) {
+      if (inFlightChildId === candidateChildId) {
+        matchedHard.push("childId");
+      } else {
+        return false;
       }
     }
 
-    return false;
+    if (inFlightExecId && currentExecId) {
+      if (inFlightExecId === currentExecId) {
+        matchedHard.push("executionId");
+      } else {
+        return false;
+      }
+    }
+
+    // Shared causal toolCallId / corrKey if explicitly passed
+    const candidateToolCall = toolArgs.toolCallId || payload.toolCallId || null;
+    if (inFlightToolCall && candidateToolCall) {
+      if (inFlightToolCall === candidateToolCall) {
+        matchedHard.push("toolCallId");
+      } else {
+        return false;
+      }
+    }
+    if (inFlightCorrKey && currentCorrKey) {
+      if (inFlightCorrKey === currentCorrKey) {
+        matchedHard.push("correlationKey");
+      } else {
+        return false;
+      }
+    }
+
+    // Condition A: At least one verifiable HARD IDENTITY present on BOTH sides
+    if (matchedHard.length === 0) {
+      return false;
+    }
+
+    // Condition C: Additional identity dimensions do not conflict
+    const inFlightParent = inFlightParentConv || inFlightConv;
+    const currentParent = currentParentConv || currentConv;
+    if (inFlightParent && currentParent && inFlightParent !== currentParent) {
+      return false;
+    }
+
+    const candidateRole = String(toolArgs.Role || payload.result?.role || payload.result?.subagentRole || "").toLowerCase();
+    if (candidateRole) {
+      if (inFlightRole && candidateRole !== inFlightRole && !candidateRole.includes("investig")) {
+        return false;
+      }
+    }
+
+    const candidateProfile = String(toolArgs.TypeName || payload.result?.profile || payload.result?.subagentProfile || "").toLowerCase();
+    if (candidateProfile) {
+      if (inFlightProfile && candidateProfile !== inFlightProfile) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   return false;

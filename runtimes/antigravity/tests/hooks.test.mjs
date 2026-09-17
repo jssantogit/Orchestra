@@ -1133,6 +1133,7 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
     const postPayload = JSON.stringify({
       conversationId: "task2-lifecycle-conv",
       stepIdx: 3,
+      toolCallId: "call_investigator",
       toolName: "invoke_subagent",
       toolArgs: {
         Subagents: [{ TypeName: "flash-worker", Role: "investigator", Prompt: "Investigate root cause" }]
@@ -1273,6 +1274,7 @@ test("Task 2 Causal Lifecycle: Investigation failure preserves post_investigatio
     const postPayload = JSON.stringify({
       conversationId: "fail-conv",
       stepIdx: 1,
+      correlationKey: "test-corr-key",
       toolName: "invoke_subagent",
       toolArgs: { Subagents: [{ TypeName: "flash-worker", Role: "investigator" }] },
       error: "Investigation subagent crashed with timeout",
@@ -1673,5 +1675,188 @@ test("Task 1 Exact Investigation Correlation: normative counterexamples A throug
   }
 });
 
+test("Task 1 Exact Investigation Correlation: normative tests H through M", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
 
+    // TEST H: conv-A + call-A stored vs conv-A + missing toolCallId -> NO MATCH
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "conv-A",
+      investigationInFlight: {
+        toolCallId: "call-A",
+        tool_call_id: "call-A",
+        conversationId: "conv-A",
+        conversation_id: "conv-A",
+        subagentRole: "investigator",
+        subagentProfile: "flash-worker",
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
 
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateH = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateH.investigationInFlight, "TEST H: missing toolCallId must NOT match stored call-A");
+    assert.equal(stateH.post_investigation, false, "TEST H: post_investigation must remain false");
+
+    // TEST I: conv-A + call-A + corr-A stored vs conv-A + call-A + missing corr-A -> MATCH on toolCallId
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "conv-A",
+      investigationInFlight: {
+        correlationKey: "corr-A",
+        correlation_key: "corr-A",
+        toolCallId: "call-A",
+        tool_call_id: "call-A",
+        conversationId: "conv-A",
+        conversation_id: "conv-A",
+        subagentRole: "investigator",
+        subagentProfile: "flash-worker",
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolCallId: "call-A",
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateI = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(stateI.investigationInFlight, undefined, "TEST I: shared causal toolCallId matches despite missing correlationKey on completion");
+    assert.equal(stateI.post_investigation, true, "TEST I: post_investigation becomes true on match");
+
+    // TEST J: conv-A + call-A stored vs conv-A without toolCallId/executionId/childConversationId -> NO MATCH
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "conv-A",
+      investigationInFlight: {
+        toolCallId: "call-A",
+        tool_call_id: "call-A",
+        conversationId: "conv-A",
+        conversation_id: "conv-A",
+        subagentRole: "investigator",
+        subagentProfile: "flash-worker",
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateJ = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateJ.investigationInFlight, "TEST J: completion without hard identity must NOT match");
+    assert.equal(stateJ.post_investigation, false, "TEST J: post_investigation must remain false");
+
+    // TEST K: parent=A, child=investigator-A, role=investigator, profile=flash-worker stored vs parent=A, child=investigator-B, role=investigator, profile=flash-worker in manage_subagents -> NO MATCH
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "conv-A",
+      investigationInFlight: {
+        parentConversationId: "conv-A",
+        parent_conversation_id: "conv-A",
+        childConversationId: "investigator-A",
+        child_conversation_id: "investigator-A",
+        subagentRole: "investigator",
+        subagent_role: "investigator",
+        subagentProfile: "flash-worker",
+        subagent_profile: "flash-worker",
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolName: "manage_subagents",
+        toolArgs: { ConversationId: "investigator-B", Role: "investigator", TypeName: "flash-worker" },
+        result: { status: "SUCCESS", subagentId: "investigator-B", role: "investigator", profile: "flash-worker" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateK = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateK.investigationInFlight, "TEST K: child mismatch (investigator-A vs investigator-B) must NOT match");
+    assert.equal(stateK.post_investigation, false, "TEST K: post_investigation must remain false");
+
+    // TEST L: parent=A, child=investigator-A stored vs exact child=investigator-A -> MATCH
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "conv-A",
+      investigationInFlight: {
+        parentConversationId: "conv-A",
+        parent_conversation_id: "conv-A",
+        childConversationId: "investigator-A",
+        child_conversation_id: "investigator-A",
+        subagentRole: "investigator",
+        subagent_role: "investigator",
+        subagentProfile: "flash-worker",
+        subagent_profile: "flash-worker",
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolName: "manage_subagents",
+        toolArgs: { ConversationId: "investigator-A", Role: "investigator", TypeName: "flash-worker" },
+        result: { status: "SUCCESS", subagentId: "investigator-A", role: "investigator", profile: "flash-worker" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateL = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(stateL.investigationInFlight, undefined, "TEST L: exact child identity (investigator-A) must match");
+    assert.equal(stateL.post_investigation, true, "TEST L: post_investigation becomes true on exact child match");
+
+    // TEST M: two investigators sharing role/profile/parent, completion contains only role/profile/parent -> NO MATCH (no FIFO/guesswork)
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "conv-A",
+      investigationInFlight: {
+        parentConversationId: "conv-A",
+        parent_conversation_id: "conv-A",
+        childConversationId: "investigator-A",
+        child_conversation_id: "investigator-A",
+        subagentRole: "investigator",
+        subagent_role: "investigator",
+        subagentProfile: "flash-worker",
+        subagent_profile: "flash-worker",
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolName: "manage_subagents",
+        toolArgs: { Role: "investigator", TypeName: "flash-worker" },
+        result: { status: "SUCCESS", role: "investigator", profile: "flash-worker" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateM = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateM.investigationInFlight, "TEST M: completion with only role/profile/parent must NOT match without hard child identity");
+    assert.equal(stateM.post_investigation, false, "TEST M: post_investigation must remain false without hard child identity");
+  } finally {
+    cleanDreamTestState();
+  }
+});
