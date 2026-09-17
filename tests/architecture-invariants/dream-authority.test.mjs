@@ -602,6 +602,8 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
   cleanTestState();
   try {
     mkdirSync(".agents/state", { recursive: true });
+
+    // 1. Adversarial: Uncorrelated completion (different conv, different call) -> in-flight must NOT be consumed
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
       activeRole: "ORCHESTRATOR",
       conversationId: "arch-013-conv",
@@ -611,12 +613,12 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
         stepIdx: 1,
         conversationId: "arch-013-conv",
         subagentRole: "investigator",
+        subagentProfile: "flash-worker",
         started_at: new Date().toISOString(),
       },
       post_investigation: false,
     }, null, 2), "utf-8");
 
-    // 1. Adversarial: Uncorrelated completion arrives -> in-flight must NOT be consumed
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
         conversationId: "different-conv",
@@ -630,11 +632,92 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
     assert.ok(state.investigationInFlight, "Uncorrelated completion must NOT consume in-flight investigation");
     assert.equal(state.post_investigation, false);
 
-    // 2. Valid: Exactly correlated completion arrives -> consumes in-flight, post_investigation = true
+    // 2. Adversarial: Missing hard identity -> NO MATCH
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
         conversationId: "arch-013-conv",
-        toolCallId: "call-013",
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.investigationInFlight, "Missing toolCallId must NOT consume in-flight");
+    assert.equal(state.post_investigation, false);
+
+    // 3. Adversarial: In manage_subagents, same parent conversation and role only -> NO MATCH
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "arch-013-conv",
+      investigationInFlight: {
+        parentConversationId: "arch-013-conv",
+        childConversationId: "child-inv-A",
+        subagentRole: "investigator",
+        subagentProfile: "flash-worker",
+        started_at: new Date().toISOString(),
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-013-conv",
+        toolName: "manage_subagents",
+        toolArgs: { Role: "investigator", TypeName: "flash-worker" },
+        result: { status: "SUCCESS", role: "investigator" },
+      }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.investigationInFlight, "Role/profile alone without hard child identity must NOT match");
+    assert.equal(state.post_investigation, false);
+
+    // 4. Adversarial: In manage_subagents, child mismatch (child-inv-B vs child-inv-A) -> NO MATCH
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-013-conv",
+        toolName: "manage_subagents",
+        toolArgs: { ConversationId: "child-inv-B", Role: "investigator", TypeName: "flash-worker" },
+        result: { status: "SUCCESS", subagentId: "child-inv-B", role: "investigator" },
+      }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.investigationInFlight, "Mismatched child ID must NOT match");
+    assert.equal(state.post_investigation, false);
+
+    // 5. Valid: In manage_subagents, exact child match -> MATCH
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-013-conv",
+        toolName: "manage_subagents",
+        toolArgs: { ConversationId: "child-inv-A", Role: "investigator", TypeName: "flash-worker" },
+        result: { status: "SUCCESS", subagentId: "child-inv-A", role: "investigator" },
+      }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.investigationInFlight, undefined, "Exact child ID match consumes in-flight");
+    assert.equal(state.post_investigation, true, "Successful investigation sets post_investigation = true");
+
+    // 6. Valid: In invoke_subagent, exact toolCallId match -> MATCH
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "arch-013-conv",
+      investigationInFlight: {
+        toolCallId: "call-013-valid",
+        conversationId: "arch-013-conv",
+        subagentRole: "investigator",
+        started_at: new Date().toISOString(),
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-013-conv",
+        toolCallId: "call-013-valid",
         toolName: "invoke_subagent",
         result: { status: "SUCCESS" },
       }),
@@ -643,6 +726,32 @@ test("ARCH-013: Exact Investigation Correlation Lifecycle (Valid & Adversarial)"
     state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
     assert.equal(state.investigationInFlight, undefined, "Correlated completion consumes in-flight");
     assert.equal(state.post_investigation, true, "Successful investigation marks post_investigation = true");
+
+    // 7. Preserves failure/cancelled semantics: failure clears in-flight but post_investigation remains false
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "arch-013-conv",
+      investigationInFlight: {
+        toolCallId: "call-013-fail",
+        conversationId: "arch-013-conv",
+        subagentRole: "investigator",
+        started_at: new Date().toISOString(),
+      },
+      post_investigation: false,
+    }, null, 2), "utf-8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-013-conv",
+        toolCallId: "call-013-fail",
+        toolName: "invoke_subagent",
+        error: "Subagent crashed",
+      }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.investigationInFlight, undefined, "Failed completion clears in-flight");
+    assert.equal(state.post_investigation, false, "Failed investigation preserves post_investigation = false");
   } finally {
     cleanTestState();
   }
@@ -723,4 +832,282 @@ test("ARCH-014: Authoritative REPLAN State Transition (Valid & Adversarial)", ()
   } finally {
     cleanTestState();
   }
+});
+
+// ---------------------------------------------------------------------------
+// ARCH-015: RETRY_SAME Exact Worker Identity
+// Medium->Medium allowed; Medium->Low, Medium->High, Low->Medium, High->Medium denied.
+// ---------------------------------------------------------------------------
+test("ARCH-015: RETRY_SAME Exact Worker Identity (Valid & Adversarial)", () => {
+  cleanTestState();
+  try {
+    const transitions = [
+      { last: "flash-medium-worker", req: "flash-medium-worker", expected: "allow" },
+      { last: "flash-medium-worker", req: "flash-low-worker", expected: "deny" },
+      { last: "flash-medium-worker", req: "flash-worker", expected: "deny" },
+      { last: "flash-low-worker", req: "flash-medium-worker", expected: "deny" },
+      { last: "flash-worker", req: "flash-medium-worker", expected: "deny" },
+    ];
+
+    for (const [idx, t] of transitions.entries()) {
+      cleanTestState();
+      mkdirSync(".agents/state", { recursive: true });
+      writeFileSync(".agents/state/active-state.json", JSON.stringify({
+        activeRole: "ORCHESTRATOR",
+        taskAction: "IMPLEMENT",
+        taskDomain: "CODE",
+        criticality: "NORMAL",
+        retry: true,
+        attempt: 1,
+        remainingAttempts: 1,
+        prevRemainingAttempts: 1,
+        retryReason: "FAILED_TEST",
+        lastWorkerProfile: t.last,
+      }, null, 2), "utf-8");
+
+      const input = JSON.stringify({
+        conversationId: `arch-015-conv-${idx}`,
+        stepIdx: idx + 1,
+        toolCall: {
+          id: `call_retry_${idx}`,
+          name: "invoke_subagent",
+          args: {
+            remainingAttempts: 1,
+            Subagents: [
+              {
+                TypeName: t.req,
+                Role: "worker",
+                Prompt: "Retry implementation. allowedPaths: [src/**]",
+              }
+            ]
+          }
+        }
+      });
+
+      const raw = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+      const res = JSON.parse(raw.trim());
+      assert.equal(res.decision, t.expected, `Transition ${t.last} -> ${t.req} must yield ${t.expected}`);
+      if (t.expected === "deny") {
+        assert.match(res.reason, /POLICY_MISMATCH.*RETRY_SAME/);
+      }
+    }
+  } finally {
+    cleanTestState();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ARCH-016: Active Self-Host Image Isolation
+// Test loads active policy A, candidate source modification B cannot hot-reload active session;
+// temporary fixture projection without touching .git/orchestra-self-host/**.
+// ---------------------------------------------------------------------------
+test("ARCH-016: Active Self-Host Image Isolation (Valid & Adversarial)", () => {
+  cleanTestState();
+  const fixtureProjectionDir = resolve(repoRoot, "scratch/active-self-host-projection-fixture");
+  try {
+    mkdirSync(resolve(fixtureProjectionDir, "runtimes/antigravity/.agents/dream/policies"), { recursive: true });
+    // Candidate source modification B: write corrupted policy in candidate projection
+    writeFileSync(
+      resolve(fixtureProjectionDir, "runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"),
+      JSON.stringify({ schema: "corrupted-candidate-policy-modification-B", rules: [] }),
+      "utf-8"
+    );
+
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+
+    // Pre-tool hook runs with candidate repo projection as repoRoot
+    const input = JSON.stringify({
+      conversationId: "arch-016-conv",
+      repoRoot: fixtureProjectionDir,
+      stepIdx: 1,
+      toolCall: {
+        id: "call_arch_016",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            {
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Implement feature with candidate repoRoot. allowedPaths: [src/**]",
+            }
+          ]
+        }
+      }
+    });
+
+    const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
+    const output = JSON.parse(rawOutput.trim());
+
+    // Active session loads active policy image, candidate modification B cannot hot-reload active policy
+    assert.equal(output.decision, "allow");
+
+    const eventsPath = ".agents/telemetry/events.jsonl";
+    assert.ok(existsSync(eventsPath));
+    const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const dec = events.find(e => e.type === "DECISION");
+    assert.ok(dec, "DECISION event recorded from immutable active runtime policy");
+    assert.equal(dec.policy_source, "STATIC_POLICY_V1");
+    assert.notEqual(dec.policy_source, "STATIC_ROUTING_FALLBACK", "Must NOT fall back to corrupted candidate source");
+  } finally {
+    try { rmSync(fixtureProjectionDir, { recursive: true, force: true }); } catch {}
+    cleanTestState();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ARCH-017: Policy Contract Truthfulness
+// Structural representable vs Semantic-only constraints (schema vs validatePolicy).
+// ---------------------------------------------------------------------------
+test("ARCH-017: Policy Contract Truthfulness (Valid & Adversarial)", () => {
+  // 1. Structurally valid (correct JSON shape, types, and schema string) but semantically invalid:
+  // Action "REPLAN" is not valid for decision_type "WORKER_TIER"
+  const semanticInvalidPolicy = {
+    schema: "orchestra.exploration-policy.v1",
+    base_policy: null,
+    description: "Structurally valid but semantically untruthful action",
+    created_at: "2026-09-17T00:00:00Z",
+    rules: [
+      {
+        id: "rule-untruthful-action",
+        decision_type: "WORKER_TIER",
+        priority: 10,
+        when: {
+          task_action: ["IMPLEMENT"],
+        },
+        choose: "REPLAN",
+      }
+    ]
+  };
+  semanticInvalidPolicy.policy_id = computePolicyId(semanticInvalidPolicy);
+
+  const semanticRes = validatePolicy(semanticInvalidPolicy);
+  assert.equal(semanticRes.valid, false, "Semantic validator must reject choose: 'REPLAN' for WORKER_TIER");
+  assert.match(semanticRes.errors.join("; "), /invalid action.*WORKER_TIER/i);
+
+  // 2. Structurally valid with valid action, but forged policy_id (tampered content address)
+  const forgedPolicy = {
+    schema: "orchestra.exploration-policy.v1",
+    policy_id: "policy-0000000000000000000000000000000000000000000000000000000000000000",
+    base_policy: null,
+    description: "Forged policy_id",
+    created_at: "2026-09-17T00:00:00Z",
+    rules: [
+      {
+        id: "rule-valid-shape",
+        decision_type: "WORKER_TIER",
+        priority: 10,
+        when: { task_action: ["IMPLEMENT"] },
+        choose: "FLASH_MEDIUM",
+      }
+    ]
+  };
+  const forgedRes = validatePolicy(forgedPolicy);
+  assert.equal(forgedRes.valid, false, "Semantic validator must enforce policy_id content address truthfulness");
+  assert.match(forgedRes.errors.join("; "), /policy_id mismatch/i);
+
+  // 3. Valid policy satisfying both structural and semantic contracts
+  const validPolicyRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    base_policy: null,
+    description: "Fully truthful policy",
+    created_at: "2026-09-17T00:00:00Z",
+    rules: [
+      {
+        id: "rule-truthful",
+        decision_type: "WORKER_TIER",
+        priority: 10,
+        when: { task_action: ["IMPLEMENT"] },
+        choose: "FLASH_MEDIUM",
+      }
+    ]
+  };
+  const validPolicy = {
+    policy_id: computePolicyId(validPolicyRaw),
+    ...validPolicyRaw,
+  };
+  const validRes = validatePolicy(validPolicy);
+  assert.equal(validRes.valid, true, "Truthful policy passes structural and semantic validation");
+});
+
+// ---------------------------------------------------------------------------
+// ARCH-018: Exact Replay Remains Model-Free
+// Demonstrate local deterministic callback, zero model/provider invocation path, UNKNOWN_BRANCH epistemic stop.
+// ---------------------------------------------------------------------------
+test("ARCH-018: Exact Replay Remains Model-Free (Valid & Adversarial)", () => {
+  const rootSnapshotId = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const runtimeFp = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+  const dec1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-model-free-1",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { task_action: "IMPLEMENT", criticality: "NORMAL" },
+    available_actions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-model-free-1",
+    observation_id: "obs-model-free-1",
+    result: "TESTS_PASSED",
+    resulting_snapshot_id: null,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: { attempt: 0, retry_remaining: 2 },
+    cost_metrics: { tokens: 50 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec1, out1],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  // Track invocation count of local deterministic callback
+  let callbackInvocations = 0;
+  const deterministicCallback = (decision) => {
+    callbackInvocations++;
+    return "FLASH_MEDIUM";
+  };
+
+  // 1. Valid: Replay executes entirely via local synchronous callback without model/provider interaction
+  const startTime = Date.now();
+  const replayResult = replayExact({
+    world: sealRes.world,
+    chooseAction: deterministicCallback,
+  });
+  const elapsed = Date.now() - startTime;
+
+  assert.equal(replayResult.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
+  assert.equal(callbackInvocations, 1, "Local deterministic callback invoked exactly once per decision step");
+  assert.equal(replayResult.trajectories[0].steps.length, 1);
+  assert.equal(replayResult.trajectories[0].steps[0].result, "TESTS_PASSED");
+  assert.ok(elapsed < 100, "Model-free replay must be instantaneous local synchronous evaluation");
+
+  // 2. Adversarial: Epistemic stop at UNKNOWN_BRANCH when local callback selects unobserved action
+  // System halts without calling model or hallucinating branch outcomes
+  const unobservedCallback = () => "FLASH_LOW";
+  const unobservedReplay = replayExact({
+    world: sealRes.world,
+    chooseAction: unobservedCallback,
+  });
+
+  assert.equal(unobservedReplay.status, REPLAY_STATUS.UNKNOWN_BRANCH);
+  assert.equal(unobservedReplay.trajectories[0].steps.length, 0, "Zero manufactured/hallucinated outcome on unobserved branch");
+  assert.equal(unobservedReplay.trajectories[0].terminal_state, null);
 });
