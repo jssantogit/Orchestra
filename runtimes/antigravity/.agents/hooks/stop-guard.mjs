@@ -207,6 +207,9 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
             originToolCallId: match.originToolCallId || match.toolCallId || null,
             pendingSeq: match.seq ?? null,
             delegationKind: match.delegationKind || null,
+            decisionCorrelationKey: match.decisionCorrelationKey || null,
+            decisionType: match.decisionType || null,
+            decisionBranchOrdinal: match.decisionBranchOrdinal ?? null,
             confidence: isFactual ? "HIGH" : "LOW",
             source: isFactual ? "RUNTIME_IDENTITY" : "UNRESOLVED",
             consumed: true,
@@ -399,7 +402,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
 
 function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings) {
   const inFlight = activeState.investigationInFlight;
-  if (!inFlight || payload.fullyIdle === false) {
+  if (!inFlight || payload.fullyIdle !== true) {
     return { matched: false, reason: "NOT_TERMINAL_INVESTIGATION_STOP" };
   }
 
@@ -420,6 +423,9 @@ function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindi
     || null;
   if (!binding) {
     return { matched: false, reason: "CHILD_BINDING_NOT_FOUND" };
+  }
+  if (binding.confidence !== "HIGH" || binding.source !== "RUNTIME_IDENTITY") {
+    return { matched: false, reason: "CHILD_IDENTITY_NOT_FACTUAL" };
   }
 
   if (binding.parentConversationId && parentConversationId && binding.parentConversationId !== parentConversationId) {
@@ -504,6 +510,104 @@ function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindi
   return { matched: true, success: !failed, dreamOutcome };
 }
 
+function finalizeDelegatedDecisionFromStop(activeState, payload, repoRoot, roleBindings) {
+  if (payload.fullyIdle !== true) {
+    return { matched: false, reason: "NOT_TERMINAL_DELEGATION_STOP" };
+  }
+
+  const childConversationId = payload.conversationId || null;
+  if (!childConversationId) {
+    return { matched: false, reason: "MISSING_CHILD_IDENTITY" };
+  }
+
+  const binding = (roleBindings.bindings && roleBindings.bindings[childConversationId])
+    || (roleBindings.conversations && roleBindings.conversations[childConversationId])
+    || null;
+  if (!binding) {
+    return { matched: false, reason: "CHILD_BINDING_NOT_FOUND" };
+  }
+  if (binding.confidence !== "HIGH" || binding.source !== "RUNTIME_IDENTITY") {
+    return { matched: false, reason: "CHILD_IDENTITY_NOT_FACTUAL" };
+  }
+  if (binding.delegationKind !== "WORK" || !binding.decisionCorrelationKey) {
+    return { matched: false, reason: "NO_FACTUAL_WORK_DECISION" };
+  }
+
+  const mainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+  if (binding.parentConversationId && mainConversationId && binding.parentConversationId !== mainConversationId) {
+    return { matched: false, reason: "PARENT_IDENTITY_MISMATCH" };
+  }
+
+  const activeTaskId = activeState.taskId || activeState.taskKey || null;
+  if ((binding.taskIdentifier || binding.taskId) && activeTaskId) {
+    const boundTaskId = binding.taskIdentifier || binding.taskId;
+    if (boundTaskId !== activeTaskId) {
+      return { matched: false, reason: "TASK_IDENTITY_MISMATCH" };
+    }
+  }
+  if (binding.benchmarkRunId && activeState.benchmarkRunId && binding.benchmarkRunId !== activeState.benchmarkRunId) {
+    return { matched: false, reason: "RUN_IDENTITY_MISMATCH" };
+  }
+
+  const terminationReason = String(payload.terminationReason || "");
+  const failed = Boolean(
+    payload.error ||
+    payload.cancelled ||
+    /(?:error|fail|cancel|kill|abort|max[_ -]?step|timeout)/i.test(terminationReason)
+  );
+
+  const outcome = recordDecisionOutcome({
+    repoRoot,
+    correlationKey: binding.decisionCorrelationKey,
+    outcome: {
+      result: failed
+        ? {
+            status: "FAILED",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+            error: payload.error || null,
+          }
+        : {
+            status: "COMPLETED",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+          },
+      evidence_summary: activeState.evidenceSummary || activeState.evidence || {
+        tests: activeState.workerValidationVerified ? "PASS" : "UNKNOWN",
+        typecheck: "UNKNOWN",
+        build: "UNKNOWN",
+        validation_fresh: Boolean(activeState.workerValidationFresh),
+        scope_check: "UNKNOWN",
+      },
+      retry_state: {
+        attempt: activeState.attempt || 0,
+        retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+        retry_reason: activeState.retryReason || activeState.retry_reason || null,
+      },
+      cost_metrics: {
+        tool_calls: activeState.tool_calls || 0,
+        context_proxy_bytes: activeState.context_proxy_bytes || 0,
+        worker_packet_bytes: activeState.toolMix?.worker_packet_bytes || activeState.worker_packet_bytes || 0,
+      },
+      terminal_state: failed ? "FAILED" : "UNKNOWN",
+    },
+  });
+
+  activeState.lastDelegatedDecisionCompletion = {
+    childConversationId,
+    parentConversationId: binding.parentConversationId || null,
+    originToolCallId: binding.originToolCallId || null,
+    decisionCorrelationKey: binding.decisionCorrelationKey,
+    decisionType: binding.decisionType || null,
+    success: !failed,
+    outcomeRecorded: Boolean(outcome?.recorded),
+    outcomeReason: outcome?.reason || null,
+    completedAt: new Date().toISOString(),
+  };
+
+  return { matched: true, success: !failed, outcome };
+}
+
 function main() {
   const rawInput = readStdin();
   let payload = {};
@@ -571,7 +675,10 @@ function main() {
   // Factual investigation completion boundary: terminal Stop of the exact bound
   // investigator child. Dispatch ACKs and manage_subagents observations cannot reach here.
   const investigationStop = finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings);
-  if (investigationStop.matched) {
+  const delegatedDecisionStop = investigationStop.matched
+    ? { matched: false, reason: "INVESTIGATION_HANDLED_SEPARATELY" }
+    : finalizeDelegatedDecisionFromStop(activeState, payload, repoRoot, roleBindings);
+  if (investigationStop.matched || delegatedDecisionStop.matched) {
     try {
       mkdirSync(dirname(statePath), { recursive: true });
       writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
