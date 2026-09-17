@@ -242,7 +242,7 @@ governance -> decision state -> available_actions -> declarative policy -> autho
 
 ## 10. Milestone D Integration Hotfix & Architecture Invariant Gate
 
-The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime against edge cases discovered during full-lifecycle testing and formalize the 20 Architecture Invariants:
+The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime against edge cases discovered during full-lifecycle testing and formalize the 21 Architecture Invariants:
 
 1. **Exact Investigation Correlation Lifecycle (ACK != COMPLETION)**:
    - `pre-tool-enforce.mjs` creates `investigationInFlight` and persists immutable causal identity for the dispatch, including `correlationKey`, `toolCallId`, parent conversation, expected investigator profile/role, and `delegationKind = INVESTIGATION`.
@@ -254,6 +254,7 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
    - Factual dispatch failure may terminate the attempt only with exact invocation identity and preserves `post_investigation = false`.
    - Successful factual child completion sets `post_investigation = true`, consumes `investigationInFlight`, and records the matching Dream `DECISION_OUTCOME` exactly once.
    - The same causal boundary applies to normal worker decisions: a successful worker dispatch ACK cannot close `WORKER_TIER` or `RETRY_ACTION`; their outcomes are recorded only on the factual terminal Stop of the exact bound worker child.
+   - `INVESTIGATION_STRATEGY = IMPLEMENT_DIRECT` is also tracked as an in-flight decision and closes only when the exact worker reaches factual terminal Stop; it cannot remain as a permanent pending decision after the first mutation.
    - Recorder durability is ordered so a DECISION is never published without durable pending correlation, and outcome retry recovery avoids duplicate `DECISION_OUTCOME` events after an append-before-consume interruption.
 2. **Explicit REPLAN State Machine Transition**:
    - Generic tool triggers (`write_to_file`, `run_command`) never induce implicit replans.
@@ -261,8 +262,8 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
 3. **Structural Policy Contract Parity & Truthfulness**:
    - Strict structural alignment between JSON Schema Draft 2020-12 and pure JavaScript `validatePolicy()` across all properties (`base_policy`, `description`, `created_at`, `rule.description`).
    - Truthfulness is enforced: structural representable constraints (schema) and normative semantic invariants (`validatePolicy()`) are explicitly partitioned and verified.
-4. **Architecture Invariant Gate (ARCH-001 to ARCH-020)**:
-   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 20 architectural boundaries:
+4. **Architecture Invariant Gate (ARCH-001 to ARCH-021)**:
+   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 21 architectural boundaries:
      - `ARCH-001`: Immutable Governance Over Dream
      - `ARCH-002`: Zero Online Context Overhead & No Raw History In Context
      - `ARCH-003`: Exact Replay Epistemic Invariant
@@ -283,3 +284,4 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
      - `ARCH-018`: Exact Replay Remains Model-Free
      - `ARCH-019`: Factual Investigator Completion Boundary
      - `ARCH-020`: Delegated Worker ACK Is Not Decision Outcome
+     - `ARCH-021`: IMPLEMENT_DIRECT Decision Completes With Its Worker
