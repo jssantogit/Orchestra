@@ -37,6 +37,13 @@ import {
   REPLAY_STATUS,
   replayExact,
 } from "./replay-simulator.mjs";
+import {
+  COMPARISON_RELATION,
+  EVALUATION_DIMENSION,
+  evaluateTrajectory,
+  compareTrajectoryFacts,
+  createReplayReport,
+} from "./evaluator.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -2861,4 +2868,555 @@ test("Task 8: Rejects invalid or unsealed world with WORLD_INVALID", () => {
   const res2 = replayExact({ world: { status: "WORLD_INCOMPLETE" }, chooseAction: () => "ACT" });
   assert.equal(res2.status, REPLAY_STATUS.WORLD_INVALID);
   assert.ok(res2.errors.length > 0);
+});
+
+test("Task 9: Hard invalidation triggers mark trajectory as ineligible", () => {
+  // 1. Governance violation
+  const tGov = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    governance_violation: true,
+  };
+  const evalGov = evaluateTrajectory(tGov);
+  assert.equal(evalGov.eligible, false);
+  assert.ok(evalGov.reason.toLowerCase().includes("governance"));
+
+  // 2. Scope violation
+  const tScope = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    scope_violation: true,
+  };
+  const evalScope = evaluateTrajectory(tScope);
+  assert.equal(evalScope.eligible, false);
+  assert.ok(evalScope.reason.toLowerCase().includes("scope"));
+
+  // 3. Orchestrator product write
+  const tOrchWrite = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    orchestrator_product_write: true,
+  };
+  const evalOrchWrite = evaluateTrajectory(tOrchWrite);
+  assert.equal(evalOrchWrite.eligible, false);
+  assert.ok(evalOrchWrite.reason.toLowerCase().includes("orchestrator"));
+
+  // 4. Reviewer product write
+  const tRevWrite = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    reviewer_product_write: true,
+  };
+  const evalRevWrite = evaluateTrajectory(tRevWrite);
+  assert.equal(evalRevWrite.eligible, false);
+  assert.ok(evalRevWrite.reason.toLowerCase().includes("reviewer"));
+
+  // 5. Unattributed mutation
+  const tUnattr = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    unattributed_mutation: true,
+  };
+  const evalUnattr = evaluateTrajectory(tUnattr);
+  assert.equal(evalUnattr.eligible, false);
+  assert.ok(evalUnattr.reason.toLowerCase().includes("mutation"));
+
+  // 6. Evidence ledger integrity failure
+  const tLedger = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    evidence_ledger_integrity_failure: true,
+  };
+  const evalLedger = evaluateTrajectory(tLedger);
+  assert.equal(evalLedger.eligible, false);
+  assert.ok(evalLedger.reason.toLowerCase().includes("ledger"));
+
+  // 7. Stale evidence used for acceptance
+  const tStale = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    stale_evidence: true,
+  };
+  const evalStale = evaluateTrajectory(tStale);
+  assert.equal(evalStale.eligible, false);
+  assert.ok(evalStale.reason.toLowerCase().includes("stale"));
+
+  // 8. Failed tool interpreted as success
+  const tFailedTool = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    failed_tool_as_success: true,
+  };
+  const evalFailedTool = evaluateTrajectory(tFailedTool);
+  assert.equal(evalFailedTool.eligible, false);
+  assert.ok(evalFailedTool.reason.toLowerCase().includes("tool"));
+
+  // 9. Two-Key bypass
+  const tTwoKey = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    two_key_bypass: true,
+  };
+  const evalTwoKey = evaluateTrajectory(tTwoKey);
+  assert.equal(evalTwoKey.eligible, false);
+  assert.ok(evalTwoKey.reason.toLowerCase().includes("two-key"));
+
+  // 10. Unresolved Human Gate treated as success
+  const tHumanGate = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    unresolved_human_gate: true,
+  };
+  const evalHumanGate = evaluateTrajectory(tHumanGate);
+  assert.equal(evalHumanGate.eligible, false);
+  assert.ok(evalHumanGate.reason.toLowerCase().includes("human gate"));
+
+  // 11. Illegal policy action
+  const tIllegal = {
+    status: REPLAY_STATUS.POLICY_INVALID_ACTION,
+    terminal_state: null,
+  };
+  const evalIllegal = evaluateTrajectory(tIllegal);
+  assert.equal(evalIllegal.eligible, false);
+  assert.ok(evalIllegal.reason.toLowerCase().includes("action"));
+
+  // 12. Invalid provenance
+  const tProv = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    invalid_provenance: true,
+  };
+  const evalProv = evaluateTrajectory(tProv);
+  assert.equal(evalProv.eligible, false);
+  assert.ok(evalProv.reason.toLowerCase().includes("provenance"));
+});
+
+test("Task 9: Factual outcome aggregation accurately computes metrics and preserves uncached_input_tokens: null", () => {
+  // Trajectory with acceptance on first pass
+  const trajFirstPass = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    steps: [
+      {
+        decision_type: "WORKER_TIER",
+        chosen_action: "FLASH_LOW",
+        result: "SUCCESS",
+      },
+    ],
+    cost_metrics: {
+      model_calls: 1,
+      role_turns: 2,
+      tool_calls: 3,
+      input_tokens: 1500,
+      output_tokens: 250,
+      cached_input_tokens: 1000,
+      uncached_input_tokens: 500, // Should be normalized to null!
+      latency_ms: 1200,
+    },
+    evidence_completeness: {
+      required: ["tests", "lint"],
+      observed: { tests: "PASS", lint: "PASS" },
+      complete: true,
+    },
+  };
+
+  const evalFirstPass = evaluateTrajectory(trajFirstPass);
+  assert.equal(evalFirstPass.eligible, true);
+  assert.equal(evalFirstPass.accepted, true);
+  assert.equal(evalFirstPass.first_pass_acceptance, true);
+  assert.equal(evalFirstPass.retries, 0);
+  assert.deepEqual(evalFirstPass.retry_reasons, []);
+  assert.equal(evalFirstPass.evidence_completeness.complete, true);
+  assert.equal(evalFirstPass.cost_metrics.model_calls, 1);
+  assert.equal(evalFirstPass.cost_metrics.role_turns, 2);
+  assert.equal(evalFirstPass.cost_metrics.tool_calls, 3);
+  assert.equal(evalFirstPass.cost_metrics.input_tokens, 1500);
+  assert.equal(evalFirstPass.cost_metrics.output_tokens, 250);
+  // CRITICAL RULE 6: uncached_input_tokens MUST be null
+  assert.strictEqual(evalFirstPass.cost_metrics.uncached_input_tokens, null);
+  assert.equal(evalFirstPass.cost_metrics.latency_ms, 1200);
+
+  // Trajectory with retries
+  const trajWithRetries = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    steps: [
+      {
+        decision_type: "WORKER_TIER",
+        chosen_action: "FLASH_LOW",
+        result: "TEST_FAILED",
+      },
+      {
+        decision_type: "RETRY_ACTION",
+        chosen_action: "DIRECT_DELTA_REPAIR",
+        retry_state: { is_retry: true, reason: "TEST_FAILED" },
+        result: "LINT_FAILED",
+      },
+      {
+        decision_type: "RETRY_ACTION",
+        chosen_action: "DIAGNOSTIC_FIRST_INVESTIGATION",
+        retry_state: { is_retry: true, reason: "LINT_FAILED" },
+        result: "SUCCESS",
+      },
+    ],
+    cost_metrics: {
+      model_calls: 3,
+      latency_ms: 4500,
+    },
+  };
+
+  const evalRetries = evaluateTrajectory(trajWithRetries);
+  assert.equal(evalRetries.eligible, true);
+  assert.equal(evalRetries.accepted, true);
+  assert.equal(evalRetries.first_pass_acceptance, false);
+  assert.equal(evalRetries.retries, 2);
+  assert.deepEqual(evalRetries.retry_reasons.sort(), ["LINT_FAILED", "TEST_FAILED"]);
+});
+
+test("Task 9: Strict lexicographic comparison in immutable priority order (no weighted sums)", () => {
+  // 1. Safety/Fidelity: Ineligible trajectory compared against eligible trajectory
+  const evalIneligible = {
+    eligible: false,
+    reason: "Governance violation",
+    accepted: true,
+  };
+  const evalEligible = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 10, latency_ms: 5000 },
+  };
+  const cmp1 = compareTrajectoryFacts(evalIneligible, evalEligible);
+  assert.equal(cmp1.relation, COMPARISON_RELATION.INELIGIBLE);
+
+  // 2. Acceptance: Accepted vs Not Accepted
+  // Accepted wins even if Not Accepted has better metrics across ALL lower priorities (0 retries, 1 token, 1ms latency)
+  const evalAcceptedWorseCost = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: false,
+    retries: 3,
+    cost_metrics: { model_calls: 10, input_tokens: 10000, output_tokens: 2000, latency_ms: 20000 },
+  };
+  const evalFailedBestCost = {
+    eligible: true,
+    accepted: false,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: false,
+    retries: 0,
+    cost_metrics: { model_calls: 1, input_tokens: 10, output_tokens: 5, latency_ms: 10 },
+  };
+  const cmp2 = compareTrajectoryFacts(evalAcceptedWorseCost, evalFailedBestCost);
+  assert.equal(cmp2.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp2.dimension, EVALUATION_DIMENSION.ACCEPTANCE);
+
+  // 3. Evidence Completeness: Complete vs Incomplete
+  // Complete wins even if Incomplete has first pass acceptance and lower cost
+  const evalComplete = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { required: ["tests"], observed: { tests: "PASS" }, complete: true },
+    first_pass_acceptance: false,
+    retries: 1,
+    cost_metrics: { model_calls: 5, input_tokens: 5000, latency_ms: 5000 },
+  };
+  const evalIncomplete = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { required: ["tests"], observed: { tests: "MISSING" }, complete: false },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 1, input_tokens: 100, latency_ms: 100 },
+  };
+  const cmp3 = compareTrajectoryFacts(evalComplete, evalIncomplete);
+  assert.equal(cmp3.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp3.dimension, EVALUATION_DIMENSION.EVIDENCE_COMPLETENESS);
+
+  // 4. First-pass Acceptance: First-pass (0 retries) vs non-first-pass
+  const evalFirstPass = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 4, input_tokens: 4000, latency_ms: 4000 },
+  };
+  const evalNonFirstPass = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: false,
+    retries: 1,
+    cost_metrics: { model_calls: 2, input_tokens: 2000, latency_ms: 2000 },
+  };
+  const cmp4 = compareTrajectoryFacts(evalFirstPass, evalNonFirstPass);
+  assert.equal(cmp4.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp4.dimension, EVALUATION_DIMENSION.FIRST_PASS_ACCEPTANCE);
+
+  // 5. Retry cost: 1 retry vs 2 retries
+  const evalFewerRetries = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: false,
+    retries: 1,
+    cost_metrics: { model_calls: 5, input_tokens: 5000, latency_ms: 5000 },
+  };
+  const evalMoreRetries = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: false,
+    retries: 2,
+    cost_metrics: { model_calls: 3, input_tokens: 3000, latency_ms: 3000 },
+  };
+  const cmp5 = compareTrajectoryFacts(evalFewerRetries, evalMoreRetries);
+  assert.equal(cmp5.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp5.dimension, EVALUATION_DIMENSION.RETRY_COST);
+
+  // 6. Model calls: 2 calls vs 4 calls
+  const evalFewerCalls = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 2, input_tokens: 5000, latency_ms: 5000 },
+  };
+  const evalMoreCalls = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 4, input_tokens: 3000, latency_ms: 3000 },
+  };
+  const cmp6 = compareTrajectoryFacts(evalFewerCalls, evalMoreCalls);
+  assert.equal(cmp6.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp6.dimension, EVALUATION_DIMENSION.MODEL_CALLS);
+
+  // 7. Tokens: 1000 tokens vs 2000 tokens
+  const evalFewerTokens = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 2, input_tokens: 800, output_tokens: 200, latency_ms: 5000 },
+  };
+  const evalMoreTokens = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 2, input_tokens: 1500, output_tokens: 500, latency_ms: 2000 },
+  };
+  const cmp7 = compareTrajectoryFacts(evalFewerTokens, evalMoreTokens);
+  assert.equal(cmp7.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp7.dimension, EVALUATION_DIMENSION.TOKENS);
+
+  // 8. Latency: 100ms vs 200ms
+  const evalLowerLatency = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 2, input_tokens: 1000, output_tokens: 100, latency_ms: 100 },
+  };
+  const evalHigherLatency = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 2, input_tokens: 1000, output_tokens: 100, latency_ms: 200 },
+  };
+  const cmp8 = compareTrajectoryFacts(evalLowerLatency, evalHigherLatency);
+  assert.equal(cmp8.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp8.dimension, EVALUATION_DIMENSION.LATENCY);
+
+  // Equivalent: all dimensions equal
+  const cmpEq = compareTrajectoryFacts(evalLowerLatency, { ...evalLowerLatency });
+  assert.equal(cmpEq.relation, COMPARISON_RELATION.EQUIVALENT);
+});
+
+test("Task 9: UNKNOWN_BRANCH trajectory represents lack of support, NOT failure", () => {
+  const trajUnknown = {
+    status: REPLAY_STATUS.UNKNOWN_BRANCH,
+    terminal_state: null,
+    steps: [
+      {
+        decision_type: "WORKER_TIER",
+        chosen_action: "FLASH_HIGH",
+        result: null,
+      },
+    ],
+  };
+
+  const evalUnknown = evaluateTrajectory(trajUnknown);
+  assert.equal(evalUnknown.eligible, true);
+  assert.equal(evalUnknown.has_unknown_branch, true);
+  assert.equal(evalUnknown.terminal_state, "UNKNOWN_BRANCH");
+  assert.equal(evalUnknown.accepted, false);
+
+  const evalKnown = {
+    eligible: true,
+    accepted: true,
+    evidence_completeness: { complete: true },
+    first_pass_acceptance: true,
+    retries: 0,
+    cost_metrics: { model_calls: 1, latency_ms: 500 },
+  };
+
+  // Comparing unknown branch against any trajectory returns INSUFFICIENT_SUPPORT / NEEDS_EXPLORATION
+  const cmp1 = compareTrajectoryFacts(evalUnknown, evalKnown);
+  assert.equal(cmp1.relation, COMPARISON_RELATION.INSUFFICIENT_SUPPORT);
+  assert.equal(cmp1.reason, "NEEDS_EXPLORATION");
+
+  const cmp2 = compareTrajectoryFacts(evalKnown, evalUnknown);
+  assert.equal(cmp2.relation, COMPARISON_RELATION.INSUFFICIENT_SUPPORT);
+  assert.equal(cmp2.reason, "NEEDS_EXPLORATION");
+});
+
+test("Task 9: createReplayReport produces structured factual report object", () => {
+  const mockWorld = {
+    root_snapshot_id: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    task_fingerprint: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  };
+
+  const mockReplay = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    trajectories: [
+      {
+        status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+        terminal_state: "ACCEPTED",
+        steps: [
+          { decision_type: "WORKER_TIER", chosen_action: "FLASH_LOW" },
+        ],
+        cost_metrics: {
+          model_calls: 1,
+          role_turns: 2,
+          tool_calls: 3,
+          input_tokens: 1000,
+          output_tokens: 200,
+          latency_ms: 1500,
+        },
+        evidence_completeness: { complete: true },
+      },
+      {
+        status: REPLAY_STATUS.UNKNOWN_BRANCH,
+        terminal_state: null,
+        steps: [],
+        cost_metrics: {
+          model_calls: 1,
+          role_turns: 1,
+          tool_calls: 0,
+          input_tokens: 500,
+          output_tokens: 50,
+          latency_ms: 600,
+        },
+      },
+      {
+        status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+        terminal_state: "ACCEPTED",
+        governance_violation: true,
+        steps: [],
+        cost_metrics: {},
+      },
+    ],
+  };
+
+  const report = createReplayReport({
+    world: mockWorld,
+    replay: mockReplay,
+    candidatePolicyId: "candidate-v2",
+  });
+
+  assert.equal(report.candidate_policy_id, "candidate-v2");
+  assert.equal(report.world_root_snapshot_id, mockWorld.root_snapshot_id);
+  assert.equal(report.total_trajectories, 3);
+  assert.equal(report.eligible_trajectories, 2);
+  assert.equal(report.ineligible_trajectories, 1);
+  assert.equal(report.complete_support_count, 1);
+  assert.equal(report.unknown_branch_count, 1);
+  assert.equal(report.accepted_count, 1);
+  assert.equal(report.acceptance_rate, 1 / 3);
+  assert.equal(report.first_pass_count, 1);
+  assert.equal(report.first_pass_rate, 1 / 3);
+  assert.equal(report.aggregate_cost_metrics.model_calls, 2);
+  assert.equal(report.aggregate_cost_metrics.input_tokens, 1500);
+  assert.equal(report.aggregate_cost_metrics.output_tokens, 250);
+  assert.strictEqual(report.aggregate_cost_metrics.uncached_input_tokens, null);
+  assert.equal(report.aggregate_cost_metrics.latency_ms, 2100);
+  assert.ok(Array.isArray(report.evaluated_trajectories));
+  assert.equal(report.evaluated_trajectories.length, 3);
+});
+
+test("Task 9: Static test asserting evaluator.mjs has zero model-call surface or network/child_process imports", () => {
+  const evalPath = resolve(__dirname, "evaluator.mjs");
+  const source = readFileSync(evalPath, "utf8");
+
+  // Invariant 1: Zero model calls, SDKs, agent profiles, invoke_subagent
+  assert.doesNotMatch(source, /@google\/genai/);
+  assert.doesNotMatch(source, /@google\/generative-ai/);
+  assert.doesNotMatch(source, /openai/);
+  assert.doesNotMatch(source, /anthropic/);
+  assert.doesNotMatch(source, /invoke_subagent/);
+  assert.doesNotMatch(source, /flash-orchestrator/);
+  assert.doesNotMatch(source, /flash-worker/);
+  assert.doesNotMatch(source, /luna-/);
+  assert.doesNotMatch(source, /terra-/);
+
+  // Invariant 2: Pure deterministic local evaluation (no network, no child_process)
+  assert.doesNotMatch(source, /child_process/);
+  assert.doesNotMatch(source, /node:net/);
+  assert.doesNotMatch(source, /node:http/);
+  assert.doesNotMatch(source, /node:https/);
+  assert.doesNotMatch(source, /\bfetch\b/);
+
+  // Allowed imports: only local dream modules
+  const importLines = source.match(/import\s+.*?\s+from\s+["'].*?["']/g) || [];
+  for (const line of importLines) {
+    const match = line.match(/from\s+["'](.*?)["']/);
+    assert.ok(match, `Invalid import line: ${line}`);
+    const importPath = match[1];
+    assert.ok(
+      importPath.startsWith("./"),
+      `evaluator.mjs may only import local modules within dream, got: ${importPath}`
+    );
+  }
+});
+
+test("Task 9: Edge cases: invalid trajectory inputs and raw trajectory comparison", () => {
+  // Non-object trajectory returns ineligible
+  assert.equal(evaluateTrajectory(null).eligible, false);
+  assert.equal(evaluateTrajectory(undefined).eligible, false);
+  assert.equal(evaluateTrajectory([]).eligible, false);
+
+  // Raw trajectories passed directly to compareTrajectoryFacts
+  const rawTrajA = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    cost_metrics: { model_calls: 1, latency_ms: 100 },
+  };
+  const rawTrajB = {
+    status: REPLAY_STATUS.EXACT_REPLAY_COMPLETE,
+    terminal_state: "ACCEPTED",
+    cost_metrics: { model_calls: 2, latency_ms: 50 },
+  };
+  // A has 1 model call vs B's 2 model calls -> A is superior (Dimension 6 Model Calls precedes Dimension 8 Latency)
+  const cmp = compareTrajectoryFacts(rawTrajA, rawTrajB);
+  assert.equal(cmp.relation, COMPARISON_RELATION.SUPERIOR);
+  assert.equal(cmp.dimension, EVALUATION_DIMENSION.MODEL_CALLS);
+
+  // createReplayReport with empty replay
+  const emptyReport = createReplayReport({ world: {}, replay: { trajectories: [] } });
+  assert.equal(emptyReport.total_trajectories, 0);
+  assert.equal(emptyReport.acceptance_rate, 0);
+  assert.strictEqual(emptyReport.aggregate_cost_metrics.uncached_input_tokens, null);
 });
