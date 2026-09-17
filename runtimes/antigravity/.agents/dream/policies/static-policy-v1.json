@@ -1,0 +1,170 @@
+{
+  "policy_id": "policy-d784d084491631ebf915bf92522fab85edc9c07905ec700dcd0e74efe917d428",
+  "schema": "orchestra.exploration-policy.v1",
+  "base_policy": "static-policy-v1",
+  "description": "Declarative static baseline policy for Orchestra Dream Layer (Milestone D)",
+  "rules": [
+    {
+      "id": "worker-tier-post-investigation",
+      "decision_type": "WORKER_TIER",
+      "priority": 100,
+      "when": {
+        "post_investigation": true
+      },
+      "choose": "FLASH_HIGH",
+      "description": "Post-investigation tasks require high worker tier"
+    },
+    {
+      "id": "worker-tier-high-complexity",
+      "decision_type": "WORKER_TIER",
+      "priority": 95,
+      "when": {
+        "complexity": [
+          "DIFFICULT",
+          "EXPERIMENTAL",
+          "INTEGRATION"
+        ]
+      },
+      "choose": "FLASH_HIGH",
+      "description": "Difficult, experimental, and integration tasks require high worker tier"
+    },
+    {
+      "id": "worker-tier-docs-domain",
+      "decision_type": "WORKER_TIER",
+      "priority": 90,
+      "when": {
+        "task_domain": [
+          "DOCS"
+        ]
+      },
+      "choose": "FLASH_LOW",
+      "description": "Documentation tasks route to lightweight low worker tier"
+    },
+    {
+      "id": "worker-tier-simple-mechanical",
+      "decision_type": "WORKER_TIER",
+      "priority": 90,
+      "when": {
+        "complexity": [
+          "SIMPLE",
+          "MECHANICAL"
+        ]
+      },
+      "choose": "FLASH_LOW",
+      "description": "Simple and mechanical tasks route to lightweight low worker tier"
+    },
+    {
+      "id": "worker-tier-normal",
+      "decision_type": "WORKER_TIER",
+      "priority": 80,
+      "when": {
+        "complexity": [
+          "NORMAL"
+        ]
+      },
+      "choose": "FLASH_MEDIUM",
+      "description": "Standard complexity tasks route to medium worker tier"
+    },
+    {
+      "id": "worker-tier-default-fallback",
+      "decision_type": "WORKER_TIER",
+      "priority": 50,
+      "when": {},
+      "choose": "FLASH_MEDIUM",
+      "description": "Default fallback worker tier is medium"
+    },
+    {
+      "id": "investigation-strategy-default",
+      "decision_type": "INVESTIGATION_STRATEGY",
+      "priority": 80,
+      "when": {
+        "task_action": [
+          "IMPLEMENT"
+        ],
+        "post_investigation": false
+      },
+      "choose": "IMPLEMENT_DIRECT",
+      "description": "Standard clean implementation defaults to direct implementation"
+    },
+    {
+      "id": "investigation-strategy-fallback",
+      "decision_type": "INVESTIGATION_STRATEGY",
+      "priority": 50,
+      "when": {},
+      "choose": "IMPLEMENT_DIRECT",
+      "description": "Default investigation strategy is direct implementation"
+    },
+    {
+      "id": "retry-failed-test",
+      "decision_type": "RETRY_ACTION",
+      "priority": 80,
+      "when": {
+        "retry_reason": [
+          "FAILED_TEST"
+        ]
+      },
+      "choose": "RETRY_SAME",
+      "description": "Failed test retry defaults to retry same worker"
+    },
+    {
+      "id": "retry-incomplete-implementation",
+      "decision_type": "RETRY_ACTION",
+      "priority": 80,
+      "when": {
+        "retry_reason": [
+          "INCOMPLETE_IMPLEMENTATION"
+        ]
+      },
+      "choose": "RETRY_SAME",
+      "description": "Incomplete implementation defaults to retry same worker"
+    },
+    {
+      "id": "retry-missing-context",
+      "decision_type": "RETRY_ACTION",
+      "priority": 80,
+      "when": {
+        "retry_reason": [
+          "MISSING_CONTEXT"
+        ]
+      },
+      "choose": "INVESTIGATE_FIRST",
+      "description": "Missing context retry requires investigation first"
+    },
+    {
+      "id": "retry-misinterpreted-requirement",
+      "decision_type": "RETRY_ACTION",
+      "priority": 80,
+      "when": {
+        "retry_reason": [
+          "MISINTERPRETED_REQUIREMENT"
+        ]
+      },
+      "choose": "REPLAN",
+      "description": "Misinterpreted requirement requires replan"
+    },
+    {
+      "id": "retry-scope-gap",
+      "decision_type": "RETRY_ACTION",
+      "priority": 80,
+      "when": {
+        "retry_reason": [
+          "SCOPE_GAP"
+        ]
+      },
+      "choose": "REPLAN",
+      "description": "Scope gap requires replan"
+    },
+    {
+      "id": "retry-integration-failure",
+      "decision_type": "RETRY_ACTION",
+      "priority": 80,
+      "when": {
+        "retry_reason": [
+          "INTEGRATION_FAILURE"
+        ]
+      },
+      "choose": "ESCALATE_WORKER",
+      "description": "Integration failure escalates worker"
+    }
+  ]
+}

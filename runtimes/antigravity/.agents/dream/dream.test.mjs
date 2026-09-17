@@ -44,6 +44,14 @@ import {
   compareTrajectoryFacts,
   createReplayReport,
 } from "./evaluator.mjs";
+import {
+  POLICY_STATUS,
+  MAX_POLICY_RULES,
+  MAX_POLICY_BYTES,
+  computePolicyId,
+  validatePolicy,
+  evaluatePolicy,
+} from "./policy-engine.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1502,7 +1510,7 @@ test("Task 5 hook integration: record-only hook integration without routing auth
   const decEvents = preEvents.filter(e => e.type === "DECISION");
   assert.equal(decEvents.length, 1);
   const dec = decEvents[0];
-  assert.equal(dec.policy_source, "STATIC_ROUTING_CURRENT");
+  assert.equal(dec.policy_source, "STATIC_POLICY_V1");
   assert.equal(dec.chosen_action, "FLASH_MEDIUM");
   assert.equal(dec.decision_type, "WORKER_TIER");
   assert(dec.available_actions.includes("FLASH_MEDIUM"));
@@ -3419,4 +3427,500 @@ test("Task 9: Edge cases: invalid trajectory inputs and raw trajectory compariso
   assert.equal(emptyReport.total_trajectories, 0);
   assert.equal(emptyReport.acceptance_rate, 0);
   assert.strictEqual(emptyReport.aggregate_cost_metrics.uncached_input_tokens, null);
+});
+
+/* =========================================================================
+   Milestone D — Declarative Static Policy Tests
+   ========================================================================= */
+
+test("Milestone D: policy schema validation and content-addressing", () => {
+  const samplePolicyWithoutId = {
+    schema: "orchestra.exploration-policy.v1",
+    base_policy: "static-policy-v1",
+    description: "Test policy",
+    rules: [
+      {
+        id: "rule-1",
+        decision_type: "WORKER_TIER",
+        priority: 100,
+        when: {
+          complexity: ["DIFFICULT"]
+        },
+        choose: "FLASH_HIGH",
+        description: "Difficult task rule"
+      }
+    ]
+  };
+
+  const computedId = computePolicyId(samplePolicyWithoutId);
+  assert.match(computedId, /^policy-[a-f0-9]{64}$/);
+
+  const validPolicy = {
+    policy_id: computedId,
+    ...samplePolicyWithoutId
+  };
+
+  // Valid policy passes
+  const validRes = validatePolicy(validPolicy);
+  assert.equal(validRes.valid, true);
+  assert.equal(validRes.errors.length, 0);
+
+  // validateDreamRecord also validates POLICY
+  const dreamRecRes = validateDreamRecord("POLICY", validPolicy);
+  assert.equal(dreamRecRes.valid, true);
+
+  // Mismatched policy_id fails
+  const badIdPolicy = { ...validPolicy, policy_id: "policy-0000000000000000000000000000000000000000000000000000000000000000" };
+  const badIdRes = validatePolicy(badIdPolicy);
+  assert.equal(badIdRes.valid, false);
+  assert.ok(badIdRes.errors.some(e => e.includes("policy_id mismatch")));
+
+  // Invalid schema fails
+  const badSchemaPolicy = { ...validPolicy, schema: "wrong.schema" };
+  const badSchemaRes = validatePolicy(badSchemaPolicy);
+  assert.equal(badSchemaRes.valid, false);
+
+  // Exceeding MAX_POLICY_RULES (128) fails
+  const tooManyRules = [];
+  for (let i = 0; i <= MAX_POLICY_RULES; i++) {
+    tooManyRules.push({
+      id: `rule-${i}`,
+      decision_type: "WORKER_TIER",
+      priority: 10,
+      when: {},
+      choose: "FLASH_MEDIUM"
+    });
+  }
+  const overflowPolicyRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    rules: tooManyRules
+  };
+  const overflowPolicy = {
+    policy_id: computePolicyId(overflowPolicyRaw),
+    ...overflowPolicyRaw
+  };
+  const overflowRes = validatePolicy(overflowPolicy);
+  assert.equal(overflowRes.valid, false);
+  assert.ok(overflowRes.errors.some(e => e.includes("exceeds maximum limit of 128")));
+
+  // Duplicate rule IDs fail
+  const dupRulesRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    rules: [
+      { id: "dup-id", decision_type: "WORKER_TIER", priority: 10, when: {}, choose: "FLASH_MEDIUM" },
+      { id: "dup-id", decision_type: "WORKER_TIER", priority: 20, when: {}, choose: "FLASH_HIGH" }
+    ]
+  };
+  const dupRes = validatePolicy({ policy_id: computePolicyId(dupRulesRaw), ...dupRulesRaw });
+  assert.equal(dupRes.valid, false);
+  assert.ok(dupRes.errors.some(e => e.includes("duplicate rule id")));
+
+  // Disallowed when condition fails (no regex, no expressions)
+  const badWhenRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    rules: [
+      { id: "bad-when", decision_type: "WORKER_TIER", priority: 10, when: { regex: ".*", jsExpression: "() => true" }, choose: "FLASH_MEDIUM" }
+    ]
+  };
+  const badWhenRes = validatePolicy({ policy_id: computePolicyId(badWhenRaw), ...badWhenRaw });
+  assert.equal(badWhenRes.valid, false);
+  assert.ok(badWhenRes.errors.some(e => e.includes("disallowed condition field")));
+
+  // Numeric range with min > max fails
+  const badRangeRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    rules: [
+      { id: "bad-range", decision_type: "RETRY_ACTION", priority: 10, when: { attempt: { min: 5, max: 2 } }, choose: "RETRY_SAME" }
+    ]
+  };
+  const badRangeRes = validatePolicy({ policy_id: computePolicyId(badRangeRaw), ...badRangeRaw });
+  assert.equal(badRangeRes.valid, false);
+  assert.ok(badRangeRes.errors.some(e => e.includes("min (5) > max (2)")));
+});
+
+test("Milestone D: static-policy-v1 declarative baseline validity and structure", () => {
+  const policyPath = resolve(__dirname, "policies/static-policy-v1.json");
+  assert.ok(existsSync(policyPath), "static-policy-v1.json must exist on disk");
+
+  const policy = JSON.parse(readFileSync(policyPath, "utf-8"));
+  const valRes = validatePolicy(policy);
+  assert.equal(valRes.valid, true, `static-policy-v1.json must be valid: ${valRes.errors.join(", ")}`);
+
+  // Verify content-addressed policy_id
+  const expectedId = computePolicyId(policy);
+  assert.equal(policy.policy_id, expectedId, "static-policy-v1.json policy_id must match content-addressed hash");
+
+  // Verify covered decision types
+  const decisionTypes = new Set(policy.rules.map(r => r.decision_type));
+  assert.ok(decisionTypes.has("WORKER_TIER"), "Must cover WORKER_TIER");
+  assert.ok(decisionTypes.has("INVESTIGATION_STRATEGY"), "Must cover INVESTIGATION_STRATEGY");
+  assert.ok(decisionTypes.has("RETRY_ACTION"), "Must cover RETRY_ACTION");
+});
+
+test("Milestone D: pure policy engine evaluation semantics", () => {
+  const testPolicyRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    rules: [
+      {
+        id: "prio-high-difficult",
+        decision_type: "WORKER_TIER",
+        priority: 100,
+        when: { complexity: ["DIFFICULT"] },
+        choose: "FLASH_HIGH"
+      },
+      {
+        id: "prio-med-normal",
+        decision_type: "WORKER_TIER",
+        priority: 80,
+        when: { complexity: ["NORMAL"] },
+        choose: "FLASH_MEDIUM"
+      },
+      {
+        id: "prio-low-docs",
+        decision_type: "WORKER_TIER",
+        priority: 70,
+        when: { task_domain: ["DOCS"] },
+        choose: "FLASH_LOW"
+      },
+      {
+        id: "numeric-range-attempt",
+        decision_type: "RETRY_ACTION",
+        priority: 90,
+        when: { retry_reason: ["FAILED_TEST"], attempt: { min: 1, max: 2 } },
+        choose: "RETRY_SAME"
+      },
+      {
+        id: "conflict-rule-a",
+        decision_type: "INVESTIGATION_STRATEGY",
+        priority: 50,
+        when: { task_action: ["IMPLEMENT"] },
+        choose: "IMPLEMENT_DIRECT"
+      },
+      {
+        id: "conflict-rule-b",
+        decision_type: "INVESTIGATION_STRATEGY",
+        priority: 50,
+        when: { task_action: ["IMPLEMENT"] },
+        choose: "INVESTIGATE_FIRST"
+      }
+    ]
+  };
+
+  const testPolicy = {
+    policy_id: computePolicyId(testPolicyRaw),
+    ...testPolicyRaw
+  };
+
+  // 1. High priority rule match
+  const res1 = evaluatePolicy({
+    policy: testPolicy,
+    decisionType: "WORKER_TIER",
+    state: { complexity: "DIFFICULT", task_domain: "DOCS" },
+    availableActions: ["FLASH_HIGH"],
+    baselineAction: "FLASH_HIGH"
+  });
+  assert.equal(res1.ok, true);
+  assert.equal(res1.action, "FLASH_HIGH");
+  assert.equal(res1.priority, 100);
+  assert.deepEqual(res1.matched_rule_ids, ["prio-high-difficult"]);
+
+  // 2. Numeric range matching
+  const res2 = evaluatePolicy({
+    policy: testPolicy,
+    decisionType: "RETRY_ACTION",
+    state: { retry_reason: "FAILED_TEST", attempt: 2 },
+    availableActions: ["RETRY_SAME", "ESCALATE_WORKER"],
+    baselineAction: "RETRY_SAME"
+  });
+  assert.equal(res2.ok, true);
+  assert.equal(res2.action, "RETRY_SAME");
+  assert.equal(res2.priority, 90);
+
+  // 3. UNKNOWN remains UNKNOWN: missing attempt never matches numeric range
+  const res3 = evaluatePolicy({
+    policy: testPolicy,
+    decisionType: "RETRY_ACTION",
+    state: { retry_reason: "FAILED_TEST" }, // attempt missing
+    availableActions: ["RETRY_SAME", "ESCALATE_WORKER"],
+    baselineAction: "RETRY_SAME"
+  });
+  assert.equal(res3.ok, false);
+  assert.equal(res3.source, "STATIC_ROUTING_FALLBACK");
+  assert.equal(res3.diagnostic, POLICY_STATUS.NO_MATCHING_RULE);
+
+  // 4. Equal priority conflict => POLICY_CONFLICT
+  const resConflict = evaluatePolicy({
+    policy: testPolicy,
+    decisionType: "INVESTIGATION_STRATEGY",
+    state: { task_action: "IMPLEMENT" },
+    availableActions: ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+    baselineAction: "IMPLEMENT_DIRECT"
+  });
+  assert.equal(resConflict.ok, false);
+  assert.equal(resConflict.action, "IMPLEMENT_DIRECT"); // falls back to baseline
+  assert.equal(resConflict.source, "STATIC_ROUTING_FALLBACK");
+  assert.ok(resConflict.diagnostic.includes("POLICY_CONFLICT"));
+
+  // 5. Chosen action outside available_actions => POLICY_INVALID_ACTION
+  const resInvalid = evaluatePolicy({
+    policy: testPolicy,
+    decisionType: "WORKER_TIER",
+    state: { complexity: "DIFFICULT" },
+    availableActions: ["FLASH_MEDIUM"], // FLASH_HIGH not allowed by governance
+    baselineAction: "FLASH_MEDIUM"
+  });
+  assert.equal(resInvalid.ok, false);
+  assert.equal(resInvalid.action, "FLASH_MEDIUM");
+  assert.ok(resInvalid.diagnostic.includes("POLICY_INVALID_ACTION"));
+
+  // 6. Invalid policy => degrades safely to baselineAction with diagnostics
+  const resCorrupt = evaluatePolicy({
+    policy: { schema: "corrupted" },
+    decisionType: "WORKER_TIER",
+    state: {},
+    availableActions: ["FLASH_MEDIUM"],
+    baselineAction: "FLASH_MEDIUM"
+  });
+  assert.equal(resCorrupt.ok, false);
+  assert.equal(resCorrupt.action, "FLASH_MEDIUM");
+  assert.ok(resCorrupt.diagnostic.includes("INVALID_POLICY"));
+});
+
+test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% parity)", () => {
+  const policyPath = resolve(__dirname, "policies/static-policy-v1.json");
+  const staticPolicy = JSON.parse(readFileSync(policyPath, "utf-8"));
+
+  let eligible_cases = 0;
+  let explicit_matches = 0;
+  let action_matches = 0;
+
+  // 1. WORKER_TIER state grid
+  const actions = ["IMPLEMENT", "TEST", "MECHANICAL_FIX"];
+  const domains = ["CODE", "DOCS", "UI", "DATA", "INFRA", "TESTING", "RESEARCH", "ORCHESTRA", "GENERAL"];
+  const complexities = ["SIMPLE", "NORMAL", "DIFFICULT", "EXPERIMENTAL", "MECHANICAL", "INTEGRATION"];
+  const criticalities = ["NORMAL", "MAJOR"];
+  const postInvs = [false, true];
+
+  for (const act of actions) {
+    for (const dom of domains) {
+      for (const comp of complexities) {
+        for (const crit of criticalities) {
+          for (const postInv of postInvs) {
+            const state = {
+              task_action: act,
+              task_domain: dom,
+              complexity: comp,
+              criticality: crit,
+              post_investigation: postInv,
+              state: "EXECUTING"
+            };
+
+            const availableActions = deriveAvailableActions("WORKER_TIER", state);
+            if (!availableActions || availableActions.length === 0) {
+              continue; // outside Dream eligibility
+            }
+
+            eligible_cases++;
+
+            // Baseline router determination
+            let baselineAction;
+            if (postInv || comp === "DIFFICULT" || comp === "EXPERIMENTAL" || comp === "INTEGRATION") {
+              baselineAction = "FLASH_HIGH";
+            } else if (comp === "SIMPLE" || comp === "MECHANICAL" || dom === "DOCS") {
+              baselineAction = "FLASH_LOW";
+            } else {
+              baselineAction = "FLASH_MEDIUM";
+            }
+
+            const evalResult = evaluatePolicy({
+              policy: staticPolicy,
+              decisionType: "WORKER_TIER",
+              state,
+              availableActions,
+              baselineAction
+            });
+
+            if (evalResult.ok) {
+              explicit_matches++;
+            }
+            if (evalResult.action === baselineAction) {
+              action_matches++;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 2. INVESTIGATION_STRATEGY state grid
+  const mutSeqs = [0, 1];
+  for (const act of ["IMPLEMENT", "INVESTIGATE", "MECHANICAL_FIX"]) {
+    for (const crit of ["NORMAL", "MAJOR", "CRITICAL"]) {
+      for (const mut of mutSeqs) {
+        for (const postInv of [false, true]) {
+          for (const comp of ["NORMAL", "DIFFICULT", "MECHANICAL"]) {
+            const state = {
+              task_action: act,
+              criticality: crit,
+              mutation_seq: mut,
+              post_investigation: postInv,
+              complexity: comp,
+              state: "INTAKE"
+            };
+
+            const availableActions = deriveAvailableActions("INVESTIGATION_STRATEGY", state);
+            if (!availableActions || availableActions.length === 0) {
+              continue;
+            }
+
+            eligible_cases++;
+            const baselineAction = "IMPLEMENT_DIRECT";
+
+            const evalResult = evaluatePolicy({
+              policy: staticPolicy,
+              decisionType: "INVESTIGATION_STRATEGY",
+              state,
+              availableActions,
+              baselineAction
+            });
+
+            if (evalResult.ok) {
+              explicit_matches++;
+            }
+            if (evalResult.action === baselineAction) {
+              action_matches++;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 3. RETRY_ACTION state grid
+  const retryReasons = [
+    "FAILED_TEST",
+    "INCOMPLETE_IMPLEMENTATION",
+    "MISSING_CONTEXT",
+    "MISINTERPRETED_REQUIREMENT",
+    "SCOPE_GAP",
+    "INTEGRATION_FAILURE"
+  ];
+
+  const expectedRetryBaseline = {
+    FAILED_TEST: "RETRY_SAME",
+    INCOMPLETE_IMPLEMENTATION: "RETRY_SAME",
+    MISSING_CONTEXT: "INVESTIGATE_FIRST",
+    MISINTERPRETED_REQUIREMENT: "REPLAN",
+    SCOPE_GAP: "REPLAN",
+    INTEGRATION_FAILURE: "ESCALATE_WORKER"
+  };
+
+  for (const reason of retryReasons) {
+    for (const attempt of [1, 2]) {
+      for (const remaining of [0, 1, 2]) {
+        const state = {
+          task_action: "IMPLEMENT",
+          retry_reason: reason,
+          attempt,
+          retry_remaining: remaining,
+          state: "EXECUTING"
+        };
+
+        const availableActions = deriveAvailableActions("RETRY_ACTION", state);
+        if (!availableActions || availableActions.length === 0) {
+          continue;
+        }
+
+        eligible_cases++;
+        const baselineAction = expectedRetryBaseline[reason];
+
+        const evalResult = evaluatePolicy({
+          policy: staticPolicy,
+          decisionType: "RETRY_ACTION",
+          state,
+          availableActions,
+          baselineAction
+        });
+
+        if (evalResult.ok) {
+          explicit_matches++;
+        }
+        if (evalResult.action === baselineAction) {
+          action_matches++;
+        }
+      }
+    }
+  }
+
+  const coverage_percent = eligible_cases > 0 ? (explicit_matches / eligible_cases) * 100 : 0;
+  const parity_percent = eligible_cases > 0 ? (action_matches / eligible_cases) * 100 : 0;
+
+  console.log(`\n--- PARITY SHADOW VERIFICATION REPORT ---`);
+  console.log(`eligible_cases: ${eligible_cases}`);
+  console.log(`explicit_matches: ${explicit_matches}`);
+  console.log(`action_matches: ${action_matches}`);
+  console.log(`coverage_percent: ${coverage_percent}%`);
+  console.log(`parity_percent: ${parity_percent}%`);
+  console.log(`-----------------------------------------\n`);
+
+  assert.equal(coverage_percent, 100, `explicit_policy_coverage must be 100%, got ${coverage_percent}%`);
+  assert.equal(parity_percent, 100, `action_parity must be 100%, got ${parity_percent}%`);
+});
+
+test("Milestone D: Exact replay with declarative policy engine callback", () => {
+  const policyPath = resolve(__dirname, "policies/static-policy-v1.json");
+  const staticPolicy = JSON.parse(readFileSync(policyPath, "utf-8"));
+
+  const rootSnapshotId = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
+  const runtimeFp = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+  const dec1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-replay-policy-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { complexity: "NORMAL", task_domain: "CODE" },
+    available_actions: ["FLASH_MEDIUM", "FLASH_HIGH"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-replay-policy-1",
+    observation_id: "obs-replay-policy-1",
+    result: "SUCCESS",
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { model_calls: 1 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec1, out1],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED", `World must seal cleanly: ${sealRes.errors?.join(", ")}`);
+  const world = sealRes.world;
+
+  // Replay callback using pure policy engine
+  const chooseAction = (ctx) => {
+    const res = evaluatePolicy({
+      policy: staticPolicy,
+      decisionType: ctx.decisionType,
+      state: ctx.state,
+      availableActions: ctx.availableActions,
+      baselineAction: ctx.availableActions[0]
+    });
+    return res.action;
+  };
+
+  const replayResult = replayExact({ world, chooseAction });
+  assert.equal(replayResult.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
+  assert.equal(replayResult.trajectories.length, 1);
+  assert.equal(replayResult.trajectories[0].terminal_state, "ACCEPTED");
+  assert.equal(replayResult.trajectories[0].steps[0].chosen_action, "FLASH_MEDIUM");
 });

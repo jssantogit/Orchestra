@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchestra.dev/schemas/dream/policy-v1.json",
+  "title": "orchestra.exploration-policy.v1",
+  "description": "Declarative deterministic exploration policy specification",
+  "type": "object",
+  "required": [
+    "schema",
+    "policy_id",
+    "rules"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "orchestra.exploration-policy.v1"
+    },
+    "policy_id": {
+      "type": "string",
+      "pattern": "^policy-[a-f0-9]{64}$"
+    },
+    "base_policy": {
+      "type": ["string", "null"]
+    },
+    "description": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "rules": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "decision_type",
+          "priority",
+          "when",
+          "choose"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "decision_type": {
+            "type": "string",
+            "enum": [
+              "WORKER_TIER",
+              "INVESTIGATION_STRATEGY",
+              "RETRY_ACTION"
+            ]
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "when": {
+            "type": "object",
+            "properties": {
+              "task_action": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "task_domain": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "criticality": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "complexity": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "state": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "attempt": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["min", "max"],
+                    "properties": {
+                      "min": { "type": "integer" },
+                      "max": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "items": { "type": "integer" }
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "retry_remaining": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["min", "max"],
+                    "properties": {
+                      "min": { "type": "integer" },
+                      "max": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "items": { "type": "integer" }
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "retry_reason": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "mutation_seq": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["min", "max"],
+                    "properties": {
+                      "min": { "type": "integer" },
+                      "max": { "type": "integer" }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "items": { "type": "integer" }
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "post_investigation": {
+                "type": "boolean"
+              },
+              "evidence": {
+                "type": "object",
+                "properties": {
+                  "tests": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "typecheck": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "build": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "scope_check": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "validation_fresh": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "choose": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

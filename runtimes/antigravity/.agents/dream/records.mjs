@@ -1,10 +1,12 @@
 import { sha256Canonical } from "./canonical.mjs";
+import { validatePolicy } from "./policy-engine.mjs";
 
 export const DREAM_SCHEMAS = Object.freeze({
   SNAPSHOT: "orchestra.snapshot.v1",
   DECISION: "orchestra.decision.v1",
   OUTCOME: "orchestra.outcome.v1",
   WORLD: "orchestra.world.v1",
+  POLICY: "orchestra.exploration-policy.v1",
 });
 
 const FORBIDDEN_AUTHORITY_FIELDS = new Set([
@@ -76,6 +78,7 @@ function normalizeKind(kind) {
   if (kind === DREAM_SCHEMAS.DECISION || kind === "DECISION" || kind === "decision") return "DECISION";
   if (kind === DREAM_SCHEMAS.OUTCOME || kind === "OUTCOME" || kind === "outcome") return "OUTCOME";
   if (kind === DREAM_SCHEMAS.WORLD || kind === "WORLD" || kind === "world") return "WORLD";
+  if (kind === DREAM_SCHEMAS.POLICY || kind === "POLICY" || kind === "policy") return "POLICY";
   return null;
 }
 
@@ -249,6 +252,14 @@ export function validateDreamRecord(kind, value) {
       }
       if (typeof value.created_at !== "string" || value.created_at.length === 0) {
         errors.push("created_at must be a non-empty string");
+      }
+      break;
+    }
+
+    case "POLICY": {
+      const polRes = validatePolicy(value);
+      if (!polRes.valid) {
+        errors.push(...polRes.errors);
       }
       break;
     }
