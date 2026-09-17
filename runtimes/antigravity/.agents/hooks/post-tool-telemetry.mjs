@@ -205,6 +205,9 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             originToolCallId: matched.originToolCallId || matched.toolCallId || null,
             pendingSeq: matched.seq ?? null,
             delegationKind: matched.delegationKind || null,
+            decisionCorrelationKey: matched.decisionCorrelationKey || null,
+            decisionType: matched.decisionType || null,
+            decisionBranchOrdinal: matched.decisionBranchOrdinal ?? null,
             confidence,
             source,
             consumed: true,
@@ -881,12 +884,6 @@ function main() {
         inFlight &&
         (!inFlightParentConversationId || inFlightParentConversationId === conversationId)
       );
-      // Potential ACK is intentionally conservative: if runtime omits toolCallId,
-      // do not let a successful invoke result close/teach the investigation outcome.
-      const isPotentialInvestigationAck = Boolean(
-        sameInvestigationParent &&
-        (!ackToolCallId || !inFlightToolCallId || inFlightToolCallId === ackToolCallId)
-      );
       // State-changing dispatch failure and child-id enrichment require exact causal identity.
       const isInvestigationAck = Boolean(
         sameInvestigationParent &&
@@ -917,56 +914,23 @@ function main() {
         }
       }
 
-      // Phase 1 Dream Record-Only Adapter: Record DECISION_OUTCOME for matching pending decisions.
-      // Investigation decisions stay pending across a successful dispatch ACK and close only at
-      // factual child termination. A factual dispatch failure may close as failure here.
-      try {
-        const branchCount = Math.max(1, subagents.length);
-        const toolCallId = payload.toolCall?.id || payload.toolCallId || "";
-        const stepIdx = payload.stepIdx ?? 0;
+      // invoke_subagent PostToolUse is dispatch acknowledgement, not delegated-work completion.
+      // Successful ACKs NEVER close Dream outcomes. Only a factual dispatch failure with
+      // exact causal identity may close the corresponding pending decision here.
+      if (invocationFailed && ackToolCallId) {
+        try {
+          const branchCount = Math.max(1, subagents.length);
+          const stepIdx = payload.stepIdx ?? 0;
 
-        for (let idx = 0; idx < branchCount; idx++) {
-          let corrKey = dreamCorrelationKey({
-            conversationId,
-            stepIdx,
-            toolCallId,
-            branchOrdinal: idx,
-          });
-
-          let pendingCheck = getPendingDecision({ repoRoot, correlationKey: corrKey });
-
-          // Fallback resolution: scan pending-decisions dir for matching conversation_id and step_idx / tool_call_id
-          if (!pendingCheck.ok) {
-            const pendingDir = resolve(repoRoot, ".agents/state/dream/pending-decisions");
-            if (existsSync(pendingDir)) {
-              try {
-                const entries = readdirSync(pendingDir).filter(f => f.endsWith(".json"));
-                for (const f of entries) {
-                  const candidateKey = f.slice(0, -5);
-                  const pRes = getPendingDecision({ repoRoot, correlationKey: candidateKey });
-                  if (pRes.ok && pRes.pending) {
-                    if (
-                      pRes.pending.conversation_id === conversationId &&
-                      (pRes.pending.step_idx === stepIdx || pRes.pending.tool_call_id === toolCallId)
-                    ) {
-                      corrKey = candidateKey;
-                      pendingCheck = pRes;
-                      break;
-                    }
-                  }
-                }
-              } catch {}
-            }
-          }
-
-          if (pendingCheck.ok && (!isPotentialInvestigationAck || (isInvestigationAck && invocationFailed))) {
-            const outcomeResultStr = typeof payload.toolResult === "string"
-              ? payload.toolResult
-              : (payload.toolResult
-                  ? JSON.stringify(payload.toolResult)
-                  : (typeof payload.result === "string"
-                      ? payload.result
-                      : (payload.result ? JSON.stringify(payload.result) : (payload.error ? "FAILED" : "SUCCESS"))));
+          for (let idx = 0; idx < branchCount; idx++) {
+            const corrKey = dreamCorrelationKey({
+              conversationId,
+              stepIdx,
+              toolCallId: ackToolCallId,
+              branchOrdinal: idx,
+            });
+            const pendingCheck = getPendingDecision({ repoRoot, correlationKey: corrKey });
+            if (!pendingCheck.ok) continue;
 
             const evidenceSummary = activeState.evidenceSummary || activeState.evidence || {
               tests: activeState.workerValidationVerified ? "PASS" : (activeState.workerValidationExitCode !== null && activeState.workerValidationExitCode !== 0 ? "FAIL" : "UNKNOWN"),
@@ -976,45 +940,36 @@ function main() {
               scope_check: "UNKNOWN",
             };
 
-            const retryState = {
-              attempt: activeState.attempt || 0,
-              retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
-              retry_reason: activeState.retryReason || activeState.retry_reason || null,
-            };
-
-            const costMetrics = {
-              tool_calls: activeState.tool_calls || 1,
-              context_proxy_bytes: activeState.context_proxy_bytes || 0,
-              worker_packet_bytes: activeState.toolMix?.worker_packet_bytes || activeState.worker_packet_bytes || 0,
-              duration_ms: payload.durationMs ?? 0,
-            };
-
-            const terminalState = payload.error
-              ? "FAILED"
-              : (activeState.state === "ACCEPTED"
-                  ? "ACCEPTED"
-                  : (activeState.state === "HUMAN_GATE"
-                      ? "HUMAN_GATE"
-                      : "UNKNOWN"));
-
-            const outcomeInput = {
-              result: outcomeResultStr,
-              evidence_summary: evidenceSummary,
-              mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
-              retry_state: retryState,
-              cost_metrics: costMetrics,
-              terminal_state: terminalState,
-            };
-
             recordDecisionOutcome({
               repoRoot,
               correlationKey: corrKey,
-              outcome: outcomeInput,
+              outcome: {
+                result: {
+                  status: payload.cancelled || payload.result?.cancelled || payload.result?.status === "CANCELLED"
+                    ? "CANCELLED"
+                    : "DISPATCH_FAILED",
+                  error: payload.error || payload.toolResult?.error || null,
+                },
+                evidence_summary: evidenceSummary,
+                mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
+                retry_state: {
+                  attempt: activeState.attempt || 0,
+                  retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+                  retry_reason: activeState.retryReason || activeState.retry_reason || null,
+                },
+                cost_metrics: {
+                  tool_calls: activeState.tool_calls || 1,
+                  context_proxy_bytes: activeState.context_proxy_bytes || 0,
+                  worker_packet_bytes: activeState.toolMix?.worker_packet_bytes || activeState.worker_packet_bytes || 0,
+                  duration_ms: payload.durationMs ?? 0,
+                },
+                terminal_state: "FAILED",
+              },
             });
           }
+        } catch {
+          // Fail-open: Dream telemetry must never break runtime execution.
         }
-      } catch (dreamOutcomeErr) {
-        // Fail-open: NEVER throw on Dream error
       }
 
       // Only a factual invocation failure may terminate the attempt here.
