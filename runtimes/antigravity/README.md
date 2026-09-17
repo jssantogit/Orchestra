@@ -91,9 +91,11 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 
 The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–D) for offline, model-free recursive policy evaluation and deterministic declarative policy execution:
 
-- **Declarative Static Policy Engine (Milestone D)**: Evaluates `static-policy-v1.json` via pure policy engine [`policy-engine.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/policy-engine.mjs) for eligible decisions (`WORKER_TIER`, `INVESTIGATION_STRATEGY`, `RETRY_ACTION`).
-- **100% Shadow Parity & Coverage**: Evaluated across 688 eligible state combinations with 100% explicit policy coverage and 100% action parity.
-- **Fail-Safe Fallback**: Any policy conflict, invalid action, or parsing error falls back immediately to `STATIC_ROUTING_FALLBACK` without interrupting task execution.
+- **Real Online Policy Authority (Milestone D Corrective Closure)**: PreToolUse hook enforces `RECORDED_CHOSEN_ACTION == ACTUAL_EXECUTED_ACTION`. Invocations diverging from policy action are deterministically denied pre-execution without recording false DECISION events.
+- **Three Decision Points**: Strict policy governance over `WORKER_TIER`, `INVESTIGATION_STRATEGY` (enforced gate before implementation), and `RETRY_ACTION` (governs retry path and enforces retry budget monotonicity).
+- **Declarative Static Policy Engine**: Evaluates `static-policy-v1.json` via pure policy engine [`policy-engine.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/policy-engine.mjs).
+- **100% Shadow Parity & Coverage**: Verified across all eligible state combinations against the production router (`decideRoute` -> `classifyBaselineDecision`).
+- **Factual Fallback & Self-Host Isolation**: Policy loads relative to `import.meta.url` isolating active self-host execution from repository edits. Fallback attributes `STATIC_ROUTING_FALLBACK` with exact diagnostics covering all 9 failure modes.
 - **Zero Online Turn Overhead**: Telemetry and declarative policy evaluation run synchronously in hooks (<0.2 ms overhead) with zero online model turns and zero tokens consumed.
 - **Fail-Open Telemetry**: Telemetry capture errors record diagnostic markers in ephemeral state and fall back safely to static routing without blocking user tasks.
 - **World Sealing & Exact Replay**: Sealed execution worlds are verified against workspace hashes and Evidence Ledger provenance. Exact replay executes strictly offline with zero model calls and returns `UNKNOWN_BRANCH` for unobserved paths.

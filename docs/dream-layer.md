@@ -197,9 +197,9 @@ If any Dream telemetry or recording operation encounters an error (disk full, co
 
 ---
 
-## 9. Milestone D: Declarative Static Policy Engine
+## 9. Milestone D: Declarative Static Policy Engine & Corrective Closure
 
-Milestone D introduces deterministic declarative policy execution for the three mutable decision classes authorized by Orchestra governance:
+Milestone D establishes deterministic declarative policy execution and online policy authority for the three mutable decision classes authorized by Orchestra governance:
 - `WORKER_TIER` (`FLASH_LOW`, `FLASH_MEDIUM`, `FLASH_HIGH`)
 - `INVESTIGATION_STRATEGY` (`IMPLEMENT_DIRECT`, `INVESTIGATE_FIRST`)
 - `RETRY_ACTION` (`RETRY_SAME`, `ESCALATE_WORKER`, `INVESTIGATE_FIRST`, `REPLAN`)
@@ -207,13 +207,24 @@ Milestone D introduces deterministic declarative policy execution for the three 
 ### Architecture & Authority Flow
 
 ```text
-governance -> decision state -> available_actions -> declarative policy -> legality validation -> action
+governance -> decision state -> available_actions -> declarative policy -> authority enforcement -> action
 ```
 
 1. **Governance Derives Action Space First**: Policy NEVER creates available actions. `deriveAvailableActions` computes the legal action set prior to policy evaluation.
-2. **Pure Policy Engine**: [`policy-engine.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/policy-engine.mjs) evaluates policy rules with zero filesystem access, zero network, zero clock access, zero LLM calls, and zero history.
-3. **Deterministic Schema & Content Addressing**: Policies follow `orchestra.exploration-policy.v1` (`schemas/policy-v1.schema.json`). Policy IDs are content-addressed: `policy-<sha256(canonical(policy_without_id))>`.
-4. **Phase B Exhaustive Parity Shadow**: `static-policy-v1.json` provides 100% explicit coverage and 100% action parity with the baseline routing policy across all 688 eligible state combinations.
-5. **Phase C Interpreter Overlay**: The interpreter overlay is authoritative only for eligible decisions. Any mismatch, conflict, or policy validation failure deterministically falls back to `STATIC_ROUTING_FALLBACK` while preserving fail-closed governance invariants.
-6. **Telemetry Attribution**: Pre-action `DECISION` events attribute `STATIC_POLICY_V1` when decided by declarative static policy, or `STATIC_ROUTING_FALLBACK` when falling back to static router.
-7. **Exact Replay Model-Free Callbacks**: Exact Replay uses `evaluatePolicy` directly as a zero-model-call callback function.
+2. **Pure Policy Engine**: [`policy-engine.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/policy-engine.mjs) evaluates declarative policy rules with zero filesystem access, zero network, zero clock access, zero LLM calls, and zero history.
+3. **Deterministic Schema & Content Addressing**: Policies follow `orchestra.exploration-policy.v1` (`schemas/policy-v1.schema.json`). Policy IDs are content-addressed: `policy-<sha256(canonical(policy_without_id))>`. Action names are strictly restricted per declared decision type, `when` conditions combine fields with AND and values with OR, numeric ranges are constrained to `attempt` and `retry_remaining`, and `mutation_seq` is removed from `when`.
+4. **Real Router Parity**: `static-policy-v1.json` provides 100% explicit coverage and 100% action parity with the production router (`decideRoute(facts)` -> `classifyBaselineDecision(facts, route)`) across all eligible state combinations, verified by shadow tests.
+5. **Real Online Policy Authority**: The PreToolUse hook enforces strict execution identity:
+   ```text
+   RECORDED_CHOSEN_ACTION == ACTUAL_EXECUTED_ACTION
+   ```
+   If an orchestrator attempts to invoke a subagent that diverges from the policy's chosen action, the invocation is deterministically DENIED before execution. Zero false DECISION records are created, and zero mismatched subagents are registered. Only verified matching executions record a factual `DECISION` event.
+6. **Three Decision-Point Semantics**:
+   - `WORKER_TIER`: Governs worker tier selection (`FLASH_LOW`, `FLASH_MEDIUM`, `FLASH_HIGH`). Hook blocks mismatched worker tiers.
+   - `INVESTIGATION_STRATEGY`: Governs investigation requirements before implementation (`IMPLEMENT_DIRECT`, `INVESTIGATE_FIRST`). If `INVESTIGATE_FIRST` is selected, worker delegations and early mutations are blocked until investigation occurs. If `IMPLEMENT_DIRECT`, the strategy decision is factually recorded pre-action.
+   - `RETRY_ACTION`: Governs failure recovery (`RETRY_SAME`, `ESCALATE_WORKER`, `INVESTIGATE_FIRST`, `REPLAN`). Enforces strict retry budget monotonicity (budget cannot increase) and prevents unauthorized escalation.
+7. **Factual Fallback Diagnostics & Self-Host Isolation**:
+   - Active policies resolve relative to `import.meta.url` (`loadActivePolicy`), isolating the active runtime image from uncommitted candidate repository edits.
+   - Any failure (missing file, JSON syntax error, schema mismatch, content-address hash mismatch, validation error, rule conflict, invalid action, unhandled condition, or exception) falls back safely to `STATIC_ROUTING_FALLBACK` recording the exact factual diagnostic code from the 9 canonical diagnostic cases:
+     `MISSING_POLICY`, `MALFORMED_JSON`, `UNSUPPORTED_SCHEMA`, `POLICY_HASH_MISMATCH`, `INVALID_POLICY`, `POLICY_CONFLICT`, `POLICY_INVALID_ACTION`, `NO_MATCHING_RULE`, `INTERPRETER_EXCEPTION`.
+8. **Exact Replay Model-Free Callbacks**: Exact Replay uses `evaluatePolicy` directly as a zero-model-call callback function.
