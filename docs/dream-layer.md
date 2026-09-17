@@ -237,24 +237,25 @@ governance -> decision state -> available_actions -> declarative policy -> autho
 
 ## 10. Milestone D Integration Hotfix & Architecture Invariant Gate
 
-The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime against edge cases discovered during full-lifecycle testing and formalize the 18 Architecture Invariants:
+The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime against edge cases discovered during full-lifecycle testing and formalize the 19 Architecture Invariants:
 
-1. **Exact Investigation Correlation Lifecycle (Hard Identity Enforced)**:
-   - `pre-tool-enforce.mjs` captures complete verifiable factual identity (`correlationKey`, `toolCallId`, `executionId`, `childConversationId`, `subagentId`, `stepIdx`, `conversationId`, `parentConversationId`, `subagentRole`, `subagentProfile`, `decision_type`).
-   - `post-tool-telemetry.mjs` only consumes `investigationInFlight` when at least one verifiable HARD IDENTITY (`toolCallId`, `executionId`, `childConversationId`/`subagentId`) is present on both sides and exactly equal, and additional identity dimensions do not conflict.
-   - In `invoke_subagent`: requires shared causal identity (`toolCallId` / `executionId`).
-   - In `manage_subagents`: requires exact child identity (`childConversationId` / `subagentId` / `executionId`). Role/profile/parent alone NEVER matches.
-   - Missing hard identity -> NO MATCH. Ambiguous identity -> NO MATCH.
-   - Preserves failure/cancelled semantics: SUCCESS sets `post_investigation = true` & clears `inFlight`; FAILED/CANCELLED clears `inFlight` but preserves `post_investigation = false`; no match leaves `inFlight` intact.
-   - Zero new `DECISION` records created on completion.
+1. **Exact Investigation Correlation Lifecycle (ACK != COMPLETION)**:
+   - `pre-tool-enforce.mjs` creates `investigationInFlight` and persists immutable causal identity for the dispatch, including `correlationKey`, `toolCallId`, parent conversation, expected investigator profile/role, and `delegationKind = INVESTIGATION`.
+   - Pending role bindings preserve `originToolCallId`, `originStepIdx`, and `delegationKind` so the eventual child conversation can be causally linked back to the exact investigation dispatch.
+   - Successful `PostToolUse(invoke_subagent)` is an **acknowledgement only**. It may enrich the factual child conversation ID, but it MUST NOT set `post_investigation`, consume `investigationInFlight`, or close the Dream `DECISION_OUTCOME`.
+   - `manage_subagents` is observability/recovery only and is never a completion boundary.
+   - Factual completion occurs at the terminal `Stop` event of the exact causally-bound investigator child. The Stop must match child identity, parent identity, `delegationKind = INVESTIGATION`, and `originToolCallId`; task/run identity must not conflict.
+   - Parent yield with `fullyIdle = false`, wrong child Stop, stale child identity, ambiguous identity, role/profile-only identity, or mismatched origin call all fail closed and leave the investigation in flight.
+   - Factual dispatch failure may terminate the attempt only with exact invocation identity and preserves `post_investigation = false`.
+   - Successful factual child completion sets `post_investigation = true`, consumes `investigationInFlight`, and records the matching Dream `DECISION_OUTCOME` exactly once.
 2. **Explicit REPLAN State Machine Transition**:
    - Generic tool triggers (`write_to_file`, `run_command`) never induce implicit replans.
    - When `RETRY_ACTION` policy evaluates to `REPLAN`, the transition `currentState -> PLANNED` is validated against Orchestra state machine rules (`validateStateTransition`), `DECISION(REPLAN)` is recorded immediately pre-transition, state is deterministically set to `PLANNED`, and the worker retry is denied with no lingering pending requirement. Invalid transitions fail closed to `HUMAN_GATE`.
 3. **Structural Policy Contract Parity & Truthfulness**:
    - Strict structural alignment between JSON Schema Draft 2020-12 and pure JavaScript `validatePolicy()` across all properties (`base_policy`, `description`, `created_at`, `rule.description`).
    - Truthfulness is enforced: structural representable constraints (schema) and normative semantic invariants (`validatePolicy()`) are explicitly partitioned and verified.
-4. **Architecture Invariant Gate (ARCH-001 to ARCH-018)**:
-   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 18 architectural boundaries:
+4. **Architecture Invariant Gate (ARCH-001 to ARCH-019)**:
+   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 19 architectural boundaries:
      - `ARCH-001`: Immutable Governance Over Dream
      - `ARCH-002`: Zero Online Context Overhead & No Raw History In Context
      - `ARCH-003`: Exact Replay Epistemic Invariant
@@ -273,3 +274,4 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
      - `ARCH-016`: Active Self-Host Image Isolation
      - `ARCH-017`: Policy Contract Truthfulness
      - `ARCH-018`: Exact Replay Remains Model-Free
+     - `ARCH-019`: Factual Investigator Completion Boundary
