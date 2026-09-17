@@ -184,7 +184,7 @@ test("Task 5 pre-tool: fallback to STATIC_ROUTING_FALLBACK when policy corrupted
   }
 });
 
-test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", () => {
+test("Task 5 delegated worker: ACK stays pending and factual child Stop records DECISION_OUTCOME", () => {
   cleanDreamTestState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -209,7 +209,6 @@ test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", 
       }
     };
 
-    // 1. Run pre-tool hook to generate pre-action DECISION
     const preInput = JSON.stringify({
       conversationId: "task5-orch-conv-post",
       stepIdx: 5,
@@ -218,16 +217,11 @@ test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", 
     const preOutput = JSON.parse(execFileSync("node", [preToolScript], { input: preInput, encoding: "utf-8" }).trim());
     assert.equal(preOutput.decision, "allow");
 
-    // Read recorded DECISION
     const preLines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map(line => JSON.parse(line));
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
     const decEvent = preLines.find(e => e.type === "DECISION");
     assert(decEvent, "DECISION event must exist");
 
-    // 2. Run post-tool hook to observe completion and record DECISION_OUTCOME
     const postInput = JSON.stringify({
       conversationId: "task5-orch-conv-post",
       stepIdx: 5,
@@ -238,28 +232,55 @@ test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", 
     const postOutput = JSON.parse(execFileSync("node", [postToolScript], { input: postInput, encoding: "utf-8" }).trim());
     assert.deepEqual(postOutput, {});
 
-    // Read recorded DECISION_OUTCOME
-    const postLines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map(line => JSON.parse(line));
-    const outcomeEvents = postLines.filter(e => e.type === "DECISION_OUTCOME");
-    assert.equal(outcomeEvents.length, 1, "Must record exactly 1 DECISION_OUTCOME event");
-    const outcome = outcomeEvents[0];
-    assert.equal(outcome.schema, "orchestra.outcome.v1");
-    assert.equal(outcome.decision_id, decEvent.decision_id);
-    assert.equal(outcome.result, "SUCCESS");
-    assert(outcome.evidence_summary && typeof outcome.evidence_summary === "object");
-    assert(outcome.retry_state && typeof outcome.retry_state === "object");
-    assert(outcome.cost_metrics && typeof outcome.cost_metrics === "object");
-    assert(outcome.observation_id && outcome.observation_id.startsWith("obs-"));
-    assert(outcome.event_hash && outcome.event_hash.startsWith("sha256:"));
+    let lines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(lines.filter(e => e.type === "DECISION_OUTCOME").length, 0, "Successful dispatch ACK must not record outcome");
 
-    // Check that pending decision file was consumed
     const pendingDir = resolve(".agents/state/dream/pending-decisions");
-    const pendingFiles = readdirSync(pendingDir).filter(f => f.endsWith(".json"));
-    assert.equal(pendingFiles.length, 0, "Pending decision file must be consumed");
+    assert.equal(readdirSync(pendingDir).filter(f => f.endsWith(".json")).length, 1, "Pending decision remains open after ACK");
+
+    const roleBindingsPath = resolve(".agents/state/role-bindings.json");
+    const roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    const pending = roleBindings.pendingSubagents.find(p => !p.consumed);
+    assert.ok(pending?.decisionCorrelationKey);
+    roleBindings.bindings = roleBindings.bindings || {};
+    roleBindings.conversations = roleBindings.conversations || {};
+    const childBinding = {
+      conversationId: "task5-worker-child",
+      role: "WORKER",
+      profile: pending.profile,
+      model: pending.model,
+      parentConversationId: "task5-orch-conv-post",
+      originToolCallId: pending.originToolCallId,
+      delegationKind: "WORK",
+      decisionCorrelationKey: pending.decisionCorrelationKey,
+      decisionType: pending.decisionType,
+      decisionBranchOrdinal: pending.decisionBranchOrdinal,
+      confidence: "HIGH",
+      source: "RUNTIME_IDENTITY",
+      consumed: true,
+    };
+    roleBindings.bindings["task5-worker-child"] = childBinding;
+    roleBindings.conversations["task5-worker-child"] = childBinding;
+    writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
+
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({
+        conversationId: "task5-worker-child",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf-8",
+    });
+
+    lines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    const outcomeEvents = lines.filter(e => e.type === "DECISION_OUTCOME");
+    assert.equal(outcomeEvents.length, 1, "Factual child Stop must record exactly one outcome");
+    assert.equal(outcomeEvents[0].decision_id, decEvent.decision_id);
+    assert.equal(outcomeEvents[0].result.status, "COMPLETED");
+    assert.equal(outcomeEvents[0].result.child_conversation_id, "task5-worker-child");
+    assert.equal(readdirSync(pendingDir).filter(f => f.endsWith(".json")).length, 0, "Pending decision consumed at factual completion");
   } finally {
     cleanDreamTestState();
   }
