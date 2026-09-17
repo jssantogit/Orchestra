@@ -1324,6 +1324,48 @@ test("recordDecision rejects duplicate live correlation without duplicating tele
   assert.equal(readdirSync(pendingDir).filter(name => name.endsWith(".json")).length, 1);
 });
 
+test("recordDecision recovers pending-first crash by publishing stored decision exactly once", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-pending-recovery-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const correlationKey = "corr-pending-recovery";
+  const decision = {
+    snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+  };
+
+  const first = recordDecision({ telemetryPath, pendingDir, correlationKey, decision });
+  assert.equal(first.recorded, true);
+
+  // Simulate process loss in the pending-first protocol after durable pending
+  // but before the DECISION append became durable.
+  rmSync(telemetryPath, { force: true });
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".json")), true);
+
+  const recovered = recordDecision({ telemetryPath, pendingDir, correlationKey, decision });
+  assert.equal(recovered.recorded, true);
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.decision_id, first.decision_id);
+
+  const events = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "DECISION");
+  assert.equal(events[0].decision_id, first.decision_id);
+
+  const duplicate = recordDecision({ telemetryPath, pendingDir, correlationKey, decision });
+  assert.equal(duplicate.recorded, false);
+  assert.equal(duplicate.reason, "DECISION_ALREADY_PENDING");
+  const after = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean);
+  assert.equal(after.length, 1, "Recovered DECISION must never be duplicated");
+});
+
 test("recordDecision does not publish DECISION when pending persistence fails", (t) => {
   const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-pending-failure-"));
   t.after(() => rmSync(tempDir, { recursive: true, force: true }));
