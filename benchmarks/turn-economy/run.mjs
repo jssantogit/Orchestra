@@ -520,6 +520,208 @@ export function auditScopeMinimality(mutatedFiles = [], taskKey = "multi") {
 }
 
 /**
+ * Investigation Policy B Economy Evaluation.
+ * Evaluates Hard and Stretch economy targets for investigation tasks.
+ */
+export function evaluateInvestigationEconomy(metrics = {}) {
+  const hardViolations = [];
+  const stretchViolations = [];
+
+  const parentTurns = metrics.parent_model_turns ?? 0;
+  const workerTurns = metrics.worker_model_turns ?? 0;
+  const totalTurns = metrics.total_model_turns ?? (parentTurns + workerTurns);
+  const preMutationTurns = metrics.worker_pre_mutation_turns ?? 0;
+  const discoveryTurns = metrics.worker_search_turns ?? metrics.worker_discovery_turns ?? 0;
+  const sidequests = metrics.parent_delegated_sidequest_attempts ?? 0;
+  const duplicateReads = metrics.duplicate_reads ?? 0;
+  const postMutationRereads = metrics.post_mutation_rereads ?? 0;
+  const repeatedValidations = metrics.repeated_validation_without_mutation ?? 0;
+  const correctionCycles = metrics.correction_cycles ?? 0;
+  const firstMutationComplete = Boolean(metrics.first_mutation_complete);
+
+  // HARD targets:
+  // parent_model_turns <= 3
+  // worker_model_turns <= 9
+  // total_model_turns <= 12
+  // worker_pre_mutation_turns <= 3
+  // worker_discovery_turns <= 1
+  // parent_delegated_sidequest_attempts = 0
+  // duplicate_reads = 0
+  // post_mutation_rereads = 0
+  // repeated_validation_without_mutation = 0
+  // correction_cycles <= 1
+  if (parentTurns > 3) hardViolations.push(`parent_model_turns: ${parentTurns} > 3`);
+  if (workerTurns > 9) hardViolations.push(`worker_model_turns: ${workerTurns} > 9`);
+  if (totalTurns > 12) hardViolations.push(`total_model_turns: ${totalTurns} > 12`);
+  if (preMutationTurns > 3) hardViolations.push(`worker_pre_mutation_turns: ${preMutationTurns} > 3`);
+  if (discoveryTurns > 1) hardViolations.push(`worker_discovery_turns: ${discoveryTurns} > 1`);
+  if (sidequests > 0) hardViolations.push(`parent_delegated_sidequest_attempts: ${sidequests} > 0`);
+  if (duplicateReads > 0) hardViolations.push(`duplicate_reads: ${duplicateReads} > 0`);
+  if (postMutationRereads > 0) hardViolations.push(`post_mutation_rereads: ${postMutationRereads} > 0`);
+  if (repeatedValidations > 0) hardViolations.push(`repeated_validation_without_mutation: ${repeatedValidations} > 0`);
+  if (correctionCycles > 1) hardViolations.push(`correction_cycles: ${correctionCycles} > 1`);
+
+  // STRETCH targets:
+  // worker_model_turns <= 8
+  // total_model_turns <= 11
+  // first_mutation_complete = true
+  // correction_cycles = 0
+  if (workerTurns > 8) stretchViolations.push(`worker_model_turns: ${workerTurns} > 8`);
+  if (totalTurns > 11) stretchViolations.push(`total_model_turns: ${totalTurns} > 11`);
+  if (!firstMutationComplete) stretchViolations.push("first_mutation_complete: false");
+  if (correctionCycles > 0) stretchViolations.push(`correction_cycles: ${correctionCycles} > 0`);
+
+  const hardPass = hardViolations.length === 0;
+  const stretchPass = hardPass && stretchViolations.length === 0;
+
+  return {
+    hard_pass: hardPass,
+    hard_gate: hardPass ? "PASS" : "FAIL",
+    hard_violations: hardViolations,
+    stretch_pass: stretchPass,
+    stretch_gate: stretchPass ? "PASS" : "MISS",
+    stretch_violations: stretchViolations,
+  };
+}
+
+/**
+ * Bounded Factual Correction Gate Evaluation (Policy B).
+ * Validates the strict 14-rule discipline for investigation correction cycles.
+ */
+export function evaluateBoundedFactualCorrection({
+  correctionCycles = 0,
+  reproductionObserved = true,
+  reproductionActor = "WORKER",
+  reproductionExitCode = 1,
+  firstMutationTargeted = true,
+  firstValidationExitCode = 0,
+  validationExposedMechanism = true,
+  searchesBetweenFailedValidationAndCorrection = 0,
+  readsBetweenFailedValidationAndCorrection = 0,
+  duplicateReadsBetweenFailedValidationAndCorrection = 0,
+  correctiveMutationAddressedFailure = true,
+  nextValidationExitCode = 0,
+  repeatedValidationWithoutMutation = 0,
+  passingValidationsAfter = 0,
+  apiShapePreserved = true,
+  scopeMinimal = true,
+  mutationAttribution = "WORKER",
+  acceptanceReusedEvidence = true,
+  workerValidationVerified = true,
+} = {}) {
+  const violations = [];
+
+  if (correctionCycles === 0) {
+    if (!reproductionObserved || reproductionExitCode === 0) {
+      violations.push("REPRODUCTION_NOT_OBSERVED");
+    }
+    if (!scopeMinimal) {
+      violations.push("SCOPE_EXPANSION");
+    }
+    if (!apiShapePreserved) {
+      violations.push("API_SHAPE_VIOLATION");
+    }
+    if (repeatedValidationWithoutMutation > 0 || passingValidationsAfter > 0) {
+      violations.push("REPEATED_VALIDATION_WITHOUT_MUTATION");
+    }
+    if (!workerValidationVerified) {
+      violations.push("WORKER_VALIDATION_UNVERIFIED");
+    }
+    const pass = violations.length === 0;
+    return {
+      pass,
+      gate: pass ? "PASS" : "FAIL",
+      correction_cycle_gate: pass ? "PASS" : "FAIL",
+      bounded_factual_correction_gate: pass ? "PASS" : "FAIL",
+      correction_cycles: 0,
+      violations,
+      details: pass ? "IDEAL_FIRST_PASS" : violations.join(", "),
+    };
+  }
+
+  // 8. exactly one corrective mutation cycle was required
+  if (correctionCycles > 1) {
+    violations.push(`EXCESSIVE_CORRECTION_CYCLES: ${correctionCycles} > 1`);
+  }
+
+  // 1. factual reproduction occurred before mutation
+  if (!reproductionObserved || reproductionExitCode === 0 || (reproductionActor && reproductionActor !== "WORKER")) {
+    violations.push("FACTUAL_REPRODUCTION_MISSING");
+  }
+
+  // 2. first mutation was based on the observed failure and inspected code
+  if (!firstMutationTargeted) {
+    violations.push("FIRST_MUTATION_UNFOCUSED");
+  }
+
+  // 3. first post-mutation validation produced a factual non-zero exit
+  if (firstValidationExitCode === 0) {
+    violations.push("FIRST_VALIDATION_DID_NOT_FAIL");
+  }
+
+  // 4. the validation exposed a concrete additional mechanism
+  if (!validationExposedMechanism) {
+    violations.push("NO_CONCRETE_MECHANISM_EXPOSED");
+  }
+
+  // 5. no new repository search occurred between failed validation and correction
+  if (searchesBetweenFailedValidationAndCorrection > 0) {
+    violations.push(`NEW_SEARCH_DURING_CORRECTION: ${searchesBetweenFailedValidationAndCorrection}`);
+  }
+
+  // 6. no duplicate file read occurred between failed validation and correction
+  if (readsBetweenFailedValidationAndCorrection > 0 || duplicateReadsBetweenFailedValidationAndCorrection > 0) {
+    violations.push(`REREAD_DURING_CORRECTION: ${readsBetweenFailedValidationAndCorrection + duplicateReadsBetweenFailedValidationAndCorrection}`);
+  }
+
+  // 7. the corrective mutation directly addressed the newly observed failure
+  if (!correctiveMutationAddressedFailure) {
+    violations.push("CORRECTIVE_MUTATION_UNRELATED");
+  }
+
+  // 9. the next required validation passed
+  if (nextValidationExitCode !== 0) {
+    violations.push(`NEXT_VALIDATION_FAILED: exit code ${nextValidationExitCode}`);
+  }
+
+  // 10. no additional passing validations occurred afterward
+  if (passingValidationsAfter > 0 || repeatedValidationWithoutMutation > 0) {
+    violations.push("REDUNDANT_VALIDATION_AFTER_PASS");
+  }
+
+  // 11. API shape remained preserved
+  if (!apiShapePreserved) {
+    violations.push("API_SHAPE_CHANGED");
+  }
+
+  // 12. mutation scope remained minimal
+  if (!scopeMinimal) {
+    violations.push("SCOPE_EXPANDED");
+  }
+
+  // 13. mutation attribution remained FACTUAL / WORKER
+  if (mutationAttribution !== "WORKER" && mutationAttribution !== "FACTUAL") {
+    violations.push(`INVALID_MUTATION_ATTRIBUTION: ${mutationAttribution}`);
+  }
+
+  // 14. fresh evidence was reused for Orchestrator acceptance
+  if (!acceptanceReusedEvidence || !workerValidationVerified) {
+    violations.push("FRESH_EVIDENCE_NOT_REUSED");
+  }
+
+  const pass = violations.length === 0;
+  return {
+    pass,
+    gate: pass ? "PASS" : "FAIL",
+    correction_cycle_gate: pass ? "PASS" : "FAIL",
+    bounded_factual_correction_gate: pass ? "PASS" : "FAIL",
+    correction_cycles: correctionCycles,
+    violations,
+    details: pass ? "BOUNDED_FACTUAL_CORRECTION_SATISFIED" : violations.join(", "),
+  };
+}
+
+/**
  * Extracts prohibited parent tool ATTEMPTS during healthy delegated execution.
  */
 export function extractParentDelegatedSidequestAttempts(parentTranscriptFile, activeState = {}) {
@@ -1202,6 +1404,44 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
   const reproductionCommand = reproductionVal ? reproductionVal.command : null;
   const reproductionOutputSummary = reproductionVal ? reproductionVal.outputSummary : null;
 
+  const postMutationValidations = childValidations.filter(
+    (v) => typeof v.stepIndex === "number" && v.stepIndex > firstChildMutationStep
+  );
+  const firstPostMutationVal = postMutationValidations.length > 0 ? postMutationValidations[0] : null;
+  const firstPostMutationValidationExitCode = firstPostMutationVal ? firstPostMutationVal.exitCode : null;
+
+  let searchesBetweenValidationAndCorrection = 0;
+  let readsBetweenValidationAndCorrection = 0;
+  let correctionCycles = 0;
+
+  if (firstPostMutationVal && firstPostMutationVal.exitCode !== 0) {
+    const secondMutation = childMutations.find(
+      (m) => typeof m.stepIndex === "number" && m.stepIndex > firstPostMutationVal.stepIndex
+    );
+    if (secondMutation) {
+      correctionCycles = 1;
+      if (workerTurns && workerTurns.length > 0) {
+        workerTurns.forEach((t) => {
+          const tStep = typeof t.lineIndex === "number" ? t.lineIndex : -1;
+          if (tStep > firstPostMutationVal.stepIndex && tStep < secondMutation.stepIndex) {
+            (t.tools || []).forEach((tc) => {
+              if (["grep_search", "find_by_name", "list_dir"].includes(tc.name)) searchesBetweenValidationAndCorrection++;
+              if (["view_file", "read_url_content"].includes(tc.name)) readsBetweenValidationAndCorrection++;
+            });
+          }
+        });
+      }
+      const subsequentFailedVals = postMutationValidations.filter(
+        (v) => typeof v.stepIndex === "number" && v.stepIndex > secondMutation.stepIndex && v.exitCode !== 0
+      );
+      if (subsequentFailedVals.length > 0) {
+        correctionCycles += subsequentFailedVals.length;
+      }
+    }
+  } else if (workerMutationTurns > 1) {
+    correctionCycles = Math.max(0, workerMutationTurns - 1);
+  }
+
   return {
     model_turns_total: totalModelTurns,
     model_invocations: totalModelTurns,
@@ -1325,6 +1565,10 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     reproduction_exit_code: reproductionExitCode,
     reproduction_command: reproductionCommand,
     reproduction_output_summary: reproductionOutputSummary,
+    correction_cycles: correctionCycles,
+    first_post_mutation_validation_exit_code: firstPostMutationValidationExitCode,
+    searches_between_validation_and_correction: searchesBetweenValidationAndCorrection,
+    reads_between_validation_and_correction: readsBetweenValidationAndCorrection,
   };
 }
 
@@ -1605,20 +1849,46 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     const routingGate = (fidelity.expectedRoute?.worker === fidelity.observed?.worker && (fidelity.fidelityStatus === "PASS" || fidelity.status === "PASS")) ? "PASS" : "FAIL";
     const rootCauseGate = (metrics.worker_completion_claimed && verification.success) ? "PASS" : "FAIL";
     const fidelityGate = (fidelity.fidelityStatus === "PASS" && fidelity.confidence === "HIGH") ? "PASS" : "FAIL";
-    const workerEconomyGate = (taskKey !== "investigation")
-      ? "PASS"
-      : ((
-          (metrics.worker_model_turns || 0) <= 8 &&
-          (metrics.worker_pre_mutation_turns || 0) <= 3 &&
-          (metrics.worker_search_turns || 0) <= 1 &&
-          (metrics.duplicate_reads || 0) === 0 &&
-          (metrics.post_mutation_rereads || 0) === 0 &&
-          (metrics.repeated_validation_without_mutation || 0) === 0
-        ) ? "PASS" : "FAIL");
+
+    const correctionCycles = metrics.correction_cycles ?? Math.max(0, (metrics.worker_mutation_turns || 0) - 1);
     const firstMutationComplete = taskKey !== "investigation"
       ? true
-      : ((metrics.worker_mutation_turns || 0) === 1 && verification.success);
-    const firstMutationCompletenessGate = firstMutationComplete ? "PASS" : "FAIL";
+      : ((metrics.worker_mutation_turns || 0) === 1 && verification.success && correctionCycles === 0);
+    const firstMutationCompleteness = firstMutationComplete ? "PASS" : "MISS";
+
+    const investigationEconomy = evaluateInvestigationEconomy({
+      ...metrics,
+      correction_cycles: correctionCycles,
+      first_mutation_complete: firstMutationComplete,
+    });
+
+    const boundedCorrection = evaluateBoundedFactualCorrection({
+      correctionCycles,
+      reproductionObserved: metrics.reproduction_observed ?? true,
+      reproductionActor: metrics.reproduction_actor ?? "WORKER",
+      reproductionExitCode: metrics.reproduction_exit_code ?? 1,
+      firstMutationTargeted: scopeAudit.pass,
+      firstValidationExitCode: correctionCycles > 0 ? (metrics.first_post_mutation_validation_exit_code ?? 1) : 0,
+      validationExposedMechanism: true,
+      searchesBetweenFailedValidationAndCorrection: metrics.searches_between_validation_and_correction ?? 0,
+      readsBetweenFailedValidationAndCorrection: metrics.reads_between_validation_and_correction ?? 0,
+      duplicateReadsBetweenFailedValidationAndCorrection: metrics.duplicate_reads ?? 0,
+      correctiveMutationAddressedFailure: true,
+      nextValidationExitCode: metrics.worker_validation_exit_code ?? (verification.success ? 0 : 1),
+      repeatedValidationWithoutMutation: metrics.repeated_validation_without_mutation ?? 0,
+      passingValidationsAfter: 0,
+      apiShapePreserved: !sigAudit.changed,
+      scopeMinimal: scopeAudit.pass,
+      mutationAttribution: fidelity.mutationAttributionMode === "FACTUAL" ? "FACTUAL" : (fidelity.observed?.mutationActor || "WORKER"),
+      acceptanceReusedEvidence: metrics.worker_validation_fresh ?? true,
+      workerValidationVerified: metrics.worker_validation_verified ?? true,
+    });
+
+    const investigationHardEconomyGate = (taskKey !== "investigation") ? "PASS" : investigationEconomy.hard_gate;
+    const investigationStretchEconomy = (taskKey !== "investigation") ? "PASS" : investigationEconomy.stretch_gate;
+    const boundedFactualCorrectionGate = (taskKey !== "investigation") ? "PASS" : boundedCorrection.gate;
+    const workerEconomyGate = investigationHardEconomyGate;
+    const firstMutationCompletenessGate = firstMutationCompleteness;
     const validationCompletionGate = ((metrics.repeated_validation_without_mutation || 0) === 0 && (metrics.worker_validation_verified || false)) ? "PASS" : "FAIL";
     const parentSameTurnDelegationGate = ((metrics.parent_pre_delegation_turns || 0) <= 1 && (metrics.parent_model_turns || 0) <= 3) ? "PASS" : "FAIL";
 
@@ -1651,7 +1921,12 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       routing_gate: routingGate,
       root_cause_gate: rootCauseGate,
       worker_economy_gate: workerEconomyGate,
+      investigation_hard_economy_gate: investigationHardEconomyGate,
+      investigation_stretch_economy: investigationStretchEconomy,
+      bounded_factual_correction_gate: boundedFactualCorrectionGate,
+      first_mutation_completeness: firstMutationCompleteness,
       first_mutation_completeness_gate: firstMutationCompletenessGate,
+      correction_cycles: correctionCycles,
       validation_completion_gate: validationCompletionGate,
       fidelity_gate: fidelityGate,
       fidelity: {
@@ -1775,8 +2050,12 @@ function main() {
               console.error(`PRECISION_PRESERVATION_FAILED: ${runtime} on ${taskKey} suffered arbitrary precision truncation`);
               hasFidelityFailure = true;
             }
-            if (res.worker_economy_gate === "FAIL") {
+            if (res.investigation_hard_economy_gate === "FAIL" || res.worker_economy_gate === "FAIL") {
               console.error(`WORKER_ECONOMY_FAILED: ${runtime} on ${taskKey} exceeded worker turn economy targets`);
+              hasFidelityFailure = true;
+            }
+            if (res.bounded_factual_correction_gate === "FAIL") {
+              console.error(`BOUNDED_FACTUAL_CORRECTION_FAILED: ${runtime} on ${taskKey} failed bounded factual correction gate`);
               hasFidelityFailure = true;
             }
             if (res.parent_zero_attempt_gate === "FAIL") {

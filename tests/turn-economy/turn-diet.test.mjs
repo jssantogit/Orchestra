@@ -27,6 +27,8 @@ import {
   auditApiSignatures,
   auditScopeMinimality,
   extractParentDelegatedSidequestAttempts,
+  evaluateInvestigationEconomy,
+  evaluateBoundedFactualCorrection,
 } from "../../benchmarks/turn-economy/run.mjs";
 import { isValidAgentName } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
 import { syncChildEvidence } from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
@@ -3129,4 +3131,179 @@ test("task5-v1.3: 3. Worker Discovery Budget <= 1 and Whole Class Location Opera
   assert.ok(!content.includes("12.5%"));
   assert.ok(!content.includes("99.9%"));
   assert.ok(!content.includes("parser.js"));
+});
+
+test("task5-v1.4: 1. Policy B & Bounded Factual Correction (Cases A through J)", () => {
+  // A. first mutation passes immediately
+  // -> correction cycles 0 -> hard PASS -> stretch may PASS
+  const caseA_econ = evaluateInvestigationEconomy({
+    parent_model_turns: 3,
+    worker_model_turns: 7,
+    total_model_turns: 10,
+    worker_pre_mutation_turns: 3,
+    worker_discovery_turns: 1,
+    parent_delegated_sidequest_attempts: 0,
+    duplicate_reads: 0,
+    post_mutation_rereads: 0,
+    repeated_validation_without_mutation: 0,
+    correction_cycles: 0,
+    first_mutation_complete: true,
+  });
+  assert.equal(caseA_econ.hard_gate, "PASS", "Case A: Hard economy must PASS");
+  assert.equal(caseA_econ.stretch_gate, "PASS", "Case A: Stretch economy must PASS");
+  const caseA_corr = evaluateBoundedFactualCorrection({
+    correctionCycles: 0,
+    reproductionObserved: true,
+    reproductionExitCode: 1,
+    firstValidationExitCode: 0,
+  });
+  assert.equal(caseA_corr.gate, "PASS", "Case A: Bounded correction gate must PASS on immediate fix");
+  assert.equal(caseA_corr.correction_cycles, 0);
+
+  // B. first validation fails, one direct correction, next validation passes
+  // -> correction cycles 1 -> bounded correction PASS
+  const caseB_corr = evaluateBoundedFactualCorrection({
+    correctionCycles: 1,
+    reproductionObserved: true,
+    reproductionActor: "WORKER",
+    reproductionExitCode: 1,
+    firstMutationTargeted: true,
+    firstValidationExitCode: 1,
+    validationExposedMechanism: true,
+    searchesBetweenFailedValidationAndCorrection: 0,
+    readsBetweenFailedValidationAndCorrection: 0,
+    duplicateReadsBetweenFailedValidationAndCorrection: 0,
+    correctiveMutationAddressedFailure: true,
+    nextValidationExitCode: 0,
+    passingValidationsAfter: 0,
+    repeatedValidationWithoutMutation: 0,
+    apiShapePreserved: true,
+    scopeMinimal: true,
+    mutationAttribution: "WORKER",
+    acceptanceReusedEvidence: true,
+    workerValidationVerified: true,
+  });
+  assert.equal(caseB_corr.gate, "PASS", "Case B: single factual correction cycle must PASS");
+  assert.equal(caseB_corr.correction_cycles, 1);
+
+  // C. failed validation followed by new search
+  // -> bounded correction FAIL
+  const caseC_corr = evaluateBoundedFactualCorrection({
+    correctionCycles: 1,
+    reproductionObserved: true,
+    firstValidationExitCode: 1,
+    searchesBetweenFailedValidationAndCorrection: 1,
+    nextValidationExitCode: 0,
+  });
+  assert.equal(caseC_corr.gate, "FAIL", "Case C: new search during correction must FAIL");
+  assert.ok(caseC_corr.violations.some((v) => v.includes("NEW_SEARCH_DURING_CORRECTION")));
+
+  // D. failed validation followed by duplicate reread
+  // -> bounded correction FAIL
+  const caseD_corr = evaluateBoundedFactualCorrection({
+    correctionCycles: 1,
+    reproductionObserved: true,
+    firstValidationExitCode: 1,
+    readsBetweenFailedValidationAndCorrection: 1,
+    nextValidationExitCode: 0,
+  });
+  assert.equal(caseD_corr.gate, "FAIL", "Case D: reread during correction must FAIL");
+  assert.ok(caseD_corr.violations.some((v) => v.includes("REREAD_DURING_CORRECTION")));
+
+  // E. two corrective mutation cycles
+  // -> bounded correction FAIL
+  const caseE_corr = evaluateBoundedFactualCorrection({
+    correctionCycles: 2,
+    reproductionObserved: true,
+    firstValidationExitCode: 1,
+    nextValidationExitCode: 0,
+  });
+  assert.equal(caseE_corr.gate, "FAIL", "Case E: 2 corrective mutation cycles must FAIL bounded correction gate");
+  assert.ok(caseE_corr.violations.some((v) => v.includes("EXCESSIVE_CORRECTION_CYCLES")));
+  const caseE_econ = evaluateInvestigationEconomy({
+    parent_model_turns: 3,
+    worker_model_turns: 9,
+    total_model_turns: 12,
+    correction_cycles: 2,
+  });
+  assert.equal(caseE_econ.hard_gate, "FAIL", "Case E: 2 corrective mutation cycles must FAIL hard economy gate");
+
+  // F. correction unrelated to observed validation failure
+  // -> bounded correction FAIL
+  const caseF_corr = evaluateBoundedFactualCorrection({
+    correctionCycles: 1,
+    reproductionObserved: true,
+    firstValidationExitCode: 1,
+    correctiveMutationAddressedFailure: false,
+    nextValidationExitCode: 0,
+  });
+  assert.equal(caseF_corr.gate, "FAIL", "Case F: unrelated corrective mutation must FAIL");
+  assert.ok(caseF_corr.violations.some((v) => v.includes("CORRECTIVE_MUTATION_UNRELATED")));
+
+  // G. passing validation followed by another validation
+  // -> existing Validation Completion discipline still applies
+  const caseG_corr = evaluateBoundedFactualCorrection({
+    correctionCycles: 1,
+    reproductionObserved: true,
+    firstValidationExitCode: 1,
+    nextValidationExitCode: 0,
+    repeatedValidationWithoutMutation: 1,
+  });
+  assert.equal(caseG_corr.gate, "FAIL", "Case G: repeated validation without mutation must FAIL bounded correction");
+  assert.ok(caseG_corr.violations.some((v) => v.includes("REDUNDANT_VALIDATION_AFTER_PASS")));
+
+  // H. worker 9 / total 12 with otherwise healthy bounded correction
+  // -> HARD economy PASS
+  const caseH_econ = evaluateInvestigationEconomy({
+    parent_model_turns: 3,
+    worker_model_turns: 9,
+    total_model_turns: 12,
+    worker_pre_mutation_turns: 3,
+    worker_discovery_turns: 1,
+    parent_delegated_sidequest_attempts: 0,
+    duplicate_reads: 0,
+    post_mutation_rereads: 0,
+    repeated_validation_without_mutation: 0,
+    correction_cycles: 1,
+    first_mutation_complete: false,
+  });
+  assert.equal(caseH_econ.hard_gate, "PASS", "Case H: worker 9 / total 12 must pass HARD economy gate");
+
+  // I. worker 10 or total 13
+  // -> HARD economy FAIL
+  const caseI_worker10 = evaluateInvestigationEconomy({
+    parent_model_turns: 3,
+    worker_model_turns: 10,
+    total_model_turns: 12,
+    correction_cycles: 1,
+  });
+  assert.equal(caseI_worker10.hard_gate, "FAIL", "Case I: worker 10 must FAIL HARD economy gate");
+
+  const caseI_total13 = evaluateInvestigationEconomy({
+    parent_model_turns: 3,
+    worker_model_turns: 9,
+    total_model_turns: 13,
+    correction_cycles: 1,
+  });
+  assert.equal(caseI_total13.hard_gate, "FAIL", "Case I: total 13 must FAIL HARD economy gate");
+
+  // J. worker 9 / total 12
+  // -> STRETCH economy MISS, not hard failure
+  const caseJ_econ = evaluateInvestigationEconomy({
+    parent_model_turns: 3,
+    worker_model_turns: 9,
+    total_model_turns: 12,
+    worker_pre_mutation_turns: 3,
+    worker_discovery_turns: 1,
+    parent_delegated_sidequest_attempts: 0,
+    duplicate_reads: 0,
+    post_mutation_rereads: 0,
+    repeated_validation_without_mutation: 0,
+    correction_cycles: 1,
+    first_mutation_complete: false,
+  });
+  assert.equal(caseJ_econ.hard_gate, "PASS", "Case J: worker 9 / total 12 must PASS hard gate");
+  assert.equal(caseJ_econ.stretch_gate, "MISS", "Case J: worker 9 / total 12 must MISS stretch target without failing hard gate");
+  assert.equal(caseJ_econ.hard_pass, true, "Case J: hard_pass must remain true");
+  assert.equal(caseJ_econ.stretch_pass, false, "Case J: stretch_pass must be false");
 });
