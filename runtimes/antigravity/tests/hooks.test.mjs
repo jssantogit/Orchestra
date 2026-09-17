@@ -12,6 +12,7 @@ import { executeReplanTransition } from "../.agents/hooks/pre-tool-enforce.mjs";
 const __testDir = dirname(fileURLToPath(import.meta.url));
 const preToolScript = resolve(__testDir, "../.agents/hooks/pre-tool-enforce.mjs");
 const postToolScript = resolve(__testDir, "../.agents/hooks/post-tool-telemetry.mjs");
+const stopToolScript = resolve(__testDir, "../.agents/hooks/stop-guard.mjs");
 
 function cleanDreamTestState() {
   try { unlinkSync(".agents/state/active-state.json"); } catch {}
@@ -1129,7 +1130,7 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
     assert.equal(res5.decision, "deny");
     assert.match(res5.reason, /Investigation is currently in flight/);
 
-    // 6. Correlated completion arrives via post-tool telemetry -> post_investigation = true, in-flight cleared
+    // 6. invoke_subagent PostToolUse is only ACK: exact correlation MUST remain in flight.
     const postPayload = JSON.stringify({
       conversationId: "task2-lifecycle-conv",
       stepIdx: 3,
@@ -1138,15 +1139,55 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
       toolArgs: {
         Subagents: [{ TypeName: "flash-worker", Role: "investigator", Prompt: "Investigate root cause" }]
       },
-      toolResult: { status: "SUCCESS", summary: "Root cause found" },
+      result: { status: "SUCCESS", conversationId: "task2-investigator-child" },
     });
     execFileSync("node", [postToolScript], { input: postPayload, encoding: "utf-8" });
 
-    const savedState6 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(savedState6.investigationInFlight, undefined, "in flight must be cleared");
-    assert.equal(savedState6.post_investigation, true, "post_investigation must now be true");
+    const savedState6Ack = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(savedState6Ack.investigationInFlight, "successful invoke ACK must keep investigation in flight");
+    assert.equal(savedState6Ack.post_investigation, false, "ACK must not satisfy post_investigation");
+    assert.equal(savedState6Ack.investigationInFlight.childConversationId, "task2-investigator-child");
 
-    // 7. Post-investigation implementation worker delegation is now ALLOWED (post-investigation routes to FLASH_HIGH)
+    // Bind the factual child to the originating investigation dispatch.
+    const roleBindings = {
+      mainConversationId: "task2-lifecycle-conv",
+      bindings: {
+        "task2-lifecycle-conv": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        "task2-investigator-child": {
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: "task2-lifecycle-conv",
+          originToolCallId: "call_investigator",
+          delegationKind: "INVESTIGATION",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    };
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(roleBindings, null, 2), "utf-8");
+
+    // 7. Factual terminal Stop of the exact investigator child completes the investigation.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({
+        conversationId: "task2-investigator-child",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf-8",
+    });
+
+    const savedState7 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(savedState7.investigationInFlight, undefined, "terminal investigator Stop must consume in-flight");
+    assert.equal(savedState7.post_investigation, true, "factual child completion must satisfy post_investigation");
+    assert.equal(savedState7.investigationCompletion.childConversationId, "task2-investigator-child");
+
+    // 8. Post-investigation implementation worker delegation is now ALLOWED (post-investigation routes to FLASH_HIGH)
     const inputInvokeHigh = JSON.stringify({
       conversationId: "task2-lifecycle-conv",
       stepIdx: 4,
@@ -1651,7 +1692,7 @@ test("Task 1 Exact Investigation Correlation: normative counterexamples A throug
       encoding: "utf-8"
     });
     let stateF = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(stateF.investigationInFlight, undefined, "Counterexample F: failed completion must close in-flight");
+    assert.equal(stateF.investigationInFlight, undefined, "Counterexample F: failed invocation dispatch must close in-flight");
     assert.equal(stateF.post_investigation, false, "Counterexample F: post_investigation must remain false on error");
 
     // G. Cancel exactly correlated -> closes in-flight, post_investigation = false
@@ -1668,7 +1709,7 @@ test("Task 1 Exact Investigation Correlation: normative counterexamples A throug
       encoding: "utf-8"
     });
     let stateG = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(stateG.investigationInFlight, undefined, "Counterexample G: cancelled completion must close in-flight");
+    assert.equal(stateG.investigationInFlight, undefined, "Counterexample G: cancelled invocation dispatch must close in-flight");
     assert.equal(stateG.post_investigation, false, "Counterexample G: post_investigation must remain false on cancel");
   } finally {
     cleanDreamTestState();
@@ -1736,8 +1777,8 @@ test("Task 1 Exact Investigation Correlation: normative tests H through M", () =
       encoding: "utf-8"
     });
     let stateI = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(stateI.investigationInFlight, undefined, "TEST I: shared causal toolCallId matches despite missing correlationKey on completion");
-    assert.equal(stateI.post_investigation, true, "TEST I: post_investigation becomes true on match");
+    assert.ok(stateI.investigationInFlight, "TEST I: exact invocation identity is still only an ACK and must remain in flight");
+    assert.equal(stateI.post_investigation, false, "TEST I: ACK must not satisfy post_investigation");
 
     // TEST J: conv-A + call-A stored vs conv-A without toolCallId/executionId/childConversationId -> NO MATCH
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
@@ -1824,8 +1865,8 @@ test("Task 1 Exact Investigation Correlation: normative tests H through M", () =
       encoding: "utf-8"
     });
     let stateL = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(stateL.investigationInFlight, undefined, "TEST L: exact child identity (investigator-A) must match");
-    assert.equal(stateL.post_investigation, true, "TEST L: post_investigation becomes true on exact child match");
+    assert.ok(stateL.investigationInFlight, "TEST L: manage_subagents exact child observation is not a terminal lifecycle event");
+    assert.equal(stateL.post_investigation, false, "TEST L: manage_subagents must not satisfy post_investigation");
 
     // TEST M: two investigators sharing role/profile/parent, completion contains only role/profile/parent -> NO MATCH (no FIFO/guesswork)
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
