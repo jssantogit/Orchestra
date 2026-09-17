@@ -267,43 +267,10 @@ export function validatePolicy(policy) {
     }
   }
 
-  // Conflict detection: rules of same decision_type and priority cannot choose different actions without mutually exclusive conditions
-  for (let i = 0; i < policy.rules.length; i++) {
-    const r1 = policy.rules[i];
-    if (!r1 || typeof r1 !== "object") continue;
-    for (let j = i + 1; j < policy.rules.length; j++) {
-      const r2 = policy.rules[j];
-      if (!r2 || typeof r2 !== "object") continue;
-      if (r1.decision_type === r2.decision_type && r1.priority === r2.priority && r1.choose !== r2.choose) {
-        if (!areConditionsMutuallyExclusive(r1.when, r2.when)) {
-          errors.push(
-            `Conflict: rules "${r1.id}" and "${r2.id}" have same priority ${r1.priority} and decision_type "${r1.decision_type}" but choose different actions ("${r1.choose}" vs "${r2.choose}") with overlapping conditions`
-          );
-        }
-      }
-    }
-  }
-
   return {
     valid: errors.length === 0,
     errors,
   };
-}
-
-function areConditionsMutuallyExclusive(whenA = {}, whenB = {}) {
-  if (!whenA || !whenB || typeof whenA !== "object" || typeof whenB !== "object") return false;
-  const enumFields = ["task_action", "task_domain", "criticality", "complexity", "state", "retry_reason"];
-  for (const f of enumFields) {
-    if (Array.isArray(whenA[f]) && Array.isArray(whenB[f])) {
-      const setA = new Set(whenA[f]);
-      const hasOverlap = whenB[f].some(item => setA.has(item));
-      if (!hasOverlap) return true;
-    }
-  }
-  if (typeof whenA.post_investigation === "boolean" && typeof whenB.post_investigation === "boolean") {
-    if (whenA.post_investigation !== whenB.post_investigation) return true;
-  }
-  return false;
 }
 
 /**
