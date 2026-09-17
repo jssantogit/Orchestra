@@ -7,7 +7,6 @@ import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync,
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { computePolicyId, validatePolicy } from "../.agents/dream/policy-engine.mjs";
-import { executeReplanTransition } from "../.agents/hooks/pre-tool-enforce.mjs";
 
 const __testDir = dirname(fileURLToPath(import.meta.url));
 const preToolScript = resolve(__testDir, "../.agents/hooks/pre-tool-enforce.mjs");
