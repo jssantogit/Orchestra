@@ -87,12 +87,14 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 
 ---
 
-## 5. Dream Layer Foundation (Record-Only & Exact Replay)
+## 5. Dream Layer Foundation & Declarative Static Policy (Milestones A–D)
 
-The Antigravity runtime incorporates the Orchestra Dream Layer Foundation (Milestones A–C) for offline, model-free recursive policy evaluation:
+The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–D) for offline, model-free recursive policy evaluation and deterministic declarative policy execution:
 
-- **Record-Only Authority Boundary**: Online routing decisions are strictly owned by static policy (`routing-policy.mjs`). Dream instrumentation observes and records decisions and outcomes without altering model or tier selection.
-- **Zero Online Turn Overhead**: Telemetry instrumentation runs synchronously in hooks (<0.1 ms decision overhead) without adding model turns or consuming model tokens.
+- **Declarative Static Policy Engine (Milestone D)**: Evaluates `static-policy-v1.json` via pure policy engine [`policy-engine.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/policy-engine.mjs) for eligible decisions (`WORKER_TIER`, `INVESTIGATION_STRATEGY`, `RETRY_ACTION`).
+- **100% Shadow Parity & Coverage**: Evaluated across 688 eligible state combinations with 100% explicit policy coverage and 100% action parity.
+- **Fail-Safe Fallback**: Any policy conflict, invalid action, or parsing error falls back immediately to `STATIC_ROUTING_FALLBACK` without interrupting task execution.
+- **Zero Online Turn Overhead**: Telemetry and declarative policy evaluation run synchronously in hooks (<0.2 ms overhead) with zero online model turns and zero tokens consumed.
 - **Fail-Open Telemetry**: Telemetry capture errors record diagnostic markers in ephemeral state and fall back safely to static routing without blocking user tasks.
 - **World Sealing & Exact Replay**: Sealed execution worlds are verified against workspace hashes and Evidence Ledger provenance. Exact replay executes strictly offline with zero model calls and returns `UNKNOWN_BRANCH` for unobserved paths.
 - **No Context Contamination**: Historical discovery trajectories never enter online prompt context.

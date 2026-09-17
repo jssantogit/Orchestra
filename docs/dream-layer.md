@@ -31,14 +31,18 @@ The Dream Layer is isolated within the Antigravity runtime, maintaining strict c
 ```text
 runtimes/antigravity/
 ├── .agents/
-│   ├── dream/                      # Committed Foundation Code
+│   ├── dream/                      # Committed Foundation & Milestone D Code
 │   │   ├── canonical.mjs           # Deterministic JSON canonicalization & SHA-256
 │   │   ├── records.mjs             # Canonical record builders & schema validators
-│   │   ├── schemas/                # JSON Schema draft-07/2020-12 specifications
-│   │   │   ├── snapshot-v1.json
-│   │   │   ├── decision-v1.json
-│   │   │   ├── outcome-v1.json
-│   │   │   └── world-v1.json
+│   │   ├── schemas/                # JSON Schema draft-2020-12 specifications
+│   │   │   ├── snapshot-v1.schema.json
+│   │   │   ├── decision-v1.schema.json
+│   │   │   ├── outcome-v1.schema.json
+│   │   │   ├── world-v1.schema.json
+│   │   │   └── policy-v1.schema.json
+│   │   ├── policies/               # Declarative policies
+│   │   │   └── static-policy-v1.json # Declarative static baseline policy
+│   │   ├── policy-engine.mjs       # Pure deterministic policy validator & interpreter
 │   │   ├── snapshot.mjs            # Deterministic snapshot & workspace manifest builder
 │   │   ├── action-space.mjs        # Legal action spaces & compact decision state
 │   │   ├── decision-recorder.mjs   # Fail-open decision telemetry & pending correlations
@@ -190,3 +194,26 @@ If any Dream telemetry or recording operation encounters an error (disk full, co
 2. **Fails open**: allows online execution to proceed uninterrupted;
 3. Falls back immediately to standard static routing without attempting online learning;
 4. Emits a clean non-zero diagnostic for offline telemetry analysis while preserving user task safety.
+
+---
+
+## 9. Milestone D: Declarative Static Policy Engine
+
+Milestone D introduces deterministic declarative policy execution for the three mutable decision classes authorized by Orchestra governance:
+- `WORKER_TIER` (`FLASH_LOW`, `FLASH_MEDIUM`, `FLASH_HIGH`)
+- `INVESTIGATION_STRATEGY` (`IMPLEMENT_DIRECT`, `INVESTIGATE_FIRST`)
+- `RETRY_ACTION` (`RETRY_SAME`, `ESCALATE_WORKER`, `INVESTIGATE_FIRST`, `REPLAN`)
+
+### Architecture & Authority Flow
+
+```text
+governance -> decision state -> available_actions -> declarative policy -> legality validation -> action
+```
+
+1. **Governance Derives Action Space First**: Policy NEVER creates available actions. `deriveAvailableActions` computes the legal action set prior to policy evaluation.
+2. **Pure Policy Engine**: [`policy-engine.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/policy-engine.mjs) evaluates policy rules with zero filesystem access, zero network, zero clock access, zero LLM calls, and zero history.
+3. **Deterministic Schema & Content Addressing**: Policies follow `orchestra.exploration-policy.v1` (`schemas/policy-v1.schema.json`). Policy IDs are content-addressed: `policy-<sha256(canonical(policy_without_id))>`.
+4. **Phase B Exhaustive Parity Shadow**: `static-policy-v1.json` provides 100% explicit coverage and 100% action parity with the baseline routing policy across all 688 eligible state combinations.
+5. **Phase C Interpreter Overlay**: The interpreter overlay is authoritative only for eligible decisions. Any mismatch, conflict, or policy validation failure deterministically falls back to `STATIC_ROUTING_FALLBACK` while preserving fail-closed governance invariants.
+6. **Telemetry Attribution**: Pre-action `DECISION` events attribute `STATIC_POLICY_V1` when decided by declarative static policy, or `STATIC_ROUTING_FALLBACK` when falling back to static router.
+7. **Exact Replay Model-Free Callbacks**: Exact Replay uses `evaluatePolicy` directly as a zero-model-call callback function.

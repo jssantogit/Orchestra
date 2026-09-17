@@ -70,7 +70,7 @@ runtimes/antigravity/
 - Modify: `runtimes/antigravity/.agents/dream/records.mjs`
 - Create/Test: `runtimes/antigravity/.agents/dream/dream.test.mjs`
 
-- [ ] **Step 1: Create `policy-v1.schema.json`**
+- [x] **Step 1: Create `policy-v1.schema.json`**
 Define `orchestra.exploration-policy.v1` schema with constraints:
 `schema` const `"orchestra.exploration-policy.v1"`, `policy_id` pattern `^policy-[a-f0-9]{64}$`, optional `base_policy` string, `rules` array (maxItems 128) of rule objects:
 - `id`: string, identifier
@@ -83,7 +83,7 @@ Define `orchestra.exploration-policy.v1` schema with constraints:
   - `evidence`: object with `tests`, `typecheck`, `build`, `scope_check`, `validation_fresh`
 - `choose`: string (must be non-empty action name)
 
-- [ ] **Step 2: Add policy validation in `records.mjs` / `policy-engine.mjs`**
+- [x] **Step 2: Add policy validation in `records.mjs` / `policy-engine.mjs`**
 Update `DREAM_SCHEMAS.POLICY = "orchestra.exploration-policy.v1"`.
 Implement deterministic structural validator `validatePolicy(policy)`:
 - checks schema constant
@@ -94,7 +94,7 @@ Implement deterministic structural validator `validatePolicy(policy)`:
 - verifies numeric ranges are inclusive with `min <= max`
 - verifies rule IDs are unique
 
-- [ ] **Step 3: Unit tests for policy validation**
+- [x] **Step 3: Unit tests for policy validation**
 Prove valid policy passes, invalid policies fail:
 - rule count > 128 rejected
 - serialized size > 64 KiB rejected
@@ -110,7 +110,7 @@ Prove valid policy passes, invalid policies fail:
 - Create: `runtimes/antigravity/.agents/dream/policies/static-policy-v1.json`
 - Test: `runtimes/antigravity/.agents/dream/dream.test.mjs`
 
-- [ ] **Step 1: Construct `static-policy-v1.json` rules**
+- [x] **Step 1: Construct `static-policy-v1.json` rules**
 Create explicit declarative rules for:
 1. `WORKER_TIER`:
    - High complexity / experimental / integration / post-investigation => `FLASH_HIGH`
@@ -128,7 +128,7 @@ Create explicit declarative rules for:
 
 Compute canonical content-addressed `policy_id`: `policy-<sha256(canonical(policyWithoutId))>`.
 
-- [ ] **Step 2: Add validation test for `static-policy-v1.json`**
+- [x] **Step 2: Add validation test for `static-policy-v1.json`**
 Verify `static-policy-v1.json` is structurally valid, strictly matches schema, and content-addressed hash matches.
 
 ---
@@ -139,7 +139,7 @@ Verify `static-policy-v1.json` is structurally valid, strictly matches schema, a
 - Create: `runtimes/antigravity/.agents/dream/policy-engine.mjs`
 - Test: `runtimes/antigravity/.agents/dream/dream.test.mjs`
 
-- [ ] **Step 1: Implement `evaluatePolicy`**
+- [x] **Step 1: Implement `evaluatePolicy`**
 Signature:
 ```js
 evaluatePolicy({
@@ -180,7 +180,7 @@ Evaluation logic:
 }
 ```
 
-- [ ] **Step 2: Unit tests for `evaluatePolicy`**
+- [x] **Step 2: Unit tests for `evaluatePolicy`**
 - Matching all fields (AND)
 - Enum arrays (OR)
 - Numeric ranges (min/max inclusive)
@@ -198,7 +198,7 @@ Evaluation logic:
 - Modify: `runtimes/antigravity/.agents/dream/dream.test.mjs`
 - Modify: `runtimes/antigravity/tests/routing-policy.test.mjs`
 
-- [ ] **Step 1: Construct Exhaustive Parity Shadow Matrix**
+- [x] **Step 1: Construct Exhaustive Parity Shadow Matrix**
 Test matrix generating all eligible combinations of:
 - `task_action` in `["IMPLEMENT", "TEST", "MECHANICAL_FIX"]`
 - `task_domain` in `["CODE", "DOCS", "UI", "DATA", "INFRA", "TESTING", "RESEARCH", "ORCHESTRA", "GENERAL"]`
@@ -210,7 +210,7 @@ Test matrix generating all eligible combinations of:
 - `attempt` in `[1, 2]`
 - `retry_remaining` in `[0, 1, 2]`
 
-- [ ] **Step 2: Verify 100% Shadow Parity**
+- [x] **Step 2: Verify 100% Shadow Parity**
 Run both `classifyBaselineDecision` / `decideRoute` and `evaluatePolicy` with `static-policy-v1.json`.
 Assert:
 - `explicit_policy_coverage = 100%`
@@ -227,7 +227,7 @@ Assert:
 - Test: `runtimes/antigravity/tests/hooks.test.mjs`
 - Test: `runtimes/antigravity/.agents/dream/dream.test.mjs`
 
-- [ ] **Step 1: Integrate Interpreter Overlay in `pre-tool-enforce.mjs`**
+- [x] **Step 1: Integrate Interpreter Overlay in `pre-tool-enforce.mjs`**
 In `pre-tool-enforce.mjs`:
 - For eligible decisions (`WORKER_TIER`, `INVESTIGATION_STRATEGY`, `RETRY_ACTION`):
   1. Governance derives legal `available_actions`.
@@ -243,10 +243,10 @@ In `pre-tool-enforce.mjs`:
 - Write `DECISION` record with correct policy source.
 - Fallback guarantees zero interruption to healthy tasks.
 
-- [ ] **Step 2: Integrate Replay Simulator with Policy Engine**
+- [x] **Step 2: Integrate Replay Simulator with Policy Engine**
 Verify `replayExact` works seamlessly with `evaluatePolicy` callback with zero model calls.
 
-- [ ] **Step 3: Verification of Fallback and Safety Invariants**
+- [x] **Step 3: Verification of Fallback and Safety Invariants**
 Add tests:
 - Corrupted policy file -> fallback to static router, task succeeds.
 - Conflict policy -> fallback to static router.
@@ -263,7 +263,7 @@ Add tests:
 - Modify: `runtimes/antigravity/README.md`
 - Create: Closure summary artifact in brain directory
 
-- [ ] **Step 1: Run Full Test and Regression Battery**
+- [x] **Step 1: Run Full Test and Regression Battery**
 Run:
 - `npm run test:dream`
 - `npm run test:antigravity`
@@ -275,14 +275,14 @@ Run:
 - `npm run doctor`
 - `git diff --check`
 
-- [ ] **Step 2: Update Documentation**
+- [x] **Step 2: Update Documentation**
 Update `docs/dream-layer.md` and `runtimes/antigravity/README.md` reflecting Milestone D:
 - Declarative static policy engine
 - Policy schema `orchestra.exploration-policy.v1`
 - `static-policy-v1.json`
 - Parity shadow & interpreter overlay architecture
 
-- [ ] **Step 3: Self-Host Health Check & Final Commit**
+- [x] **Step 3: Self-Host Health Check & Final Commit**
 Verify self-host status and git status.
 Commit per accepted unit.
 
