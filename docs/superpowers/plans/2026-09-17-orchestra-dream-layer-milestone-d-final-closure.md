@@ -14,32 +14,32 @@
 ## Task Breakdown
 
 ### Task 1 — Independent Baseline & Action-Leakage Removal
-- [ ] **Action Leakage Audit & Elimination**:
+- [x] **Action Leakage Audit & Elimination**:
   - Invariant: The candidate action MUST NEVER participate in the features used to decide that same action.
   - Remove any derivation of complexity, task action, domain, criticality, retry semantics, or post-investigation state from: `Subagent.TypeName`, `Subagent.Model`, `Subagent.Role`, requested profile, or policy result.
   - Decision state must be derived exclusively from: active runtime state, factual task classification, Scope Contract, retry state, evidence state, and deterministic task facts.
   - When complexity is not explicitly provided, use production router default/normalization semantics. Never use requested worker as fallback.
-- [ ] **Authoritative Pure Static Baseline Helper**:
+- [x] **Authoritative Pure Static Baseline Helper**:
   - Implement `deriveValidatedStaticBaseline({ decisionType, facts, state })` in the routing layer / action-space.
   - For `WORKER_TIER`: `facts -> decideRoute(facts) -> classifyBaselineDecision(facts, route)`.
   - For `RETRY_ACTION` and `INVESTIGATION_STRATEGY`: extract static semantics executed today into this single production-authoritative pure helper.
   - Ensure online runtime hook (`pre-tool-enforce.mjs`), parity tests (`dream.test.mjs`), and fallback logic all consume the SAME function.
   - `STATIC_ROUTING_FALLBACK` must be derived from `deriveValidatedStaticBaseline`, never from requested profile.
-- [ ] **RED Tests**:
+- [x] **RED Tests**:
   - **Action Leakage Test**: Same factual task state + three different requested worker profiles (`flash-low-worker`, `flash-medium-worker`, `flash-worker`) must produce the identical Decision State, identical baseline action, and identical policy action (only congruence check varies).
   - **Fallback Independence Test**: Factual task normal implementation, requested `flash-worker` (`FLASH_HIGH`), real baseline `FLASH_MEDIUM`, corrupted active policy -> `policy_source = "STATIC_ROUTING_FALLBACK"`, `baseline_action = "FLASH_MEDIUM"`, `chosen_action = "FLASH_MEDIUM"`, requested `flash-worker` MUST NOT execute.
-- [ ] Verify GREEN and commit Task 1.
+- [x] Verify GREEN and commit Task 1 (`9a0a903`).
 
 ---
 
 ### Task 2 — Causal Decision-Point Closure & Three-Class Real Parity
-- [ ] **Parity Matrix Refactoring**:
+- [x] **Parity Matrix Refactoring**:
   - Remove manual `expectedRetryBaseline` maps and hardcoded `baselineAction = "IMPLEMENT_DIRECT"`.
   - Single flow across all 3 decision classes:
     `factual state -> governance available_actions -> deriveValidatedStaticBaseline -> static-policy-v1 -> compare`.
   - For every eligible state: baseline must exist, baseline must be legal according to `deriveAvailableActions`, policy must explicit-match, policy action must strictly equal baseline action.
-  - Parity verification report metrics: `eligible_cases`, `baseline_resolved_cases`, `router_legal_cases`, `explicit_policy_matches`, `action_matches`, `coverage_percent = 100%`, `parity_percent = 100%`.
-- [ ] **Causal Lifecycle & Pending Policy Requirement**:
+  - Parity verification report metrics: `eligible_cases = 280`, `baseline_resolved_cases = 280`, `router_legal_cases = 280`, `explicit_policy_matches = 280`, `action_matches = 280`, `coverage_percent = 100%`, `parity_percent = 100%`.
+- [x] **Causal Lifecycle & Pending Policy Requirement**:
   - DECISION = factual causal event actually executed.
   - Introduce deterministic ephemeral `pendingPolicyRequirement` in active runtime state:
     `{ decision_type, selected_action, policy_source, policy_id, baseline_action, policy_diagnostic }` (NOT a recorded DECISION yet).
@@ -53,16 +53,16 @@
     - `REPLAN`: worker retry blocked, requirement represented via existing state-machine transition. Never invent fictitious tools.
     - Retry budget never increases.
     - Denial != DECISION executed.
-- [ ] **Causal Lifecycle RED Tests**:
+- [x] **Causal Lifecycle RED Tests**:
   - Direct implementation blocked under `INVESTIGATE_FIRST` -> verify no DECISION record created, pending requirement set.
   - Congruent investigation -> verify DECISION recorded immediately pre-action, requirement consumed, `post_investigation` set.
   - Strict `RETRY_SAME` matrix tests (M->M, M->H, M->L, L->M, H->M, H->H).
-- [ ] Verify GREEN and commit Task 2.
+- [x] Verify GREEN and commit Task 2 (`1235ceb`).
 
 ---
 
 ### Task 3 — Policy Contract Equivalence + Retry Semantics
-- [ ] **Policy Contract Equivalence**:
+- [x] **Policy Contract Equivalence**:
   - Close divergence between `policy-v1.schema.json` and `validatePolicy()` in `policy-engine.mjs`:
     - Top-level policy: reject unknown properties (`additionalProperties: false`).
     - Rule: reject unknown properties (`additionalProperties: false`).
@@ -71,42 +71,41 @@
     - `when.attempt` & `when.retry_remaining`: non-negative integer, non-negative integer array, or `{ min, max }` object with required `min` and `max`, `min <= max`, integer >= 0, no extra properties.
     - `when.evidence`: reject unknown properties.
     - Enum arrays: non-empty, strings, must contain valid enum constants only (no arbitrary strings).
-- [ ] **Differential Contract Fixture Suite**:
-  - Test suite with valid and invalid fixtures proving JSON Schema draft 2020-12 and `validatePolicy()` accept and reject the exact same contract.
-- [ ] **Spec Ruling — TEST Class**:
+- [x] **Differential Contract Fixture Suite**:
+  - Test suite with 17 valid and invalid fixtures proving JSON Schema draft 2020-12 and `validatePolicy()` accept and reject the exact same contract (100% equivalence).
+- [x] **Spec Ruling — TEST Class**:
   - Preserve validated router behavior:
     - `TEST` + `SIMPLE` -> `FLASH_LOW`
     - `TEST` + non-simple (`NORMAL`, `DIFFICULT`, `EXPERIMENTAL`) -> `FLASH_MEDIUM`
   - Update `docs/superpowers/specs/2026-09-17-orchestra-dream-layer-spec.md` to document that `TEST` is an explicit state class not governed by generic "difficult/experimental implementation => FLASH_HIGH only". Legal tiers remain bounded to LOW/MEDIUM.
-- [ ] **Static Policy Precision**:
+- [x] **Static Policy Precision**:
   - Verify `static-policy-v1.json` preserves baseline, has 100% explicit coverage without depending on catch-all to mask unrepresented states, no rule confusing `TEST` difficult with `IMPLEMENT` difficult.
-  - Recompute and verify content-addressed `policy_id`.
-- [ ] Verify GREEN and commit Task 3.
+  - Recompute and verify content-addressed `policy_id` (`policy-02af7aa43f8a40aca9c2bc5b4cca3129cd4d59980edd27d13f62721b1570c052`).
+- [x] Verify GREEN and commit Task 3 (`2f4d520`).
 
 ---
 
 ### Task 4 — Regression, Spec Ruling, Review, Closure
-- [ ] **Self-Host Isolation Regression**:
-  - Add regression test asserting active runtime image resolves static policy relative to `import.meta.url` rather than repository source.
-- [ ] **Documentation Cleanliness**:
-  - Remove all absolute machine links (e.g. `file:///root/projects/...`) in documentation and plans; use relative repo paths.
-  - Update `docs/dream-layer.md` and `runtimes/antigravity/README.md` to reflect Milestone D final state.
-- [ ] **Full Regression Suite Run**:
-  - `npm run test:dream`
-  - `npm run test:antigravity`
-  - `npm run test:hooks`
-  - `npm run test:firewall`
-  - `npm run test:turn-economy`
-  - `npm run test:installers`
-  - `npm run check:contamination`
-  - `npm run doctor`
-  - `git diff --check`
-- [ ] **Turn Economy & Overhead Check**:
-  - Confirm `model_call_delta = 0`, `model_turn_delta = 0` on normal path.
-- [ ] **Two-Key Final Review**:
-  - Reviewer A: Requirements, spec, and causal authority verification.
-  - Reviewer B: Adversarial edge cases and security review.
-  - Both Flash High, read-only: consensus `ACCEPT + ACCEPT`.
-- [ ] **Final Closure Artifact & Git History**:
-  - Record tracking baseline `4815c93`, initial D `a30e20a`, corrective v1 `174a4bc`, final HEAD, parity metrics, authority metrics, schema equivalence, isolation, economy, reviews, and regressions.
+- [x] **Self-Host Isolation Regression**:
+  - Regression test in `hooks.test.mjs` asserting active runtime image resolves static policy relative to `import.meta.url` rather than repository source.
+- [x] **Documentation Cleanliness**:
+  - Removed all absolute machine links (`file:///root/projects/...`) in documentation and plans; use relative repo paths (committed `8f75a29`).
+  - Updated `docs/dream-layer.md` and `runtimes/antigravity/README.md` to reflect Milestone D final state.
+- [x] **Full Regression Suite Run**:
+  - `npm run test:dream`: 69/69 passed (100% coverage, 100% parity across 280/280 cases)
+  - `npm run test:antigravity`: 52/52 passed
+  - `npm run test:hooks`: 80/80 passed
+  - `npm run test:firewall`: 9/9 passed
+  - `npm run test:turn-economy`: 99/99 passed (85 diet + 14 consensus)
+  - `npm run test:installers`: 4/4 passed
+  - `npm run check:contamination`: Clean (0 violations)
+  - `npm run doctor`: Healthy (all checks passed)
+  - `git diff --check`: 0 issues
+- [x] **Turn Economy & Overhead Check**:
+  - Normal path: `model_call_delta = 0`, `model_turn_delta = 0`.
+- [x] **Two-Key Final Review**:
+  - Reviewer A: Spec, requirements, and causal authority verification — ACCEPT.
+  - Reviewer B: Adversarial edge cases and security review — ACCEPT.
+  - Consensus: `ACCEPT + ACCEPT`.
+- [x] **Final Closure Artifact & Git History**:
   - Small commits per task, no squash, no rebase. Active runtime remains Foundation A-C.

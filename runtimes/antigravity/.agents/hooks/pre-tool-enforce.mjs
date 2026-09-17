@@ -963,7 +963,8 @@ function main() {
         });
 
         const rawProfile = sub.TypeName || sub.agent || sub.subagent_profile || sub.profile || "";
-        const isDreamWorker = Boolean(
+        const subRoleNormalized = String(sub.Role || sub.role || "").toLowerCase();
+        const isDreamWorker = (subRoleNormalized === "worker" || activeState.complexity !== undefined) && Boolean(
           PROFILE_TO_WORKER_ACTION[String(rawProfile).toLowerCase()] ||
           PROFILE_TO_WORKER_ACTION[String(sub.TypeName || "").toLowerCase()]
         );
