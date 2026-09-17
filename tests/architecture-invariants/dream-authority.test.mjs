@@ -52,6 +52,52 @@ function cleanTestState() {
   try { rmSync(resolve(repoRoot, ".agents/telemetry"), { recursive: true, force: true }); } catch {}
 }
 
+function validateJsonSchemaSubset(schema, data) {
+  if (!schema || typeof schema !== "object") return true;
+  if (schema.type) {
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    const matches = types.some((t) => {
+      if (t === "object") return typeof data === "object" && data !== null && !Array.isArray(data);
+      if (t === "array") return Array.isArray(data);
+      if (t === "string") return typeof data === "string";
+      if (t === "integer") return Number.isInteger(data);
+      if (t === "boolean") return typeof data === "boolean";
+      if (t === "null") return data === null;
+      return false;
+    });
+    if (!matches) return false;
+  }
+  if (schema.const !== undefined && data !== schema.const) return false;
+  if (schema.enum && !schema.enum.includes(data)) return false;
+  if (schema.pattern && typeof data === "string" && !new RegExp(schema.pattern).test(data)) return false;
+  if (schema.minLength !== undefined && typeof data === "string" && data.length < schema.minLength) return false;
+  if (schema.minimum !== undefined && typeof data === "number" && data < schema.minimum) return false;
+  if (Array.isArray(data)) {
+    if (schema.minItems !== undefined && data.length < schema.minItems) return false;
+    if (schema.maxItems !== undefined && data.length > schema.maxItems) return false;
+    if (schema.items && data.some((item) => !validateJsonSchemaSubset(schema.items, item))) return false;
+  }
+  if (typeof data === "object" && data !== null && !Array.isArray(data)) {
+    if (schema.required && schema.required.some((key) => !(key in data))) return false;
+    if (schema.properties) {
+      for (const [key, value] of Object.entries(data)) {
+        if (schema.properties[key] && !validateJsonSchemaSubset(schema.properties[key], value)) return false;
+      }
+    }
+    if (schema.additionalProperties === false && schema.properties) {
+      if (Object.keys(data).some((key) => !schema.properties[key])) return false;
+    }
+  }
+  if (schema.oneOf) {
+    if (schema.oneOf.filter((sub) => validateJsonSchemaSubset(sub, data)).length !== 1) return false;
+  }
+  if (schema.allOf && schema.allOf.some((sub) => !validateJsonSchemaSubset(sub, data))) return false;
+  if (schema.if && validateJsonSchemaSubset(schema.if, data) && schema.then) {
+    if (!validateJsonSchemaSubset(schema.then, data)) return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // ARCH-001: Immutable Governance Over Dream
 // Dream cannot modify or bypass state-machine transitions or governance rules.
@@ -848,15 +894,15 @@ test("ARCH-016: Active Self-Host Image Isolation (Valid & Adversarial)", () => {
   const fixtureProjectionDir = resolve(repoRoot, "scratch/active-self-host-projection-fixture");
   try {
     mkdirSync(resolve(fixtureProjectionDir, "runtimes/antigravity/.agents/dream/policies"), { recursive: true });
-    // Candidate source modification B: write corrupted policy in candidate projection
     writeFileSync(
       resolve(fixtureProjectionDir, "runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"),
       JSON.stringify({ schema: "corrupted-candidate-policy-modification-B", rules: [] }),
       "utf-8"
     );
 
-    mkdirSync(".agents/state", { recursive: true });
-    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+    const fixtureStateDir = resolve(fixtureProjectionDir, ".agents/state");
+    mkdirSync(fixtureStateDir, { recursive: true });
+    writeFileSync(resolve(fixtureStateDir, "active-state.json"), JSON.stringify({
       activeRole: "ORCHESTRATOR",
       taskAction: "IMPLEMENT",
       taskDomain: "CODE",
@@ -864,10 +910,10 @@ test("ARCH-016: Active Self-Host Image Isolation (Valid & Adversarial)", () => {
       criticality: "NORMAL",
     }, null, 2), "utf-8");
 
-    // Pre-tool hook runs with candidate repo projection as repoRoot
+    // getWorkspacePaths() actually consumes workspacePaths/workspaceUris, not payload.repoRoot.
     const input = JSON.stringify({
       conversationId: "arch-016-conv",
-      repoRoot: fixtureProjectionDir,
+      workspacePaths: [fixtureProjectionDir],
       stepIdx: 1,
       toolCall: {
         id: "call_arch_016",
@@ -877,7 +923,7 @@ test("ARCH-016: Active Self-Host Image Isolation (Valid & Adversarial)", () => {
             {
               TypeName: "flash-medium-worker",
               Role: "worker",
-              Prompt: "Implement feature with candidate repoRoot. allowedPaths: [src/**]",
+              Prompt: "Implement feature in candidate projection. allowedPaths: [src/**]",
             }
           ]
         }
@@ -886,17 +932,15 @@ test("ARCH-016: Active Self-Host Image Isolation (Valid & Adversarial)", () => {
 
     const rawOutput = execFileSync("node", [preToolScript], { input, encoding: "utf-8" });
     const output = JSON.parse(rawOutput.trim());
-
-    // Active session loads active policy image, candidate modification B cannot hot-reload active policy
     assert.equal(output.decision, "allow");
 
-    const eventsPath = ".agents/telemetry/events.jsonl";
-    assert.ok(existsSync(eventsPath));
+    const eventsPath = resolve(fixtureProjectionDir, ".agents/telemetry/events.jsonl");
+    assert.ok(existsSync(eventsPath), "Hook must have resolved the fixture projection as workspace");
     const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
     const dec = events.find(e => e.type === "DECISION");
-    assert.ok(dec, "DECISION event recorded from immutable active runtime policy");
-    assert.equal(dec.policy_source, "STATIC_POLICY_V1");
-    assert.notEqual(dec.policy_source, "STATIC_ROUTING_FALLBACK", "Must NOT fall back to corrupted candidate source");
+    assert.ok(dec, "DECISION event recorded in candidate workspace");
+    assert.equal(dec.policy_source, "STATIC_POLICY_V1", "Active runtime image A remains authoritative");
+    assert.notEqual(dec.policy_source, "STATIC_ROUTING_FALLBACK", "Corrupted candidate source B must not hot-reload active image A");
   } finally {
     try { rmSync(fixtureProjectionDir, { recursive: true, force: true }); } catch {}
     cleanTestState();
@@ -908,6 +952,11 @@ test("ARCH-016: Active Self-Host Image Isolation (Valid & Adversarial)", () => {
 // Structural representable vs Semantic-only constraints (schema vs validatePolicy).
 // ---------------------------------------------------------------------------
 test("ARCH-017: Policy Contract Truthfulness (Valid & Adversarial)", () => {
+  const schema = JSON.parse(readFileSync(
+    resolve(repoRoot, "runtimes/antigravity/.agents/dream/schemas/policy-v1.schema.json"),
+    "utf-8"
+  ));
+
   // 1. Structurally valid (correct JSON shape, types, and schema string) but semantically invalid:
   // Action "REPLAN" is not valid for decision_type "WORKER_TIER"
   const semanticInvalidPolicy = {
@@ -929,6 +978,7 @@ test("ARCH-017: Policy Contract Truthfulness (Valid & Adversarial)", () => {
   };
   semanticInvalidPolicy.policy_id = computePolicyId(semanticInvalidPolicy);
 
+  assert.equal(validateJsonSchemaSubset(schema, semanticInvalidPolicy), false, "Schema must reject REPLAN for WORKER_TIER");
   const semanticRes = validatePolicy(semanticInvalidPolicy);
   assert.equal(semanticRes.valid, false, "Semantic validator must reject choose: 'REPLAN' for WORKER_TIER");
   assert.match(semanticRes.errors.join("; "), /invalid action.*WORKER_TIER/i);
@@ -950,6 +1000,7 @@ test("ARCH-017: Policy Contract Truthfulness (Valid & Adversarial)", () => {
       }
     ]
   };
+  assert.equal(validateJsonSchemaSubset(schema, forgedPolicy), true, "Forged content address remains structurally valid");
   const forgedRes = validatePolicy(forgedPolicy);
   assert.equal(forgedRes.valid, false, "Semantic validator must enforce policy_id content address truthfulness");
   assert.match(forgedRes.errors.join("; "), /policy_id mismatch/i);
@@ -974,6 +1025,7 @@ test("ARCH-017: Policy Contract Truthfulness (Valid & Adversarial)", () => {
     policy_id: computePolicyId(validPolicyRaw),
     ...validPolicyRaw,
   };
+  assert.equal(validateJsonSchemaSubset(schema, validPolicy), true, "Truthful policy passes structural schema validation");
   const validRes = validatePolicy(validPolicy);
   assert.equal(validRes.valid, true, "Truthful policy passes structural and semantic validation");
 });
@@ -1027,19 +1079,24 @@ test("ARCH-018: Exact Replay Remains Model-Free (Valid & Adversarial)", () => {
     return "FLASH_MEDIUM";
   };
 
-  // 1. Valid: Replay executes entirely via local synchronous callback without model/provider interaction
-  const startTime = Date.now();
+  // 1. Valid: Replay executes entirely via local deterministic callback.
   const replayResult = replayExact({
     world: sealRes.world,
     chooseAction: deterministicCallback,
   });
-  const elapsed = Date.now() - startTime;
 
   assert.equal(replayResult.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
   assert.equal(callbackInvocations, 1, "Local deterministic callback invoked exactly once per decision step");
   assert.equal(replayResult.trajectories[0].steps.length, 1);
   assert.equal(replayResult.trajectories[0].steps[0].result, "TESTS_PASSED");
-  assert.ok(elapsed < 100, "Model-free replay must be instantaneous local synchronous evaluation");
+
+  // Prove the implementation boundary directly instead of using timing as a proxy.
+  const replaySource = readFileSync(
+    resolve(repoRoot, "runtimes/antigravity/.agents/dream/replay-simulator.mjs"),
+    "utf-8"
+  );
+  assert.doesNotMatch(replaySource, /@google\/genai|@google\/generative-ai|openai|anthropic/i);
+  assert.doesNotMatch(replaySource, /invoke_subagent|child_process|node:net|node:http|node:https|\bfetch\b/);
 
   // 2. Adversarial: Epistemic stop at UNKNOWN_BRANCH when local callback selects unobserved action
   // System halts without calling model or hallucinating branch outcomes
@@ -1158,7 +1215,16 @@ test("ARCH-019: Factual Investigator Completion Boundary (Valid & Adversarial)",
     assert.ok(state.investigationInFlight, "Parent yield must not complete child investigation");
     assert.equal(state.post_investigation, false);
 
-    // C. Wrong child terminal Stop cannot close the current investigation.
+    // C. Child Stop without explicit fullyIdle=true is not factual terminal completion.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.investigationInFlight, "Missing fullyIdle=true must fail closed");
+    assert.equal(state.post_investigation, false);
+
+    // D. Wrong child terminal Stop cannot close the current investigation.
     execFileSync("node", [stopToolScript], {
       input: JSON.stringify({ conversationId: wrongChild, fullyIdle: true, terminationReason: "end_turn" }),
       encoding: "utf-8",
@@ -1168,7 +1234,7 @@ test("ARCH-019: Factual Investigator Completion Boundary (Valid & Adversarial)",
     assert.equal(state.post_investigation, false);
     assert.equal(existsSync(".agents/state/dream/pending-decisions/" + corr + ".json"), true);
 
-    // D. Exact terminal child Stop is the factual completion boundary.
+    // E. Exact terminal child Stop is the factual completion boundary.
     execFileSync("node", [stopToolScript], {
       input: JSON.stringify({ conversationId: child, fullyIdle: true, terminationReason: "end_turn" }),
       encoding: "utf-8",
@@ -1183,13 +1249,117 @@ test("ARCH-019: Factual Investigator Completion Boundary (Valid & Adversarial)",
     const events1 = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
     assert.equal(events1.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === "dec-019").length, 1, "Exactly one investigation outcome must be recorded");
 
-    // E. Replayed duplicate terminal Stop is idempotent.
+    // F. Replayed duplicate terminal Stop is idempotent.
     execFileSync("node", [stopToolScript], {
       input: JSON.stringify({ conversationId: child, fullyIdle: true, terminationReason: "end_turn" }),
       encoding: "utf-8",
     });
     const events2 = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
     assert.equal(events2.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === "dec-019").length, 1, "Duplicate Stop must not duplicate outcome");
+  } finally {
+    cleanTestState();
+  }
+});
+
+
+// ---------------------------------------------------------------------------
+// ARCH-020: Delegated Worker ACK Is Not Decision Outcome
+// WORKER_TIER/RETRY_ACTION outcomes close only at factual terminal child Stop.
+// ---------------------------------------------------------------------------
+test("ARCH-020: Delegated Worker ACK Is Not Decision Outcome", () => {
+  cleanTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+
+    const parent = "arch-020-parent";
+    const child = "arch-020-child";
+    const toolCall = {
+      id: "call-020",
+      name: "invoke_subagent",
+      args: {
+        Subagents: [{
+          TypeName: "flash-medium-worker",
+          Role: "worker",
+          Prompt: "Implement bounded change. allowedPaths: [src/**]",
+        }],
+      },
+    };
+
+    const pre = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({ conversationId: parent, stepIdx: 7, toolCall }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(pre.decision, "allow");
+
+    const roleBindingsPath = ".agents/state/role-bindings.json";
+    const bindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    const pending = bindings.pendingSubagents.find(p => !p.consumed);
+    assert.ok(pending?.decisionCorrelationKey, "Worker delegation must preserve Dream decision correlation");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: parent,
+        stepIdx: 7,
+        toolName: "invoke_subagent",
+        toolCall,
+        toolResult: "SUCCESS",
+      }),
+      encoding: "utf-8",
+    });
+
+    let events = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(events.filter(e => e.type === "DECISION_OUTCOME").length, 0, "Successful worker dispatch ACK cannot teach an outcome");
+
+    bindings.bindings = bindings.bindings || {};
+    bindings.conversations = bindings.conversations || {};
+    const childBinding = {
+      conversationId: child,
+      role: "WORKER",
+      profile: pending.profile,
+      model: pending.model,
+      parentConversationId: parent,
+      originToolCallId: pending.originToolCallId,
+      delegationKind: "WORK",
+      decisionCorrelationKey: pending.decisionCorrelationKey,
+      decisionType: pending.decisionType,
+      decisionBranchOrdinal: pending.decisionBranchOrdinal,
+      confidence: "HIGH",
+      source: "RUNTIME_IDENTITY",
+      consumed: true,
+    };
+    bindings.bindings[child] = childBinding;
+    bindings.conversations[child] = childBinding;
+    writeFileSync(roleBindingsPath, JSON.stringify(bindings, null, 2), "utf-8");
+
+    // Ambiguous/non-terminal Stop must not close the outcome.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    events = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(events.filter(e => e.type === "DECISION_OUTCOME").length, 0);
+
+    // Exact terminal child Stop closes exactly once.
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, fullyIdle: true, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, fullyIdle: true, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    events = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const outcomes = events.filter(e => e.type === "DECISION_OUTCOME");
+    assert.equal(outcomes.length, 1, "Duplicate child Stop must not duplicate Dream outcome");
+    assert.equal(outcomes[0].result.status, "COMPLETED");
+    assert.equal(outcomes[0].result.child_conversation_id, child);
   } finally {
     cleanTestState();
   }
