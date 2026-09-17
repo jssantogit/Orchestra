@@ -1397,6 +1397,10 @@ function main() {
             branchOrdinal: idx,
           });
 
+          candidatePending[idx].decisionCorrelationKey = corrKey;
+          candidatePending[idx].decisionType = decisionType;
+          candidatePending[idx].decisionBranchOrdinal = idx;
+
           const decRecordInput = {
             decision_type: decisionType,
             state: decisionState,
