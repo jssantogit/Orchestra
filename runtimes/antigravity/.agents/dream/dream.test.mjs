@@ -15,6 +15,14 @@ import {
   deriveDecisionState,
   classifyBaselineDecision,
 } from "./action-space.mjs";
+import {
+  dreamCorrelationKey,
+  recordDecision,
+} from "./decision-recorder.mjs";
+import {
+  getPendingDecision,
+  recordDecisionOutcome,
+} from "./outcome-recorder.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1070,4 +1078,350 @@ test("classifyBaselineDecision: maps worker delegations, retries, and returns nu
     ),
     null,
   );
+});
+
+test("dreamCorrelationKey builds deterministic safe filesystem key string", () => {
+  const key1 = dreamCorrelationKey({
+    conversationId: "conv/123:test",
+    stepIdx: 5,
+    toolCallId: "call_abc?def",
+    branchOrdinal: 1,
+  });
+  assert.equal(key1, "dec-conv%2F123%3Atest_5_call_abc%3Fdef_1");
+
+  // Defaults branchOrdinal to 0
+  const key2 = dreamCorrelationKey({
+    conversationId: "conv-123",
+    stepIdx: 0,
+    toolCallId: "call-1",
+  });
+  assert.equal(key2, "dec-conv-123_0_call-1_0");
+});
+
+test("recordDecision and recordDecisionOutcome: full lifecycle, ordering, correlation, and hashes", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-test-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const telemetryPath = join(tempDir, ".agents", "telemetry", "events.jsonl");
+  const pendingDir = join(tempDir, ".agents", "state", "dream", "pending-decisions");
+
+  const correlationKey = dreamCorrelationKey({
+    conversationId: "conv-lifecycle-1",
+    stepIdx: 1,
+    toolCallId: "call-step-1",
+    branchOrdinal: 0,
+  });
+
+  const mockSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+  const decisionInput = {
+    snapshot_id: mockSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { task_action: "IMPLEMENT", complexity: "NORMAL", criticality: "NORMAL" },
+    available_actions: ["FLASH_MEDIUM", "FLASH_HIGH"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    conversation_id: "conv-lifecycle-1",
+    step_idx: 1,
+    tool_call_id: "call-step-1",
+    branch_ordinal: 0,
+  };
+
+  // 1. Record decision
+  const decResult = recordDecision({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    decision: decisionInput,
+    correlationKey,
+  });
+
+  assert.equal(decResult.recorded, true);
+  assert.match(decResult.decision_id, /^dec-/);
+  assert.match(decResult.event_hash, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(decResult.correlationKey, correlationKey);
+
+  // 2. Pending decision file exists with factual metadata
+  const pendingCheck = getPendingDecision({ pendingDir, correlationKey });
+  assert.equal(pendingCheck.ok, true);
+  assert.equal(pendingCheck.pending.decision_id, decResult.decision_id);
+  assert.equal(pendingCheck.pending.snapshot_id, mockSnapshotId);
+  assert.equal(pendingCheck.pending.decision_type, "WORKER_TIER");
+  assert.equal(pendingCheck.pending.chosen_action, "FLASH_MEDIUM");
+  assert.equal(pendingCheck.pending.conversation_id, "conv-lifecycle-1");
+  assert.equal(pendingCheck.pending.step_idx, 1);
+  assert.equal(pendingCheck.pending.tool_call_id, "call-step-1");
+  assert.equal(pendingCheck.pending.branch_ordinal, 0);
+  assert.equal(pendingCheck.pending.event_hash, decResult.event_hash);
+
+  // 3. Record outcome
+  const outcomeInput = {
+    result: "SUCCESS",
+    resulting_snapshot_id: mockSnapshotId,
+    evidence_summary: { tests: "PASS", validation_fresh: true },
+    retry_state: { attempt: 1, retry_remaining: 1 },
+    cost_metrics: { model_calls: 1, latency_ms: 500 },
+    terminal_state: "ACCEPTED",
+  };
+
+  const outcomeResult = recordDecisionOutcome({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    outcome: outcomeInput,
+  });
+
+  assert.equal(outcomeResult.recorded, true);
+  assert.equal(outcomeResult.decision_id, decResult.decision_id);
+  assert.match(outcomeResult.observation_id, /^obs-/);
+  assert.match(outcomeResult.event_hash, /^sha256:[a-f0-9]{64}$/);
+
+  // 4. Verify telemetry events.jsonl ordering and hashes
+  const lines = readFileSync(telemetryPath, "utf8").trim().split("\n");
+  assert.equal(lines.length, 2);
+
+  const event0 = JSON.parse(lines[0]);
+  const event1 = JSON.parse(lines[1]);
+
+  assert.equal(event0.type, "DECISION");
+  assert.equal(event1.type, "DECISION_OUTCOME");
+  assert.equal(event1.decision_id, event0.decision_id);
+  assert.equal(event0.decision_id, decResult.decision_id);
+  assert.equal(event0.event_hash, decResult.event_hash);
+  assert.equal(event1.event_hash, outcomeResult.event_hash);
+
+  // Event hashes correctly verify against recomputation
+  const expectedHash0 = createDreamEvent("DECISION", event0).event_hash;
+  assert.equal(event0.event_hash, expectedHash0);
+
+  const expectedHash1 = createDreamEvent("DECISION_OUTCOME", event1).event_hash;
+  assert.equal(event1.event_hash, expectedHash1);
+});
+
+test("recordDecisionOutcome idempotency: second call returns OUTCOME_ALREADY_RECORDED and does not duplicate", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-idempotency-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const telemetryPath = join(tempDir, ".agents", "telemetry", "events.jsonl");
+  const pendingDir = join(tempDir, ".agents", "state", "dream", "pending-decisions");
+  const correlationKey = "dec-idempotency-key";
+
+  const decResult = recordDecision({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    decision: {
+      snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      decision_type: "INVESTIGATION_STRATEGY",
+      state: { task_action: "IMPLEMENT", complexity: "NORMAL", criticality: "NORMAL" },
+      available_actions: ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+      chosen_action: "IMPLEMENT_DIRECT",
+      policy_source: "STATIC_ROUTING_CURRENT",
+      actor_identity: "ORCHESTRATOR",
+    },
+  });
+  assert.equal(decResult.recorded, true);
+
+  const outcomeInput = {
+    result: "SUCCESS",
+    evidence_summary: { tests: "PASS" },
+    retry_state: { attempt: 1, retry_remaining: 0 },
+    cost_metrics: { model_calls: 1 },
+    terminal_state: "ACCEPTED",
+  };
+
+  // First outcome call: succeeds
+  const firstOutcome = recordDecisionOutcome({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    outcome: outcomeInput,
+  });
+  assert.equal(firstOutcome.recorded, true);
+
+  // Second outcome call with same correlationKey: must return OUTCOME_ALREADY_RECORDED
+  const secondOutcome = recordDecisionOutcome({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    outcome: outcomeInput,
+  });
+  assert.equal(secondOutcome.recorded, false);
+  assert.equal(secondOutcome.reason, "OUTCOME_ALREADY_RECORDED");
+
+  // Verify telemetry file STILL has exactly 2 lines (DECISION + 1 DECISION_OUTCOME)
+  const lines = readFileSync(telemetryPath, "utf8").trim().split("\n");
+  assert.equal(lines.length, 2);
+});
+
+test("recordDecisionOutcome returns PENDING_DECISION_NOT_FOUND when correlation missing", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-notfound-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const res = recordDecisionOutcome({
+    repoRoot: tempDir,
+    correlationKey: "dec-nonexistent-key",
+    outcome: {
+      result: "SUCCESS",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+    },
+  });
+  assert.equal(res.recorded, false);
+  assert.equal(res.reason, "PENDING_DECISION_NOT_FOUND");
+});
+
+test("recordDecision and recordDecisionOutcome fail-open semantics: no throw on I/O or validation failures", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-failopen-test-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // Create an unwritable telemetry target by making a directory where a file is expected
+  const badTelemetryPath = join(tempDir, "unwritable-dir");
+  mkdirSync(badTelemetryPath, { recursive: true });
+
+  const validDecision = {
+    snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+  };
+
+  // 1. Unwritable telemetry does not throw in recordDecision
+  const failDec = recordDecision({
+    repoRoot: tempDir,
+    telemetryPath: badTelemetryPath, // attempting to append to a directory will fail
+    decision: validDecision,
+    correlationKey: "dec-fail-key",
+  });
+  assert.equal(failDec.recorded, false);
+  assert.equal(failDec.reason, "DREAM_TELEMETRY_WRITE_FAILED");
+  assert.ok(failDec.error_code);
+
+  // 2. Validation failure in recordDecision does not throw
+  const invalidDec = recordDecision({
+    repoRoot: tempDir,
+    decision: { chosen_action: "INVALID" }, // missing required fields
+    correlationKey: "dec-invalid-key",
+  });
+  assert.equal(invalidDec.recorded, false);
+  assert.equal(invalidDec.reason, "VALIDATION_FAILED");
+  assert.ok(Array.isArray(invalidDec.details));
+
+  // 3. Normal recordDecision to set up pending decision for outcome tests
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const recOk = recordDecision({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    decision: validDecision,
+    correlationKey: "dec-ok-key",
+  });
+  assert.equal(recOk.recorded, true);
+
+  // 4. Unwritable telemetry does not throw in recordDecisionOutcome
+  const failOutcome = recordDecisionOutcome({
+    repoRoot: tempDir,
+    telemetryPath: badTelemetryPath, // directory
+    pendingDir,
+    correlationKey: "dec-ok-key",
+    outcome: {
+      result: "SUCCESS",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+    },
+  });
+  assert.equal(failOutcome.recorded, false);
+  assert.equal(failOutcome.reason, "DREAM_TELEMETRY_WRITE_FAILED");
+
+  // 5. Validation failure in recordDecisionOutcome does not throw
+  const invalidOutcome = recordDecisionOutcome({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey: "dec-ok-key",
+    outcome: {
+      terminal_state: "INVALID_STATE", // invalid enum
+    },
+  });
+  assert.equal(invalidOutcome.recorded, false);
+  assert.equal(invalidOutcome.reason, "VALIDATION_FAILED");
+
+  // 6. Decision ID mismatch in recordDecisionOutcome does not throw
+  const mismatchOutcome = recordDecisionOutcome({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey: "dec-ok-key",
+    outcome: {
+      decision_id: "dec-mismatched-id",
+      result: "SUCCESS",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+    },
+  });
+  assert.equal(mismatchOutcome.recorded, false);
+  assert.ok(["DECISION_ID_MISMATCH", "VALIDATION_FAILED"].includes(mismatchOutcome.reason));
+});
+
+test("recordDecisionOutcome validates factual fields without subjective quality fields or authority escalation", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-factual-test-"));
+  t.after(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+
+  recordDecision({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey: "dec-factual-key",
+    decision: {
+      snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      decision_type: "WORKER_TIER",
+      state: {},
+      available_actions: ["FLASH_MEDIUM"],
+      chosen_action: "FLASH_MEDIUM",
+      policy_source: "STATIC_ROUTING_CURRENT",
+      actor_identity: "ORCHESTRATOR",
+    },
+  });
+
+  // Rejects forbidden authority fields in outcome
+  const rejectedEscalation = recordDecisionOutcome({
+    repoRoot: tempDir,
+    telemetryPath,
+    pendingDir,
+    correlationKey: "dec-factual-key",
+    outcome: {
+      result: "SUCCESS",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+      override_governance: true, // Forbidden authority field
+    },
+  });
+  assert.equal(rejectedEscalation.recorded, false);
+  assert.equal(rejectedEscalation.reason, "VALIDATION_FAILED");
 });
