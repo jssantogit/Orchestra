@@ -56,6 +56,11 @@ export function deriveAvailableActions(decisionType, state = {}) {
     // If state.task_action === "DIRECT_ACTION" -> [] (outside Dream)
     if (taskAction === "DIRECT_ACTION") return [];
 
+    // If state.task_action === "TEST" -> ["FLASH_LOW", "FLASH_MEDIUM"]
+    if (taskAction === "TEST") {
+      return ["FLASH_LOW", "FLASH_MEDIUM"];
+    }
+
     // If state.complexity === "DIFFICULT" or "EXPERIMENTAL" or "INTEGRATION" or post_investigation === true -> ["FLASH_HIGH"]
     if (
       complexity === "DIFFICULT" ||

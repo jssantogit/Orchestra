@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-
+import { decideRoute } from "../skills/orchestra/routing-policy.mjs";
 import { canonicalize, sha256Canonical } from "./canonical.mjs";
 import {
   DREAM_SCHEMAS,
@@ -3691,64 +3691,83 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
   const staticPolicy = JSON.parse(readFileSync(policyPath, "utf-8"));
 
   let eligible_cases = 0;
-  let explicit_matches = 0;
+  let router_legal_cases = 0;
+  let explicit_policy_matches = 0;
   let action_matches = 0;
 
-  // 1. WORKER_TIER state grid
-  const actions = ["IMPLEMENT", "TEST", "MECHANICAL_FIX"];
-  const domains = ["CODE", "DOCS", "UI", "DATA", "INFRA", "TESTING", "RESEARCH", "ORCHESTRA", "GENERAL"];
-  const complexities = ["SIMPLE", "NORMAL", "DIFFICULT", "EXPERIMENTAL", "MECHANICAL", "INTEGRATION"];
+  // 1. WORKER_TIER real router parity grid
+  // Exhaustive matrix covering all eligible states:
+  // - TEST (SIMPLE, NORMAL, DIFFICULT, EXPERIMENTAL)
+  // - MECHANICAL_FIX
+  // - IMPLEMENT (SIMPLE, NORMAL, DIFFICULT, EXPERIMENTAL, INTEGRATION, DOCS, post-investigation)
+  const domains = ["CODE", "UI", "DATA", "INFRA", "TESTING", "RESEARCH", "ORCHESTRA", "GENERAL"];
   const criticalities = ["NORMAL", "MAJOR"];
-  const postInvs = [false, true];
 
-  for (const act of actions) {
-    for (const dom of domains) {
-      for (const comp of complexities) {
-        for (const crit of criticalities) {
-          for (const postInv of postInvs) {
-            const state = {
-              task_action: act,
-              task_domain: dom,
-              complexity: comp,
-              criticality: crit,
-              post_investigation: postInv,
-              state: "EXECUTING"
-            };
+  const workerTierCases = [];
 
-            const availableActions = deriveAvailableActions("WORKER_TIER", state);
-            if (!availableActions || availableActions.length === 0) {
-              continue; // outside Dream eligibility
-            }
-
-            eligible_cases++;
-
-            // Baseline router determination
-            let baselineAction;
-            if (postInv || comp === "DIFFICULT" || comp === "EXPERIMENTAL" || comp === "INTEGRATION") {
-              baselineAction = "FLASH_HIGH";
-            } else if (comp === "SIMPLE" || comp === "MECHANICAL" || dom === "DOCS") {
-              baselineAction = "FLASH_LOW";
-            } else {
-              baselineAction = "FLASH_MEDIUM";
-            }
-
-            const evalResult = evaluatePolicy({
-              policy: staticPolicy,
-              decisionType: "WORKER_TIER",
-              state,
-              availableActions,
-              baselineAction
-            });
-
-            if (evalResult.ok) {
-              explicit_matches++;
-            }
-            if (evalResult.action === baselineAction) {
-              action_matches++;
-            }
-          }
-        }
+  // TEST (SIMPLE, NORMAL, DIFFICULT, EXPERIMENTAL)
+  for (const comp of ["SIMPLE", "NORMAL", "DIFFICULT", "EXPERIMENTAL"]) {
+    for (const dom of [...domains, "DOCS"]) {
+      for (const crit of criticalities) {
+        workerTierCases.push({ taskAction: "TEST", implementationComplexity: comp.toLowerCase(), taskDomain: dom, criticality: crit });
       }
+    }
+  }
+
+  // MECHANICAL_FIX
+  for (const dom of [...domains, "DOCS"]) {
+    for (const crit of criticalities) {
+      workerTierCases.push({ taskAction: "MECHANICAL_FIX", taskDomain: dom, criticality: crit });
+    }
+  }
+
+  // IMPLEMENT (SIMPLE, NORMAL, DIFFICULT, EXPERIMENTAL, INTEGRATION, DOCS, post-investigation)
+  for (const comp of ["SIMPLE", "NORMAL", "DIFFICULT", "EXPERIMENTAL"]) {
+    for (const dom of domains) {
+      for (const crit of criticalities) {
+        workerTierCases.push({ taskAction: "IMPLEMENT", implementationComplexity: comp.toLowerCase(), taskDomain: dom, criticality: crit });
+        workerTierCases.push({ taskAction: "IMPLEMENT", implementationComplexity: comp.toLowerCase(), taskDomain: dom, criticality: crit, postInvestigation: true });
+      }
+    }
+  }
+  for (const dom of domains) {
+    for (const crit of criticalities) {
+      workerTierCases.push({ taskAction: "IMPLEMENT", integration: true, taskDomain: dom, criticality: crit });
+    }
+  }
+  for (const comp of ["SIMPLE", "NORMAL", "DIFFICULT"]) {
+    for (const crit of criticalities) {
+      workerTierCases.push({ taskAction: "IMPLEMENT", taskDomain: "DOCS", implementationComplexity: comp.toLowerCase(), criticality: crit });
+    }
+  }
+
+  for (const facts of workerTierCases) {
+    const route = decideRoute(facts);
+    const baseline = classifyBaselineDecision(facts, route);
+    if (!baseline) continue;
+
+    const state = deriveDecisionState(facts);
+    const availableActions = deriveAvailableActions(baseline.decisionType, state);
+    if (!availableActions || availableActions.length === 0) continue;
+
+    eligible_cases++;
+    if (availableActions.includes(baseline.chosenAction)) {
+      router_legal_cases++;
+    }
+
+    const evalResult = evaluatePolicy({
+      policy: staticPolicy,
+      decisionType: baseline.decisionType,
+      state,
+      availableActions,
+      baselineAction: baseline.chosenAction,
+    });
+
+    if (evalResult.ok) {
+      explicit_policy_matches++;
+    }
+    if (evalResult.action === baseline.chosenAction) {
+      action_matches++;
     }
   }
 
@@ -3775,6 +3794,9 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
 
             eligible_cases++;
             const baselineAction = "IMPLEMENT_DIRECT";
+            if (availableActions.includes(baselineAction)) {
+              router_legal_cases++;
+            }
 
             const evalResult = evaluatePolicy({
               policy: staticPolicy,
@@ -3785,7 +3807,7 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
             });
 
             if (evalResult.ok) {
-              explicit_matches++;
+              explicit_policy_matches++;
             }
             if (evalResult.action === baselineAction) {
               action_matches++;
@@ -3833,6 +3855,9 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
 
         eligible_cases++;
         const baselineAction = expectedRetryBaseline[reason];
+        if (availableActions.includes(baselineAction)) {
+          router_legal_cases++;
+        }
 
         const evalResult = evaluatePolicy({
           policy: staticPolicy,
@@ -3843,7 +3868,7 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
         });
 
         if (evalResult.ok) {
-          explicit_matches++;
+          explicit_policy_matches++;
         }
         if (evalResult.action === baselineAction) {
           action_matches++;
@@ -3852,17 +3877,19 @@ test("Milestone D: Phase B exhaustive parity shadow test (100% coverage, 100% pa
     }
   }
 
-  const coverage_percent = eligible_cases > 0 ? (explicit_matches / eligible_cases) * 100 : 0;
+  const coverage_percent = eligible_cases > 0 ? (explicit_policy_matches / eligible_cases) * 100 : 0;
   const parity_percent = eligible_cases > 0 ? (action_matches / eligible_cases) * 100 : 0;
 
-  console.log(`\n--- PARITY SHADOW VERIFICATION REPORT ---`);
+  console.log(`\n--- REAL ROUTER PARITY SHADOW VERIFICATION REPORT ---`);
   console.log(`eligible_cases: ${eligible_cases}`);
-  console.log(`explicit_matches: ${explicit_matches}`);
+  console.log(`router_legal_cases: ${router_legal_cases}`);
+  console.log(`explicit_policy_matches: ${explicit_policy_matches}`);
   console.log(`action_matches: ${action_matches}`);
   console.log(`coverage_percent: ${coverage_percent}%`);
   console.log(`parity_percent: ${parity_percent}%`);
-  console.log(`-----------------------------------------\n`);
+  console.log(`-----------------------------------------------------\n`);
 
+  assert.equal(router_legal_cases, eligible_cases, `router_legal_cases must equal eligible_cases`);
   assert.equal(coverage_percent, 100, `explicit_policy_coverage must be 100%, got ${coverage_percent}%`);
   assert.equal(parity_percent, 100, `action_parity must be 100%, got ${parity_percent}%`);
 });
