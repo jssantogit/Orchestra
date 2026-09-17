@@ -24,6 +24,11 @@ import {
   getPendingDecision,
   recordDecisionOutcome,
 } from "./outcome-recorder.mjs";
+import {
+  sealWorld,
+  validateWorld,
+  writeSealedWorld,
+} from "./world-sealer.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1515,4 +1520,400 @@ test("Task 5 hook integration: record-only hook integration without routing auth
   // Pending file must be consumed
   const remainingPending = readdirSync(dreamPendingDir).filter(f => f.endsWith(".json"));
   assert.equal(remainingPending.length, 0);
+});
+
+test("Task 6: valid decision + correlated outcome + factual actor => SEALED with valid world_manifest_hash", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  const decEvent = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-t6-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { task_action: "IMPLEMENT", complexity: "NORMAL", criticality: "NORMAL" },
+    available_actions: ["FLASH_MEDIUM", "FLASH_HIGH"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+
+  const outcomeEvent = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-t6-1",
+    observation_id: "obs-t6-1",
+    result: "SUCCESS",
+    evidence_summary: { tests: "NOT_REQUIRED" },
+    retry_state: { attempt: 1, retry_remaining: 1 },
+    cost_metrics: { model_calls: 1, latency_ms: 200 },
+    terminal_state: "ACCEPTED",
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const res = sealWorld({
+    events: [decEvent, outcomeEvent],
+    expectedRuntimeFingerprint: runtimeFp,
+  });
+
+  assert.equal(res.status, "SEALED");
+  assert.equal(res.errors.length, 0);
+  assert.ok(res.world);
+
+  const world = res.world;
+  assert.equal(world.schema, DREAM_SCHEMAS.WORLD);
+  assert.match(world.world_id, /^world-[0-9a-f]{16}$/);
+  assert.equal(world.root_snapshot_id, rootSnapshotId);
+  assert.equal(world.runtime_fingerprint, runtimeFp);
+  assert.deepEqual(world.event_hashes, [decEvent.event_hash, outcomeEvent.event_hash]);
+
+  const expectedManifestHash = sha256Canonical({
+    schema: DREAM_SCHEMAS.WORLD,
+    root_snapshot_id: rootSnapshotId,
+    runtime_fingerprint: runtimeFp,
+    event_hashes: [decEvent.event_hash, outcomeEvent.event_hash],
+  });
+  assert.equal(world.world_manifest_hash, expectedManifestHash);
+  assert.equal(world.status, "SEALED");
+
+  // validateWorld verifies integrity
+  const valRes = validateWorld(world);
+  assert.equal(valRes.valid, true);
+  assert.deepEqual(valRes.errors, []);
+});
+
+test("Task 6: open decision without outcome => WORLD_INCOMPLETE", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  const decEvent = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-open-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+
+  const res = sealWorld({
+    events: [decEvent],
+    expectedRuntimeFingerprint: runtimeFp,
+  });
+
+  assert.equal(res.status, "WORLD_INCOMPLETE");
+  assert.ok(res.errors.includes("OPEN_DECISION_WITHOUT_OUTCOME"));
+  assert.equal(res.world, undefined);
+});
+
+test("Task 6: mismatched decision_id or orphan outcome => WORLD_INVALID", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  const decEvent = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-matched-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+
+  const orphanOutcome = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-mismatched-99",
+    observation_id: "obs-orphan-1",
+    result: "SUCCESS",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const res = sealWorld({
+    events: [decEvent, orphanOutcome],
+    expectedRuntimeFingerprint: runtimeFp,
+  });
+
+  assert.equal(res.status, "WORLD_INVALID");
+  assert.ok(res.errors.includes("ORPHAN_OR_MISMATCHED_OUTCOME"));
+});
+
+test("Task 6: tampered event_hash in decision or outcome => WORLD_INVALID", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  const decEvent = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-tamper-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+
+  const outcomeEvent = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-tamper-1",
+    observation_id: "obs-tamper-1",
+    result: "SUCCESS",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  // Tampered decision event_hash
+  const tamperedDec = { ...decEvent, event_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000" };
+  const res1 = sealWorld({
+    events: [tamperedDec, outcomeEvent],
+    expectedRuntimeFingerprint: runtimeFp,
+  });
+  assert.equal(res1.status, "WORLD_INVALID");
+  assert.ok(res1.errors.some(e => e.includes("TAMPERED_EVENT_HASH") || e.includes("EVENT_HASH_MISMATCH")));
+
+  // Tampered outcome payload without updating hash
+  const tamperedOutcome = { ...outcomeEvent, result: "TAMPERED_RESULT" };
+  const res2 = sealWorld({
+    events: [decEvent, tamperedOutcome],
+    expectedRuntimeFingerprint: runtimeFp,
+  });
+  assert.equal(res2.status, "WORLD_INVALID");
+  assert.ok(res2.errors.some(e => e.includes("TAMPERED_EVENT_HASH") || e.includes("EVENT_HASH_MISMATCH")));
+});
+
+test("Task 6: UNKNOWN or unresolved actor identity => WORLD_INVALID with ROLE_IDENTITY_UNRESOLVED", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  const unresolvedActors = [
+    "UNKNOWN",
+    "UNRESOLVED",
+    { role: "UNKNOWN", confidence: "HIGH" },
+    { role: "WORKER_MEDIUM", confidence: "LOW" },
+    { role: "WORKER_MEDIUM", resolved: false },
+  ];
+
+  for (const actor of unresolvedActors) {
+    const decEvent = createDreamEvent("DECISION", {
+      schema: DREAM_SCHEMAS.DECISION,
+      decision_id: "dec-actor-test",
+      snapshot_id: rootSnapshotId,
+      decision_type: "WORKER_TIER",
+      state: {},
+      available_actions: ["FLASH_MEDIUM"],
+      chosen_action: "FLASH_MEDIUM",
+      policy_source: "STATIC_ROUTING_CURRENT",
+      actor_identity: actor,
+      step_idx: 1,
+      created_at: "2026-09-17T12:00:00.000Z",
+    });
+
+    const outcomeEvent = createDreamEvent("DECISION_OUTCOME", {
+      schema: DREAM_SCHEMAS.OUTCOME,
+      decision_id: "dec-actor-test",
+      observation_id: "obs-actor-test",
+      result: "SUCCESS",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+      created_at: "2026-09-17T12:00:05.000Z",
+    });
+
+    const res = sealWorld({
+      events: [decEvent, outcomeEvent],
+      expectedRuntimeFingerprint: runtimeFp,
+    });
+
+    assert.equal(res.status, "WORLD_INVALID", `Actor ${JSON.stringify(actor)} must yield WORLD_INVALID`);
+    assert.ok(res.errors.includes("ROLE_IDENTITY_UNRESOLVED"));
+  }
+});
+
+test("Task 6: evidence references validation and absent execution provenance", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-sealer-evidence-"));
+  t.after(() => {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  });
+
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  const decEvent = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-ev-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+
+  // 1. Evidence requires verification (tests: PASS) but evidence_provenance is empty -> WORLD_INVALID
+  const outcomeMissingEv = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-ev-1",
+    observation_id: "obs-ev-1",
+    result: "SUCCESS",
+    evidence_summary: { tests: "PASS", validation_fresh: true },
+    retry_state: {},
+    cost_metrics: {},
+    evidence_provenance: [],
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const resMissing = sealWorld({
+    events: [decEvent, outcomeMissingEv],
+    expectedRuntimeFingerprint: runtimeFp,
+    repoRoot: tempDir,
+  });
+  assert.equal(resMissing.status, "WORLD_INVALID");
+  assert.ok(resMissing.errors.some(e => e.includes("EVIDENCE") || e.includes("PROVENANCE")));
+
+  // 2. Evidence references absent execution ID -> WORLD_INVALID
+  const outcomeAbsentExec = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-ev-1",
+    observation_id: "obs-ev-2",
+    result: "SUCCESS",
+    evidence_summary: { tests: "PASS", validation_fresh: true },
+    retry_state: {},
+    cost_metrics: {},
+    evidence_provenance: ["exec-absent-999"],
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const resAbsent = sealWorld({
+    events: [decEvent, outcomeAbsentExec],
+    expectedRuntimeFingerprint: runtimeFp,
+    repoRoot: tempDir,
+  });
+  assert.equal(resAbsent.status, "WORLD_INVALID");
+  assert.ok(resAbsent.errors.some(e => e.includes("EVIDENCE") || e.includes("EXECUTION") || e.includes("ABSENT")));
+
+  // 3. Evidence references present execution ID on disk -> SEALED
+  const execDir = join(tempDir, ".agents", "state", "executions");
+  mkdirSync(execDir, { recursive: true });
+  writeFileSync(join(execDir, "exec-present-1.json"), JSON.stringify({ executionId: "exec-present-1", status: "PASS" }), "utf8");
+
+  const outcomePresentExec = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-ev-1",
+    observation_id: "obs-ev-3",
+    result: "SUCCESS",
+    evidence_summary: { tests: "PASS", validation_fresh: true },
+    retry_state: {},
+    cost_metrics: {},
+    evidence_provenance: ["exec-present-1"],
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const resPresent = sealWorld({
+    events: [decEvent, outcomePresentExec],
+    expectedRuntimeFingerprint: runtimeFp,
+    repoRoot: tempDir,
+  });
+  assert.equal(resPresent.status, "SEALED");
+  assert.equal(resPresent.errors.length, 0);
+});
+
+test("Task 6: writeSealedWorld writes only sealed worlds and rejects incomplete/invalid worlds", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-sealer-write-"));
+  t.after(() => {
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  });
+
+  // 1. Incomplete world cannot be written
+  const incompleteWorld = {
+    schema: DREAM_SCHEMAS.WORLD,
+    world_id: "world-incomplete-1",
+    status: "WORLD_INCOMPLETE",
+  };
+  const writeInc = writeSealedWorld(tempDir, incompleteWorld);
+  assert.equal(writeInc.written, false);
+
+  // 2. Invalid world cannot be written
+  const invalidWorld = {
+    schema: DREAM_SCHEMAS.WORLD,
+    world_id: "world-invalid-1",
+    status: "WORLD_INVALID",
+  };
+  const writeInv = writeSealedWorld(tempDir, invalidWorld);
+  assert.equal(writeInv.written, false);
+
+  // 3. World with tampered manifest hash cannot be written
+  const tamperedWorld = {
+    schema: DREAM_SCHEMAS.WORLD,
+    world_id: "world-tampered-1",
+    root_snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    runtime_fingerprint: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    event_hashes: ["sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
+    world_manifest_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    status: "SEALED",
+    created_at: "2026-09-17T12:00:00.000Z",
+  };
+  const writeTamp = writeSealedWorld(tempDir, tamperedWorld);
+  assert.equal(writeTamp.written, false);
+
+  // 4. Valid sealed world written under .agents/dream-data/worlds/${world.world_id}.json
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+  const decEvent = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-w-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const outEvent = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-w-1",
+    observation_id: "obs-w-1",
+    result: "SUCCESS",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [decEvent, outEvent],
+    expectedRuntimeFingerprint: runtimeFp,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  const writeOk = writeSealedWorld(tempDir, sealRes.world);
+  assert.equal(writeOk.written, true);
+  assert.equal(writeOk.path, join(tempDir, ".agents", "dream-data", "worlds", `${sealRes.world.world_id}.json`));
+  assert.ok(existsSync(writeOk.path));
+
+  const savedWorld = JSON.parse(readFileSync(writeOk.path, "utf8"));
+  assert.equal(savedWorld.world_id, sealRes.world.world_id);
+  assert.equal(savedWorld.world_manifest_hash, sealRes.world.world_manifest_hash);
+  assert.equal(validateWorld(savedWorld).valid, true);
 });
