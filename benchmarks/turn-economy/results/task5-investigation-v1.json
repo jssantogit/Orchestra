@@ -1,0 +1,305 @@
+{
+  "benchmark": "TASK 5 — INVESTIGATION + FIX v1",
+  "task": "investigation",
+  "task_id": "task-5-investigation",
+  "version": "v1.0",
+  "runtime": "antigravity",
+  "status": "EVALUATED",
+  "overall_pass": false,
+  "summary": "Baseline executed with untouched flash-worker and demonstrated factual reproduction, high root-cause fidelity, and clean acceptance, but suffered from excessive turn bloat (35 worker turns). Generic turn diet refinement to flash-worker reduced worker turns by 54.3% (35 -> 16) and duration by 48.1% (161s -> 84s). However, the optimized run encountered a parent sidequest attempt (manage_subagents) and worker turns (16) remained above the hard target (<= 8).",
+  "gates": {
+    "routing_gate": "PASS",
+    "reproduction_gate": "PASS",
+    "root_cause_gate": "PASS",
+    "functional_gate": "PASS",
+    "test_integrity_gate": "PASS",
+    "scope_minimality_gate": "PASS",
+    "api_shape_gate": "PASS",
+    "worker_economy_gate": "FAIL",
+    "parent_zero_attempt_gate": "FAIL",
+    "fidelity_gate": "PASS",
+    "task5_closed": false
+  },
+  "route": {
+    "expected": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-worker",
+      "worker_model": "gemini-3.8-flash-high",
+      "task_action": "INVESTIGATE"
+    },
+    "observed": {
+      "orchestrator": "flash-orchestrator",
+      "orchestrator_model": "gemini-3.8-flash-medium",
+      "worker": "flash-worker",
+      "worker_model": "gemini-3.8-flash-high",
+      "task_action": "INVESTIGATE"
+    },
+    "routing_match": true
+  },
+  "runs": {
+    "baseline": {
+      "run_id": "run-1789604216413",
+      "timestamp": "2026-09-17T00:17:04Z",
+      "parent_conversation_id": "0e31bab9-785a-4622-ba5a-34e6d984bb4b",
+      "worker_conversation_id": "f218257a-ec07-4963-b2c9-488d521f9d14",
+      "success": true,
+      "verification_detail": "OK",
+      "duration_ms": 161733,
+      "turns": {
+        "parent_model_turns": 4,
+        "worker_model_turns": 35,
+        "total_model_turns": 39,
+        "worker_pre_mutation_turns": 17,
+        "worker_post_mutation_turns": 17,
+        "parent_per_turn_tool_counts": [1, 1, 0, 0],
+        "worker_per_turn_tool_counts": [1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        "parent_tool_calls": 2,
+        "worker_tool_calls": 36,
+        "total_tool_calls": 38
+      },
+      "tool_breakdown": {
+        "worker_searches": 2,
+        "worker_reads": 5,
+        "worker_mutations": 1,
+        "worker_validations": 2,
+        "worker_handoffs": 2,
+        "files_read": [
+          "src/parser.js",
+          "test/parser.test.js",
+          "test/calculator.test.js",
+          "test/formatter.test.js",
+          "src/formatter.js",
+          "src/calculator.js"
+        ],
+        "files_mutated": [
+          "src/parser.js"
+        ],
+        "mutation_necessity_classification": {
+          "src/parser.js": "REQUIRED"
+        }
+      },
+      "reproduction": {
+        "command": "npm test",
+        "exit_code": 1,
+        "actor": "WORKER",
+        "observed": true,
+        "failing_tests": [
+          "parser: parses decimal percentage values"
+        ],
+        "failure_output_summary": "RangeError: Invalid percentage format: \"12.5%\"\n    at parsePercentage (file:///tmp/orch-turn-econ-investigation-hrmVyo/src/parser.js:87:11)"
+      },
+      "root_cause": {
+        "responsible_file": "src/parser.js",
+        "responsible_symbol": "parsePercentage(input)",
+        "concrete_mechanism": "1. Regex restriction: parsePercentage matched /^([0-9]+)%$/, throwing RangeError for decimal inputs like 12.5% and 99.9%. 2. Binary division precision error: Number(match[1]) / 100 causes IEEE-754 precision drift (e.g. 99.9 / 100 === 0.9990000000000001 !== 0.999).",
+        "evidence": "Observed RangeError on 12.5% during focused npm test reproduction run; node -e precision checks confirmed 99.9 / 100 strict equality mismatch."
+      },
+      "fix": {
+        "files_changed": ["src/parser.js"],
+        "smallest_correct_fix": "Updated regex to /^([-+]?(?:\\d+(?:\\.\\d+)?|\\.\\d+))%$/ and used exponential notation Number(match[1] + 'e-2') to avoid binary floating-point division precision loss."
+      },
+      "api_signature": {
+        "before": {
+          "src/parser.js": {
+            "validateNumericInput": "validateNumericInput(value, options = {})",
+            "parseNumber": "parseNumber(input, options = {})",
+            "parsePercentage": "parsePercentage(input)"
+          }
+        },
+        "after": {
+          "src/parser.js": {
+            "validateNumericInput": "validateNumericInput(value, options = {})",
+            "parseNumber": "parseNumber(input, options = {})",
+            "parsePercentage": "parsePercentage(input)"
+          }
+        },
+        "changed": false
+      },
+      "test_integrity": {
+        "seeded_assertions_present": true,
+        "seeded_test_active": true,
+        "malformed_rejection_verified": true
+      },
+      "parent_sidequests": {
+        "parent_delegated_sidequest_attempts": 0,
+        "parent_delegated_sidequest_attempts_by_tool": {},
+        "parent_delegated_sidequest_denied": 0,
+        "parent_delegated_sidequest_succeeded": 0,
+        "schedule_attempts_during_delegation": 0,
+        "manage_task_poll_attempts": 0,
+        "manage_subagent_poll_attempts": 0,
+        "parent_workspace_read_attempts": 0,
+        "parent_repository_search_attempts": 0,
+        "parent_validation_attempts": 0
+      },
+      "validation_evidence": {
+        "command": "npm test",
+        "exit_code": 0,
+        "actor": "WORKER",
+        "fresh": true,
+        "verified": true,
+        "output_summary": "14/14 tests passing"
+      },
+      "acceptance_evidence": {
+        "observed": true,
+        "actor": "ORCHESTRATOR",
+        "state": "ACCEPTED"
+      },
+      "fidelity": {
+        "status": "PASS",
+        "confidence": "HIGH",
+        "mutation_attribution_mode": "FACTUAL",
+        "orchestrator_workspace_writes": 0,
+        "unknown_workspace_writes": 0
+      },
+      "tokens": {
+        "input_tokens": 44349,
+        "cached_input_tokens": 28489,
+        "uncached_input_tokens": null,
+        "uncached_semantics": "NOT_DERIVABLE",
+        "output_tokens": 5465,
+        "reasoning_tokens": 4148,
+        "confidence": "MEDIUM"
+      }
+    },
+    "optimized": {
+      "run_id": "run-1789611737559",
+      "timestamp": "2026-09-17T02:22:23Z",
+      "parent_conversation_id": "6e04c29a-9f0b-4f92-89a5-befd74b42899",
+      "worker_conversation_id": "d5c37591-685d-45c5-9def-faaae4ac66f9",
+      "success": true,
+      "verification_detail": "OK",
+      "duration_ms": 83956,
+      "turns": {
+        "parent_model_turns": 4,
+        "worker_model_turns": 16,
+        "total_model_turns": 20,
+        "worker_pre_mutation_turns": 11,
+        "worker_post_mutation_turns": 4,
+        "parent_per_turn_tool_counts": [2, 1, 0, 0],
+        "worker_per_turn_tool_counts": [1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        "parent_tool_calls": 3,
+        "worker_tool_calls": 16,
+        "total_tool_calls": 19
+      },
+      "tool_breakdown": {
+        "worker_searches": 2,
+        "worker_reads": 7,
+        "worker_mutations": 1,
+        "worker_validations": 3,
+        "worker_handoffs": 2,
+        "files_read": [
+          "src/parser.js",
+          "test/parser.test.js"
+        ],
+        "files_mutated": [
+          "src/parser.js"
+        ],
+        "mutation_necessity_classification": {
+          "src/parser.js": "REQUIRED"
+        }
+      },
+      "reproduction": {
+        "command": "node --test",
+        "exit_code": 1,
+        "actor": "WORKER",
+        "observed": true,
+        "failing_tests": [
+          "parser: parses decimal percentage values"
+        ],
+        "failure_output_summary": "✖ parser: parses decimal percentage values (0.786346ms)"
+      },
+      "root_cause": {
+        "responsible_file": "src/parser.js",
+        "responsible_symbol": "parsePercentage(input)",
+        "concrete_mechanism": "1. Pattern mismatch: regex strictly matched integer digits /^([0-9]+)%$/, throwing RangeError on valid decimal percentages. 2. Floating-point binary representation drift: (val / 100) causes 0.9990000000000001 !== 0.999. Resolved by allowing decimal pattern and normalizing precision via .toPrecision(12).",
+        "evidence": "Factual reproduction via node --test exited code 1 with failing parser: parses decimal percentage values; post-fix test suite passed with exit code 0."
+      },
+      "fix": {
+        "files_changed": ["src/parser.js"],
+        "smallest_correct_fix": "Updated parsePercentage regular expression to /^([-+]?[0-9]+(?:\\.[0-9]+)?)%$/ and normalized precision via Number((val / 100).toPrecision(12))."
+      },
+      "api_signature": {
+        "before": {
+          "src/parser.js": {
+            "validateNumericInput": "validateNumericInput(value, options = {})",
+            "parseNumber": "parseNumber(input, options = {})",
+            "parsePercentage": "parsePercentage(input)"
+          }
+        },
+        "after": {
+          "src/parser.js": {
+            "validateNumericInput": "validateNumericInput(value, options = {})",
+            "parseNumber": "parseNumber(input, options = {})",
+            "parsePercentage": "parsePercentage(input)"
+          }
+        },
+        "changed": false
+      },
+      "test_integrity": {
+        "seeded_assertions_present": true,
+        "seeded_test_active": true,
+        "malformed_rejection_verified": true
+      },
+      "parent_sidequests": {
+        "parent_delegated_sidequest_attempts": 1,
+        "parent_delegated_sidequest_attempts_by_tool": {
+          "manage_subagents": 1
+        },
+        "parent_delegated_sidequest_denied": 1,
+        "parent_delegated_sidequest_succeeded": 0,
+        "schedule_attempts_during_delegation": 0,
+        "manage_task_poll_attempts": 0,
+        "manage_subagent_poll_attempts": 1,
+        "parent_workspace_read_attempts": 0,
+        "parent_repository_search_attempts": 0,
+        "parent_validation_attempts": 0
+      },
+      "validation_evidence": {
+        "command": "npm test",
+        "exit_code": 0,
+        "actor": "WORKER",
+        "fresh": true,
+        "verified": true,
+        "output_summary": "14/14 tests passing"
+      },
+      "acceptance_evidence": {
+        "observed": true,
+        "actor": "ORCHESTRATOR",
+        "state": "ACCEPTED"
+      },
+      "fidelity": {
+        "status": "PASS",
+        "confidence": "HIGH",
+        "mutation_attribution_mode": "FACTUAL",
+        "orchestrator_workspace_writes": 0,
+        "unknown_workspace_writes": 0
+      },
+      "tokens": {
+        "input_tokens": 40037,
+        "cached_input_tokens": 28453,
+        "uncached_input_tokens": null,
+        "uncached_semantics": "NOT_DERIVABLE",
+        "output_tokens": 3195,
+        "reasoning_tokens": 1978,
+        "confidence": "MEDIUM"
+      }
+    },
+    "delta": {
+      "duration_ms": -77777,
+      "duration_percentage": "-48.1%",
+      "worker_model_turns": -19,
+      "worker_model_turns_percentage": "-54.3%",
+      "worker_pre_mutation_turns": -6,
+      "worker_post_mutation_turns": -13,
+      "total_model_turns": -19,
+      "total_tool_calls": -19,
+      "output_tokens": -2270,
+      "output_tokens_percentage": "-41.5%",
+      "reasoning_tokens": -2170,
+      "reasoning_tokens_percentage": "-52.3%",
+      "parent_delegated_sidequest_attempts": 1
+    }
+  }
+}

@@ -155,11 +155,57 @@ test("parser: parses decimal percentage values", () => {
       execFileSync("git", ["commit", "-m", "test: add failing decimal percentage test"], { cwd: dir, stdio: "ignore" });
     },
     verify(dir) {
+      // 1. Run parser test suite
       try {
         execFileSync("node", ["--test", "test/parser.test.js"], { cwd: dir, stdio: "pipe" });
       } catch (err) {
         return { success: false, reason: "test/parser.test.js still failing" };
       }
+
+      // 2. Direct functional verification of required and preserved behavior
+      try {
+        const testCode = `
+          import assert from "node:assert/strict";
+          import { parsePercentage } from "./src/parser.js";
+
+          // Required decimal percentage support
+          assert.equal(parsePercentage("12.5%"), 0.125);
+          assert.equal(parsePercentage("99.9%"), 0.999);
+
+          // Preserved existing behavior
+          assert.equal(parsePercentage("50%"), 0.5);
+          assert.equal(parsePercentage("100%"), 1);
+          assert.equal(parsePercentage("0%"), 0);
+
+          // Strict malformed-input rejection preserved
+          const invalidInputs = ["abc%", "%", "12.5.5%", "12x5%", "12.5"];
+          for (const invalid of invalidInputs) {
+            assert.throws(
+              () => parsePercentage(invalid),
+              (err) => err instanceof RangeError || err instanceof TypeError,
+              \`Expected parsePercentage(\${JSON.stringify(invalid)}) to throw RangeError/TypeError\`
+            );
+          }
+        `;
+        execFileSync("node", ["--input-type=module", "-e", testCode], { cwd: dir, stdio: "pipe" });
+      } catch (err) {
+        return { success: false, reason: `Functional acceptance failed: ${err.message}` };
+      }
+
+      // 3. Test integrity: seeded decimal-percentage assertions must remain present and active
+      const parserTestPath = join(dir, "test/parser.test.js");
+      const testContent = readFileSync(parserTestPath, "utf8");
+      const hasSeeded125 = testContent.includes('parsePercentage("12.5%")') && testContent.includes("0.125");
+      const hasSeeded999 = testContent.includes('parsePercentage("99.9%")') && testContent.includes("0.999");
+      if (!hasSeeded125 || !hasSeeded999) {
+        return { success: false, reason: "Test integrity failed: seeded decimal percentage assertions were removed or modified" };
+      }
+      if (/test\.skip\s*\(\s*["']parser:\s*parses decimal percentage values["']/i.test(testContent) ||
+          /\/\*[\s\S]*parsePercentage\("12\.5%"\)[\s\S]*\*\//.test(testContent) ||
+          /\/\/.*parsePercentage\("12\.5%"\)/.test(testContent)) {
+        return { success: false, reason: "Test integrity failed: seeded test was skipped or commented out" };
+      }
+
       return { success: true };
     },
   },
@@ -370,19 +416,37 @@ export function auditApiSignatures(pristineDir, liveDir, targetFiles = ["src/for
  * Audits mutated files for scope minimality.
  */
 export function auditScopeMinimality(mutatedFiles = [], taskKey = "multi") {
-  if (taskKey !== "multi") return { pass: true, classification: {} };
-  const classification = {};
-  let pass = true;
-  for (const f of mutatedFiles) {
-    const norm = canonicalizePath(f);
-    if (norm === "src/formatter.js" || norm === "test/formatter.test.js") {
-      classification[norm] = "REQUIRED";
-    } else {
-      classification[norm] = "UNNECESSARY_SCOPE_EXPANSION";
-      pass = false;
+  if (taskKey === "multi") {
+    const classification = {};
+    let pass = true;
+    for (const f of mutatedFiles) {
+      const norm = canonicalizePath(f);
+      if (norm === "src/formatter.js" || norm === "test/formatter.test.js") {
+        classification[norm] = "REQUIRED";
+      } else {
+        classification[norm] = "UNNECESSARY_SCOPE_EXPANSION";
+        pass = false;
+      }
     }
+    return { pass, classification };
   }
-  return { pass, classification };
+  if (taskKey === "investigation") {
+    const classification = {};
+    let pass = true;
+    for (const f of mutatedFiles) {
+      const norm = canonicalizePath(f);
+      if (norm === "src/parser.js") {
+        classification[norm] = "REQUIRED";
+      } else if (norm === "test/parser.test.js") {
+        classification[norm] = "REQUIRED";
+      } else {
+        classification[norm] = "UNNECESSARY_SCOPE_EXPANSION";
+        pass = false;
+      }
+    }
+    return { pass, classification };
+  }
+  return { pass: true, classification: {} };
 }
 
 /**
@@ -727,14 +791,19 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
           } else if (toolName === "run_command") {
             const cmd = String(args.CommandLine || args.command || args.cmd || "").replace(/^["']|["']$/g, "").trim();
             let exitCode = null;
+            let outputSummary = "";
             for (let j = i + 1; j < Math.min(i + 3, steps.length); j++) {
               const next = steps[j];
               if (next && next.content) {
-                const m = String(next.content).match(/The command exited with code (\d+)/i);
+                const text = String(next.content);
+                const m = text.match(/The command exited with code (\d+)/i);
                 if (m) {
                   exitCode = parseInt(m[1], 10);
-                  break;
                 }
+                if (!outputSummary && text.length > 0) {
+                  outputSummary = text.slice(0, 1000);
+                }
+                if (exitCode !== null) break;
               }
             }
             const isTestCmd = /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd);
@@ -745,6 +814,7 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
                 transcriptEvidenceId,
                 command: cmd,
                 exitCode: exitCode,
+                outputSummary: outputSummary || null,
                 actorRole: resolvedRole,
                 agentProfile: resolvedProfile,
                 conversationId: sub.conversationId,
@@ -1050,6 +1120,18 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     lastChildVal.actorRole === "WORKER"
   );
 
+  const firstChildMutationStep = childMutations.length > 0
+    ? Math.min(...childMutations.map((m) => (typeof m.stepIndex === "number" ? m.stepIndex : 999999)))
+    : 999999;
+  const reproductionVal = childValidations.find(
+    (v) => typeof v.stepIndex === "number" && v.stepIndex < firstChildMutationStep
+  );
+  const reproductionObserved = Boolean(reproductionVal && reproductionVal.exitCode !== 0);
+  const reproductionActor = reproductionVal ? reproductionVal.actorRole : null;
+  const reproductionExitCode = reproductionVal ? reproductionVal.exitCode : null;
+  const reproductionCommand = reproductionVal ? reproductionVal.command : null;
+  const reproductionOutputSummary = reproductionVal ? reproductionVal.outputSummary : null;
+
   return {
     model_turns_total: totalModelTurns,
     model_invocations: totalModelTurns,
@@ -1168,6 +1250,11 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     parent_validation_attempts: sidequestAttempts.attempts_by_tool["run_command"] || 0,
     parent_per_turn_tool_counts: parentMetrics?.per_turn_tool_counts || (parentToolCalls > 0 ? [parentToolCalls] : [0]),
     worker_per_turn_tool_counts: workerMetrics?.per_turn_tool_counts || (workerToolCalls > 0 ? [workerToolCalls] : []),
+    reproduction_observed: reproductionObserved,
+    reproduction_actor: reproductionActor,
+    reproduction_exit_code: reproductionExitCode,
+    reproduction_command: reproductionCommand,
+    reproduction_output_summary: reproductionOutputSummary,
   };
 }
 
@@ -1418,7 +1505,10 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       mutationAttributionMode: mutationEvents.length > 0 ? (mutationEvents.some((m) => m.evidenceSource === "CHILD_TRANSCRIPT") ? "FACTUAL" : null) : null,
     });
 
-    const sigAudit = auditApiSignatures(fixtureSource, tempDir, ["src/formatter.js", "src/calculator.js"]);
+    const targetAuditFiles = taskKey === "investigation"
+      ? ["src/parser.js"]
+      : ["src/formatter.js", "src/calculator.js"];
+    const sigAudit = auditApiSignatures(fixtureSource, tempDir, targetAuditFiles);
     const mutatedPaths = (metrics.mutation_events || []).map((m) => m.path).filter(Boolean);
     const uniqueMutatedFiles = [...new Set(mutatedPaths)];
     const scopeAudit = auditScopeMinimality(uniqueMutatedFiles, taskKey);
@@ -1427,6 +1517,9 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
     const parentZeroAttemptGate = (metrics.parent_delegated_sidequest_attempts || 0) === 0 ? "PASS" : "FAIL";
     const apiShapePreservationGate = (!sigAudit.changed && verification.success) ? "PASS" : "FAIL";
     const scopeMinimalityGate = scopeAudit.pass ? "PASS" : "FAIL";
+    const reproductionGate = (taskKey !== "investigation")
+      ? "PASS"
+      : ((metrics.reproduction_observed && metrics.reproduction_actor === "WORKER" && metrics.reproduction_exit_code !== 0) ? "PASS" : "FAIL");
 
     return {
       runtime,
@@ -1446,6 +1539,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       parent_zero_attempt_gate: parentZeroAttemptGate,
       api_shape_preservation_gate: apiShapePreservationGate,
       scope_minimality_gate: scopeMinimalityGate,
+      reproduction_gate: reproductionGate,
       fidelity: {
         status: fidelity.fidelityStatus,
         confidence: fidelity.confidence,
@@ -1550,8 +1644,12 @@ function main() {
             console.error(`PARENT_SIDEQUEST_ATTEMPT_FAILED: ${runtime} on ${taskKey} had prohibited parent sidequest attempts after delegation: ${res.parent_delegated_sidequest_attempts} attempts (${JSON.stringify(res.parent_delegated_sidequest_attempts_by_tool)})`);
             hasFidelityFailure = true;
           }
-          if (taskKey === "multi" && res.api_signature_changed) {
+          if ((taskKey === "multi" || taskKey === "investigation") && res.api_signature_changed) {
             console.error(`API_SIGNATURE_FAILED: ${runtime} on ${taskKey} changed exported API signatures: ${JSON.stringify(res.api_signature_after)}`);
+            hasFidelityFailure = true;
+          }
+          if ((taskKey === "multi" || taskKey === "investigation") && res.scope_minimality_gate === "FAIL") {
+            console.error(`SCOPE_MINIMALITY_FAILED: ${runtime} on ${taskKey} mutated files outside required scope: ${JSON.stringify(res.scope_minimality_audit)}`);
             hasFidelityFailure = true;
           }
         }
