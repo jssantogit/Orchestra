@@ -228,10 +228,6 @@ export function completeInvestigation({ activeState, statePath, success = true }
 }
 
 export function executeReplanTransition({ activeState, statePath, repoRoot, payload, toolCall, activeRole, activeContract }) {
-  const req = activeState.pendingPolicyRequirement;
-  if (!req || req.selected_action !== "REPLAN") {
-    return { ok: false, reason: "NO_PENDING_REPLAN_REQUIREMENT" };
-  }
 
   const currentState = activeState.state || "EXECUTING";
   const transitionCheck = validateStateTransition(currentState, "PLANNED", {
@@ -1023,6 +1019,13 @@ function main() {
           }));
           return;
         }
+        if ((prevRemaining !== undefined && prevRemaining <= 0) || (currentRemaining !== undefined && currentRemaining <= 0)) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: "RETRY_BUDGET_EXHAUSTED: Maximum retries exceeded. No remaining retry budget.",
+          }));
+          return;
+        }
       }
 
       const candidatePending = [];
@@ -1285,18 +1288,65 @@ function main() {
               return;
             }
             if (evalResult.action === "REPLAN") {
-              activeState.pendingPolicyRequirement = {
-                decision_type: DECISION_TYPES.RETRY_ACTION,
-                selected_action: "REPLAN",
-                policy_source: evalResult.source,
-                policy_id: evalResult.policy_id,
-                baseline_action: baselineAction,
-                policy_diagnostic: evalResult.policy_diagnostic,
-              };
-              try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+              const currentState = activeState.state || "EXECUTING";
+              const transitionCheck = validateStateTransition(currentState, "PLANNED", {
+                retry: true,
+                retry_reason: activeState.retryReason || activeState.retry_reason || retryReason,
+              });
+
+              if (!transitionCheck.valid) {
+                activeState.state = "HUMAN_GATE";
+                activeState.humanGateReason = `REPLAN_INVALID_STATE_TRANSITION: Transition from "${currentState}" to "PLANNED" rejected: ${transitionCheck.reason || "disallowed"}`;
+                delete activeState.pendingPolicyRequirement;
+                if (statePath) {
+                  try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+                }
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: `REPLAN_INVALID_TRANSITION: State transition from "${currentState}" to "PLANNED" rejected by governance: ${transitionCheck.reason || "disallowed"}. Routing to HUMAN_GATE.`,
+                }));
+                return;
+              }
+
+              // Pre-transition: record DECISION(REPLAN)
+              const corrKey = dreamCorrelationKey({
+                conversationId: convId,
+                stepIdx: payload.stepIdx ?? 0,
+                toolCallId: toolCall.id || payload.toolCallId || "",
+                branchOrdinal: 0,
+              });
+
+              recordDecision({
+                repoRoot,
+                snapshot: snapRes.snapshot,
+                decision: {
+                  decision_type: DECISION_TYPES.RETRY_ACTION,
+                  state: decisionState,
+                  available_actions: availableActions.length > 0 ? availableActions : ["REPLAN"],
+                  chosen_action: "REPLAN",
+                  policy_source: evalResult.source || "STATIC_POLICY_V1",
+                  policy_id: evalResult.policy_id || null,
+                  baseline_action: baselineAction || "REPLAN",
+                  policy_diagnostic: evalResult.policy_diagnostic || null,
+                  actor_identity: activeRole || "ORCHESTRATOR",
+                  conversation_id: convId,
+                  step_idx: payload.stepIdx ?? 0,
+                  tool_call_id: toolCall.id || payload.toolCallId || "",
+                  branch_ordinal: 0,
+                },
+                correlationKey: corrKey,
+              });
+
+              // Execute deterministic state transition
+              activeState.state = "PLANNED";
+              delete activeState.pendingPolicyRequirement;
+              if (statePath) {
+                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+              }
+
               console.log(JSON.stringify({
                 decision: "deny",
-                reason: `POLICY_MISMATCH: Retry policy selected REPLAN for retry reason "${retryReason}". Replanning required before worker execution.`,
+                reason: `POLICY_MISMATCH: Retry policy selected REPLAN for retry reason "${retryReason}". State transitioned to PLANNED. Worker retry denied; replanning required.`,
               }));
               return;
             }
@@ -1821,17 +1871,6 @@ function main() {
     // 4. Orchestrator: only control-plane allowed; product code / workspace writes prohibited
     if (isOrchestratorRole(activeRole)) {
       if (isControlPlane) {
-        if (activeState.pendingPolicyRequirement?.selected_action === "REPLAN") {
-          executeReplanTransition({
-            activeState,
-            statePath,
-            repoRoot,
-            payload,
-            toolCall,
-            activeRole,
-            activeContract,
-          });
-        }
         console.log(JSON.stringify({ decision: "allow" }));
         return;
       }

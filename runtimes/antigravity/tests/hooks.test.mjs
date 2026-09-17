@@ -1372,7 +1372,7 @@ test("Task 2 Causal Lifecycle: Preserves origin decision_type for RETRY_ACTION",
   }
 });
 
-test("Task 1 REPLAN State-Machine Integrity: worker retry denied, state never PLANNING, factual replan transition to PLANNED", () => {
+test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pre-transition, state PLANNED, no pending requirement", () => {
   cleanDreamTestState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -1390,9 +1390,9 @@ test("Task 1 REPLAN State-Machine Integrity: worker retry denied, state never PL
       lastWorkerProfile: "flash-medium-worker",
     }, null, 2), "utf-8");
 
-    // 1. Worker retry attempted -> DENIED because policy chooses REPLAN
+    // 1. Worker retry attempted -> DECISION(REPLAN) pre-transition, state PLANNED, worker DENIED, no pending REPLAN requirement
     const inputRetry = JSON.stringify({
-      conversationId: "replan-integrity-conv",
+      conversationId: "replan-causal-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_worker_retry_replan",
@@ -1410,25 +1410,21 @@ test("Task 1 REPLAN State-Machine Integrity: worker retry denied, state never PL
     assert.match(res1.reason, /POLICY_MISMATCH: Retry policy selected REPLAN/);
 
     const savedState1 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.ok(savedState1.pendingPolicyRequirement, "Pending requirement must be established");
-    assert.equal(savedState1.pendingPolicyRequirement.selected_action, "REPLAN");
-    assert.equal(savedState1.pendingPolicyRequirement.decision_type, "RETRY_ACTION");
+    assert.equal(savedState1.state, "PLANNED", "State must deterministically transition to PLANNED");
+    assert.notEqual(savedState1.state, "PLANNING", "State must NEVER be PLANNING");
+    assert.equal(savedState1.pendingPolicyRequirement, undefined, "Zero pending requirement waiting for arbitrary tools");
 
-    // State MUST NOT be changed to PLANNING (governance has PLANNED, never PLANNING)
-    assert.equal(savedState1.state, "EXECUTING");
-    assert.notEqual(savedState1.state, "PLANNING");
-
-    // Zero DECISION event recorded on denial
+    // Immediately pre-transition: factual DECISION(REPLAN) is recorded
     const eventsPath = ".agents/telemetry/events.jsonl";
-    if (existsSync(eventsPath)) {
-      const events1 = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
-      const dec1 = events1.find(e => e.type === "DECISION");
-      assert.equal(dec1, undefined, "Zero DECISION event on worker retry denial");
-    }
+    assert.ok(existsSync(eventsPath), "events.jsonl must exist");
+    const events1 = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const dec1 = events1.find(e => e.type === "DECISION" && e.decision_type === "RETRY_ACTION" && e.chosen_action === "REPLAN");
+    assert.ok(dec1, "Factual DECISION(REPLAN) must be recorded immediately pre-transition");
+    assert.equal(dec1.baseline_action, "REPLAN");
 
-    // 2. Factual replan execution (orchestrator writes plan file on control plane)
+    // 2. Generic control plane write (write_to_file) is allowed as normal and does NOT trigger replan or change state
     const inputPlanWrite = JSON.stringify({
-      conversationId: "replan-integrity-conv",
+      conversationId: "replan-causal-conv",
       stepIdx: 2,
       activeRole: "ORCHESTRATOR",
       toolCall: {
@@ -1446,21 +1442,51 @@ test("Task 1 REPLAN State-Machine Integrity: worker retry denied, state never PL
     const res2 = JSON.parse(raw2.trim());
     assert.equal(res2.decision, "allow");
 
-    // State transitioned to authoritative PLANNED and pending requirement consumed
     const savedState2 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(savedState2.state, "PLANNED", "State must legally transition to PLANNED");
-    assert.notEqual(savedState2.state, "PLANNING", "State must NEVER be PLANNING");
-    assert.equal(savedState2.pendingPolicyRequirement, undefined, "pending requirement consumed");
-
-    // Immediately before transition, DECISION(REPLAN) is recorded
-    assert.ok(existsSync(eventsPath), "events.jsonl must exist");
-    const events2 = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
-    const dec2 = events2.find(e => e.type === "DECISION" && e.decision_type === "RETRY_ACTION" && e.chosen_action === "REPLAN");
-    assert.ok(dec2, "Factual DECISION(REPLAN) must be recorded immediately before transition");
-    assert.equal(dec2.baseline_action, "REPLAN");
+    assert.equal(savedState2.state, "PLANNED", "State remains PLANNED without generic tool side effect");
 
     // Clean up created test plan file
     try { unlinkSync(".agents/plans/test-replan.md"); } catch {}
+
+    // 3. Invalid state transition: if state cannot transition to PLANNED, do NOT record DECISION(REPLAN), fail closed to HUMAN_GATE
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      criticality: "NORMAL",
+      state: "INTAKE", // INTAKE cannot transition to PLANNED on retry
+      retry: true,
+      attempt: 1,
+      remainingAttempts: 1,
+      prevRemainingAttempts: 1,
+      retryReason: "MISINTERPRETED_REQUIREMENT",
+      lastWorkerProfile: "flash-medium-worker",
+    }, null, 2), "utf-8");
+
+    // Remove events to test zero DECISION recording on invalid transition
+    unlinkSync(eventsPath);
+
+    const inputInvalid = JSON.stringify({
+      conversationId: "replan-invalid-conv",
+      stepIdx: 1,
+      toolCall: {
+        id: "call_worker_invalid",
+        name: "invoke_subagent",
+        args: {
+          remainingAttempts: 1,
+          Subagents: [{ TypeName: "flash-medium-worker", Role: "worker", Prompt: "Retry feature" }]
+        }
+      }
+    });
+
+    const raw3 = execFileSync("node", [preToolScript], { input: inputInvalid, encoding: "utf-8" });
+    const res3 = JSON.parse(raw3.trim());
+    assert.equal(res3.decision, "deny");
+    assert.match(res3.reason, /REPLAN_INVALID_TRANSITION/);
+
+    const savedState3 = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(savedState3.state, "HUMAN_GATE", "Invalid transition must fail closed to HUMAN_GATE");
+    assert.equal(existsSync(eventsPath), false, "Zero DECISION(REPLAN) recorded when state transition is invalid");
 
     // 3. Rejection of PLANNING in validatePolicy and policy schema
     const basePolicy = {
@@ -1491,6 +1517,158 @@ test("Task 1 REPLAN State-Machine Integrity: worker retry denied, state never PL
     assert.match(valRes.errors.join("; "), /elements must be valid enum strings/, "Validator error mentions enum strings");
   } finally {
     try { unlinkSync(".agents/plans/test-replan.md"); } catch {}
+    cleanDreamTestState();
+  }
+});
+
+test("Task 1 Exact Investigation Correlation: normative counterexamples A through G", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    const setupInFlightA = () => {
+      writeFileSync(".agents/state/active-state.json", JSON.stringify({
+        activeRole: "ORCHESTRATOR",
+        taskAction: "IMPLEMENT",
+        taskDomain: "CODE",
+        criticality: "NORMAL",
+        conversationId: "conv-A",
+        investigationInFlight: {
+          correlationKey: "corr-key-A",
+          correlation_key: "corr-key-A",
+          decision_type: "INVESTIGATION_STRATEGY",
+          policy_source: "STATIC_POLICY_V1",
+          toolCallId: "call-A",
+          tool_call_id: "call-A",
+          stepIdx: 1,
+          step_idx: 1,
+          conversationId: "conv-A",
+          conversation_id: "conv-A",
+          subagentRole: "investigator",
+          subagentProfile: "flash-worker",
+          started_at: new Date().toISOString(),
+        },
+        post_investigation: false,
+      }, null, 2), "utf-8");
+    };
+
+    // A. conv-A, call-A vs conv-B, call-B -> A remains in flight, post_investigation = false
+    setupInFlightA();
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-B",
+        toolCallId: "call-B",
+        stepIdx: 1,
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateA = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateA.investigationInFlight, "Counterexample A: in-flight must NOT be consumed by different conversation and tool call");
+    assert.equal(stateA.post_investigation, false, "Counterexample A: post_investigation must remain false");
+
+    // B. Same conversation, different toolCallId -> does not close A
+    setupInFlightA();
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolCallId: "call-different",
+        stepIdx: 2,
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateB = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateB.investigationInFlight, "Counterexample B: in-flight must NOT be consumed by different tool call in same conversation");
+    assert.equal(stateB.post_investigation, false, "Counterexample B: post_investigation must remain false");
+
+    // C. Same toolCallId, incompatible conversation -> does not close A
+    setupInFlightA();
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-incompatible",
+        toolCallId: "call-A",
+        stepIdx: 1,
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateC = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateC.investigationInFlight, "Counterexample C: in-flight must NOT be consumed by incompatible conversation");
+    assert.equal(stateC.post_investigation, false, "Counterexample C: post_investigation must remain false");
+
+    // D. manage_subagents of another child -> does not close A
+    setupInFlightA();
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolName: "manage_subagents",
+        toolArgs: { Action: "status", ConversationIds: ["unrelated-child-worker"] },
+        result: { status: "SUCCESS", subagentId: "unrelated-child-worker", role: "worker" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateD = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(stateD.investigationInFlight, "Counterexample D: manage_subagents of unrelated child must NOT close in-flight");
+    assert.equal(stateD.post_investigation, false, "Counterexample D: post_investigation must remain false");
+
+    // E. Exactly correlated completion -> closes A, post_investigation = true
+    setupInFlightA();
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolCallId: "call-A",
+        stepIdx: 1,
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf-8"
+    });
+    let stateE = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(stateE.investigationInFlight, undefined, "Counterexample E: exactly correlated completion must close in-flight");
+    assert.equal(stateE.post_investigation, true, "Counterexample E: post_investigation must become true");
+
+    // F. Exactly correlated completion + FAILED/error -> closes in-flight, post_investigation = false
+    setupInFlightA();
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolCallId: "call-A",
+        stepIdx: 1,
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        error: "Subagent crashed with unhandled exception",
+      }),
+      encoding: "utf-8"
+    });
+    let stateF = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(stateF.investigationInFlight, undefined, "Counterexample F: failed completion must close in-flight");
+    assert.equal(stateF.post_investigation, false, "Counterexample F: post_investigation must remain false on error");
+
+    // G. Cancel exactly correlated -> closes in-flight, post_investigation = false
+    setupInFlightA();
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "conv-A",
+        toolCallId: "call-A",
+        stepIdx: 1,
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{ Role: "investigator", TypeName: "flash-worker" }] },
+        cancelled: true,
+      }),
+      encoding: "utf-8"
+    });
+    let stateG = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(stateG.investigationInFlight, undefined, "Counterexample G: cancelled completion must close in-flight");
+    assert.equal(stateG.post_investigation, false, "Counterexample G: post_investigation must remain false on cancel");
+  } finally {
     cleanDreamTestState();
   }
 });
