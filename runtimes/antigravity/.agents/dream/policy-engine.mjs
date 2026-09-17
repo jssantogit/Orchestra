@@ -175,6 +175,18 @@ export function validatePolicy(policy) {
     );
   }
 
+  if (policy.base_policy !== undefined && policy.base_policy !== null && typeof policy.base_policy !== "string") {
+    errors.push("base_policy must be a string or null");
+  }
+
+  if (policy.description !== undefined && typeof policy.description !== "string") {
+    errors.push("description must be a string");
+  }
+
+  if (policy.created_at !== undefined && typeof policy.created_at !== "string") {
+    errors.push("created_at must be a string");
+  }
+
   // Canonical size ceiling
   try {
     const canonicalStr = canonicalize(policy);
@@ -235,6 +247,10 @@ export function validatePolicy(policy) {
       if (!ALLOWED_RULE_PROPERTIES.has(key)) {
         errors.push(`${prefix}: unrecognized rule property "${key}"`);
       }
+    }
+
+    if (rule.description !== undefined && typeof rule.description !== "string") {
+      errors.push(`${prefix}: description must be a string`);
     }
 
     // ID validation

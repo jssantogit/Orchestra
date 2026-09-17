@@ -4156,6 +4156,37 @@ test("Policy structural contract parity and semantic invariants", () => {
       expectedValid: false,
     },
     {
+      name: "invalid_top_level_description_integer",
+      policy: makePolicy({ ...baseRaw, description: 42 }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_top_level_base_policy_integer",
+      policy: makePolicy({ ...baseRaw, base_policy: 42 }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_top_level_created_at_boolean",
+      policy: makePolicy({ ...baseRaw, created_at: false }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_rule_description_object",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], description: {} }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_retry_remaining_negative",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { retry_remaining: -1 } }],
+      }),
+      expectedValid: false,
+    },
+    {
       name: "invalid_rule_unknown_property",
       policy: makePolicy({
         ...baseRaw,
