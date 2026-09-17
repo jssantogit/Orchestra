@@ -150,6 +150,7 @@ export function recordDecision({
     };
 
     const targetFile = join(resolvedPendingDir, `${effectiveCorrelationKey}.json`);
+    const consumedFile = join(resolvedPendingDir, `${effectiveCorrelationKey}.consumed`);
     const tempFile = join(
       resolvedPendingDir,
       `.${effectiveCorrelationKey}.${randomUUID()}.tmp`,
@@ -157,6 +158,17 @@ export function recordDecision({
 
     let pendingCommitted = false;
     try {
+      if (existsSync(consumedFile)) {
+        let consumed = null;
+        try { consumed = JSON.parse(readFileSync(consumedFile, "utf8")); } catch {}
+        return {
+          recorded: false,
+          reason: "DECISION_ALREADY_CONSUMED",
+          error_code: "ERR_CORRELATION_ALREADY_CONSUMED",
+          decision_id: consumed?.decision_id || null,
+          correlationKey: effectiveCorrelationKey,
+        };
+      }
       if (existsSync(targetFile)) {
         let existingPending = null;
         try { existingPending = JSON.parse(readFileSync(targetFile, "utf8")); } catch {}
