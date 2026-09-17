@@ -63,22 +63,27 @@ Follow the execution loop strictly:
   - Interpret phrases such as "as needed" conditionally. They do not require touching that component.
   - Use the smallest correct design.
 
-## API Shape Preservation (EXISTING API SUPPORT != NEW API SURFACE)
-- **Do not invent new API shapes**: Do not invent a new public or internal API shape merely to propagate a feature. This includes unnecessary:
-  - Positional arguments;
+## API Shape Preservation (EXISTING EXTENSION POINT FIRST)
+- **EXISTING EXTENSION POINT FIRST**: If the requested behavior can be represented through an existing:
+  - options object;
+  - config object;
+  - existing parameter;
+  - existing pass-through value;
+  use it directly without inventing another calling convention.
+- **Preserve existing function signatures**: Preserve an existing function signature (e.g. `formatNumber(value, options = {})`) unless one of these is true:
+  1. The requested external contract explicitly requires a new signature;
+  2. The existing API cannot express the requested behavior;
+  3. An authoritative required test requires the new shape.
+- **DO NOT add an alternate positional parameter**: Do NOT add an alternate positional parameter (e.g. `formatNumber(value, options, precision)`) merely because JavaScript permits extra arguments.
+- **DO NOT create unnecessary calling variations**: Never create:
+  - Positional aliases for an options property;
   - Overloads;
-  - Alternate calling conventions;
-  - Wrapper parameters;
-  - Forwarding parameters;
-  - Helper functions;
-  - Cross-layer plumbing.
-- **Preserve existing options/config objects**: If an existing API, config, or options object already carries or can carry the requested value without caller modification, preserve that API.
-- **Pass-through callers remain unmodified**: An existing pass-through caller that already forwards the relevant object or value unchanged is **NOT_REQUIRED**.
-- Change a caller or boundary ONLY when at least one of these is factually true:
-  1. The requested external contract explicitly requires that caller API;
-  2. Existing data flow cannot express or forward the requested behavior;
-  3. A required test demonstrates that caller modification is necessary.
-- Phrases such as "as needed" or "update the boundary as needed" are conditional, not a mandate to modify another layer. Do not infer a new API requirement that the task did not request.
+  - Alternate parameter order;
+  - New forwarding parameters;
+  - Wrapper APIs;
+  without factual necessity.
+- **Pass-through callers remain unmodified**: If an existing caller (e.g. `calculateAndFormat`) already forwards the existing options/config object unchanged, leave the caller completely unchanged.
+- Change a caller or boundary ONLY when at least one of the 3 criteria above is factually true. Phrases such as "as needed" or "update the boundary as needed" are conditional, not a mandate to modify another layer. Do not infer a new API requirement that the task did not request.
 
 ## Invariants & Turn Economy Discipline
 1. **No Context Files or Git Archaeology**: Repository control instructions are already injected by the runtime. During ordinary implementation, do NOT manually read: `GEMINI.md`, `AGENTS.md`, `SKILL.md`, `README.md`, `package.json`, lockfiles, or git history unless the implementation has a concrete unresolved dependency that requires that specific file. Curiosity, confirmation, architecture archaeology, or general context are never valid reasons. Never run `git log`, `git status`, or `git diff` during the normal worker implementation path.

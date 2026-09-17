@@ -98,18 +98,40 @@ const TASKS = {
       } catch (err) {
         return { success: false, reason: "Fixture test suite failed" };
       }
-      // 2. Verify precision argument
+      // 2. Verify options.precision and reject positional precision overload
       try {
         const testCode = `
           import assert from "node:assert/strict";
           import { formatNumber } from "./src/formatter.js";
+          import { calculateAndFormat } from "./src/calculator.js";
+
+          // options.precision supported
           assert.equal(formatNumber(3.14159, { precision: 2 }), "3.14");
           assert.equal(formatNumber(10, { precision: 3 }), "10.000");
+
+          // default compatibility: empty options retains full number string
+          assert.equal(formatNumber(3.14159, {}), "3.14159");
+
+          // positional precision rejected: 3rd argument must NOT be treated as precision
+          assert.equal(formatNumber(3.14159, {}, 2), "3.14159");
+
+          // calculator pass-through works via existing options without calculator changes
+          assert.equal(calculateAndFormat("divide", 1, 8, { precision: 2 }), "0.13");
         `;
         execFileSync("node", ["--input-type=module", "-e", testCode], { cwd: dir, stdio: "pipe" });
       } catch (err) {
-        return { success: false, reason: "Precision argument verification failed" };
+        return { success: false, reason: `Precision argument verification failed: ${err.message}` };
       }
+
+      // 3. Exported function signature audit
+      const sigAudit = auditApiSignatures(fixtureSource, dir, ["src/formatter.js", "src/calculator.js"]);
+      if (sigAudit.changed) {
+        const details = Object.entries(sigAudit.details)
+          .map(([fn, d]) => `${fn}: before="${d.before}" after="${d.after}"`)
+          .join(", ");
+        return { success: false, reason: `Exported function signature changed unexpectedly: ${details}` };
+      }
+
       return { success: true };
     },
   },
@@ -271,6 +293,16 @@ function parseCodexJsonl(rawOutput) {
     advisory_injections: 0,
     worker_packet_bytes: 0,
     context_proxy_bytes: 0,
+    parent_delegated_sidequest_attempts: 0,
+    parent_delegated_sidequest_attempts_by_tool: {},
+    parent_delegated_sidequest_denied: 0,
+    parent_delegated_sidequest_succeeded: 0,
+    schedule_attempts_during_delegation: 0,
+    manage_task_poll_attempts: 0,
+    manage_subagent_poll_attempts: 0,
+    parent_workspace_read_attempts: 0,
+    parent_repository_search_attempts: 0,
+    parent_validation_attempts: 0,
     input_tokens: normUsage.inputTokens,
     cached_input_tokens: normUsage.cachedInputTokens,
     uncached_input_tokens: normUsage.uncachedInputTokens,
@@ -279,6 +311,220 @@ function parseCodexJsonl(rawOutput) {
     reasoning_tokens: normUsage.reasoningTokens,
     token_semantics_confidence: normUsage.confidence,
     metric_status: normUsage.status,
+  };
+}
+
+/**
+ * Extracts exported function signatures from a JavaScript source file.
+ */
+export function extractExportedFunctionSignatures(filePath) {
+  if (!existsSync(filePath)) return {};
+  const content = readFileSync(filePath, "utf8");
+  const signatures = {};
+  const fnRegex = /export\s+(?:async\s+)?function\s+([a-zA-Z0-9_$]+)\s*\(([^)]*)\)/g;
+  let match;
+  while ((match = fnRegex.exec(content)) !== null) {
+    const fnName = match[1];
+    const params = match[2].replace(/\s+/g, " ").trim();
+    signatures[fnName] = `${fnName}(${params})`;
+  }
+  const arrowRegex = /export\s+const\s+([a-zA-Z0-9_$]+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/g;
+  while ((match = arrowRegex.exec(content)) !== null) {
+    const fnName = match[1];
+    const params = match[2].replace(/\s+/g, " ").trim();
+    signatures[fnName] = `${fnName}(${params})`;
+  }
+  return signatures;
+}
+
+/**
+ * Audits exported API function signatures before and after benchmark execution.
+ */
+export function auditApiSignatures(pristineDir, liveDir, targetFiles = ["src/formatter.js", "src/calculator.js"]) {
+  const audit = {
+    before: {},
+    after: {},
+    changed: false,
+    details: {},
+  };
+  for (const relFile of targetFiles) {
+    const pristineFile = join(pristineDir, relFile);
+    const liveFile = join(liveDir, relFile);
+    const beforeSigs = extractExportedFunctionSignatures(pristineFile);
+    const afterSigs = extractExportedFunctionSignatures(liveFile);
+    audit.before[relFile] = beforeSigs;
+    audit.after[relFile] = afterSigs;
+
+    for (const [fnName, sigBefore] of Object.entries(beforeSigs)) {
+      const sigAfter = afterSigs[fnName];
+      if (!sigAfter || sigAfter !== sigBefore) {
+        audit.changed = true;
+        audit.details[fnName] = { before: sigBefore, after: sigAfter || "REMOVED" };
+      }
+    }
+  }
+  return audit;
+}
+
+/**
+ * Audits mutated files for scope minimality.
+ */
+export function auditScopeMinimality(mutatedFiles = [], taskKey = "multi") {
+  if (taskKey !== "multi") return { pass: true, classification: {} };
+  const classification = {};
+  let pass = true;
+  for (const f of mutatedFiles) {
+    const norm = canonicalizePath(f);
+    if (norm === "src/formatter.js" || norm === "test/formatter.test.js") {
+      classification[norm] = "REQUIRED";
+    } else {
+      classification[norm] = "UNNECESSARY_SCOPE_EXPANSION";
+      pass = false;
+    }
+  }
+  return { pass, classification };
+}
+
+/**
+ * Extracts prohibited parent tool ATTEMPTS during healthy delegated execution.
+ */
+export function extractParentDelegatedSidequestAttempts(parentTranscriptFile, activeState = {}) {
+  const attemptsByTool = {};
+  let totalAttempts = 0;
+  let deniedCount = 0;
+  let succeededCount = 0;
+  const attempts = [];
+
+  const PROHIBITED_ROUTINE_TOOLS = new Set([
+    "schedule",
+    "manage_task",
+    "manage_subagents",
+    "view_file",
+    "grep_search",
+    "find_by_name",
+    "run_command",
+  ]);
+
+  if (parentTranscriptFile && existsSync(parentTranscriptFile)) {
+    try {
+      const raw = readFileSync(parentTranscriptFile, "utf8").trim();
+      const lines = raw ? raw.split("\n") : [];
+      const steps = [];
+      for (const line of lines) {
+        try {
+          steps.push(JSON.parse(line));
+        } catch {}
+      }
+
+      let delegationStepIndex = -1;
+      let wakeupStepIndex = Infinity;
+
+      // Identify delegation step (first invoke_subagent)
+      for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        if (step.type === "PLANNER_RESPONSE" && Array.isArray(step.tool_calls)) {
+          if (step.tool_calls.some((tc) => tc.name === "invoke_subagent")) {
+            delegationStepIndex = i;
+            break;
+          }
+        }
+      }
+
+      // Identify reactive wakeup step (system message with worker completion / completion content)
+      if (delegationStepIndex !== -1) {
+        for (let i = delegationStepIndex + 1; i < steps.length; i++) {
+          const step = steps[i];
+          const content = String(step.content || "");
+          const isCompletionMsg =
+            step.type === "SYSTEM_MESSAGE" &&
+            (content.includes("STATUS: IMPLEMENTATION_COMPLETE") ||
+              content.includes("IMPLEMENTATION_COMPLETE") ||
+              content.includes("PRIORITY_HIGH"));
+          if (isCompletionMsg) {
+            wakeupStepIndex = i;
+            break;
+          }
+        }
+
+        // Analyze parent turns strictly between delegation and wakeup (healthy delegation window)
+        for (let i = delegationStepIndex + 1; i < Math.min(wakeupStepIndex, steps.length); i++) {
+          const step = steps[i];
+          if (step.type === "PLANNER_RESPONSE" && Array.isArray(step.tool_calls)) {
+            for (let tcIdx = 0; tcIdx < step.tool_calls.length; tcIdx++) {
+              const tc = step.tool_calls[tcIdx];
+              const toolName = tc.name || "";
+              const toolArgs = tc.args || tc.parameters || {};
+
+              if (PROHIBITED_ROUTINE_TOOLS.has(toolName)) {
+                // Check recovery / cancellation exceptions
+                const isCancellation =
+                  (toolName === "manage_subagents" && (toolArgs.Action === "kill" || toolArgs.Action === "kill_all")) ||
+                  (toolName === "manage_task" && toolArgs.Action === "kill");
+                const isDiagnosedStalled = Boolean(activeState?.stalled || activeState?.circuitBreakerType === "STALLED");
+
+                if (isCancellation || (toolName === "manage_subagents" && isDiagnosedStalled)) {
+                  // Legitimate recovery exception: do NOT count
+                  continue;
+                }
+
+                // Check if this tool call was denied by pre-tool hook
+                let wasDenied = false;
+                for (let j = i + 1; j < Math.min(i + 4, steps.length); j++) {
+                  const nextStep = steps[j];
+                  if (nextStep.type === "PLANNER_RESPONSE") break;
+                  const errText = String(nextStep.error || nextStep.content || "");
+                  if (
+                    nextStep.status === "ERROR" &&
+                    (errText.includes("denied by pre-tool hook") || errText.includes("tool call denied"))
+                  ) {
+                    wasDenied = true;
+                    break;
+                  }
+                }
+
+                totalAttempts++;
+                attemptsByTool[toolName] = (attemptsByTool[toolName] || 0) + 1;
+                if (wasDenied) {
+                  deniedCount++;
+                } else {
+                  succeededCount++;
+                }
+                attempts.push({
+                  tool: toolName,
+                  stepIndex: i,
+                  denied: wasDenied,
+                  args: toolArgs,
+                });
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Reconcile with activeState.deniedAttempts
+  if (Array.isArray(activeState?.deniedAttempts)) {
+    for (const d of activeState.deniedAttempts) {
+      if (!attempts.some((a) => a.tool === d.tool && a.denied)) {
+        totalAttempts++;
+        attemptsByTool[d.tool] = (attemptsByTool[d.tool] || 0) + 1;
+        deniedCount++;
+        attempts.push({
+          tool: d.tool,
+          denied: true,
+          args: d.args,
+        });
+      }
+    }
+  }
+
+  return {
+    total_attempts: totalAttempts,
+    attempts_by_tool: attemptsByTool,
+    denied_count: deniedCount,
+    succeeded_count: succeededCount,
+    attempts,
   };
 }
 
@@ -553,6 +799,7 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
 
   // Inspect transcripts from brain directory if available
   let parentTurns = null;
+  let parentTranscriptFile = null;
   const workerTurns = [];
   const reviewerTurns = [];
   const childMutations = [];
@@ -561,7 +808,7 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
 
   if (convId) {
     const brainDir = join(homedir(), ".gemini/antigravity-cli/brain", convId);
-    const parentTranscriptFile = join(brainDir, ".system_generated/logs/transcript.jsonl");
+    parentTranscriptFile = join(brainDir, ".system_generated/logs/transcript.jsonl");
     if (existsSync(parentTranscriptFile)) {
       parentTurns = parseTranscriptTurns(parentTranscriptFile);
     }
@@ -611,6 +858,8 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
       } catch {}
     }
   }
+
+  const sidequestAttempts = extractParentDelegatedSidequestAttempts(parentTranscriptFile, state);
 
   const parentMetrics = parentTurns ? calculateDistribution(parentTurns) : null;
   const workerMetrics = workerTurns.length > 0 ? calculateDistribution(workerTurns) : null;
@@ -907,6 +1156,16 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     acceptance_actor: state.acceptanceActor || null,
     acceptance_observed: Boolean(state.acceptanceObserved),
     acceptance_state: state.acceptanceState || null,
+    parent_delegated_sidequest_attempts: sidequestAttempts.total_attempts,
+    parent_delegated_sidequest_attempts_by_tool: sidequestAttempts.attempts_by_tool,
+    parent_delegated_sidequest_denied: sidequestAttempts.denied_count,
+    parent_delegated_sidequest_succeeded: sidequestAttempts.succeeded_count,
+    schedule_attempts_during_delegation: sidequestAttempts.attempts_by_tool["schedule"] || 0,
+    manage_task_poll_attempts: sidequestAttempts.attempts_by_tool["manage_task"] || 0,
+    manage_subagent_poll_attempts: sidequestAttempts.attempts_by_tool["manage_subagents"] || 0,
+    parent_workspace_read_attempts: sidequestAttempts.attempts_by_tool["view_file"] || 0,
+    parent_repository_search_attempts: (sidequestAttempts.attempts_by_tool["grep_search"] || 0) + (sidequestAttempts.attempts_by_tool["find_by_name"] || 0),
+    parent_validation_attempts: sidequestAttempts.attempts_by_tool["run_command"] || 0,
     parent_per_turn_tool_counts: parentMetrics?.per_turn_tool_counts || (parentToolCalls > 0 ? [parentToolCalls] : [0]),
     worker_per_turn_tool_counts: workerMetrics?.per_turn_tool_counts || (workerToolCalls > 0 ? [workerToolCalls] : []),
   };
@@ -991,6 +1250,24 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         reasoning_tokens: runtime === "codex" ? 20 : null,
         token_semantics_confidence: runtime === "codex" ? "HIGH" : "LOW",
         metric_status: runtime === "codex" ? "OK" : "NOT_AVAILABLE",
+        parent_delegated_sidequest_attempts: 0,
+        parent_delegated_sidequest_attempts_by_tool: {},
+        parent_delegated_sidequest_denied: 0,
+        parent_delegated_sidequest_succeeded: 0,
+        schedule_attempts_during_delegation: 0,
+        manage_task_poll_attempts: 0,
+        manage_subagent_poll_attempts: 0,
+        parent_workspace_read_attempts: 0,
+        parent_repository_search_attempts: 0,
+        parent_validation_attempts: 0,
+        zero_parent_sidequests_gate: "PASS",
+        parent_zero_attempt_gate: "PASS",
+        api_signature_before: {},
+        api_signature_after: {},
+        api_signature_changed: false,
+        scope_minimality_audit: {},
+        api_shape_preservation_gate: "PASS",
+        scope_minimality_gate: "PASS",
         fidelity: {
           status: fidelity.fidelityStatus,
           confidence: fidelity.confidence,
@@ -1141,6 +1418,16 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       mutationAttributionMode: mutationEvents.length > 0 ? (mutationEvents.some((m) => m.evidenceSource === "CHILD_TRANSCRIPT") ? "FACTUAL" : null) : null,
     });
 
+    const sigAudit = auditApiSignatures(fixtureSource, tempDir, ["src/formatter.js", "src/calculator.js"]);
+    const mutatedPaths = (metrics.mutation_events || []).map((m) => m.path).filter(Boolean);
+    const uniqueMutatedFiles = [...new Set(mutatedPaths)];
+    const scopeAudit = auditScopeMinimality(uniqueMutatedFiles, taskKey);
+
+    const zeroParentSidequestsGate = (metrics.parent_delegated_sidequest_attempts || 0) === 0 ? "PASS" : "FAIL";
+    const parentZeroAttemptGate = (metrics.parent_delegated_sidequest_attempts || 0) === 0 ? "PASS" : "FAIL";
+    const apiShapePreservationGate = (!sigAudit.changed && verification.success) ? "PASS" : "FAIL";
+    const scopeMinimalityGate = scopeAudit.pass ? "PASS" : "FAIL";
+
     return {
       runtime,
       task: taskKey,
@@ -1151,6 +1438,14 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       dry_run: false,
       duration_ms: durationMs,
       ...metrics,
+      api_signature_before: sigAudit.before,
+      api_signature_after: sigAudit.after,
+      api_signature_changed: sigAudit.changed,
+      scope_minimality_audit: scopeAudit.classification,
+      zero_parent_sidequests_gate: zeroParentSidequestsGate,
+      parent_zero_attempt_gate: parentZeroAttemptGate,
+      api_shape_preservation_gate: apiShapePreservationGate,
+      scope_minimality_gate: scopeMinimalityGate,
       fidelity: {
         status: fidelity.fidelityStatus,
         confidence: fidelity.confidence,
@@ -1249,6 +1544,14 @@ function main() {
           }
           if (res.fidelity && res.fidelity.status !== "PASS") {
             console.error(`FIDELITY_FAILED: ${runtime} on ${taskKey} failed runtime fidelity check: ${res.fidelity.violations.join(", ")}`);
+            hasFidelityFailure = true;
+          }
+          if ((res.parent_delegated_sidequest_attempts || 0) > 0) {
+            console.error(`PARENT_SIDEQUEST_ATTEMPT_FAILED: ${runtime} on ${taskKey} had prohibited parent sidequest attempts after delegation: ${res.parent_delegated_sidequest_attempts} attempts (${JSON.stringify(res.parent_delegated_sidequest_attempts_by_tool)})`);
+            hasFidelityFailure = true;
+          }
+          if (taskKey === "multi" && res.api_signature_changed) {
+            console.error(`API_SIGNATURE_FAILED: ${runtime} on ${taskKey} changed exported API signatures: ${JSON.stringify(res.api_signature_after)}`);
             hasFidelityFailure = true;
           }
         }

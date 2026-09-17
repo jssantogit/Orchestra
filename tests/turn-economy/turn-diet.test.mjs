@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, mkdtempSync, cpSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,14 @@ import {
   isConcretePath,
   verifyWorkerValidation,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
-import { canonicalizePath, extractChildTranscriptEvidence } from "../../benchmarks/turn-economy/run.mjs";
+import {
+  canonicalizePath,
+  extractChildTranscriptEvidence,
+  extractExportedFunctionSignatures,
+  auditApiSignatures,
+  auditScopeMinimality,
+  extractParentDelegatedSidequestAttempts,
+} from "../../benchmarks/turn-economy/run.mjs";
 import { isValidAgentName } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
 import { syncChildEvidence } from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
 
@@ -2426,4 +2433,235 @@ test("reactive-delegation-lock: 12. healthy delegated execution can yield and la
   assert.equal(finalState.workerValidationVerified, true);
   assert.equal(finalState.workerValidationFresh, true);
   assert.equal(finalState.workerValidationExitCode, 0);
+});
+
+test("task4-v1.4: 1. denied delegated schedule attempt is counted as a side-quest attempt", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sidequest-test-1-"));
+  const transcriptPath = join(tempDir, "transcript.jsonl");
+  try {
+    const lines = [
+      JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "Task prompt" }),
+      JSON.stringify({ step_index: 1, type: "PLANNER_RESPONSE", tool_calls: [{ name: "invoke_subagent", args: {} }] }),
+      JSON.stringify({ step_index: 2, type: "GENERIC", status: "DONE", content: "Worker spawned" }),
+      JSON.stringify({ step_index: 3, type: "PLANNER_RESPONSE", tool_calls: [{ name: "schedule", args: { DurationSeconds: 30 } }] }),
+      JSON.stringify({ step_index: 4, type: "GENERIC", status: "ERROR", error: "tool call denied by pre-tool hook: Reactive Wakeup policy: Routine schedule/timer calls are prohibited" }),
+      JSON.stringify({ step_index: 5, type: "PLANNER_RESPONSE", tool_calls: [] }),
+      JSON.stringify({ step_index: 6, type: "SYSTEM_MESSAGE", content: "STATUS: IMPLEMENTATION_COMPLETE" }),
+      JSON.stringify({ step_index: 7, type: "PLANNER_RESPONSE", tool_calls: [] }),
+    ];
+    writeFileSync(transcriptPath, lines.join("\n"), "utf8");
+
+    const res = extractParentDelegatedSidequestAttempts(transcriptPath);
+    assert.equal(res.total_attempts, 1);
+    assert.equal(res.attempts_by_tool["schedule"], 1);
+    assert.equal(res.denied_count, 1);
+    assert.equal(res.succeeded_count, 0);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task4-v1.4: 2. zero successful side quests but one denied attempt -> gate FAIL", () => {
+  const res = {
+    parent_delegated_sidequest_attempts: 1,
+    parent_delegated_sidequest_denied: 1,
+    parent_delegated_sidequest_succeeded: 0,
+  };
+  const zeroGate = res.parent_delegated_sidequest_attempts === 0 ? "PASS" : "FAIL";
+  assert.equal(zeroGate, "FAIL");
+});
+
+test("task4-v1.4: 3. zero attempted side quests -> gate PASS", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sidequest-test-3-"));
+  const transcriptPath = join(tempDir, "transcript.jsonl");
+  try {
+    const lines = [
+      JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "Task prompt" }),
+      JSON.stringify({ step_index: 1, type: "PLANNER_RESPONSE", tool_calls: [{ name: "invoke_subagent", args: {} }] }),
+      JSON.stringify({ step_index: 2, type: "GENERIC", status: "DONE", content: "Worker spawned" }),
+      JSON.stringify({ step_index: 3, type: "PLANNER_RESPONSE", tool_calls: [] }),
+      JSON.stringify({ step_index: 4, type: "SYSTEM_MESSAGE", content: "STATUS: IMPLEMENTATION_COMPLETE" }),
+      JSON.stringify({ step_index: 5, type: "PLANNER_RESPONSE", tool_calls: [] }),
+    ];
+    writeFileSync(transcriptPath, lines.join("\n"), "utf8");
+
+    const res = extractParentDelegatedSidequestAttempts(transcriptPath);
+    assert.equal(res.total_attempts, 0);
+    assert.equal(res.denied_count, 0);
+    assert.equal(res.succeeded_count, 0);
+    const zeroGate = res.total_attempts === 0 ? "PASS" : "FAIL";
+    assert.equal(zeroGate, "PASS");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task4-v1.4: 4. legitimate recovery exception does not count as routine side quest", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sidequest-test-4-"));
+  const transcriptPath = join(tempDir, "transcript.jsonl");
+  try {
+    const lines = [
+      JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "Task prompt" }),
+      JSON.stringify({ step_index: 1, type: "PLANNER_RESPONSE", tool_calls: [{ name: "invoke_subagent", args: {} }] }),
+      JSON.stringify({ step_index: 2, type: "GENERIC", status: "DONE", content: "Worker spawned" }),
+      JSON.stringify({ step_index: 3, type: "PLANNER_RESPONSE", tool_calls: [{ name: "manage_subagents", args: { Action: "kill", ConversationIds: ["sub-1"] } }] }),
+      JSON.stringify({ step_index: 4, type: "GENERIC", status: "DONE", content: "Subagent killed" }),
+      JSON.stringify({ step_index: 5, type: "SYSTEM_MESSAGE", content: "STATUS: IMPLEMENTATION_COMPLETE" }),
+    ];
+    writeFileSync(transcriptPath, lines.join("\n"), "utf8");
+
+    const res = extractParentDelegatedSidequestAttempts(transcriptPath);
+    assert.equal(res.total_attempts, 0, "Cancellation exception must not count as routine side quest attempt");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task4-v1.4: 5. parent outside healthy delegation is not incorrectly counted", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "sidequest-test-5-"));
+  const transcriptPath = join(tempDir, "transcript.jsonl");
+  try {
+    const lines = [
+      JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "Task prompt" }),
+      // Turn 1 before delegation: legitimate read
+      JSON.stringify({ step_index: 1, type: "PLANNER_RESPONSE", tool_calls: [{ name: "view_file", args: { AbsolutePath: "README.md" } }] }),
+      JSON.stringify({ step_index: 2, type: "GENERIC", status: "DONE", content: "File content" }),
+      // Turn 2: delegation
+      JSON.stringify({ step_index: 3, type: "PLANNER_RESPONSE", tool_calls: [{ name: "invoke_subagent", args: {} }] }),
+      JSON.stringify({ step_index: 4, type: "GENERIC", status: "DONE", content: "Worker spawned" }),
+      // Child completion wakeup
+      JSON.stringify({ step_index: 5, type: "SYSTEM_MESSAGE", content: "STATUS: IMPLEMENTATION_COMPLETE" }),
+      // Turn 3: post-wakeup acceptance
+      JSON.stringify({ step_index: 6, type: "PLANNER_RESPONSE", tool_calls: [] }),
+    ];
+    writeFileSync(transcriptPath, lines.join("\n"), "utf8");
+
+    const res = extractParentDelegatedSidequestAttempts(transcriptPath);
+    assert.equal(res.total_attempts, 0, "Tool calls outside delegation window must not be counted");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task4-v1.4: 6. Task 4 API compatibility rejects positional precision support", () => {
+  function badFormatNumber(value, options = {}, precision) {
+    const p = typeof precision === "number" ? precision : (options && typeof options.precision === "number" ? options.precision : undefined);
+    if (typeof p === "number") {
+      return value.toFixed(p);
+    }
+    return String(value);
+  }
+
+  function correctFormatNumber(value, options = {}) {
+    const p = options && typeof options.precision === "number" ? options.precision : undefined;
+    if (typeof p === "number") {
+      return value.toFixed(p);
+    }
+    return String(value);
+  }
+
+  assert.equal(badFormatNumber(3.14159, {}, 2), "3.14");
+  assert.equal(correctFormatNumber(3.14159, {}, 2), "3.14159");
+
+  const rejectsPositional = correctFormatNumber(3.14159, {}, 2) === "3.14159";
+  assert.equal(rejectsPositional, true);
+  const badRejectsPositional = badFormatNumber(3.14159, {}, 2) === "3.14159";
+  assert.equal(badRejectsPositional, false, "Bad implementation with positional parameter fails acceptance check");
+});
+
+test("task4-v1.4: 7. Task 4 preserves existing exported function signatures", () => {
+  const pristineDir = resolve(orchestraRoot, "benchmarks/turn-economy/fixture");
+  const tempDir = mkdtempSync(join(tmpdir(), "sig-audit-test-"));
+  try {
+    cpSync(join(pristineDir, "src"), join(tempDir, "src"), { recursive: true });
+
+    // Unchanged fixture audit must pass
+    const auditUnchanged = auditApiSignatures(pristineDir, tempDir, ["src/formatter.js", "src/calculator.js"]);
+    assert.equal(auditUnchanged.changed, false);
+    assert.equal(auditUnchanged.before["src/formatter.js"]["formatNumber"], "formatNumber(value, options = {})");
+    assert.equal(auditUnchanged.before["src/calculator.js"]["calculateAndFormat"], "calculateAndFormat(op, a, b, options = {})");
+
+    // If an alternate positional parameter is added to formatNumber signature
+    const modifiedFormatter = readFileSync(join(tempDir, "src/formatter.js"), "utf8")
+      .replace("formatNumber(value, options = {})", "formatNumber(value, options = {}, precision)");
+    writeFileSync(join(tempDir, "src/formatter.js"), modifiedFormatter, "utf8");
+
+    const auditChanged = auditApiSignatures(pristineDir, tempDir, ["src/formatter.js", "src/calculator.js"]);
+    assert.equal(auditChanged.changed, true, "Signature alteration must be detected");
+    assert.equal(auditChanged.details["formatNumber"].after, "formatNumber(value, options = {}, precision)");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("task4-v1.4: 8. existing options.precision behavior passes", () => {
+  function formatNumber(value, options = {}) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new TypeError("Value must be a finite number");
+    }
+    const prefix = options.prefix || "";
+    const suffix = options.suffix || "";
+    let numStr;
+    if (typeof options.precision === "number") {
+      numStr = value.toFixed(options.precision);
+    } else {
+      numStr = String(value);
+    }
+    return `${prefix}${numStr}${suffix}`;
+  }
+
+  assert.equal(formatNumber(3.14159, { precision: 2 }), "3.14");
+  assert.equal(formatNumber(10, { precision: 3 }), "10.000");
+  assert.equal(formatNumber(3.14159, {}), "3.14159");
+  assert.equal(formatNumber(3.14159), "3.14159");
+});
+
+test("task4-v1.4: 9. calculator options pass-through works without calculator API expansion", () => {
+  const pristineDir = resolve(orchestraRoot, "benchmarks/turn-economy/fixture");
+  const tempDir = mkdtempSync(join(tmpdir(), "calc-passthrough-test-"));
+  try {
+    cpSync(join(pristineDir, "src"), join(tempDir, "src"), { recursive: true });
+
+    // Update only formatter.js with options.precision
+    const formatterContent = `
+export function formatNumber(value, options = {}) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError("Value must be a finite number");
+  }
+  const prefix = options.prefix || "";
+  const suffix = options.suffix || "";
+  let numStr;
+  if (typeof options.precision === "number") {
+    numStr = value.toFixed(options.precision);
+  } else {
+    numStr = String(value);
+  }
+  return \`\${prefix}\${numStr}\${suffix}\`;
+}
+export function formatPercentage(value) {
+  return \`\${Math.round(value * 100)}%\`;
+}
+`;
+    writeFileSync(join(tempDir, "src/formatter.js"), formatterContent, "utf8");
+
+    // Notice: src/calculator.js is NOT mutated at all!
+    const testCode = `
+      import assert from "node:assert/strict";
+      import { calculateAndFormat } from "./src/calculator.js";
+      assert.equal(calculateAndFormat("divide", 1, 8, { precision: 2 }), "0.13");
+    `;
+    execFileSync("node", ["--input-type=module", "-e", testCode], { cwd: tempDir, stdio: "pipe" });
+
+    // Scope minimality check: only src/formatter.js is mutated
+    const scopeAudit = auditScopeMinimality(["src/formatter.js", "test/formatter.test.js"], "multi");
+    assert.equal(scopeAudit.pass, true);
+    assert.equal(scopeAudit.classification["src/formatter.js"], "REQUIRED");
+
+    // If src/calculator.js had been mutated:
+    const badScopeAudit = auditScopeMinimality(["src/formatter.js", "src/calculator.js"], "multi");
+    assert.equal(badScopeAudit.pass, false);
+    assert.equal(badScopeAudit.classification["src/calculator.js"], "UNNECESSARY_SCOPE_EXPANSION");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });

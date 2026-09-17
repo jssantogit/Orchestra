@@ -105,6 +105,22 @@ function saveRoleBindings(roleBindingsPath, data) {
   } catch {}
 }
 
+function recordDeniedAttempt(activeState, statePath, toolName, toolArgs, reason) {
+  if (!activeState || !statePath) return;
+  if (!Array.isArray(activeState.deniedAttempts)) {
+    activeState.deniedAttempts = [];
+  }
+  activeState.deniedAttempts.push({
+    tool: toolName,
+    args: toolArgs || {},
+    timestamp: Date.now(),
+    reason,
+  });
+  try {
+    writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+  } catch {}
+}
+
 function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "", roleBindingsPath = "") {
   const convId = payload.conversationId || null;
 
@@ -856,9 +872,11 @@ function main() {
   // Check 1a: schedule / timer policy during delegated execution
   if (toolName === "schedule") {
     if (isHealthyDelegatedExecution(activeState, activeRole)) {
+      const reason = "Reactive Wakeup policy: Routine schedule/timer calls are prohibited for Orchestrator during healthy delegated execution. Yield and await asynchronous reactive wakeup on child completion.";
+      recordDeniedAttempt(activeState, statePath, "schedule", toolArgs, reason);
       console.log(JSON.stringify({
         decision: "deny",
-        reason: "Reactive Wakeup policy: Routine schedule/timer calls are prohibited for Orchestrator during healthy delegated execution. Yield and await asynchronous reactive wakeup on child completion.",
+        reason,
       }));
       return;
     }
@@ -877,9 +895,11 @@ function main() {
 
     if (action === "status") {
       if (isHealthyDelegatedExecution(activeState, activeRole)) {
+        const reason = "Reactive Wakeup policy: Routine manage_task status polling is prohibited for Orchestrator during healthy delegated execution (polling budget is closed). Yield and await asynchronous reactive wakeup on child completion.";
+        recordDeniedAttempt(activeState, statePath, "manage_task", toolArgs, reason);
         console.log(JSON.stringify({
           decision: "deny",
-          reason: "Reactive Wakeup policy: Routine manage_task status polling is prohibited for Orchestrator during healthy delegated execution (polling budget is closed). Yield and await asynchronous reactive wakeup on child completion.",
+          reason,
         }));
         return;
       }
@@ -921,9 +941,11 @@ function main() {
       return;
     }
 
+    const reason = "Reactive Wakeup policy: Routine manage_subagents polling is prohibited during healthy delegated execution. Await asynchronous reactive wakeup on child completion.";
+    recordDeniedAttempt(activeState, statePath, "manage_subagents", toolArgs, reason);
     console.log(JSON.stringify({
       decision: "deny",
-      reason: "Reactive Wakeup policy: Routine manage_subagents polling is prohibited during healthy delegated execution. Await asynchronous reactive wakeup on child completion.",
+      reason,
     }));
     return;
   }
@@ -932,9 +954,11 @@ function main() {
   if (toolName === "view_file" || toolName === "grep_search" || toolName === "find_by_name") {
     const currentState = String(activeState.state || "").toUpperCase();
     if (isOrchestratorRole(activeRole) && currentState === "DELEGATED") {
+      const reason = `Reactive Wakeup policy: Orchestrator exploration/inspection (${toolName}) is prohibited during delegated execution. Workers own implementation discovery and exploration; Orchestrator must yield and await child completion.`;
+      recordDeniedAttempt(activeState, statePath, toolName, toolArgs, reason);
       console.log(JSON.stringify({
         decision: "deny",
-        reason: `Reactive Wakeup policy: Orchestrator exploration/inspection (${toolName}) is prohibited during delegated execution. Workers own implementation discovery and exploration; Orchestrator must yield and await child completion.`,
+        reason,
       }));
       return;
     }
@@ -990,9 +1014,11 @@ function main() {
     // 2b. Orchestrator: allow read-only and validation; block shell mutations to workspace/product code
     if (isOrchestratorRole(activeRole)) {
       if (isHealthyDelegatedExecution(activeState, activeRole)) {
+        const reason = "Reactive Wakeup policy: Orchestrator command execution is prohibited during healthy delegated execution. Workers own implementation and validation; Orchestrator must yield and await child completion.";
+        recordDeniedAttempt(activeState, statePath, "run_command", toolArgs, reason);
         console.log(JSON.stringify({
           decision: "deny",
-          reason: "Reactive Wakeup policy: Orchestrator command execution is prohibited during healthy delegated execution. Workers own implementation and validation; Orchestrator must yield and await child completion.",
+          reason,
         }));
         return;
       }

@@ -7,23 +7,23 @@
     "success": true,
     "verification_detail": "OK",
     "dry_run": false,
-    "duration_ms": 40576,
-    "model_turns_total": 8,
-    "model_invocations": 8,
+    "duration_ms": 49759,
+    "model_turns_total": 10,
+    "model_invocations": 10,
     "parent_model_turns": 3,
     "parent_invocations": 3,
-    "worker_model_turns": 5,
-    "worker_invocations": 5,
+    "worker_model_turns": 7,
+    "worker_invocations": 7,
     "reviewer_model_turns": 0,
     "reviewer_invocations": 0,
-    "total_model_turns": 8,
+    "total_model_turns": 10,
     "parent_tool_calls": 2,
-    "worker_tool_calls": 6,
-    "total_tool_calls": 8,
-    "tool_calls": 8,
+    "worker_tool_calls": 8,
+    "total_tool_calls": 10,
+    "tool_calls": 10,
     "tool_calls_per_turn_distribution": {
       "0": 3,
-      "1": 2,
+      "1": 4,
       "2": 3,
       "3+": 0
     },
@@ -35,7 +35,7 @@
     },
     "worker_tool_distribution": {
       "0": 1,
-      "1": 2,
+      "1": 4,
       "2": 2,
       "3+": 0
     },
@@ -56,35 +56,35 @@
       "WORKER": {
         "distribution": {
           "0": 1,
-          "1": 2,
+          "1": 4,
           "2": 2,
           "3+": 0
         },
         "max_tools_single_turn": 2,
         "turns_with_0_tools": 1,
-        "turns_with_1_tool": 2,
+        "turns_with_1_tool": 4,
         "turns_with_2_tools": 2,
         "turns_with_3_plus_tools": 0
       }
     },
     "turns_with_zero_tools": 3,
-    "turns_with_one_tool": 2,
+    "turns_with_one_tool": 4,
     "turns_with_multiple_tools": 3,
     "max_tools_in_single_turn": 2,
     "parent_pre_delegation_turns": 1,
     "parent_post_handoff_turns": 2,
-    "worker_pre_mutation_turns": 1,
+    "worker_pre_mutation_turns": 3,
     "worker_post_mutation_turns": 3,
-    "worker_search_turns": 0,
-    "worker_read_turns": 1,
+    "worker_search_turns": 1,
+    "worker_read_turns": 2,
     "worker_mutation_turns": 1,
     "worker_validation_turns": 1,
     "worker_handoff_turns": 2,
     "worker_multi_tool_turns": 2,
-    "worker_serial_independent_tool_opportunities": 0,
+    "worker_serial_independent_tool_opportunities": 1,
     "tools_per_turn_by_role": {
       "ORCHESTRATOR": 0.67,
-      "WORKER": 1.2
+      "WORKER": 1.14
     },
     "duplicate_reads": 0,
     "post_mutation_rereads": 0,
@@ -120,14 +120,14 @@
     "clean_stops": 2,
     "forced_stop_continuations": 0,
     "advisory_injections": 0,
-    "worker_packet_bytes": 1435,
-    "context_proxy_bytes": 5397,
-    "input_tokens": 28311,
-    "cached_input_tokens": 28483,
+    "worker_packet_bytes": 1460,
+    "context_proxy_bytes": 5617,
+    "input_tokens": 44058,
+    "cached_input_tokens": 20370,
     "uncached_input_tokens": null,
     "uncached_semantics": "NOT_DERIVABLE",
-    "output_tokens": 6501,
-    "reasoning_tokens": 5808,
+    "output_tokens": 10113,
+    "reasoning_tokens": 9280,
     "token_semantics_confidence": "MEDIUM",
     "metric_status": "OK",
     "mutation_events": [
@@ -135,21 +135,21 @@
         "path": "src/formatter.js",
         "actorRole": "WORKER",
         "agentProfile": "flash-low-worker",
-        "conversationId": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+        "conversationId": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
         "tool": "replace_file_content",
         "confidence": "HIGH",
         "evidenceSource": "CHILD_TRANSCRIPT",
-        "stepIndex": 4
+        "stepIndex": 8
       },
       {
         "path": "test/formatter.test.js",
         "actorRole": "WORKER",
         "agentProfile": "flash-low-worker",
-        "conversationId": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+        "conversationId": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
         "tool": "replace_file_content",
         "confidence": "HIGH",
         "evidenceSource": "CHILD_TRANSCRIPT",
-        "stepIndex": 4
+        "stepIndex": 8
       }
     ],
     "orchestrator_workspace_writes": 0,
@@ -161,16 +161,26 @@
     "worker_validation_exit_code": 0,
     "worker_validation_actor": "WORKER",
     "worker_validation_execution_id": null,
-    "worker_validation_conversation_id": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+    "worker_validation_conversation_id": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
     "worker_validation_verified": true,
     "worker_validation_fresh": true,
     "handoff_observed": true,
-    "handoff_bytes": 1435,
+    "handoff_bytes": 1460,
     "handoff_status": "MESSAGE_DELIVERED",
-    "worker_conversation_id": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+    "worker_conversation_id": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
     "acceptance_actor": "ORCHESTRATOR",
     "acceptance_observed": true,
     "acceptance_state": "ACCEPTED",
+    "parent_delegated_sidequest_attempts": 0,
+    "parent_delegated_sidequest_attempts_by_tool": {},
+    "parent_delegated_sidequest_denied": 0,
+    "parent_delegated_sidequest_succeeded": 0,
+    "schedule_attempts_during_delegation": 0,
+    "manage_task_poll_attempts": 0,
+    "manage_subagent_poll_attempts": 0,
+    "parent_workspace_read_attempts": 0,
+    "parent_repository_search_attempts": 0,
+    "parent_validation_attempts": 0,
     "parent_per_turn_tool_counts": [
       2,
       0,
@@ -178,11 +188,45 @@
     ],
     "worker_per_turn_tool_counts": [
       2,
+      1,
+      1,
       2,
       1,
       1,
       0
     ],
+    "api_signature_before": {
+      "src/formatter.js": {
+        "formatNumber": "formatNumber(value, options = {})",
+        "formatPercentage": "formatPercentage(value)"
+      },
+      "src/calculator.js": {
+        "add": "add(a, b)",
+        "subtract": "subtract(a, b)",
+        "multiply": "multiply(a, b)",
+        "divide": "divide(a, b)",
+        "calculateAndFormat": "calculateAndFormat(op, a, b, options = {})"
+      }
+    },
+    "api_signature_after": {
+      "src/formatter.js": {
+        "formatNumber": "formatNumber(value, options = {})",
+        "formatPercentage": "formatPercentage(value)"
+      },
+      "src/calculator.js": {
+        "add": "add(a, b)",
+        "subtract": "subtract(a, b)",
+        "multiply": "multiply(a, b)",
+        "divide": "divide(a, b)",
+        "calculateAndFormat": "calculateAndFormat(op, a, b, options = {})"
+      }
+    },
+    "api_signature_changed": false,
+    "scope_minimality_audit": {},
+    "zero_parent_sidequests_gate": "PASS",
+    "parent_zero_attempt_gate": "PASS",
+    "api_shape_preservation_gate": "PASS",
+    "scope_minimality_gate": "PASS",
     "fidelity": {
       "status": "PASS",
       "confidence": "HIGH",
@@ -204,21 +248,21 @@
             "path": "src/formatter.js",
             "actorRole": "WORKER",
             "agentProfile": "flash-low-worker",
-            "conversationId": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+            "conversationId": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
             "tool": "replace_file_content",
             "confidence": "HIGH",
             "evidenceSource": "CHILD_TRANSCRIPT",
-            "stepIndex": 4
+            "stepIndex": 8
           },
           {
             "path": "test/formatter.test.js",
             "actorRole": "WORKER",
             "agentProfile": "flash-low-worker",
-            "conversationId": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+            "conversationId": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
             "tool": "replace_file_content",
             "confidence": "HIGH",
             "evidenceSource": "CHILD_TRANSCRIPT",
-            "stepIndex": 4
+            "stepIndex": 8
           }
         ],
         "orchestratorWorkspaceWrites": 0,
@@ -228,7 +272,7 @@
         "worker_validation_observed": true,
         "worker_validation_verified": true,
         "worker_validation_execution_id": null,
-        "worker_validation_conversation_id": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+        "worker_validation_conversation_id": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
         "worker_validation_actor": "WORKER",
         "worker_validation_exit_code": 0,
         "worker_validation_fresh": true,
@@ -241,7 +285,7 @@
       "worker_validation_observed": true,
       "worker_validation_verified": true,
       "worker_validation_execution_id": null,
-      "worker_validation_conversation_id": "4e5b3a7f-cd67-4bbf-97a9-025bcbfcfa3b",
+      "worker_validation_conversation_id": "6d52e41b-0c69-4815-90aa-1e28fe42d985",
       "worker_validation_actor": "WORKER",
       "worker_validation_exit_code": 0,
       "worker_validation_fresh": true,
