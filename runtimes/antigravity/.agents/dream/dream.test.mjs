@@ -29,6 +29,10 @@ import {
   validateWorld,
   writeSealedWorld,
 } from "./world-sealer.mjs";
+import {
+  BRANCH_STATUS,
+  buildDiscoveryTree,
+} from "./discovery-tree-builder.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1916,4 +1920,424 @@ test("Task 6: writeSealedWorld writes only sealed worlds and rejects incomplete/
   assert.equal(savedWorld.world_id, sealRes.world.world_id);
   assert.equal(savedWorld.world_manifest_hash, sealRes.world.world_manifest_hash);
   assert.equal(validateWorld(savedWorld).valid, true);
+});
+
+test("Task 7: Unobserved legal actions are explicitly retained as UNKNOWN_BRANCH", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const childSnapshotId = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  const decEvent = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-t7-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { task: "fix-bug" },
+    available_actions: ["FLASH_MEDIUM", "FLASH_HIGH"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+
+  const outEvent = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-t7-1",
+    observation_id: "obs-t7-1",
+    result: "SUCCESS",
+    resulting_snapshot_id: childSnapshotId,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 150 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [decEvent, outEvent],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  const tree = buildDiscoveryTree(sealRes.world);
+
+  assert.equal(tree.world_id, sealRes.world.world_id);
+  assert.equal(tree.root_snapshot_id, rootSnapshotId);
+
+  const rootNode = tree.nodes[rootSnapshotId];
+  assert.ok(rootNode, "Root node must be present in discovery tree");
+  assert.equal(rootNode.snapshot_id, rootSnapshotId);
+
+  // Assert FLASH_MEDIUM is OBSERVED_ONCE
+  const observedAction = rootNode.actions["FLASH_MEDIUM"];
+  assert.ok(observedAction);
+  assert.equal(observedAction.action, "FLASH_MEDIUM");
+  assert.equal(observedAction.status, BRANCH_STATUS.OBSERVED_ONCE);
+  assert.equal(observedAction.observations.length, 1);
+  assert.deepEqual(observedAction.observations[0], {
+    observation_id: "obs-t7-1",
+    decision_id: "dec-t7-1",
+    result: "SUCCESS",
+    resulting_snapshot_id: childSnapshotId,
+    terminal_state: "ACCEPTED",
+    cost_metrics: { tokens: 150 },
+    evidence_summary: {},
+  });
+
+  // Assert FLASH_HIGH is UNKNOWN_BRANCH with empty observations
+  const unobservedAction = rootNode.actions["FLASH_HIGH"];
+  assert.ok(unobservedAction);
+  assert.equal(unobservedAction.action, "FLASH_HIGH");
+  assert.equal(unobservedAction.status, BRANCH_STATUS.UNKNOWN_BRANCH);
+  assert.deepEqual(unobservedAction.observations, []);
+
+  // Assert metadata counts
+  assert.equal(tree.metadata.total_nodes, Object.keys(tree.nodes).length);
+  assert.equal(tree.metadata.total_observations, 1);
+  assert.equal(tree.metadata.unknown_branches, 1);
+  assert.equal(tree.metadata.ambiguous_branches, 0);
+});
+
+test("Task 7: Multiple observations with same terminal state yield OBSERVED_MULTIPLE_CONSISTENT", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  // Two decisions at the same snapshot choosing the same action, both ACCEPTED
+  const dec1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-cons-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { attempt: 1 },
+    available_actions: ["FLASH_MEDIUM", "PRO"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    branch_ordinal: 0,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-cons-1",
+    observation_id: "obs-cons-1",
+    result: "SUCCESS",
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 100 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  const dec2 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-cons-2",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { attempt: 2 },
+    available_actions: ["FLASH_MEDIUM", "PRO"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 2,
+    branch_ordinal: 1,
+    created_at: "2026-09-17T12:00:10.000Z",
+  });
+  const out2 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-cons-2",
+    observation_id: "obs-cons-2",
+    result: "SUCCESS",
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 110 },
+    created_at: "2026-09-17T12:00:15.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec1, out1, dec2, out2],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  const tree = buildDiscoveryTree(sealRes.world);
+  const actionBranch = tree.nodes[rootSnapshotId].actions["FLASH_MEDIUM"];
+
+  assert.equal(actionBranch.status, BRANCH_STATUS.OBSERVED_MULTIPLE_CONSISTENT);
+  assert.equal(actionBranch.observations.length, 2);
+  assert.equal(actionBranch.observations[0].observation_id, "obs-cons-1");
+  assert.equal(actionBranch.observations[1].observation_id, "obs-cons-2");
+  assert.equal(tree.metadata.ambiguous_branches, 0);
+
+  // Also test consistent non-accepted: both FAILED
+  const decFail1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-fail-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_LOW"],
+    chosen_action: "FLASH_LOW",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 3,
+    created_at: "2026-09-17T12:00:20.000Z",
+  });
+  const outFail1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-fail-1",
+    observation_id: "obs-fail-1",
+    result: "ERROR",
+    terminal_state: "FAILED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:25.000Z",
+  });
+  const decFail2 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-fail-2",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_LOW"],
+    chosen_action: "FLASH_LOW",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 4,
+    created_at: "2026-09-17T12:00:30.000Z",
+  });
+  const outFail2 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-fail-2",
+    observation_id: "obs-fail-2",
+    result: "ERROR",
+    terminal_state: "FAILED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:35.000Z",
+  });
+
+  const sealResFail = sealWorld({
+    events: [decFail1, outFail1, decFail2, outFail2],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealResFail.status, "SEALED");
+
+  const treeFail = buildDiscoveryTree(sealResFail.world);
+  const failBranch = treeFail.nodes[rootSnapshotId].actions["FLASH_LOW"];
+  assert.equal(failBranch.status, BRANCH_STATUS.OBSERVED_MULTIPLE_CONSISTENT);
+  assert.equal(failBranch.observations.length, 2);
+});
+
+test("Task 7: Multiple observations with conflicting terminal state yield AMBIGUOUS_OBSERVED", () => {
+  const rootSnapshotId = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  // Decision 1 at S0: ACCEPTED
+  const dec1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-amb-1",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-amb-1",
+    observation_id: "obs-amb-1",
+    result: "SUCCESS",
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  // Decision 2 at S0: FAILED / RETRY_REQUIRED
+  const dec2 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-amb-2",
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 2,
+    created_at: "2026-09-17T12:00:10.000Z",
+  });
+  const out2 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-amb-2",
+    observation_id: "obs-amb-2",
+    result: "RETRY_NEEDED",
+    terminal_state: "RETRY_REQUIRED",
+    evidence_summary: {},
+    retry_state: { attempt: 1 },
+    cost_metrics: {},
+    created_at: "2026-09-17T12:00:15.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec1, out1, dec2, out2],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  const tree = buildDiscoveryTree(sealRes.world);
+  const actionBranch = tree.nodes[rootSnapshotId].actions["FLASH_MEDIUM"];
+
+  assert.equal(actionBranch.status, BRANCH_STATUS.AMBIGUOUS_OBSERVED);
+  assert.equal(actionBranch.observations.length, 2);
+  assert.equal(tree.metadata.ambiguous_branches, 1);
+});
+
+test("Task 7: Tree preserves original causal lineage and resulting_snapshot_id transitions", () => {
+  const rootSnapshotId = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
+  const step1SnapshotId = "sha256:0000000000000000000000000000000000000000000000000000000000000002";
+  const terminalSnapshotId = "sha256:0000000000000000000000000000000000000000000000000000000000000003";
+  const runtimeFp = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+
+  // Step 1: at rootSnapshotId -> transitions to step1SnapshotId
+  const dec1 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-seq-1",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "start" },
+    available_actions: ["PLAN", "EXECUTE"],
+    chosen_action: "PLAN",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-17T12:00:00.000Z",
+  });
+  const out1 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-seq-1",
+    observation_id: "obs-seq-1",
+    result: "PLAN_CREATED",
+    resulting_snapshot_id: step1SnapshotId,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 50 },
+    created_at: "2026-09-17T12:00:05.000Z",
+  });
+
+  // Step 2: at step1SnapshotId -> transitions to terminalSnapshotId
+  const dec2 = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-seq-2",
+    parent_decision_id: "dec-seq-1",
+    snapshot_id: step1SnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { phase: "execution" },
+    available_actions: ["EXECUTE_FAST", "EXECUTE_CAREFUL"],
+    chosen_action: "EXECUTE_FAST",
+    policy_source: "STATIC_ROUTING_CURRENT",
+    actor_identity: "WORKER",
+    step_idx: 2,
+    created_at: "2026-09-17T12:00:10.000Z",
+  });
+  const out2 = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-seq-2",
+    observation_id: "obs-seq-2",
+    result: "EXECUTION_COMPLETE",
+    resulting_snapshot_id: terminalSnapshotId,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: { tokens: 120 },
+    created_at: "2026-09-17T12:00:15.000Z",
+  });
+
+  const sealRes = sealWorld({
+    events: [dec1, out1, dec2, out2],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealRes.status, "SEALED");
+
+  const tree = buildDiscoveryTree(sealRes.world);
+
+  // Lineage validation
+  assert.equal(tree.world_id, sealRes.world.world_id);
+  assert.equal(tree.root_snapshot_id, rootSnapshotId);
+
+  // Verify transition from root -> step 1
+  const rootObs = tree.nodes[rootSnapshotId].actions["PLAN"].observations[0];
+  assert.equal(rootObs.decision_id, "dec-seq-1");
+  assert.equal(rootObs.resulting_snapshot_id, step1SnapshotId);
+
+  // Verify step 1 node exists and links to terminal snapshot
+  const step1Node = tree.nodes[step1SnapshotId];
+  assert.ok(step1Node, "Child snapshot node must exist in tree");
+  assert.equal(step1Node.snapshot_id, step1SnapshotId);
+
+  const step1Obs = step1Node.actions["EXECUTE_FAST"].observations[0];
+  assert.equal(step1Obs.decision_id, "dec-seq-2");
+  assert.equal(step1Obs.resulting_snapshot_id, terminalSnapshotId);
+
+  // Verify unobserved actions at each step are preserved as UNKNOWN_BRANCH
+  assert.equal(tree.nodes[rootSnapshotId].actions["EXECUTE"].status, BRANCH_STATUS.UNKNOWN_BRANCH);
+  assert.equal(tree.nodes[step1SnapshotId].actions["EXECUTE_CAREFUL"].status, BRANCH_STATUS.UNKNOWN_BRANCH);
+
+  // Content-addressed snapshot indexing check (tree.snapshots matches tree.nodes)
+  assert.equal(tree.snapshots[rootSnapshotId], tree.nodes[rootSnapshotId]);
+  assert.equal(tree.snapshots[step1SnapshotId], tree.nodes[step1SnapshotId]);
+
+  // Terminal node is indexed
+  assert.ok(tree.nodes[terminalSnapshotId]);
+  assert.equal(tree.nodes[terminalSnapshotId].snapshot_id, terminalSnapshotId);
+});
+
+test("Task 7: Rejects unsealed or invalid world input", () => {
+  // 1. null / non-object input
+  assert.throws(() => buildDiscoveryTree(null), /INVALID_SEALED_WORLD|WORLD_INVALID|must be an object/i);
+  assert.throws(() => buildDiscoveryTree(undefined), /INVALID_SEALED_WORLD|WORLD_INVALID|must be an object/i);
+  assert.throws(() => buildDiscoveryTree("not-a-world"), /INVALID_SEALED_WORLD|WORLD_INVALID|must be an object/i);
+
+  // 2. Unsealed world
+  const unsealedWorld = {
+    schema: DREAM_SCHEMAS.WORLD,
+    world_id: "world-unsealed-1",
+    root_snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    runtime_fingerprint: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    event_hashes: [],
+    world_manifest_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    status: "WORLD_INCOMPLETE",
+    created_at: "2026-09-17T12:00:00.000Z",
+  };
+  assert.throws(() => buildDiscoveryTree(unsealedWorld), /INVALID_SEALED_WORLD|WORLD_NOT_SEALED|Invalid world status/i);
+
+  // 3. Tampered manifest hash
+  const tamperedWorld = {
+    schema: DREAM_SCHEMAS.WORLD,
+    world_id: "world-tampered-1",
+    root_snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    runtime_fingerprint: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    event_hashes: ["sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
+    world_manifest_hash: "sha256:bad0000000000000000000000000000000000000000000000000000000000000",
+    status: "SEALED",
+    created_at: "2026-09-17T12:00:00.000Z",
+  };
+  assert.throws(() => buildDiscoveryTree(tamperedWorld), /INVALID_SEALED_WORLD|WORLD_MANIFEST_HASH_MISMATCH/i);
 });
