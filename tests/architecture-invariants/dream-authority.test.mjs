@@ -1529,3 +1529,65 @@ test("ARCH-022: Retry Escalation Requires Factual Previous Worker Identity", () 
     cleanTestState();
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// ARCH-023: Retry Budget Is Factual, Never Manufactured
+// Missing attempt/budget state must fail closed instead of defaulting to a fresh budget.
+// ---------------------------------------------------------------------------
+test("ARCH-023: Retry Budget Is Factual, Never Manufactured", () => {
+  cleanTestState();
+  try {
+    const invoke = (state, suffix) => {
+      cleanTestState();
+      mkdirSync(".agents/state", { recursive: true });
+      writeFileSync(".agents/state/active-state.json", JSON.stringify({
+        activeRole: "ORCHESTRATOR",
+        taskAction: "IMPLEMENT",
+        taskDomain: "CODE",
+        criticality: "NORMAL",
+        retry: true,
+        retryReason: "FAILED_TEST",
+        lastWorkerProfile: "flash-medium-worker",
+        ...state,
+      }, null, 2), "utf-8");
+
+      return JSON.parse(execFileSync("node", [preToolScript], {
+        input: JSON.stringify({
+          conversationId: "arch-023-" + suffix,
+          stepIdx: 1,
+          toolCall: {
+            id: "call-023-" + suffix,
+            name: "invoke_subagent",
+            args: {
+              ...(state.toolRemaining !== undefined ? { remainingAttempts: state.toolRemaining } : {}),
+              Subagents: [{
+                TypeName: "flash-medium-worker",
+                Role: "worker",
+                Prompt: "Retry failed test. allowedPaths: [src/**]",
+              }],
+            },
+          },
+        }),
+        encoding: "utf-8",
+      }).trim());
+    };
+
+    const missingAttempt = invoke({ remainingAttempts: 1, prevRemainingAttempts: 1, toolRemaining: 1 }, "missing-attempt");
+    assert.equal(missingAttempt.decision, "deny");
+    assert.match(missingAttempt.reason, /RETRY_STATE_UNRESOLVED/);
+
+    const missingBudget = invoke({ attempt: 1 }, "missing-budget");
+    assert.equal(missingBudget.decision, "deny");
+    assert.match(missingBudget.reason, /RETRY_BUDGET_UNRESOLVED/);
+
+    const inflated = invoke({ attempt: 1, remainingAttempts: 1, prevRemainingAttempts: 1, toolRemaining: 2 }, "inflated");
+    assert.equal(inflated.decision, "deny");
+    assert.match(inflated.reason, /RETRY_BUDGET_VIOLATION/);
+
+    const factual = invoke({ attempt: 1, remainingAttempts: 1, prevRemainingAttempts: 1, toolRemaining: 1 }, "factual");
+    assert.equal(factual.decision, "allow");
+  } finally {
+    cleanTestState();
+  }
+});
