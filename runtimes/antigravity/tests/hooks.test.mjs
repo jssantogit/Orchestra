@@ -600,6 +600,46 @@ test("Task 3: INVESTIGATION_STRATEGY congruence (IMPLEMENT_DIRECT allows and rec
     const invDecision = events.find(e => e.type === "DECISION" && e.decision_type === "INVESTIGATION_STRATEGY");
     assert.ok(invDecision, "INVESTIGATION_STRATEGY decision must be recorded");
     assert.equal(invDecision.chosen_action, "IMPLEMENT_DIRECT");
+
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.directInvestigationDecisionInFlight, "IMPLEMENT_DIRECT decision must remain causally in-flight until worker termination");
+
+    const directChildBinding = {
+      mainConversationId: "task3-parent-conv",
+      bindings: {
+        "task3-inv-direct-conv": {
+          conversationId: "task3-inv-direct-conv",
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          parentConversationId: "task3-parent-conv",
+          delegationKind: "WORK",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    };
+    directChildBinding.conversations["task3-inv-direct-conv"] = directChildBinding.bindings["task3-inv-direct-conv"];
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(directChildBinding, null, 2), "utf-8");
+
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({
+        conversationId: "task3-inv-direct-conv",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf-8",
+    });
+
+    const afterStopEvents = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const invOutcomes = afterStopEvents.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === invDecision.decision_id);
+    assert.equal(invOutcomes.length, 1, "IMPLEMENT_DIRECT decision must close exactly once at factual worker Stop");
+    assert.equal(invOutcomes[0].result.chosen_action, "IMPLEMENT_DIRECT");
+
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.directInvestigationDecisionInFlight, undefined);
   } finally {
     cleanDreamTestState();
   }
