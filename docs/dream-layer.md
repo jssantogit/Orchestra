@@ -17,7 +17,7 @@ Unknown replay branches remain UNKNOWN_BRANCH.
 
 ### Four Foundational Invariants
 
-1. **Static Routing Remains Authoritative**: Online routing decisions are strictly owned by [`routing-policy.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs). No learned policy, shadow policy, canary deployment, or bandit selector may alter worker or reviewer selection online.
+1. **Static Routing Remains Authoritative**: Online routing decisions are strictly owned by [`routing-policy.mjs`](../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs). No learned policy, shadow policy, canary deployment, or bandit selector may alter worker or reviewer selection online.
 2. **Zero Online Model Overhead**: Dream instrumentation introduces **zero new model turns** and consumes zero online model tokens.
 3. **No Context Contamination**: Raw discovery history, previous decision traces, and replay transcripts are **never injected into online prompt context**. Context economy is preserved.
 4. **Epistemic Truthfulness**: Exact replay requires exact snapshot identity. Missing, counterfactual, or unobserved branches deterministically return `UNKNOWN_BRANCH`. Dream **never hallucinates or invents** synthetic execution outcomes.
@@ -127,13 +127,13 @@ Exact Replay provides a factual baseline for policy evaluation without stochasti
 1. **Exact Snapshot Identity**: A decision step during replay matches an observed step if and only if `snapshot_id` matches exactly. Heuristic similarity or semantic approximation is forbidden.
 2. **Strict Causal Prefix**: The policy callback receives only previous steps and the current snapshot. Future outcomes, subsequent mutations, and terminal task results are strictly withheld to eliminate hindsight bias.
 3. **Non-Inferred Counterfactuals**: If an alternative policy selects an action that was not observed in the sealed world, replay terminates with status `UNKNOWN_BRANCH`. The simulator **never extrapolates, interpolates, or synthesizes** outcomes for untaken paths.
-4. **Zero Model Calls**: [`replay-simulator.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/replay-simulator.mjs) imports no LLM SDKs, executes no subprocesses, and makes no network requests. Replay is 100% deterministic CPU evaluation.
+4. **Zero Model Calls**: [`replay-simulator.mjs`](../runtimes/antigravity/.agents/dream/replay-simulator.mjs) imports no LLM SDKs, executes no subprocesses, and makes no network requests. Replay is 100% deterministic CPU evaluation.
 
 ---
 
 ## 6. The 8-Tier Lexicographic Evaluator
 
-Trajectory evaluation uses an immutable lexicographic hierarchy defined in [`evaluator.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/evaluator.mjs). A candidate trajectory must strictly outperform or tie a baseline trajectory at tier $N$ before tier $N+1$ is considered. **No weighted sums or composite scoring functions are permitted.**
+Trajectory evaluation uses an immutable lexicographic hierarchy defined in [`evaluator.mjs`](../runtimes/antigravity/.agents/dream/evaluator.mjs). A candidate trajectory must strictly outperform or tie a baseline trajectory at tier $N$ before tier $N+1$ is considered. **No weighted sums or composite scoring functions are permitted.**
 
 | Tier | Evaluation Dimension | Criterion | Rationale |
 | :---: | :--- | :--- | :--- |
@@ -211,7 +211,7 @@ governance -> decision state -> available_actions -> declarative policy -> autho
 ```
 
 1. **Governance Derives Action Space First**: Policy NEVER creates available actions. `deriveAvailableActions` computes the legal action set prior to policy evaluation.
-2. **Pure Policy Engine**: [`policy-engine.mjs`](file:///root/projects/Orchestra/runtimes/antigravity/.agents/dream/policy-engine.mjs) evaluates declarative policy rules with zero filesystem access, zero network, zero clock access, zero LLM calls, and zero history.
+2. **Pure Policy Engine**: [`policy-engine.mjs`](../runtimes/antigravity/.agents/dream/policy-engine.mjs) evaluates declarative policy rules with zero filesystem access, zero network, zero clock access, zero LLM calls, and zero history.
 3. **Deterministic Schema & Content Addressing**: Policies follow `orchestra.exploration-policy.v1` (`schemas/policy-v1.schema.json`). Policy IDs are content-addressed: `policy-<sha256(canonical(policy_without_id))>`. Action names are strictly restricted per declared decision type, `when` conditions combine fields with AND and values with OR, numeric ranges are constrained to `attempt` and `retry_remaining`, and `mutation_seq` is removed from `when`.
 4. **Real Router Parity**: `static-policy-v1.json` provides 100% explicit coverage and 100% action parity with the production router (`decideRoute(facts)` -> `classifyBaselineDecision(facts, route)`) across all eligible state combinations, verified by shadow tests.
 5. **Real Online Policy Authority**: The PreToolUse hook enforces strict execution identity:
