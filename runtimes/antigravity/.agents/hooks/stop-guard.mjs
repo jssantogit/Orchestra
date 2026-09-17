@@ -510,6 +510,82 @@ function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindi
   return { matched: true, success: !failed, dreamOutcome };
 }
 
+function finalizeDirectInvestigationDecisionFromStop(activeState, payload, repoRoot, roleBindings) {
+  const inFlight = activeState.directInvestigationDecisionInFlight;
+  if (!inFlight || payload.fullyIdle !== true) {
+    return { matched: false, reason: "NO_TERMINAL_DIRECT_INVESTIGATION_DECISION" };
+  }
+
+  const childConversationId = payload.conversationId || null;
+  if (!childConversationId || inFlight.childConversationId !== childConversationId) {
+    return { matched: false, reason: "DIRECT_INVESTIGATION_CHILD_MISMATCH" };
+  }
+
+  const binding = (roleBindings.bindings && roleBindings.bindings[childConversationId])
+    || (roleBindings.conversations && roleBindings.conversations[childConversationId])
+    || null;
+  if (!binding || binding.confidence !== "HIGH" || binding.source !== "RUNTIME_IDENTITY" || binding.delegationKind !== "WORK") {
+    return { matched: false, reason: "DIRECT_INVESTIGATION_CHILD_NOT_FACTUAL" };
+  }
+
+  const terminationReason = String(payload.terminationReason || "");
+  const failed = Boolean(
+    payload.error ||
+    payload.cancelled ||
+    /(?:error|fail|cancel|kill|abort|max[_ -]?step|timeout)/i.test(terminationReason)
+  );
+
+  const outcome = recordDecisionOutcome({
+    repoRoot,
+    correlationKey: inFlight.correlationKey,
+    outcome: {
+      result: failed
+        ? {
+            status: "FAILED",
+            chosen_action: "IMPLEMENT_DIRECT",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+            error: payload.error || null,
+          }
+        : {
+            status: "COMPLETED",
+            chosen_action: "IMPLEMENT_DIRECT",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+          },
+      evidence_summary: activeState.evidenceSummary || activeState.evidence || {
+        tests: activeState.workerValidationVerified ? "PASS" : "UNKNOWN",
+        typecheck: "UNKNOWN",
+        build: "UNKNOWN",
+        validation_fresh: Boolean(activeState.workerValidationFresh),
+        scope_check: "UNKNOWN",
+      },
+      retry_state: {
+        attempt: activeState.attempt || 0,
+        retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+        retry_reason: activeState.retryReason || activeState.retry_reason || null,
+      },
+      cost_metrics: {
+        tool_calls: activeState.tool_calls || 0,
+        context_proxy_bytes: activeState.context_proxy_bytes || 0,
+      },
+      terminal_state: failed ? "FAILED" : "UNKNOWN",
+    },
+  });
+
+  activeState.directInvestigationDecisionCompletion = {
+    childConversationId,
+    correlationKey: inFlight.correlationKey,
+    success: !failed,
+    outcomeRecorded: Boolean(outcome?.recorded),
+    outcomeReason: outcome?.reason || null,
+    completedAt: new Date().toISOString(),
+  };
+  delete activeState.directInvestigationDecisionInFlight;
+
+  return { matched: true, success: !failed, outcome };
+}
+
 function finalizeDelegatedDecisionFromStop(activeState, payload, repoRoot, roleBindings) {
   if (payload.fullyIdle !== true) {
     return { matched: false, reason: "NOT_TERMINAL_DELEGATION_STOP" };
@@ -675,10 +751,13 @@ function main() {
   // Factual investigation completion boundary: terminal Stop of the exact bound
   // investigator child. Dispatch ACKs and manage_subagents observations cannot reach here.
   const investigationStop = finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings);
+  const directInvestigationStop = investigationStop.matched
+    ? { matched: false, reason: "INVESTIGATION_HANDLED_SEPARATELY" }
+    : finalizeDirectInvestigationDecisionFromStop(activeState, payload, repoRoot, roleBindings);
   const delegatedDecisionStop = investigationStop.matched
     ? { matched: false, reason: "INVESTIGATION_HANDLED_SEPARATELY" }
     : finalizeDelegatedDecisionFromStop(activeState, payload, repoRoot, roleBindings);
-  if (investigationStop.matched || delegatedDecisionStop.matched) {
+  if (investigationStop.matched || directInvestigationStop.matched || delegatedDecisionStop.matched) {
     try {
       mkdirSync(dirname(statePath), { recursive: true });
       writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
