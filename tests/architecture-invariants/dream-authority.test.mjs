@@ -1364,3 +1364,99 @@ test("ARCH-020: Delegated Worker ACK Is Not Decision Outcome", () => {
     cleanTestState();
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// ARCH-021: IMPLEMENT_DIRECT Decision Completes With Its Worker
+// Skipping investigation is a real decision and must not remain permanently open.
+// ---------------------------------------------------------------------------
+test("ARCH-021: IMPLEMENT_DIRECT Decision Completes With Its Worker", () => {
+  cleanTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "WORKER",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      complexity: "NORMAL",
+      criticality: "NORMAL",
+      mutationSeq: 0,
+      postInvestigation: false,
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "arch-021-contract",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }, null, 2), "utf-8");
+
+    const child = "arch-021-child";
+    const writeCall = {
+      id: "call-021-write",
+      name: "write_to_file",
+      args: {
+        TargetFile: "src/arch021.ts",
+        CodeContent: "export const arch021 = true;",
+      },
+    };
+
+    const pre = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({ conversationId: child, stepIdx: 3, toolCall: writeCall }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(pre.decision, "allow");
+
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.directInvestigationDecisionInFlight);
+    const correlationKey = state.directInvestigationDecisionInFlight.correlationKey;
+    assert.ok(correlationKey);
+
+    let events = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const decision = events.find(e => e.type === "DECISION" && e.decision_type === "INVESTIGATION_STRATEGY" && e.chosen_action === "IMPLEMENT_DIRECT");
+    assert.ok(decision);
+    assert.equal(events.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === decision.decision_id).length, 0);
+
+    const bindings = {
+      mainConversationId: "arch-021-parent",
+      bindings: {
+        [child]: {
+          conversationId: child,
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          parentConversationId: "arch-021-parent",
+          delegationKind: "WORK",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    };
+    bindings.conversations[child] = bindings.bindings[child];
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(bindings, null, 2), "utf-8");
+
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    events = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(events.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === decision.decision_id).length, 0, "Non-terminal Stop cannot close IMPLEMENT_DIRECT");
+
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({ conversationId: child, fullyIdle: true, terminationReason: "end_turn" }),
+      encoding: "utf-8",
+    });
+    events = readFileSync(".agents/telemetry/events.jsonl", "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const outcomes = events.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === decision.decision_id);
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].result.status, "COMPLETED");
+    assert.equal(outcomes[0].result.chosen_action, "IMPLEMENT_DIRECT");
+
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.directInvestigationDecisionInFlight, undefined);
+    assert.equal(existsSync(".agents/state/dream/pending-decisions/" + correlationKey + ".consumed"), true);
+  } finally {
+    cleanTestState();
+  }
+});
