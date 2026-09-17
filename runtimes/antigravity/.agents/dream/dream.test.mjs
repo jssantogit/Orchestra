@@ -10,6 +10,11 @@ import {
   createDreamEvent,
   validateDreamRecord,
 } from "./records.mjs";
+import {
+  deriveAvailableActions,
+  deriveDecisionState,
+  classifyBaselineDecision,
+} from "./action-space.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -692,5 +697,377 @@ test("buildSnapshot handles missing required parameters with descriptive reasons
       executionState: {},
     }).reason,
     "MISSING_EVIDENCE",
+  );
+});
+
+test("deriveAvailableActions: WORKER_TIER legal action space matches governance constraints", () => {
+  // CRITICAL tasks have fixed governance outside Dream
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { criticality: "CRITICAL" }),
+    [],
+  );
+
+  // DIRECT_ACTION is outside Dream
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { task_action: "DIRECT_ACTION" }),
+    [],
+  );
+
+  // Mechanical / Simple / Docs tasks
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { complexity: "MECHANICAL" }),
+    ["FLASH_LOW", "FLASH_MEDIUM"],
+  );
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { complexity: "SIMPLE" }),
+    ["FLASH_LOW", "FLASH_MEDIUM"],
+  );
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { task_domain: "DOCS" }),
+    ["FLASH_LOW", "FLASH_MEDIUM"],
+  );
+
+  // Normal complexity
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { complexity: "NORMAL" }),
+    ["FLASH_MEDIUM", "FLASH_HIGH"],
+  );
+
+  // Difficult / Experimental / Integration / Post-investigation
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { complexity: "DIFFICULT" }),
+    ["FLASH_HIGH"],
+  );
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { complexity: "EXPERIMENTAL" }),
+    ["FLASH_HIGH"],
+  );
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { complexity: "INTEGRATION" }),
+    ["FLASH_HIGH"],
+  );
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", { post_investigation: true }),
+    ["FLASH_HIGH"],
+  );
+
+  // Default fallback
+  assert.deepEqual(
+    deriveAvailableActions("WORKER_TIER", {}),
+    ["FLASH_MEDIUM", "FLASH_HIGH"],
+  );
+});
+
+test("deriveAvailableActions: INVESTIGATION_STRATEGY legal action space matches eligibility rules", () => {
+  // Eligible: mutation_seq === 0, criticality !== CRITICAL, task_action === IMPLEMENT
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 0,
+      criticality: "NORMAL",
+      task_action: "IMPLEMENT",
+      complexity: "NORMAL",
+    }),
+    ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+  );
+
+  // Eligible when mutation_seq is undefined
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      criticality: "NORMAL",
+      task_action: "IMPLEMENT",
+      complexity: "NORMAL",
+    }),
+    ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+  );
+
+  // Ineligible when mutations have occurred
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 1,
+      criticality: "NORMAL",
+      task_action: "IMPLEMENT",
+    }),
+    [],
+  );
+
+  // Ineligible when CRITICAL
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 0,
+      criticality: "CRITICAL",
+      task_action: "IMPLEMENT",
+    }),
+    [],
+  );
+
+  // Ineligible when DIRECT_ACTION
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 0,
+      criticality: "NORMAL",
+      task_action: "DIRECT_ACTION",
+    }),
+    [],
+  );
+
+  // Ineligible when MECHANICAL
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 0,
+      criticality: "NORMAL",
+      task_action: "IMPLEMENT",
+      complexity: "MECHANICAL",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 0,
+      criticality: "NORMAL",
+      task_action: "MECHANICAL_FIX",
+    }),
+    [],
+  );
+
+  // Ineligible when already INVESTIGATE
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 0,
+      criticality: "NORMAL",
+      task_action: "INVESTIGATE",
+    }),
+    [],
+  );
+
+  // Ineligible when post_investigation is already true
+  assert.deepEqual(
+    deriveAvailableActions("INVESTIGATION_STRATEGY", {
+      mutation_seq: 0,
+      criticality: "NORMAL",
+      task_action: "IMPLEMENT",
+      post_investigation: true,
+    }),
+    [],
+  );
+});
+
+test("deriveAvailableActions: RETRY_ACTION legal action space by retry reason", () => {
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", { retry_reason: "FAILED_TEST" }),
+    ["RETRY_SAME", "ESCALATE_WORKER", "INVESTIGATE_FIRST"],
+  );
+
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", { retry_reason: "INCOMPLETE_IMPLEMENTATION" }),
+    ["RETRY_SAME", "ESCALATE_WORKER"],
+  );
+
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", { retry_reason: "MISSING_CONTEXT" }),
+    ["INVESTIGATE_FIRST", "REPLAN"],
+  );
+
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", { retry_reason: "MISINTERPRETED_REQUIREMENT" }),
+    ["REPLAN"],
+  );
+
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", { retry_reason: "SCOPE_GAP" }),
+    ["REPLAN"],
+  );
+
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", { retry_reason: "INTEGRATION_FAILURE" }),
+    ["ESCALATE_WORKER", "REPLAN"],
+  );
+
+  // Unknown or unrecognized retry reason
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", { retry_reason: "UNKNOWN_REASON" }),
+    [],
+  );
+  assert.deepEqual(
+    deriveAvailableActions("RETRY_ACTION", {}),
+    [],
+  );
+
+  // Unknown decisionType
+  assert.deepEqual(
+    deriveAvailableActions("UNKNOWN_DECISION_TYPE", {}),
+    [],
+  );
+});
+
+test("deriveDecisionState produces compact policy-visible state without leaking raw code or prompts", () => {
+  const facts = {
+    taskAction: "IMPLEMENT",
+    taskDomain: "CODE",
+    criticality: "NORMAL",
+    complexity: "NORMAL",
+    // Dangerous raw data that MUST NOT leak into policy-visible decision state:
+    prompt: "Write a function foo that computes bar",
+    rawCode: "function foo() { return 42; }",
+    sourceCode: "const x = 1;",
+    stackTrace: "Error: failure at index.js:10\n    at Object.<anonymous>",
+    chatHistory: [
+      { role: "user", content: "Please fix the bug" },
+      { role: "assistant", content: "Working on it" },
+    ],
+  };
+
+  const activeState = {
+    state: "EXECUTING",
+    attempt: 1,
+    retry_remaining: 2,
+    retry_reason: "FAILED_TEST",
+    mutation_seq: 3,
+    post_investigation: false,
+    rawPrompt: "System instructions...",
+  };
+
+  const evidenceSummary = {
+    tests: "FAIL",
+    typecheck: "PASS",
+    build: "PASS",
+    scope_check: "PASS",
+    validation_fresh: true,
+  };
+
+  const state = deriveDecisionState(facts, activeState, evidenceSummary);
+
+  // Verify exact keys present in decision state
+  const allowedKeys = [
+    "task_action",
+    "task_domain",
+    "criticality",
+    "complexity",
+    "state",
+    "attempt",
+    "retry_remaining",
+    "retry_reason",
+    "mutation_seq",
+    "post_investigation",
+    "evidence",
+  ];
+  assert.deepEqual(Object.keys(state).sort(), allowedKeys.sort());
+
+  // Assert no leak of raw data
+  assert.equal(state.prompt, undefined);
+  assert.equal(state.rawCode, undefined);
+  assert.equal(state.sourceCode, undefined);
+  assert.equal(state.stackTrace, undefined);
+  assert.equal(state.chatHistory, undefined);
+  assert.equal(state.rawPrompt, undefined);
+
+  // Assert correct values
+  assert.equal(state.task_action, "IMPLEMENT");
+  assert.equal(state.task_domain, "CODE");
+  assert.equal(state.criticality, "NORMAL");
+  assert.equal(state.complexity, "NORMAL");
+  assert.equal(state.state, "EXECUTING");
+  assert.equal(state.attempt, 1);
+  assert.equal(state.retry_remaining, 2);
+  assert.equal(state.retry_reason, "FAILED_TEST");
+  assert.equal(state.mutation_seq, 3);
+  assert.equal(state.post_investigation, false);
+
+  assert.deepEqual(state.evidence, {
+    tests: "FAIL",
+    typecheck: "PASS",
+    build: "PASS",
+    scope_check: "PASS",
+    validation_fresh: true,
+  });
+});
+
+test("deriveDecisionState handles missing evidence safely as explicit UNKNOWN (never inferred as PASS)", () => {
+  const state = deriveDecisionState({}, {}, {});
+  assert.deepEqual(state.evidence, {
+    tests: "UNKNOWN",
+    typecheck: "UNKNOWN",
+    build: "UNKNOWN",
+    scope_check: "UNKNOWN",
+    validation_fresh: false,
+  });
+});
+
+test("classifyBaselineDecision: maps worker delegations, retries, and returns null for non-learned routes", () => {
+  // Low worker
+  assert.deepEqual(
+    classifyBaselineDecision({}, { kind: "worker", effort: "low", tier: "flash_lite" }),
+    { decisionType: "WORKER_TIER", chosenAction: "FLASH_LOW" },
+  );
+  assert.deepEqual(
+    classifyBaselineDecision({}, { kind: "worker", profile: "flash-low-worker" }),
+    { decisionType: "WORKER_TIER", chosenAction: "FLASH_LOW" },
+  );
+
+  // Medium worker
+  assert.deepEqual(
+    classifyBaselineDecision({}, { kind: "worker", effort: "medium", tier: "flash" }),
+    { decisionType: "WORKER_TIER", chosenAction: "FLASH_MEDIUM" },
+  );
+  assert.deepEqual(
+    classifyBaselineDecision({}, { kind: "worker", profile: "flash-medium-worker" }),
+    { decisionType: "WORKER_TIER", chosenAction: "FLASH_MEDIUM" },
+  );
+
+  // High worker
+  assert.deepEqual(
+    classifyBaselineDecision({}, { kind: "worker", effort: "high", tier: "pro" }),
+    { decisionType: "WORKER_TIER", chosenAction: "FLASH_HIGH" },
+  );
+  assert.deepEqual(
+    classifyBaselineDecision({}, { kind: "worker", profile: "flash-worker" }),
+    { decisionType: "WORKER_TIER", chosenAction: "FLASH_HIGH" },
+  );
+
+  // Direct Action returns null
+  assert.equal(
+    classifyBaselineDecision({ taskAction: "DIRECT_ACTION" }, { kind: "direct_action", action: "DIRECT_ACTION" }),
+    null,
+  );
+
+  // CRITICAL review / two-key review returns null
+  assert.equal(
+    classifyBaselineDecision(
+      { criticality: "CRITICAL" },
+      { kind: "two-key-review", modelReviewerA: "gemini-3.8-flash-high", modelReviewerB: "gemini-3.8-flash-high" },
+    ),
+    null,
+  );
+
+  // Default / Unknown orchestration returns null
+  assert.equal(
+    classifyBaselineDecision({}, { kind: "orchestration", reason: "default-orchestration" }),
+    null,
+  );
+
+  // Retry active mapping
+  assert.deepEqual(
+    classifyBaselineDecision(
+      { retry: true, retry_reason: "FAILED_TEST" },
+      { kind: "worker", effort: "medium", retry: true },
+    ),
+    { decisionType: "RETRY_ACTION", chosenAction: "RETRY_SAME" },
+  );
+
+  // Retry active with escalate
+  assert.deepEqual(
+    classifyBaselineDecision(
+      { retry: true, retry_reason: "FAILED_TEST", escalate: true },
+      { kind: "worker", effort: "high", retry: true },
+    ),
+    { decisionType: "RETRY_ACTION", chosenAction: "ESCALATE_WORKER" },
+  );
+
+  // Retry with budget exhausted returns null
+  assert.equal(
+    classifyBaselineDecision(
+      { retry: true, retry_reason: "FAILED_TEST" },
+      { kind: "orchestration", reason: "retry-budget-exhausted", state: "HUMAN_GATE" },
+    ),
+    null,
   );
 });

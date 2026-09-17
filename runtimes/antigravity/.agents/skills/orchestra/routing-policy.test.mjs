@@ -91,6 +91,11 @@ import {
   detectDirectActionOverhead,
   detectDirectActionOverthinking,
 } from "./routing-policy.mjs";
+import {
+  deriveAvailableActions,
+  deriveDecisionState,
+  classifyBaselineDecision,
+} from "../../dream/action-space.mjs";
 
 test("D: routes normal product implementation to Flash Medium worker", () => {
   const res = decideRoute({ taskAction: "IMPLEMENT", implementationComplexity: "normal" });
@@ -1178,3 +1183,218 @@ test("v5: tool mix telemetry tracks direct action metrics and diagnostics", () =
   assert(overthink.reason.includes("DIRECT_ACTION_OVERTHINKING"));
 });
 
+test("dream routing parity matrix: preserves 100% routing parity across comprehensive fixture suite", () => {
+  const fixtures = [
+    // 1. Simple
+    {
+      name: "simple-implementation",
+      facts: { taskAction: "IMPLEMENT", implementationComplexity: "simple" },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_LOW,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_LOW" },
+      expectedLegalActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    },
+    // 2. Docs
+    {
+      name: "docs-implementation",
+      facts: { taskAction: "IMPLEMENT", taskDomain: "DOCS" },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_LOW,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_LOW" },
+      expectedLegalActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    },
+    // 3. Mechanical
+    {
+      name: "mechanical-fix",
+      facts: { taskAction: "MECHANICAL_FIX" },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_LOW,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_LOW" },
+      expectedLegalActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    },
+    // 4. Normal
+    {
+      name: "normal-implementation",
+      facts: { taskAction: "IMPLEMENT", implementationComplexity: "normal" },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_MEDIUM,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_MEDIUM" },
+      expectedLegalActions: ["FLASH_MEDIUM", "FLASH_HIGH"],
+    },
+    // 5. Difficult
+    {
+      name: "difficult-implementation",
+      facts: { taskAction: "IMPLEMENT", implementationComplexity: "difficult" },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_HIGH,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_HIGH" },
+      expectedLegalActions: ["FLASH_HIGH"],
+    },
+    // 6. Experimental
+    {
+      name: "experimental-implementation",
+      facts: { taskAction: "IMPLEMENT", complexity: "experimental", experimental: true },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_HIGH,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_HIGH" },
+      expectedLegalActions: ["FLASH_HIGH"],
+    },
+    // 7. Post-investigation
+    {
+      name: "post-investigation-implementation",
+      facts: { taskAction: "IMPLEMENT", postInvestigation: true },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_HIGH,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_HIGH" },
+      expectedLegalActions: ["FLASH_HIGH"],
+    },
+    // 8. Testing
+    {
+      name: "test-execution",
+      facts: { taskAction: "TEST", implementationComplexity: "normal" },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_MEDIUM,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_MEDIUM" },
+      expectedLegalActions: ["FLASH_MEDIUM", "FLASH_HIGH"],
+    },
+    // 9. Integration
+    {
+      name: "integration-implementation",
+      facts: { taskAction: "IMPLEMENT", integration: true },
+      expectedKind: "worker",
+      expectedModel: GEMINI_MODELS.WORKER_HIGH,
+      expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_HIGH" },
+      expectedLegalActions: ["FLASH_HIGH"],
+    },
+    // 10. Investigation
+    {
+      name: "investigation-action",
+      facts: { taskAction: "INVESTIGATE" },
+      expectedKind: "orchestration",
+      expectedModel: GEMINI_MODELS.INVESTIGATOR,
+      expectedDreamDecision: null,
+    },
+    // 11. Retry: FAILED_TEST
+    {
+      name: "retry-failed-test",
+      facts: { taskAction: "IMPLEMENT", retry: true, retry_reason: "FAILED_TEST" },
+      expectedKind: "worker",
+      expectedDreamDecision: { decisionType: "RETRY_ACTION", chosenAction: "RETRY_SAME" },
+      expectedLegalActions: ["RETRY_SAME", "ESCALATE_WORKER", "INVESTIGATE_FIRST"],
+    },
+    // 12. Retry: INCOMPLETE_IMPLEMENTATION
+    {
+      name: "retry-incomplete-implementation",
+      facts: { taskAction: "IMPLEMENT", retry: true, retry_reason: "INCOMPLETE_IMPLEMENTATION" },
+      expectedKind: "worker",
+      expectedDreamDecision: { decisionType: "RETRY_ACTION", chosenAction: "RETRY_SAME" },
+      expectedLegalActions: ["RETRY_SAME", "ESCALATE_WORKER"],
+    },
+    // 13. Retry: MISSING_CONTEXT with INVESTIGATE_FIRST
+    {
+      name: "retry-missing-context",
+      facts: { retry: true, retry_reason: "MISSING_CONTEXT", retryAction: "INVESTIGATE_FIRST" },
+      expectedDreamDecision: { decisionType: "RETRY_ACTION", chosenAction: "INVESTIGATE_FIRST" },
+      expectedLegalActions: ["INVESTIGATE_FIRST", "REPLAN"],
+    },
+    // 14. Retry: MISINTERPRETED_REQUIREMENT with REPLAN
+    {
+      name: "retry-misinterpreted-requirement",
+      facts: { retry: true, retry_reason: "MISINTERPRETED_REQUIREMENT", retryAction: "REPLAN" },
+      expectedDreamDecision: { decisionType: "RETRY_ACTION", chosenAction: "REPLAN" },
+      expectedLegalActions: ["REPLAN"],
+    },
+    // 15. Retry: SCOPE_GAP with REPLAN
+    {
+      name: "retry-scope-gap",
+      facts: { retry: true, retry_reason: "SCOPE_GAP", retryAction: "REPLAN" },
+      expectedDreamDecision: { decisionType: "RETRY_ACTION", chosenAction: "REPLAN" },
+      expectedLegalActions: ["REPLAN"],
+    },
+    // 16. Retry: INTEGRATION_FAILURE with ESCALATE_WORKER
+    {
+      name: "retry-integration-failure",
+      facts: { retry: true, retry_reason: "INTEGRATION_FAILURE", retryAction: "ESCALATE_WORKER" },
+      expectedDreamDecision: { decisionType: "RETRY_ACTION", chosenAction: "ESCALATE_WORKER" },
+      expectedLegalActions: ["ESCALATE_WORKER", "REPLAN"],
+    },
+    // 17. Direct Action: explicit taskAction
+    {
+      name: "direct-action-explicit",
+      facts: { taskAction: "DIRECT_ACTION", directActionType: "GIT_STATUS" },
+      expectedKind: "direct_action",
+      expectedDreamDecision: null,
+    },
+    // 18. Direct Action: natural language intent
+    {
+      name: "direct-action-prompt-intent",
+      facts: { intent: "git status" },
+      expectedKind: "direct_action",
+      expectedDreamDecision: null,
+    },
+    // 19. CRITICAL review (decideRoute control plane)
+    {
+      name: "critical-review-control-plane",
+      facts: { taskAction: "REVIEW", criticality: "CRITICAL" },
+      expectedKind: "orchestration",
+      expectedDreamDecision: null,
+    },
+    // 20. Two-Key Review (reviewRoute)
+    {
+      name: "two-key-review",
+      useReviewRoute: true,
+      facts: { criticality: "CRITICAL", acceptanceCriteriaStatus: "passed" },
+      expectedKind: "two-key-review",
+      expectedDreamDecision: null,
+    },
+    // 21. Unknown / default orchestration
+    {
+      name: "default-orchestration",
+      facts: {},
+      expectedKind: "orchestration",
+      expectedDreamDecision: null,
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const route = fixture.useReviewRoute ? reviewRoute(fixture.facts) : decideRoute(fixture.facts);
+    if (fixture.expectedKind) {
+      assert.equal(
+        route.kind,
+        fixture.expectedKind,
+        `[${fixture.name}] Expected route kind ${fixture.expectedKind}, got ${route.kind}`,
+      );
+    }
+    if (fixture.expectedModel) {
+      assert.equal(
+        route.model,
+        fixture.expectedModel,
+        `[${fixture.name}] Expected route model ${fixture.expectedModel}, got ${route.model}`,
+      );
+    }
+
+    const decisionState = deriveDecisionState(fixture.facts);
+    const dreamDecision = classifyBaselineDecision(fixture.facts, route);
+
+    assert.deepEqual(
+      dreamDecision,
+      fixture.expectedDreamDecision,
+      `[${fixture.name}] Mismatched baseline classification: ${JSON.stringify(dreamDecision)} vs ${JSON.stringify(fixture.expectedDreamDecision)}`,
+    );
+
+    if (dreamDecision !== null) {
+      const availableActions = deriveAvailableActions(dreamDecision.decisionType, decisionState);
+      assert.ok(
+        availableActions.includes(dreamDecision.chosenAction),
+        `[${fixture.name}] Chosen action "${dreamDecision.chosenAction}" must be in available actions [${availableActions.join(", ")}]`,
+      );
+      if (fixture.expectedLegalActions) {
+        assert.deepEqual(
+          availableActions,
+          fixture.expectedLegalActions,
+          `[${fixture.name}] Mismatched available actions: [${availableActions.join(", ")}] vs [${fixture.expectedLegalActions.join(", ")}]`,
+        );
+      }
+    }
+  }
+});

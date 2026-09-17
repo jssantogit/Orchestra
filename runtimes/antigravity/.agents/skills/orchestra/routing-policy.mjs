@@ -495,7 +495,7 @@ export function normalizeTaskAction(facts = {}) {
   return taskActionInfo(facts).action ?? "UNKNOWN";
 }
 
-function normalizeComplexity(value) {
+export function normalizeComplexity(value) {
   const token = normalizeToken(value);
   if (["SIMPLE", "TRIVIAL", "SMALL", "LOW"].includes(token)) return "simple";
   if (["EXPERIMENTAL", "RESEARCH", "INVESTIGATIVE", "EXPERIMENT"].includes(token)) return "experimental";
