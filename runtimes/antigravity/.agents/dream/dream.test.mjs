@@ -3536,6 +3536,28 @@ test("Milestone D: policy schema validation and content-addressing", () => {
   const badRangeRes = validatePolicy({ policy_id: computePolicyId(badRangeRaw), ...badRangeRaw });
   assert.equal(badRangeRes.valid, false);
   assert.ok(badRangeRes.errors.some(e => e.includes("min (5) > max (2)")));
+
+  // Disallowed action for decision_type fails validation
+  const badActionRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    rules: [
+      { id: "bad-action-rule", decision_type: "INVESTIGATION_STRATEGY", priority: 10, when: {}, choose: "FLASH_HIGH" }
+    ]
+  };
+  const badActionRes = validatePolicy({ policy_id: computePolicyId(badActionRaw), ...badActionRaw });
+  assert.equal(badActionRes.valid, false, "Disallowed action name for decision_type must be invalid");
+  assert.ok(badActionRes.errors.some(e => e.includes("invalid action") || e.includes("choose")));
+
+  // Disallowed mutation_seq in when condition fails
+  const badMutationSeqRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    rules: [
+      { id: "bad-mutation-seq", decision_type: "WORKER_TIER", priority: 10, when: { mutation_seq: 0 }, choose: "FLASH_MEDIUM" }
+    ]
+  };
+  const badMutationRes = validatePolicy({ policy_id: computePolicyId(badMutationSeqRaw), ...badMutationSeqRaw });
+  assert.equal(badMutationRes.valid, false, "mutation_seq in when condition must be rejected");
+  assert.ok(badMutationRes.errors.some(e => e.includes("disallowed condition field")));
 });
 
 test("Milestone D: static-policy-v1 declarative baseline validity and structure", () => {

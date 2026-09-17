@@ -61,6 +61,12 @@
     "policy_source": {
       "type": "string"
     },
+    "baseline_action": {
+      "type": ["string", "null"]
+    },
+    "policy_diagnostic": {
+      "type": ["string", "null"]
+    },
     "actor_identity": {
       "type": ["string", "object"]
     },

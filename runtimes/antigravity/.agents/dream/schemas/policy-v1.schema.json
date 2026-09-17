@@ -121,26 +121,6 @@
                 "type": "array",
                 "items": { "type": "string" }
               },
-              "mutation_seq": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "required": ["min", "max"],
-                    "properties": {
-                      "min": { "type": "integer" },
-                      "max": { "type": "integer" }
-                    },
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "array",
-                    "items": { "type": "integer" }
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ]
-              },
               "post_investigation": {
                 "type": "boolean"
               },
@@ -179,6 +159,59 @@
             "type": "string"
           }
         },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "decision_type": { "const": "WORKER_TIER" } }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "FLASH_LOW",
+                    "FLASH_MEDIUM",
+                    "FLASH_HIGH"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": { "decision_type": { "const": "INVESTIGATION_STRATEGY" } }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "IMPLEMENT_DIRECT",
+                    "INVESTIGATE_FIRST"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": { "decision_type": { "const": "RETRY_ACTION" } }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "RETRY_SAME",
+                    "ESCALATE_WORKER",
+                    "INVESTIGATE_FIRST",
+                    "REPLAN"
+                  ]
+                }
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       }
     }

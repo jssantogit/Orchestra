@@ -1,6 +1,11 @@
 import { canonicalize, sha256Canonical } from "./canonical.mjs";
 import { DREAM_SCHEMAS } from "./records.mjs";
-import { DECISION_TYPES } from "./action-space.mjs";
+import {
+  DECISION_TYPES,
+  WORKER_TIER_ACTIONS,
+  INVESTIGATION_STRATEGY_ACTIONS,
+  RETRY_ACTIONS,
+} from "./action-space.mjs";
 
 export const POLICY_STATUS = Object.freeze({
   OK: "OK",
@@ -15,6 +20,12 @@ export const MAX_POLICY_BYTES = 65536; // 64 KiB
 
 const VALID_DECISION_TYPES_SET = new Set(Object.values(DECISION_TYPES));
 
+const VALID_ACTIONS_BY_DECISION_TYPE = Object.freeze({
+  [DECISION_TYPES.WORKER_TIER]: new Set(WORKER_TIER_ACTIONS),
+  [DECISION_TYPES.INVESTIGATION_STRATEGY]: new Set(INVESTIGATION_STRATEGY_ACTIONS),
+  [DECISION_TYPES.RETRY_ACTION]: new Set(RETRY_ACTIONS),
+});
+
 const ALLOWED_WHEN_FIELDS = new Set([
   "task_action",
   "task_domain",
@@ -24,7 +35,6 @@ const ALLOWED_WHEN_FIELDS = new Set([
   "attempt",
   "retry_remaining",
   "retry_reason",
-  "mutation_seq",
   "post_investigation",
   "evidence",
 ]);
@@ -156,6 +166,13 @@ export function validatePolicy(policy) {
     // Choose
     if (typeof rule.choose !== "string" || !rule.choose.trim()) {
       errors.push(`${prefix}: choose must be a non-empty action string`);
+    } else {
+      const allowedActions = VALID_ACTIONS_BY_DECISION_TYPE[rule.decision_type];
+      if (allowedActions && !allowedActions.has(rule.choose)) {
+        errors.push(
+          `${prefix}: invalid action "${rule.choose}" for decision_type "${rule.decision_type}". Expected one of: ${[...allowedActions].join(", ")}`
+        );
+      }
     }
 
     // When conditions
@@ -180,7 +197,7 @@ export function validatePolicy(policy) {
         if (typeof cond !== "boolean" && !Array.isArray(cond)) {
           errors.push(`${prefix}: post_investigation must be a boolean or array of booleans`);
         }
-      } else if (key === "attempt" || key === "retry_remaining" || key === "mutation_seq") {
+      } else if (key === "attempt" || key === "retry_remaining") {
         if (typeof cond === "number") {
           if (!Number.isInteger(cond) || cond < 0) {
             errors.push(`${prefix}: numeric condition "${key}" must be a non-negative integer`);
@@ -250,10 +267,43 @@ export function validatePolicy(policy) {
     }
   }
 
+  // Conflict detection: rules of same decision_type and priority cannot choose different actions without mutually exclusive conditions
+  for (let i = 0; i < policy.rules.length; i++) {
+    const r1 = policy.rules[i];
+    if (!r1 || typeof r1 !== "object") continue;
+    for (let j = i + 1; j < policy.rules.length; j++) {
+      const r2 = policy.rules[j];
+      if (!r2 || typeof r2 !== "object") continue;
+      if (r1.decision_type === r2.decision_type && r1.priority === r2.priority && r1.choose !== r2.choose) {
+        if (!areConditionsMutuallyExclusive(r1.when, r2.when)) {
+          errors.push(
+            `Conflict: rules "${r1.id}" and "${r2.id}" have same priority ${r1.priority} and decision_type "${r1.decision_type}" but choose different actions ("${r1.choose}" vs "${r2.choose}") with overlapping conditions`
+          );
+        }
+      }
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors,
   };
+}
+
+function areConditionsMutuallyExclusive(whenA = {}, whenB = {}) {
+  if (!whenA || !whenB || typeof whenA !== "object" || typeof whenB !== "object") return false;
+  const enumFields = ["task_action", "task_domain", "criticality", "complexity", "state", "retry_reason"];
+  for (const f of enumFields) {
+    if (Array.isArray(whenA[f]) && Array.isArray(whenB[f])) {
+      const setA = new Set(whenA[f]);
+      const hasOverlap = whenB[f].some(item => setA.has(item));
+      if (!hasOverlap) return true;
+    }
+  }
+  if (typeof whenA.post_investigation === "boolean" && typeof whenB.post_investigation === "boolean") {
+    if (whenA.post_investigation !== whenB.post_investigation) return true;
+  }
+  return false;
 }
 
 /**
@@ -304,7 +354,7 @@ function matchesRuleCondition(when = {}, state = {}) {
 
     const stateVal = state[field];
 
-    if (field === "attempt" || field === "retry_remaining" || field === "mutation_seq") {
+    if (field === "attempt" || field === "retry_remaining") {
       if (stateVal === undefined || stateVal === null || typeof stateVal !== "number") {
         return false;
       }
