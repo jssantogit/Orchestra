@@ -3989,3 +3989,324 @@ test("Milestone D: Exact replay with declarative policy engine callback", () => 
   assert.equal(replayResult.trajectories[0].terminal_state, "ACCEPTED");
   assert.equal(replayResult.trajectories[0].steps[0].chosen_action, "FLASH_MEDIUM");
 });
+
+test("Milestone D: Differential contract fixture suite (JSON Schema draft 2020-12 and validatePolicy 100% parity)", () => {
+  const schemaPath = resolve(__dirname, "schemas/policy-v1.schema.json");
+  const schema = JSON.parse(readFileSync(schemaPath, "utf-8"));
+
+  function validateJsonSchema(s, data) {
+    if (!s || typeof s !== "object") return true;
+
+    if (s.type) {
+      const types = Array.isArray(s.type) ? s.type : [s.type];
+      const matchesType = types.some(t => {
+        if (t === "object") return typeof data === "object" && data !== null && !Array.isArray(data);
+        if (t === "array") return Array.isArray(data);
+        if (t === "string") return typeof data === "string";
+        if (t === "integer") return Number.isInteger(data);
+        if (t === "boolean") return typeof data === "boolean";
+        if (t === "null") return data === null;
+        return false;
+      });
+      if (!matchesType) return false;
+    }
+
+    if (s.const !== undefined && data !== s.const) return false;
+    if (s.enum && !s.enum.includes(data)) return false;
+    if (s.pattern && typeof data === "string" && !new RegExp(s.pattern).test(data)) return false;
+    if (s.minimum !== undefined && typeof data === "number" && data < s.minimum) return false;
+
+    if (Array.isArray(data)) {
+      if (s.minItems !== undefined && data.length < s.minItems) return false;
+      if (s.maxItems !== undefined && data.length > s.maxItems) return false;
+      if (s.items) {
+        for (const item of data) {
+          if (!validateJsonSchema(s.items, item)) return false;
+        }
+      }
+    }
+
+    if (typeof data === "object" && data !== null && !Array.isArray(data)) {
+      if (s.required) {
+        for (const req of s.required) {
+          if (!(req in data)) return false;
+        }
+      }
+      if (s.properties) {
+        for (const [k, v] of Object.entries(data)) {
+          if (s.properties[k]) {
+            if (!validateJsonSchema(s.properties[k], v)) return false;
+          }
+        }
+      }
+      if (s.additionalProperties === false && s.properties) {
+        for (const k of Object.keys(data)) {
+          if (!s.properties[k]) return false;
+        }
+      }
+    }
+
+    if (s.oneOf) {
+      const matches = s.oneOf.filter(sub => validateJsonSchema(sub, data)).length;
+      if (matches !== 1) return false;
+    }
+
+    if (s.allOf) {
+      for (const sub of s.allOf) {
+        if (!validateJsonSchema(sub, data)) return false;
+      }
+    }
+
+    if (s.if) {
+      const ifMatches = validateJsonSchema(s.if, data);
+      if (ifMatches && s.then) {
+        if (!validateJsonSchema(s.then, data)) return false;
+      }
+    }
+
+    return true;
+  }
+
+  function makePolicy(raw) {
+    try {
+      return { policy_id: computePolicyId(raw), ...raw };
+    } catch {
+      return raw;
+    }
+  }
+
+  const baseRaw = {
+    schema: "orchestra.exploration-policy.v1",
+    base_policy: null,
+    description: "Differential test baseline",
+    created_at: "2026-09-17T00:00:00Z",
+    rules: [
+      {
+        id: "base-rule-1",
+        decision_type: "WORKER_TIER",
+        priority: 10,
+        when: { task_action: ["IMPLEMENT"] },
+        choose: "FLASH_MEDIUM",
+        description: "Base rule",
+      },
+    ],
+  };
+
+  const fixtures = [
+    {
+      name: "valid_minimal",
+      policy: makePolicy(baseRaw),
+      expectedValid: true,
+    },
+    {
+      name: "valid_comprehensive",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [
+          {
+            id: "comp-worker",
+            decision_type: "WORKER_TIER",
+            priority: 90,
+            when: {
+              task_action: ["IMPLEMENT"],
+              task_domain: ["CODE"],
+              criticality: ["NORMAL"],
+              complexity: ["DIFFICULT"],
+              state: ["EXECUTING"],
+              post_investigation: true,
+            },
+            choose: "FLASH_HIGH",
+          },
+          {
+            id: "comp-retry",
+            decision_type: "RETRY_ACTION",
+            priority: 80,
+            when: {
+              retry_reason: ["FAILED_TEST"],
+              attempt: { min: 1, max: 3 },
+              retry_remaining: [0, 1],
+              evidence: {
+                tests: ["FAIL"],
+                typecheck: ["PASS", "NOT_REQUIRED"],
+                build: ["PASS"],
+                scope_check: ["PASS"],
+                validation_fresh: true,
+              },
+            },
+            choose: "RETRY_SAME",
+          },
+          {
+            id: "comp-investigate",
+            decision_type: "INVESTIGATION_STRATEGY",
+            priority: 70,
+            when: {
+              task_action: ["IMPLEMENT"],
+              attempt: 0,
+            },
+            choose: "INVESTIGATE_FIRST",
+          },
+        ],
+      }),
+      expectedValid: true,
+    },
+    {
+      name: "invalid_top_level_unknown_property",
+      policy: makePolicy({ ...baseRaw, unknown_property: "disallowed" }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_rule_unknown_property",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], unexpected_rule_prop: 123 }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_when_unknown_property",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { task_action: ["IMPLEMENT"], unknown_when_field: true } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_evidence_unknown_property",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [
+          {
+            id: "ev-test",
+            decision_type: "RETRY_ACTION",
+            priority: 10,
+            when: { evidence: { tests: ["PASS"], disallowed_ev_field: 1 } },
+            choose: "RETRY_SAME",
+          },
+        ],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_post_investigation_array",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { post_investigation: [true] } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_attempt_negative_integer",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { attempt: -1 } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_attempt_negative_range_min",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { attempt: { min: -1, max: 2 } } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_attempt_range_extra_property",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { attempt: { min: 1, max: 2, extra: 3 } } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_attempt_empty_array",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { attempt: [] } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_task_action_empty_array",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { task_action: [] } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_task_action_enum_value",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { task_action: ["NON_EXISTENT_ACTION"] } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_complexity_enum_value",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], when: { complexity: ["SUPER_COMPLEX"] } }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_evidence_tests_enum_value",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [
+          {
+            id: "ev-enum-test",
+            decision_type: "RETRY_ACTION",
+            priority: 10,
+            when: { evidence: { tests: ["MAYBE"] } },
+            choose: "RETRY_SAME",
+          },
+        ],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_decision_type",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], decision_type: "UNKNOWN_TYPE" }],
+      }),
+      expectedValid: false,
+    },
+    {
+      name: "invalid_choose_action_for_decision_type",
+      policy: makePolicy({
+        ...baseRaw,
+        rules: [{ ...baseRaw.rules[0], choose: "FLASH_ULTRA" }],
+      }),
+      expectedValid: false,
+    },
+  ];
+
+  let passedComparisons = 0;
+  for (const fixture of fixtures) {
+    const schemaValid = validateJsonSchema(schema, fixture.policy);
+    const engineRes = validatePolicy(fixture.policy);
+    const engineValid = engineRes.valid;
+
+    assert.equal(
+      schemaValid,
+      fixture.expectedValid,
+      `Fixture "${fixture.name}" schema validation mismatch: expected ${fixture.expectedValid}, got ${schemaValid}`
+    );
+    assert.equal(
+      engineValid,
+      fixture.expectedValid,
+      `Fixture "${fixture.name}" engine validation mismatch: expected ${fixture.expectedValid}, got ${engineValid} (${engineRes.errors?.join("; ")})`
+    );
+    assert.equal(
+      schemaValid,
+      engineValid,
+      `Fixture "${fixture.name}" contract divergence: schema=${schemaValid}, engine=${engineValid}`
+    );
+    passedComparisons++;
+  }
+
+  assert.equal(passedComparisons, fixtures.length);
+});

@@ -39,6 +39,91 @@ const ALLOWED_WHEN_FIELDS = new Set([
   "evidence",
 ]);
 
+const ALLOWED_TOP_LEVEL_PROPERTIES = new Set([
+  "schema",
+  "policy_id",
+  "base_policy",
+  "description",
+  "created_at",
+  "rules",
+]);
+
+const ALLOWED_RULE_PROPERTIES = new Set([
+  "id",
+  "decision_type",
+  "priority",
+  "when",
+  "choose",
+  "description",
+]);
+
+const VALID_ENUMS = Object.freeze({
+  task_action: new Set([
+    "ORCHESTRATE",
+    "INVESTIGATE",
+    "IMPLEMENT",
+    "TEST",
+    "REVIEW",
+    "MECHANICAL_FIX",
+    "INTEGRATE",
+    "ESCALATE",
+    "HEAVY_EXECUTION",
+    "DIRECT_ACTION",
+  ]),
+  task_domain: new Set([
+    "CODE",
+    "AUTOEQ_ALGORITHM",
+    "DSP_CORE",
+    "UI",
+    "DATA",
+    "INFRA",
+    "TESTING",
+    "DOCS",
+    "RESEARCH",
+    "ORCHESTRA",
+    "GENERAL",
+  ]),
+  criticality: new Set([
+    "NORMAL",
+    "MAJOR",
+    "CRITICAL",
+  ]),
+  complexity: new Set([
+    "SIMPLE",
+    "NORMAL",
+    "DIFFICULT",
+    "EXPERIMENTAL",
+    "MECHANICAL",
+    "INTEGRATION",
+  ]),
+  state: new Set([
+    "INTAKE",
+    "CLASSIFIED",
+    "DIRECT_ACTION",
+    "PLANNED",
+    "DELEGATED",
+    "EXECUTING",
+    "EVIDENCE_READY",
+    "ACCEPTANCE",
+    "INTEGRATING",
+    "DONE",
+    "BLOCKED",
+    "HUMAN_GATE",
+    "CRITICAL_REVIEW",
+    "PLANNING",
+  ]),
+  retry_reason: new Set([
+    "MISINTERPRETED_REQUIREMENT",
+    "INCOMPLETE_IMPLEMENTATION",
+    "FAILED_TEST",
+    "SCOPE_GAP",
+    "MISSING_CONTEXT",
+    "INTEGRATION_FAILURE",
+  ]),
+  evidence_status: new Set(["PASS", "FAIL", "UNKNOWN"]),
+  evidence_extended_status: new Set(["PASS", "FAIL", "UNKNOWN", "NOT_REQUIRED"]),
+});
+
 const ALLOWED_EVIDENCE_FIELDS = new Set([
   "tests",
   "typecheck",
@@ -77,6 +162,12 @@ export function validatePolicy(policy) {
 
   if (typeof policy !== "object" || policy === null || Array.isArray(policy)) {
     return { valid: false, errors: ["Policy must be a non-null plain object"] };
+  }
+
+  for (const key of Object.keys(policy)) {
+    if (!ALLOWED_TOP_LEVEL_PROPERTIES.has(key)) {
+      errors.push(`Unrecognized top-level property "${key}"`);
+    }
   }
 
   if (policy.schema !== DREAM_SCHEMAS.POLICY) {
@@ -141,6 +232,12 @@ export function validatePolicy(policy) {
       continue;
     }
 
+    for (const key of Object.keys(rule)) {
+      if (!ALLOWED_RULE_PROPERTIES.has(key)) {
+        errors.push(`${prefix}: unrecognized rule property "${key}"`);
+      }
+    }
+
     // ID validation
     if (typeof rule.id !== "string" || !rule.id.trim()) {
       errors.push(`${prefix}: id must be a non-empty string`);
@@ -194,8 +291,8 @@ export function validatePolicy(policy) {
       }
 
       if (key === "post_investigation") {
-        if (typeof cond !== "boolean" && !Array.isArray(cond)) {
-          errors.push(`${prefix}: post_investigation must be a boolean or array of booleans`);
+        if (typeof cond !== "boolean") {
+          errors.push(`${prefix}: post_investigation must be a boolean`);
         }
       } else if (key === "attempt" || key === "retry_remaining") {
         if (typeof cond === "number") {
@@ -203,6 +300,9 @@ export function validatePolicy(policy) {
             errors.push(`${prefix}: numeric condition "${key}" must be a non-negative integer`);
           }
         } else if (Array.isArray(cond)) {
+          if (cond.length === 0) {
+            errors.push(`${prefix}: numeric condition array "${key}" must not be empty`);
+          }
           for (const item of cond) {
             if (!Number.isInteger(item) || item < 0) {
               errors.push(`${prefix}: numeric condition array "${key}" elements must be non-negative integers`);
@@ -210,8 +310,10 @@ export function validatePolicy(policy) {
             }
           }
         } else if (typeof cond === "object" && cond !== null) {
-          if (!Number.isInteger(cond.min) || !Number.isInteger(cond.max)) {
-            errors.push(`${prefix}: numeric range "${key}" must have integer min and max`);
+          if (cond.min === undefined || cond.max === undefined) {
+            errors.push(`${prefix}: numeric range "${key}" requires both min and max properties`);
+          } else if (!Number.isInteger(cond.min) || cond.min < 0 || !Number.isInteger(cond.max) || cond.max < 0) {
+            errors.push(`${prefix}: numeric range "${key}" must have non-negative integer min and max`);
           } else if (cond.min > cond.max) {
             errors.push(`${prefix}: numeric range "${key}" has min (${cond.min}) > max (${cond.max})`);
           }
@@ -235,12 +337,17 @@ export function validatePolicy(policy) {
                 errors.push(`${prefix}: evidence.validation_fresh must be a boolean`);
               }
             } else {
+              const allowedSet = (evKey === "typecheck" || evKey === "build")
+                ? VALID_ENUMS.evidence_extended_status
+                : VALID_ENUMS.evidence_status;
               if (!Array.isArray(evVal)) {
                 errors.push(`${prefix}: evidence.${evKey} must be an array of enum strings`);
+              } else if (evVal.length === 0) {
+                errors.push(`${prefix}: evidence.${evKey} array must not be empty`);
               } else {
                 for (const item of evVal) {
-                  if (typeof item !== "string") {
-                    errors.push(`${prefix}: evidence.${evKey} elements must be strings`);
+                  if (typeof item !== "string" || !allowedSet.has(item)) {
+                    errors.push(`${prefix}: evidence.${evKey} elements must be valid enum strings: ${[...allowedSet].join(", ")}`);
                     break;
                   }
                 }
@@ -250,15 +357,15 @@ export function validatePolicy(policy) {
         }
       } else {
         // Enums (task_action, task_domain, criticality, complexity, state, retry_reason)
+        const allowedSet = VALID_ENUMS[key];
         if (!Array.isArray(cond)) {
           errors.push(`${prefix}: enum condition "${key}" must be an array of strings (OR semantics)`);
+        } else if (cond.length === 0) {
+          errors.push(`${prefix}: enum condition "${key}" array must not be empty`);
         } else {
-          if (cond.length === 0) {
-            errors.push(`${prefix}: enum condition "${key}" array must not be empty`);
-          }
           for (const item of cond) {
-            if (typeof item !== "string") {
-              errors.push(`${prefix}: enum condition "${key}" elements must be strings`);
+            if (typeof item !== "string" || (allowedSet && !allowedSet.has(item))) {
+              errors.push(`${prefix}: enum condition "${key}" elements must be valid enum strings: ${allowedSet ? [...allowedSet].join(", ") : ""}`);
               break;
             }
           }
@@ -311,8 +418,6 @@ function matchesRuleCondition(when = {}, state = {}) {
       if (typeof stateVal !== "boolean") return false;
       if (typeof condition === "boolean") {
         if (stateVal !== condition) return false;
-      } else if (Array.isArray(condition)) {
-        if (!condition.includes(stateVal)) return false;
       } else {
         return false;
       }

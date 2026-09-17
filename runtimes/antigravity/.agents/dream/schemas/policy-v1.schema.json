@@ -59,23 +59,92 @@
             "properties": {
               "task_action": {
                 "type": "array",
-                "items": { "type": "string" }
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ORCHESTRATE",
+                    "INVESTIGATE",
+                    "IMPLEMENT",
+                    "TEST",
+                    "REVIEW",
+                    "MECHANICAL_FIX",
+                    "INTEGRATE",
+                    "ESCALATE",
+                    "HEAVY_EXECUTION",
+                    "DIRECT_ACTION"
+                  ]
+                }
               },
               "task_domain": {
                 "type": "array",
-                "items": { "type": "string" }
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "CODE",
+                    "AUTOEQ_ALGORITHM",
+                    "DSP_CORE",
+                    "UI",
+                    "DATA",
+                    "INFRA",
+                    "TESTING",
+                    "DOCS",
+                    "RESEARCH",
+                    "ORCHESTRA",
+                    "GENERAL"
+                  ]
+                }
               },
               "criticality": {
                 "type": "array",
-                "items": { "type": "string" }
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "NORMAL",
+                    "MAJOR",
+                    "CRITICAL"
+                  ]
+                }
               },
               "complexity": {
                 "type": "array",
-                "items": { "type": "string" }
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "SIMPLE",
+                    "NORMAL",
+                    "DIFFICULT",
+                    "EXPERIMENTAL",
+                    "MECHANICAL",
+                    "INTEGRATION"
+                  ]
+                }
               },
               "state": {
                 "type": "array",
-                "items": { "type": "string" }
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "INTAKE",
+                    "CLASSIFIED",
+                    "DIRECT_ACTION",
+                    "PLANNED",
+                    "DELEGATED",
+                    "EXECUTING",
+                    "EVIDENCE_READY",
+                    "ACCEPTANCE",
+                    "INTEGRATING",
+                    "DONE",
+                    "BLOCKED",
+                    "HUMAN_GATE",
+                    "CRITICAL_REVIEW",
+                    "PLANNING"
+                  ]
+                }
               },
               "attempt": {
                 "oneOf": [
@@ -83,17 +152,19 @@
                     "type": "object",
                     "required": ["min", "max"],
                     "properties": {
-                      "min": { "type": "integer" },
-                      "max": { "type": "integer" }
+                      "min": { "type": "integer", "minimum": 0 },
+                      "max": { "type": "integer", "minimum": 0 }
                     },
                     "additionalProperties": false
                   },
                   {
                     "type": "array",
-                    "items": { "type": "integer" }
+                    "minItems": 1,
+                    "items": { "type": "integer", "minimum": 0 }
                   },
                   {
-                    "type": "integer"
+                    "type": "integer",
+                    "minimum": 0
                   }
                 ]
               },
@@ -103,23 +174,36 @@
                     "type": "object",
                     "required": ["min", "max"],
                     "properties": {
-                      "min": { "type": "integer" },
-                      "max": { "type": "integer" }
+                      "min": { "type": "integer", "minimum": 0 },
+                      "max": { "type": "integer", "minimum": 0 }
                     },
                     "additionalProperties": false
                   },
                   {
                     "type": "array",
-                    "items": { "type": "integer" }
+                    "minItems": 1,
+                    "items": { "type": "integer", "minimum": 0 }
                   },
                   {
-                    "type": "integer"
+                    "type": "integer",
+                    "minimum": 0
                   }
                 ]
               },
               "retry_reason": {
                 "type": "array",
-                "items": { "type": "string" }
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "MISINTERPRETED_REQUIREMENT",
+                    "INCOMPLETE_IMPLEMENTATION",
+                    "FAILED_TEST",
+                    "SCOPE_GAP",
+                    "MISSING_CONTEXT",
+                    "INTEGRATION_FAILURE"
+                  ]
+                }
               },
               "post_investigation": {
                 "type": "boolean"
@@ -129,19 +213,23 @@
                 "properties": {
                   "tests": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "minItems": 1,
+                    "items": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN"] }
                   },
                   "typecheck": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "minItems": 1,
+                    "items": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN", "NOT_REQUIRED"] }
                   },
                   "build": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "minItems": 1,
+                    "items": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN", "NOT_REQUIRED"] }
                   },
                   "scope_check": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "minItems": 1,
+                    "items": { "type": "string", "enum": ["PASS", "FAIL", "UNKNOWN"] }
                   },
                   "validation_fresh": {
                     "type": "boolean"

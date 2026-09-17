@@ -216,12 +216,15 @@ Governance derives `available_actions`; policy selects one legal member.
 | State class | Legal actions |
 |---|---|
 | mechanical/docs/simple | `FLASH_LOW`, `FLASH_MEDIUM` |
+| test execution (task_action: `TEST`) | `FLASH_LOW`, `FLASH_MEDIUM` (`SIMPLE` -> `FLASH_LOW`, non-simple -> `FLASH_MEDIUM`) |
 | normal implementation | `FLASH_MEDIUM`, `FLASH_HIGH` |
-| difficult/experimental/integration/post-investigation | `FLASH_HIGH` only |
+| difficult/experimental/integration/post-investigation implementation | `FLASH_HIGH` only |
 | `CRITICAL` | fixed governance route |
 | `DIRECT_ACTION` | outside Dream |
 
 Reasoning effort remains bound to tier in v1.
+
+**TEST Explicit State Class Ruling**: The `TEST` task action constitutes an explicit state class not governed by generic "difficult/experimental implementation => FLASH_HIGH only". Legal worker tiers for `TEST` execution remain strictly bounded to `FLASH_LOW` and `FLASH_MEDIUM` (`SIMPLE` routes to `FLASH_LOW`; non-simple `NORMAL`, `DIFFICULT`, `EXPERIMENTAL` routes to `FLASH_MEDIUM`). Hard/experimental test execution is bounded to standard execution resources rather than high-tier escalation.
 
 ### 8.2 `INVESTIGATION_STRATEGY`
 
