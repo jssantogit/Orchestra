@@ -40,6 +40,9 @@ test("installer: installs Antigravity runtime cleanly into empty project without
     // Verify no state or telemetry was copied
     assert.equal(existsSync(join(tempProject, ".agents/state/active-state.json")), false);
     assert.equal(existsSync(join(tempProject, ".agents/telemetry/events.jsonl")), false);
+    assert.equal(existsSync(join(tempProject, ".agents/dream/canonical.mjs")), true);
+    assert.equal(existsSync(join(tempProject, ".agents/dream-data")), false);
+    assert.equal(existsSync(join(tempProject, ".agents/state/dream/pending-decisions")), false);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
   }

@@ -34,7 +34,7 @@ if (existsSync(targetAgents) || existsSync(targetGemini)) {
 console.log(`Installing Orchestra Antigravity runtime into '${targetDir}'...`);
 mkdirSync(targetAgents, { recursive: true });
 
-const subdirs = ["agents", "hooks", "skills", "state", "telemetry", "artifacts/outputs"];
+const subdirs = ["agents", "hooks", "skills", "dream", "state", "telemetry", "artifacts/outputs"];
 for (const sub of subdirs) {
   mkdirSync(join(targetAgents, sub), { recursive: true });
 }
@@ -42,6 +42,9 @@ for (const sub of subdirs) {
 cpSync(join(sourceAgents, "agents"), join(targetAgents, "agents"), { recursive: true });
 cpSync(join(sourceAgents, "hooks"), join(targetAgents, "hooks"), { recursive: true });
 cpSync(join(sourceAgents, "skills"), join(targetAgents, "skills"), { recursive: true });
+if (existsSync(join(sourceAgents, "dream"))) {
+  cpSync(join(sourceAgents, "dream"), join(targetAgents, "dream"), { recursive: true });
+}
 cpSync(join(sourceAgents, "hooks.json"), join(targetAgents, "hooks.json"));
 if (existsSync(sourceGemini)) {
   cpSync(sourceGemini, targetGemini);
@@ -52,9 +55,20 @@ try { rmSync(join(targetAgents, "state/active-state.json"), { force: true }); } 
 try { rmSync(join(targetAgents, "state/active-contract.json"), { force: true }); } catch {}
 try { rmSync(join(targetAgents, "telemetry/events.jsonl"), { force: true }); } catch {}
 
+// Ensure dream historical data and state are never copied
+try { rmSync(join(targetAgents, "dream/dream-data"), { recursive: true, force: true }); } catch {}
+try { rmSync(join(targetAgents, "dream-data"), { recursive: true, force: true }); } catch {}
+try { rmSync(join(targetDir, ".agents/dream-data"), { recursive: true, force: true }); } catch {}
+try { rmSync(join(targetDir, "dream-data"), { recursive: true, force: true }); } catch {}
+try { rmSync(join(targetAgents, "state/dream"), { recursive: true, force: true }); } catch {}
+
 writeFileSync(join(targetAgents, "state/.gitkeep"), "");
 writeFileSync(join(targetAgents, "telemetry/.gitkeep"), "");
 writeFileSync(join(targetAgents, "artifacts/outputs/.gitkeep"), "");
+
+// Ensure destination .agents/state/dream/ has only .gitkeep
+mkdirSync(join(targetAgents, "state/dream"), { recursive: true });
+writeFileSync(join(targetAgents, "state/dream/.gitkeep"), "");
 
 console.log(`Antigravity runtime successfully installed to '${targetAgents}'.`);
 console.log(`Verify installation by running: node --test ${join(targetAgents, "skills/orchestra/routing-policy.test.mjs")}`);

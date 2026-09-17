@@ -9,6 +9,15 @@ lerna-debug.log*
 # Runtime State & History (DO NOT COMMIT)
 .agents/state/*
 !.agents/state/.gitkeep
+!.agents/state/dream/
+.agents/state/dream/*
+!.agents/state/dream/.gitkeep
+.agents/dream-data/*
+!.agents/dream-data/.gitkeep
+**/.agents/state/dream/*
+!**/.agents/state/dream/.gitkeep
+**/.agents/dream-data/*
+!**/.agents/dream-data/.gitkeep
 .agents/telemetry/*
 !.agents/telemetry/.gitkeep
 .agents/artifacts/*
@@ -70,4 +79,5 @@ scratch/
 *.tmp
 *.log
 benchmarks/turn-economy/raw/
+.superpowers/
 

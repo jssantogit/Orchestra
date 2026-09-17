@@ -5,10 +5,11 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "test": "node --test runtimes/codex/tests/routing-policy.test.mjs && node --test runtimes/antigravity/tests/routing-policy.test.mjs && node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs && node --test tests/cross-runtime/cross-runtime-firewall.test.mjs && node --test tests/installers/installers.test.mjs && node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs",
+    "test": "node --test runtimes/codex/tests/routing-policy.test.mjs && node --test runtimes/antigravity/tests/routing-policy.test.mjs && node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs && npm run test:dream && node --test tests/cross-runtime/cross-runtime-firewall.test.mjs && node --test tests/installers/installers.test.mjs && node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs",
     "test:codex": "node --test runtimes/codex/tests/routing-policy.test.mjs",
     "test:antigravity": "node --test runtimes/antigravity/tests/routing-policy.test.mjs",
     "test:hooks": "node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs",
+    "test:dream": "node --test runtimes/antigravity/.agents/dream/dream.test.mjs",
     "test:firewall": "node --test tests/cross-runtime/cross-runtime-firewall.test.mjs",
     "test:installers": "node --test tests/installers/installers.test.mjs",
     "test:turn-economy": "node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs",
