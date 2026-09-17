@@ -1305,6 +1305,10 @@ test("Task 2 Causal Lifecycle: Investigation failure preserves post_investigatio
       lastWorkerProfile: "flash-medium-worker",
       investigationInFlight: {
         correlationKey: "test-corr-key",
+        toolCallId: "call-investigator-fail",
+        tool_call_id: "call-investigator-fail",
+        conversationId: "fail-conv",
+        parentConversationId: "fail-conv",
         decision_type: "RETRY_ACTION",
         started_at: new Date().toISOString(),
       },
@@ -1315,6 +1319,7 @@ test("Task 2 Causal Lifecycle: Investigation failure preserves post_investigatio
     const postPayload = JSON.stringify({
       conversationId: "fail-conv",
       stepIdx: 1,
+      toolCallId: "call-investigator-fail",
       correlationKey: "test-corr-key",
       toolName: "invoke_subagent",
       toolArgs: { Subagents: [{ TypeName: "flash-worker", Role: "investigator" }] },
@@ -1661,7 +1666,7 @@ test("Task 1 Exact Investigation Correlation: normative counterexamples A throug
     assert.ok(stateD.investigationInFlight, "Counterexample D: manage_subagents of unrelated child must NOT close in-flight");
     assert.equal(stateD.post_investigation, false, "Counterexample D: post_investigation must remain false");
 
-    // E. Exactly correlated completion -> closes A, post_investigation = true
+    // E. Exactly correlated successful invocation is still only ACK -> A remains in flight
     setupInFlightA();
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
@@ -1675,10 +1680,10 @@ test("Task 1 Exact Investigation Correlation: normative counterexamples A throug
       encoding: "utf-8"
     });
     let stateE = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
-    assert.equal(stateE.investigationInFlight, undefined, "Counterexample E: exactly correlated completion must close in-flight");
-    assert.equal(stateE.post_investigation, true, "Counterexample E: post_investigation must become true");
+    assert.ok(stateE.investigationInFlight, "Counterexample E: exactly correlated invoke ACK must remain in-flight");
+    assert.equal(stateE.post_investigation, false, "Counterexample E: invoke ACK must not satisfy post_investigation");
 
-    // F. Exactly correlated completion + FAILED/error -> closes in-flight, post_investigation = false
+    // F. Exactly correlated invocation failure -> closes dispatch attempt, post_investigation = false
     setupInFlightA();
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
