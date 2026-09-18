@@ -36,6 +36,7 @@ import {
   feedbackSummary,
   reconcileFeedbackPlane,
 } from "../skills/orchestra/feedback-plane.mjs";
+import { detectAuthorityInjection } from "../skills/orchestra/trust-boundary.mjs";
 
 function readStdin() {
   try {
@@ -965,6 +966,17 @@ function main() {
           activeState.workerConversationId = conversationId;
         }
         const msgStr = typeof msg === "string" ? msg : JSON.stringify(msg);
+        const authorityClaim = detectAuthorityInjection(msgStr);
+        if (authorityClaim.detected) {
+          activeState.untrustedAuthorityClaims = (activeState.untrustedAuthorityClaims || 0) + 1;
+          activeState.lastUntrustedAuthorityClaim = {
+            actorId: actor.actorId || conversationId || null,
+            role: actor.role || "UNKNOWN",
+            reasons: authorityClaim.reasons,
+            trustClass: "MODEL_CLAIM",
+            observedAt: new Date().toISOString(),
+          };
+        }
         const parsedFeedback = extractFeedbackDeclarations(msgStr);
         if (parsedFeedback.declarations.length > 0 || parsedFeedback.errors.length > 0) {
           const appliedFeedback = applyFeedbackDeclarations(
@@ -1258,6 +1270,8 @@ function main() {
       worker_validation_actor: activeState.workerValidationActor || null,
       worker_validation_fresh: activeState.workerValidationFresh || false,
       feedback_summary: activeState.feedbackSummary || null,
+      untrusted_authority_claims: activeState.untrustedAuthorityClaims || 0,
+      last_capability_decision: activeState.lastCapabilityDecision || null,
       type: "TOOL_STEP"
     };
 
