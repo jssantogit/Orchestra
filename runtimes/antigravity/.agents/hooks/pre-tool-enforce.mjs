@@ -1915,9 +1915,9 @@ function main() {
     return;
   }
 
-  // Check 3: write_to_file and replace_file_content
-  if (toolName === "write_to_file" || toolName === "replace_file_content") {
-    const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || "";
+  // Check 3: native file mutation tools
+  if (["write_to_file", "replace_file_content", "edit_file", "create_file"].includes(toolName)) {
+    const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.FilePath || toolArgs.filePath || toolArgs.path || "";
     const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
 
     // 0. Constitution protection: AGENTS.md is strictly immutable across all agents
