@@ -316,6 +316,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
           parentConversationId: parentConvId,
           taskId: activeTaskId,
           benchmarkRunId: activeRunId,
+          attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
         });
 
         let match = null;
@@ -346,6 +347,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
             parentConversationId: match.parentConversationId || parentConvId,
             taskIdentifier: match.taskIdentifier || activeTaskId || null,
             benchmarkRunId: match.benchmarkRunId || activeRunId || null,
+            attempt: Number.isInteger(match.attempt) ? match.attempt : 0,
             originToolCallId: match.originToolCallId || match.toolCallId || null,
             originStepIdx: match.originStepIdx ?? null,
             pendingSeq: match.seq ?? null,
@@ -390,6 +392,9 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         if (binding.benchmarkRunId && activeRunId) {
           if (binding.benchmarkRunId !== activeRunId) continue;
         }
+        const activeAttempt = Number.isInteger(activeState.attempt) ? activeState.attempt : 0;
+        const bindingAttempt = Number.isInteger(binding.attempt) ? binding.attempt : 0;
+        if (bindingAttempt !== activeAttempt) continue;
       }
 
       // Child Identity Resolution
@@ -480,6 +485,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 confidence: childConfidence,
                 evidenceSource: "CHILD_TRANSCRIPT",
                 delegationKind: binding?.delegationKind || null,
+                attempt: Number.isInteger(binding?.attempt) ? binding.attempt : 0,
                 transcriptStepIndex: stepIdx,
                 latestMutationStepBeforeValidation,
                 mutationAfterValidation,
@@ -531,6 +537,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                   source: binding.source,
                   confidence: childConfidence,
                   delegationKind: binding.delegationKind,
+                  attempt: Number.isInteger(binding.attempt) ? binding.attempt : 0,
                 };
                 activeState.implementationComplete = true;
                 activeState.handoffObserved = true;
