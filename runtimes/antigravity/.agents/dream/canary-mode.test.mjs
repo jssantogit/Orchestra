@@ -300,6 +300,102 @@ function approveFixture(f) {
   return approval;
 }
 
+
+function recordAcceptedCanaryOutcomes(
+  f,
+  {
+    count,
+    trafficPercent,
+    start,
+    label,
+  },
+) {
+  const seen = new Set();
+  for (let i = 0; i < count; i++) {
+    let selected = taskForSelection(
+      f.candidateId,
+      true,
+      start + (i * 1000),
+      trafficPercent,
+    );
+    while (seen.has(selected.taskId)) {
+      selected = taskForSelection(
+        f.candidateId,
+        true,
+        start + (i * 1000) + seen.size + 1,
+        trafficPercent,
+      );
+    }
+    seen.add(selected.taskId);
+
+    const runtime = safeRuntime(selected.taskId);
+    const overlay = evaluateCanaryPolicyOverlay({
+      repoRoot: f.repo,
+      taskId: selected.taskId,
+      decisionType: "WORKER_TIER",
+      state: policyState(),
+      availableActions: ACTIONS,
+      baselineAction: "FLASH_MEDIUM",
+      baselinePolicyId: f.baselinePolicyId,
+      activeState: runtime.activeState,
+      activeContract: runtime.activeContract,
+    });
+    assert.equal(overlay.active, true, JSON.stringify(overlay));
+    assert.equal(overlay.canary_traffic_percent, trafficPercent);
+
+    const correlationKey = "canary-rollout-" + label + "-" + i;
+    const decisionId = "dec-canary-rollout-" + label + "-" + i;
+    const recorded = recordDecision({
+      repoRoot: f.repo,
+      snapshot: f.trainRoot,
+      correlationKey,
+      decision: {
+        decision_id: decisionId,
+        snapshot_id: f.trainRoot,
+        decision_type: "WORKER_TIER",
+        state: policyState(),
+        available_actions: ACTIONS,
+        chosen_action: overlay.action,
+        policy_source: overlay.source,
+        policy_id: overlay.policy_id,
+        baseline_action: overlay.baseline_action,
+        policy_diagnostic: null,
+        actor_identity: "ORCHESTRATOR",
+        conversation_id: "canary-rollout-" + label,
+        step_idx: i + 1,
+        tool_call_id: "tool-canary-rollout-" + label + "-" + i,
+        branch_ordinal: 0,
+      },
+    });
+    assert.equal(recorded.recorded, true, JSON.stringify(recorded));
+
+    const outcome = recordDecisionOutcome({
+      repoRoot: f.repo,
+      correlationKey,
+      outcome: {
+        result: { status: "SUCCESS" },
+        evidence_summary: {
+          tests: "NOT_REQUIRED",
+          typecheck: "NOT_REQUIRED",
+          build: "NOT_REQUIRED",
+          scope_check: "PASS",
+          validation_fresh: false,
+        },
+        retry_state: { retry_remaining: 1 },
+        cost_metrics: {
+          model_calls: 1,
+          input_tokens: 10,
+          output_tokens: 5,
+          latency_ms: 5,
+        },
+        terminal_state: "ACCEPTED",
+        resulting_snapshot_id: null,
+      },
+    });
+    assert.equal(outcome.recorded, true, JSON.stringify(outcome));
+  }
+}
+
 test("Canary rollout uses deterministic nested 5/20/50/100 cohorts and NORMAL only", () => {
   assert.deepEqual(CANARY_GATES, {
     initial_traffic_percent: 5,
