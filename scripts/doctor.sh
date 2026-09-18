@@ -90,9 +90,15 @@ REQUIRED_AGY_FILES=(
   "experiments/jev/catalog-builder.mjs"
   "experiments/jev/candidate-generator.mjs"
   "experiments/jev/artifact-ranker.mjs"
-  "experiments/jev/shadow-runner.mjs"
+  "experiments/jev/future-use-oracle.mjs"
+  "experiments/jev/redundancy-shadow.mjs"
+  "experiments/jev/evaluator.mjs"
+  "experiments/jev/packet-builder.mjs"
   "experiments/jev/activation-gate.mjs"
   "experiments/jev/retrieval-assist.mjs"
+  "experiments/jev/dream-analyzer.mjs"
+  "experiments/jev/egress-policy.mjs"
+  "experiments/jev/shadow-runner.mjs"
   "experiments/jev/jev-cli.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-side-effect-guard.mjs"
@@ -167,9 +173,15 @@ JS_FILES=(
   "experiments/jev/catalog-builder.mjs"
   "experiments/jev/candidate-generator.mjs"
   "experiments/jev/artifact-ranker.mjs"
-  "experiments/jev/shadow-runner.mjs"
+  "experiments/jev/future-use-oracle.mjs"
+  "experiments/jev/redundancy-shadow.mjs"
+  "experiments/jev/evaluator.mjs"
+  "experiments/jev/packet-builder.mjs"
   "experiments/jev/activation-gate.mjs"
   "experiments/jev/retrieval-assist.mjs"
+  "experiments/jev/dream-analyzer.mjs"
+  "experiments/jev/egress-policy.mjs"
+  "experiments/jev/shadow-runner.mjs"
   "experiments/jev/jev-cli.mjs"
   "benchmarks/turn-economy/jev-evaluation.mjs"
   "scripts/contamination-check.mjs"
@@ -239,7 +251,7 @@ else
   report_fail "Milestones I-J-K tests failed"
 fi
 
-if node --test "${ROOT_DIR}/tests/jev/jev-contract.test.mjs" "${ROOT_DIR}/tests/jev/jev-shadow.test.mjs" "${ROOT_DIR}/tests/jev/future-use-oracle.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-jev.test.mjs"; then
+if node --test "${ROOT_DIR}/tests/jev/jev-contract.test.mjs" "${ROOT_DIR}/tests/jev/jev-shadow.test.mjs" "${ROOT_DIR}/tests/jev/future-use-oracle.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-jev.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-metrics.test.mjs"; then
   report_pass "Milestone L Jev semantic shadow tests passed"
 else
   report_fail "Milestone L Jev semantic shadow tests failed"
