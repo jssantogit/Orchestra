@@ -116,9 +116,10 @@ Orchestra/
 │   └── autoeq-workbench/     # Real-world DSP/numerical example with custom domains
 │
 ├── scripts/
-│   ├── install-codex.sh      # Installs Codex runtime into target project
-│   ├── install-antigravity.sh# Installs Antigravity runtime into target project
-│   ├── doctor.sh             # Validates repository health & dependencies
+│   ├── install-codex.sh       # Installs Codex runtime into target project
+│   ├── install-antigravity.sh # Clean Antigravity install
+│   ├── orchestra-project.mjs  # Install/update/doctor/version/diff/rollback manager
+│   ├── doctor.sh              # Validates Orchestra repository health
 │   └── contamination-check.mjs # Cross-runtime firewall scan
 │
 └── tests/
@@ -144,8 +145,32 @@ This installs `.codex/` with `config.toml`, instructions, 9 custom agents, and t
 ```
 This installs `.agents/` with engine hooks, 5 custom agents, and specialized skills.
 
+### Existing Antigravity Projects
+
+Do not reinstall or manually replace `.agents`. Use the project runtime manager:
+
+```bash
+# Preview
+node scripts/orchestra-project.mjs update /path/to/project --dry-run
+
+# Update with automatic backup
+node scripts/orchestra-project.mjs update /path/to/project
+
+# Verify installed runtime
+node scripts/orchestra-project.mjs doctor /path/to/project
+
+# Inspect version / drift
+node scripts/orchestra-project.mjs version /path/to/project
+node scripts/orchestra-project.mjs diff-runtime /path/to/project
+
+# Roll back Orchestra runtime without rewinding project/Dream state
+node scripts/orchestra-project.mjs rollback-runtime /path/to/project --backup latest
+```
+
+Updates replace only Orchestra-owned runtime paths and preserve project rules, active/history state, telemetry, Dream data, and artifacts. See [Project Runtime Management](docs/project-runtime.md).
+
 ### Non-Destructive Guarantee:
-Neither installer will overwrite existing configurations. If destination files conflict, installation halts immediately and reports the conflict.
+Clean installers still refuse existing configurations. Existing Antigravity runtimes must use the updater, which creates a backup before replacing any managed runtime path.
 
 ---
 
@@ -159,7 +184,7 @@ node --test runtimes/codex/tests/routing-policy.test.mjs
 node --test runtimes/antigravity/tests/routing-policy.test.mjs
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
 node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
-node --test tests/installers/installers.test.mjs
+npm run test:installers
 
 # Run cross-runtime firewall scan
 node scripts/contamination-check.mjs

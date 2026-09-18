@@ -56,9 +56,9 @@ jobs:
         run: |
           node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
 
-      - name: Run Installer Tests
+      - name: Run Project Runtime & Installer Tests
         run: |
-          node --test tests/installers/installers.test.mjs
+          npm run test:installers
 
       - name: Run Cross-Runtime Contamination Check
         run: |

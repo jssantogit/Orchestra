@@ -55,6 +55,38 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 
 ---
 
+## 2.5 Project Runtime Lifecycle
+
+Antigravity installations are versioned and content-addressed. Managed projects receive `.agents/orchestra-runtime.json`.
+
+From the Orchestra checkout:
+
+```bash
+node scripts/orchestra-project.mjs update /path/to/project --dry-run
+node scripts/orchestra-project.mjs update /path/to/project
+node scripts/orchestra-project.mjs doctor /path/to/project
+node scripts/orchestra-project.mjs version /path/to/project
+node scripts/orchestra-project.mjs diff-runtime /path/to/project
+node scripts/orchestra-project.mjs backups /path/to/project
+node scripts/orchestra-project.mjs rollback-runtime /path/to/project --backup latest
+```
+
+Updates replace only `.agents/{agents,hooks,skills,dream}`, `.agents/hooks.json`, and `GEMINI.md`. They preserve `.agents/{rules,state,telemetry,dream-data,artifacts,runtime-management}`.
+
+The manager creates an automatic pre-update backup and refuses active states such as `EXECUTING`, `DELEGATED`, or `CI_WAIT`. `DONE`, `BLOCKED`, and `HUMAN_GATE` are quiescent so runtime defects can be repaired without resetting project state.
+
+Inside an installed project:
+
+```bash
+node .agents/skills/orchestra/project-runtime-cli.mjs doctor
+node .agents/skills/orchestra/project-runtime-cli.mjs version
+node .agents/skills/orchestra/project-runtime-cli.mjs backups
+```
+
+See [Project Runtime Management](../../docs/project-runtime.md).
+
+---
+
 ## 3. ALL-GEMINI Model Routing Matrix
 
 | Role | Profile / Model | Reasoning Effort | Duties |
