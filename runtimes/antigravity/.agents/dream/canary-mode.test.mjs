@@ -34,7 +34,7 @@ import {
   splitLineage,
   submitDesignerCandidates,
 } from "./policy-lab.mjs";
-import { loadRuntimePolicy } from "./policy-store.mjs";
+import { loadRuntimePolicy, rollbackActivePolicy } from "./policy-store.mjs";
 import { createDreamEvent, DREAM_SCHEMAS } from "./records.mjs";
 import {
   enableShadowMode,
@@ -623,6 +623,15 @@ test("Healthy completed Canary requires second human approval before atomic prom
     assert.equal(canaryAfter.active, false);
     assert.equal(canaryAfter.reason, "CANARY_DISABLED");
 
+    // A Shadow report tied to the old baseline becomes stale immediately after promotion.
+    const staleApproval = approveCanary({
+      repoRoot: f.repo,
+      shadowReportId: f.shadowReportId,
+      humanApproval: true,
+    });
+    assert.equal(staleApproval.approved, false);
+    assert.equal(staleApproval.reason, "CANARY_SHADOW_BASELINE_STALE");
+
     // Corrupting the pointer must never make the promoted policy authoritative.
     const pointerPath = promoted.pointer_path;
     const pointer = JSON.parse(readFileSync(pointerPath, "utf8"));
@@ -634,6 +643,31 @@ test("Healthy completed Canary requires second human approval before atomic prom
     assert.equal(fallback.source, "STATIC_ROUTING_FALLBACK");
     assert.equal(fallback.diagnostic, "ACTIVE_POLICY_POINTER_INVALID");
     assert.notEqual(fallback.policy.policy_id, f.candidateId);
+
+    // Restore the valid pointer, then prove policy rollback is separately human-gated
+    // and returns authority to the exact previous baseline.
+    writeFileSync(pointerPath, JSON.stringify(promoted.active_pointer, null, 2), "utf8");
+    const rollbackDenied = rollbackActivePolicy({
+      repoRoot: f.repo,
+      humanApproval: false,
+    });
+    assert.equal(rollbackDenied.rolled_back, false);
+    assert.equal(rollbackDenied.reason, "EXPLICIT_HUMAN_POLICY_ROLLBACK_REQUIRED");
+
+    const rollback = rollbackActivePolicy({
+      repoRoot: f.repo,
+      humanApproval: true,
+    });
+    assert.equal(rollback.rolled_back, true, JSON.stringify(rollback));
+    assert.equal(rollback.rollback_of_policy_id, f.candidateId);
+    assert.equal(rollback.policy_id, f.baselinePolicyId);
+    assert.equal(rollback.source, "STATIC_POLICY_V1");
+    assert.ok(existsSync(rollback.history_path));
+
+    const afterRollback = loadRuntimePolicy(f.repo);
+    assert.equal(afterRollback.ok, true);
+    assert.equal(afterRollback.source, "STATIC_POLICY_V1");
+    assert.equal(afterRollback.policy.policy_id, f.baselinePolicyId);
   } finally {
     rmSync(f.repo, { recursive: true, force: true });
   }
