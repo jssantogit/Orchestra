@@ -6,6 +6,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
 import { evaluateTwoKeyReview } from "../skills/orchestra/routing-policy.mjs";
 import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
+import { getExplorationBudgetState } from "../dream/exploration-lab.mjs";
 import {
   factualSubagentMatchesPending,
   filterFactualPendingCandidates,
@@ -988,6 +989,29 @@ function main() {
   }
 
   const { repoRoot, statePath, telemetryPath } = getWorkspacePaths(payload);
+
+  // Milestone E budget is a hard upper bound. If PostInvocation exhausted the
+  // exploration allowance, Stop must not reopen the execution loop even when
+  // normal acceptance/evidence gates would otherwise request continuation.
+  const explorationBudget = getExplorationBudgetState(repoRoot);
+  if (explorationBudget.active && explorationBudget.exhausted) {
+    recordStopTelemetry(
+      telemetryPath,
+      {},
+      payload,
+      "stop",
+      explorationBudget.timed_out
+        ? "EXPLORATION_TIMEOUT"
+        : "EXPLORATION_MODEL_CALL_BUDGET_EXHAUSTED",
+    );
+    console.log(JSON.stringify({
+      decision: "stop",
+      reason: explorationBudget.timed_out
+        ? "EXPLORATION_TIMEOUT: hard Milestone E deadline reached."
+        : `EXPLORATION_MODEL_CALL_BUDGET_EXHAUSTED: ${explorationBudget.model_calls} model calls observed; Stop cannot continue the exploration loop.`,
+    }));
+    return;
+  }
 
   let activeState = {};
   const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");

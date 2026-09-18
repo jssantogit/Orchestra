@@ -33,6 +33,11 @@ import {
   validatePolicy,
 } from "../dream/policy-engine.mjs";
 import {
+  captureBranchSeedIfArmed,
+  consumeExplorationTarget,
+  resolveExplorationPolicyOverlay,
+} from "../dream/exploration-lab.mjs";
+import {
   factualSubagentMatchesPending,
   filterFactualPendingCandidates,
   findFactualSubagentRecord,
@@ -86,9 +91,30 @@ function loadActivePolicy() {
   return { policy: parsed, diagnostic: null };
 }
 
-function evaluatePolicyWithFallback({ decisionType, state, availableActions, baselineAction }) {
-  const loaded = loadActivePolicy();
+function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableActions, baselineAction }) {
   const safeBaseline = typeof baselineAction === "string" ? baselineAction : "";
+  const exploration = resolveExplorationPolicyOverlay({
+    repoRoot,
+    decisionType,
+    state,
+    availableActions,
+    baselineAction: safeBaseline,
+  });
+  if (exploration?.active) {
+    if (exploration.blocked) {
+      return {
+        ok: false,
+        action: "",
+        source: "EXPLORATION_LAB",
+        policy_id: null,
+        baseline_action: safeBaseline,
+        policy_diagnostic: exploration.reason,
+        block_execution: true,
+      };
+    }
+    return exploration;
+  }
+  const loaded = loadActivePolicy();
   if (loaded.diagnostic) {
     return {
       ok: false,
@@ -169,13 +195,28 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
   if (snapRes.ok) {
     const decState = deriveDecisionState(taskObj, activeState, activeState.evidenceSummary || activeState.evidence || {});
     const availableActions = deriveAvailableActions(req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY, decState);
-    recordDecision({
+    const effectiveActions = availableActions.length > 0 ? availableActions : ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"];
+    const seedCapture = captureBranchSeedIfArmed({
       repoRoot,
       snapshot: snapRes.snapshot,
+      decisionType: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
+      decisionState: decState,
+      availableActions: effectiveActions,
+      scopeContract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
+      taskDescriptor: taskObj,
+      evidenceSummary: activeState.evidenceSummary || activeState.evidence || {},
+      runtimeState: activeState,
+    });
+    if (seedCapture.captured) {
+      activeState.explorationSeedCaptured = seedCapture.seed_id;
+    }
+    recordDecision({
+      repoRoot,
+      snapshot: req.source_snapshot_id || snapRes.snapshot,
       decision: {
         decision_type: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
         state: decState,
-        available_actions: availableActions.length > 0 ? availableActions : ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+        available_actions: effectiveActions,
         chosen_action: "INVESTIGATE_FIRST",
         policy_source: req.policy_source || "STATIC_POLICY_V1",
         policy_id: req.policy_id || null,
@@ -188,6 +229,12 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
         branch_ordinal: 0,
       },
       correlationKey: corrKey,
+    });
+    consumeExplorationTarget({
+      repoRoot,
+      decisionType: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
+      state: decState,
+      action: "INVESTIGATE_FIRST",
     });
   }
 
@@ -1578,11 +1625,19 @@ function main() {
                 state: decisionState,
               }) || "IMPLEMENT_DIRECT";
               const invEval = evaluatePolicyWithFallback({
+                repoRoot,
                 decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
                 state: decisionState,
                 availableActions: invAvailable,
                 baselineAction: invBaseline,
               });
+              if (invEval.block_execution) {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: `EXPLORATION_POLICY_INVALID: ${invEval.policy_diagnostic || "blocked"}`,
+                }));
+                return;
+              }
               if (invEval.action === "INVESTIGATE_FIRST") {
                 activeState.pendingPolicyRequirement = {
                   decision_type: DECISION_TYPES.INVESTIGATION_STRATEGY,
@@ -1591,6 +1646,7 @@ function main() {
                   policy_id: invEval.policy_id,
                   baseline_action: invBaseline,
                   policy_diagnostic: invEval.policy_diagnostic,
+                  source_snapshot_id: invEval.source_snapshot_id || null,
                 };
                 try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
                 console.log(JSON.stringify({
@@ -1599,6 +1655,7 @@ function main() {
                 }));
                 return;
               }
+
             }
           }
 
@@ -1612,11 +1669,39 @@ function main() {
           }) || (decisionType === DECISION_TYPES.WORKER_TIER ? "FLASH_MEDIUM" : "RETRY_SAME");
 
           const evalResult = evaluatePolicyWithFallback({
+            repoRoot,
             decisionType,
             state: decisionState,
             availableActions,
             baselineAction,
           });
+          if (evalResult.block_execution) {
+            console.log(JSON.stringify({
+              decision: "deny",
+              reason: `EXPLORATION_POLICY_INVALID: ${evalResult.policy_diagnostic || "blocked"}`,
+            }));
+            return;
+          }
+
+          // RETRY_ACTION=INVESTIGATE_FIRST is published only when the factual
+          // investigation dispatch begins; defer BranchSeed capture until then.
+          if (!(decisionType === DECISION_TYPES.RETRY_ACTION && evalResult.action === "INVESTIGATE_FIRST")) {
+            const seedCapture = captureBranchSeedIfArmed({
+              repoRoot,
+              snapshot: snapRes.snapshot,
+              decisionType,
+              decisionState,
+              availableActions,
+              scopeContract: contractObj,
+              taskDescriptor: taskObj,
+              evidenceSummary: evidenceObj,
+              runtimeState: activeState,
+            });
+            if (seedCapture.captured) {
+              activeState.explorationSeedCaptured = seedCapture.seed_id;
+              try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+            }
+          }
 
           // 3. Real Online Policy Authority Enforcements
           if (decisionType === DECISION_TYPES.WORKER_TIER) {
@@ -1676,7 +1761,7 @@ function main() {
 
               recordDecision({
                 repoRoot,
-                snapshot: snapRes.snapshot,
+                snapshot: evalResult.source_snapshot_id || snapRes.snapshot,
                 decision: {
                   decision_type: DECISION_TYPES.RETRY_ACTION,
                   state: decisionState,
@@ -1693,6 +1778,12 @@ function main() {
                   branch_ordinal: 0,
                 },
                 correlationKey: corrKey,
+              });
+              consumeExplorationTarget({
+                repoRoot,
+                decisionType: DECISION_TYPES.RETRY_ACTION,
+                state: decisionState,
+                action: "REPLAN",
               });
 
               // Execute deterministic state transition
@@ -1775,7 +1866,7 @@ function main() {
           };
 
           decisionsToRecord.push({
-            snapshot: snapRes.snapshot,
+            snapshot: evalResult.source_snapshot_id || snapRes.snapshot,
             decision: decRecordInput,
             correlationKey: corrKey,
             profile,
@@ -1878,6 +1969,12 @@ function main() {
           activeState.dreamRecordingError = decRes.reason || decRes.error_code || "DECISION_RECORD_FAILED";
           try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
         }
+        consumeExplorationTarget({
+          repoRoot,
+          decisionType: item.decision.decision_type,
+          state: item.decision.state,
+          action: item.decision.chosen_action,
+        });
       }
 
       console.log(JSON.stringify({ decision: "allow" }));
@@ -2582,11 +2679,19 @@ function main() {
             state: invState,
           }) || "IMPLEMENT_DIRECT";
           const invRes = evaluatePolicyWithFallback({
+            repoRoot,
             decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
             state: invState,
             availableActions: invAvailable,
             baselineAction: invBaseline,
           });
+          if (invRes.block_execution) {
+            console.log(JSON.stringify({
+              decision: "deny",
+              reason: `EXPLORATION_POLICY_INVALID: ${invRes.policy_diagnostic || "blocked"}`,
+            }));
+            return;
+          }
           if (invRes.action === "INVESTIGATE_FIRST") {
             console.log(JSON.stringify({
               decision: "deny",
@@ -2610,6 +2715,21 @@ function main() {
               evidence: activeState.evidenceSummary || activeState.evidence || { tests: "UNKNOWN", typecheck: "UNKNOWN", build: "UNKNOWN", validation_fresh: false, scope_check: "UNKNOWN" },
             });
             if (snapRes.ok) {
+              const seedCapture = captureBranchSeedIfArmed({
+                repoRoot,
+                snapshot: snapRes.snapshot,
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                decisionState: invState,
+                availableActions: invAvailable,
+                scopeContract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
+                taskDescriptor: taskObj,
+                evidenceSummary: activeState.evidenceSummary || activeState.evidence || {},
+                runtimeState: activeState,
+              });
+              if (seedCapture.captured) {
+                activeState.explorationSeedCaptured = seedCapture.seed_id;
+              }
+
               const corrKey = dreamCorrelationKey({
                 conversationId: payload.conversationId || activeState.conversationId || "default",
                 stepIdx: payload.stepIdx ?? 0,
@@ -2618,7 +2738,7 @@ function main() {
               });
               const directDecision = recordDecision({
                 repoRoot,
-                snapshot: snapRes.snapshot,
+                snapshot: invRes.source_snapshot_id || snapRes.snapshot,
                 decision: {
                   decision_type: DECISION_TYPES.INVESTIGATION_STRATEGY,
                   state: invState,
@@ -2635,6 +2755,12 @@ function main() {
                   branch_ordinal: 0,
                 },
                 correlationKey: corrKey,
+              });
+              consumeExplorationTarget({
+                repoRoot,
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                state: invState,
+                action: "IMPLEMENT_DIRECT",
               });
               if (directDecision.recorded) {
                 activeState.directInvestigationDecisionInFlight = {
