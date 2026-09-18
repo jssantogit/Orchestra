@@ -31,6 +31,34 @@ test("common alternate side channels are classified before shell execution", () 
   assert.equal(classifyCommandCapability("python -m http.server 8000").capability, SIDE_EFFECT_CAPABILITIES.PUBLICATION);
 });
 
+test("external plugin tools fail toward write authority unless their semantics are clearly read-only", () => {
+  assert.equal(
+    classifyToolCapability("mcp__GitHub__create_issue", { title: "x" }).capability,
+    SIDE_EFFECT_CAPABILITIES.REMOTE_REPO_WRITE,
+  );
+  assert.equal(
+    classifyToolCapability("mcp__GitHub__search_code", { query: "x" }).capability,
+    SIDE_EFFECT_CAPABILITIES.NETWORK_READ,
+  );
+  assert.equal(
+    classifyToolCapability("plugin_slack_send_message", { channel: "dev" }).capability,
+    SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE,
+  );
+  assert.equal(
+    classifyToolCapability("connector_unknown_operation", {}).capability,
+    SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE,
+  );
+  assert.equal(
+    authorizeToolCapability({
+      toolName: "connector_unknown_operation",
+      toolArgs: {},
+      activeState: { taskAction: "IMPLEMENT" },
+      activeContract: {},
+    }).allowed,
+    false,
+  );
+});
+
 test("remote/public writes default deny and become legal only through factual capability or classified direct action", () => {
   const denied = authorizeToolCapability({
     toolName: "run_command",
