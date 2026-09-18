@@ -565,3 +565,27 @@ test("instruction source remains within the Codex control-plane tree", () => {
   assert.equal(instructions.includes(".agents/skills/agy-orchestra"), false);
   assert.equal(instructions.includes("gemini-"), false);
 });
+
+test("provider-neutral scope contract preserves side-effect capabilities", () => {
+  const contract = createScopeContract({
+    allowedPaths: ["packages/core/**"],
+    capabilities: ["network_write", "VCS_REMOTE_WRITE", "network_write"],
+  });
+  assert.deepEqual(contract.sideEffectCapabilities, ["NETWORK_WRITE", "VCS_REMOTE_WRITE"]);
+  assert.equal(validateScopeContract(contract, ["packages/core/src/index.ts"]).valid, true);
+
+  const nested = createScopeContract({
+    scopeContract: {
+      allowedPaths: ["packages/core/**"],
+      sideEffectCapabilities: ["PUBLICATION"],
+    },
+  });
+  assert.deepEqual(nested.sideEffectCapabilities, ["PUBLICATION"]);
+
+  const invalid = validateScopeContract({
+    allowedPaths: ["packages/core/**"],
+    sideEffectCapabilities: ["ROOT_ACCESS"],
+  }, ["packages/core/src/index.ts"]);
+  assert.equal(invalid.valid, false);
+  assert.deepEqual(invalid.invalidSideEffectCapabilities, ["ROOT_ACCESS"]);
+});
