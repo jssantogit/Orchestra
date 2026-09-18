@@ -59,20 +59,22 @@ The Jev HTTP client accepts only `orchestra.jev-projection.v1`. It does not acce
 
 The default live endpoint is `https://api.typesafe.ai/v1/systemone`, model `jev-latest`, API key `TYPESAFE_API_KEY`.
 
-Live calls are allowed only when the caller explicitly requests live mode. Runtime integration remains absent until Retrieval Assist activation is approved.
+Live calls are allowed only when the caller explicitly requests live mode. The synthetic Turn Economy fixture is the only live-egress target allowed by default. Any real project additionally requires `ORCHESTRA_JEV_ALLOW_PROJECT_EGRESS=1`. Runtime integration remains absent until Retrieval Assist activation is approved.
 
 ## Retrieval Assist gate
 
 Active packet influence requires all of:
-1. a factual Jev evaluation report;
-2. minimum sample coverage;
-3. critical reference recall of 1.0;
-4. future-use recall >= 0.95;
-5. false-low-relevance <= 0.02;
-6. no increase in tool re-execution;
-7. no acceptance/fidelity regression;
-8. explicit local human approval whose report hash matches the factual report;
-9. `ORCHESTRA_JEV_RETRIEVAL_ASSIST=1`.
+1. factual Shadow predictions paired with **post-hoc future-use labels**; unlabeled predictions never count as successful samples;
+2. a persisted evaluation report cryptographically bound to the current append-only Shadow telemetry;
+3. minimum sample coverage;
+4. critical reference recall of 1.0;
+5. future-use recall >= 0.95;
+6. false-low-relevance <= 0.02;
+7. no increase in tool re-execution;
+8. no acceptance/fidelity regression;
+9. zero malformed Shadow telemetry;
+10. explicit local human approval whose report hash **and source telemetry hash** match the persisted factual report;
+11. `ORCHESTRA_JEV_RETRIEVAL_ASSIST=1`.
 
 Failure of any condition returns the current deterministic Orchestra packet unchanged.
 
@@ -81,6 +83,14 @@ Failure of any condition returns the current deterministic Orchestra packet unch
 Jev is not a runtime provider. It is an optional semantic service outside both control planes.
 
 Active routing files MUST NOT contain a Jev model route. Runtime profiles MUST NOT select `jev-*` or TypeSafe. The experiments layer may mention Jev freely.
+
+## Shadow observation model
+
+A live Shadow call records a prediction first. It cannot know future use yet, so its relevance quality fields are deliberately absent from promotion evidence.
+
+Later, once factual task events exist, Orchestra appends exactly one `orchestra.jev-shadow-label.v1` for that `shadow_id`. Evaluation joins report+label pairs. The original prediction is never rewritten.
+
+This prevents “no ground truth” from being misread as perfect recall and preserves append-only observability.
 
 ## Evaluation objective
 
