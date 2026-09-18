@@ -15,6 +15,10 @@ export const DECISION_TYPES = Object.freeze({
   WORKER_TIER: "WORKER_TIER",
   INVESTIGATION_STRATEGY: "INVESTIGATION_STRATEGY",
   RETRY_ACTION: "RETRY_ACTION",
+  EXPLORATION_BRANCHING: "EXPLORATION_BRANCHING",
+  PARALLELISM: "PARALLELISM",
+  PRUNE_BRANCH: "PRUNE_BRANCH",
+  STOPPING: "STOPPING",
 });
 
 export const WORKER_TIER_ACTIONS = Object.freeze([
@@ -33,6 +37,26 @@ export const RETRY_ACTIONS = Object.freeze([
   "ESCALATE_WORKER",
   "INVESTIGATE_FIRST",
   "REPLAN",
+]);
+
+export const EXPLORATION_BRANCHING_ACTIONS = Object.freeze([
+  "NO_NEW_BRANCH",
+  "OPEN_BRANCH",
+]);
+
+export const PARALLELISM_ACTIONS = Object.freeze([
+  "SERIAL",
+  "PARALLEL_2",
+]);
+
+export const PRUNE_BRANCH_ACTIONS = Object.freeze([
+  "KEEP_BRANCH",
+  "PRUNE_BRANCH",
+]);
+
+export const STOPPING_ACTIONS = Object.freeze([
+  "CONTINUE_EXPLORATION",
+  "STOP_EXPLORATION",
 ]);
 
 /**
@@ -146,6 +170,46 @@ export function deriveAvailableActions(decisionType, state = {}) {
       default:
         return [];
     }
+  }
+
+  const explorationIneligible =
+    criticality === "CRITICAL" ||
+    normState.state === "HUMAN_GATE" ||
+    normState.human_gate_active === true;
+
+  if (decisionType === DECISION_TYPES.EXPLORATION_BRANCHING) {
+    if (explorationIneligible) return ["NO_NEW_BRANCH"];
+    const remaining = Number.isInteger(normState.exploration_branches_remaining)
+      ? normState.exploration_branches_remaining
+      : 0;
+    return remaining > 0 ? ["NO_NEW_BRANCH", "OPEN_BRANCH"] : ["NO_NEW_BRANCH"];
+  }
+
+  if (decisionType === DECISION_TYPES.PARALLELISM) {
+    if (explorationIneligible) return ["SERIAL"];
+    const active = Number.isInteger(normState.exploration_branches_active)
+      ? normState.exploration_branches_active
+      : 0;
+    const remaining = Number.isInteger(normState.exploration_branches_remaining)
+      ? normState.exploration_branches_remaining
+      : 0;
+    return active < 2 && remaining >= 2 ? ["SERIAL", "PARALLEL_2"] : ["SERIAL"];
+  }
+
+  if (decisionType === DECISION_TYPES.PRUNE_BRANCH) {
+    const branchStatus = String(normState.branch_feedback_status || "UNKNOWN").toUpperCase();
+    const invalid = normState.branch_invalid === true;
+    if (invalid || branchStatus === "FALSIFIED") return ["KEEP_BRANCH", "PRUNE_BRANCH"];
+    return ["KEEP_BRANCH"];
+  }
+
+  if (decisionType === DECISION_TYPES.STOPPING) {
+    if (explorationIneligible) return ["STOP_EXPLORATION"];
+    const remaining = Number.isInteger(normState.exploration_branches_remaining)
+      ? normState.exploration_branches_remaining
+      : 0;
+    if (remaining <= 0) return ["STOP_EXPLORATION"];
+    return ["CONTINUE_EXPLORATION", "STOP_EXPLORATION"];
   }
 
   return [];
@@ -317,6 +381,15 @@ export function deriveDecisionState(facts = {}, activeState = {}, evidenceSummar
     validation_fresh: validationFresh,
   });
 
+  const feedbackCounts = safeActiveState.feedbackSummary?.status_counts || safeFacts.feedbackSummary?.status_counts || {};
+  const control = safeActiveState.explorationControl || safeFacts.explorationControl || {};
+  const maxBranches = Number.isInteger(control.max_branches) ? control.max_branches : 0;
+  const branchesStarted = Number.isInteger(control.branches_started) ? control.branches_started : 0;
+  const branchesActive = Number.isInteger(control.branches_active) ? control.branches_active : 0;
+  const branchesRemaining = Number.isInteger(control.branches_remaining)
+    ? control.branches_remaining
+    : Math.max(0, maxBranches - branchesStarted);
+
   return Object.freeze({
     task_action: taskAction,
     task_domain: taskDomain,
@@ -329,6 +402,16 @@ export function deriveDecisionState(facts = {}, activeState = {}, evidenceSummar
     mutation_seq: mutationSeq,
     post_investigation: postInvestigation,
     evidence,
+    exploration_branches_started: branchesStarted,
+    exploration_branches_active: branchesActive,
+    exploration_branches_remaining: branchesRemaining,
+    feedback_unknown: Number.isInteger(feedbackCounts.UNKNOWN) ? feedbackCounts.UNKNOWN : 0,
+    feedback_observed: Number.isInteger(feedbackCounts.OBSERVED) ? feedbackCounts.OBSERVED : 0,
+    feedback_supported: Number.isInteger(feedbackCounts.SUPPORTED) ? feedbackCounts.SUPPORTED : 0,
+    feedback_falsified: Number.isInteger(feedbackCounts.FALSIFIED) ? feedbackCounts.FALSIFIED : 0,
+    feedback_causal: Number.isInteger(feedbackCounts.CAUSALLY_VERIFIED) ? feedbackCounts.CAUSALLY_VERIFIED : 0,
+    branch_feedback_status: String(control.branch_feedback_status || "UNKNOWN").toUpperCase(),
+    branch_invalid: control.branch_invalid === true,
   });
 }
 
@@ -535,6 +618,25 @@ export function deriveValidatedStaticBaseline({ decisionType, facts = {}, state 
       return candidateBaseline;
     }
     return null;
+  }
+
+  if (decisionType === DECISION_TYPES.EXPLORATION_BRANCHING) {
+    const legal = deriveAvailableActions(decisionType, normState);
+    return legal.includes("OPEN_BRANCH") ? "OPEN_BRANCH" : "NO_NEW_BRANCH";
+  }
+
+  if (decisionType === DECISION_TYPES.PARALLELISM) {
+    return "SERIAL";
+  }
+
+  if (decisionType === DECISION_TYPES.PRUNE_BRANCH) {
+    const legal = deriveAvailableActions(decisionType, normState);
+    return legal.includes("PRUNE_BRANCH") ? "PRUNE_BRANCH" : "KEEP_BRANCH";
+  }
+
+  if (decisionType === DECISION_TYPES.STOPPING) {
+    const legal = deriveAvailableActions(decisionType, normState);
+    return legal.includes("CONTINUE_EXPLORATION") ? "CONTINUE_EXPLORATION" : "STOP_EXPLORATION";
   }
 
   return null;
