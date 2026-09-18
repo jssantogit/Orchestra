@@ -480,8 +480,10 @@ function assertQuiescentOrForced(targetDir, force) {
 
 function runtimePresent(targetDir) {
   return existsSync(join(targetDir, ".agents"))
-    && existsSync(join(targetDir, ".agents", "hooks.json"))
-    && existsSync(join(targetDir, "GEMINI.md"));
+    && (
+      existsSync(join(targetDir, ".agents", "hooks.json"))
+      || existsSync(join(targetDir, ".agents", "skills", "orchestra", "routing-policy.mjs"))
+    );
 }
 
 export function installProjectRuntime({
