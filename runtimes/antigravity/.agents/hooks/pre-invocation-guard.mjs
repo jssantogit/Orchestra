@@ -262,6 +262,16 @@ function main() {
     recordAdvisory("CI_WAIT", "CI_WAIT ACTIVE: Authoritative remote evidence is pending. Do not substitute local tests, inspect unrelated files, spawn subagents, or claim completion from memory. Yield with zero work; Stop Guard will re-query the declared provider evidence.");
   }
 
+  if (state.mechanicalFastPath?.active === true) {
+    const paths = Array.isArray(state.mechanicalFastPath.allowedPaths)
+      ? state.mechanicalFastPath.allowedPaths.join(", ")
+      : "";
+    recordAdvisory(
+      "MECHANICAL_FAST_PATH",
+      "MECHANICAL FAST PATH ACTIVE: one Flash Low worker, concrete scope [" + paths + "]. Read only declared targets, perform the bounded native edit, skip search/shell/review/extra subagents, then hand off. Runtime-owned LOCAL_FACT evidence will be collected by Orchestra."
+    );
+  }
+
   if (state.directActionOverheadDetected || state.circuitBreakerType === "DIRECT_ACTION_OVERHEAD") {
     recordAdvisory("DIRECT_ACTION_OVERHEAD", "DIRECT_ACTION_OVERHEAD: Target for direct action is 1-3 tool calls. Consolidate operations via git-operation.mjs or execute command directly.");
   }

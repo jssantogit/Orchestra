@@ -1349,6 +1349,14 @@ function main() {
     activeState.workerCompletionClaimFactual = false;
     activeState.implementationComplete = false;
     activeState.state = nextBudget.remainingAttempts > 0 ? "PLANNED" : "BLOCKED";
+    if (activeState.mechanicalFastPath?.active) {
+      activeState.mechanicalFastPath = {
+        ...activeState.mechanicalFastPath,
+        active: false,
+        status: nextBudget.remainingAttempts > 0 ? "FAILED_EVIDENCE_RETRY" : "FAILED_EVIDENCE_BLOCKED",
+        endedAt: new Date().toISOString(),
+      };
+    }
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
@@ -1376,6 +1384,14 @@ function main() {
     activeState.workerCompletionClaimed = false;
     activeState.workerCompletionClaimFactual = false;
     activeState.implementationComplete = false;
+    if (activeState.mechanicalFastPath?.active) {
+      activeState.mechanicalFastPath = {
+        ...activeState.mechanicalFastPath,
+        active: false,
+        status: "STALE_EVIDENCE_REPLAN",
+        endedAt: new Date().toISOString(),
+      };
+    }
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
@@ -1392,6 +1408,14 @@ function main() {
     activeState.evidenceSourceUnavailableCount = count;
     activeState.acceptanceState = "PENDING";
     activeState.state = count >= 3 ? "HUMAN_GATE" : "CI_WAIT";
+    if (activeState.mechanicalFastPath?.active) {
+      activeState.mechanicalFastPath = {
+        ...activeState.mechanicalFastPath,
+        active: false,
+        status: count >= 3 ? "SOURCE_UNAVAILABLE_HUMAN_GATE" : "SOURCE_UNAVAILABLE",
+        endedAt: new Date().toISOString(),
+      };
+    }
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
@@ -1409,6 +1433,14 @@ function main() {
     activeState.state = "HUMAN_GATE";
     activeState.acceptanceState = "PENDING";
     activeState.humanGateReason = "INVALID_EVIDENCE_CONTRACT";
+    if (activeState.mechanicalFastPath?.active) {
+      activeState.mechanicalFastPath = {
+        ...activeState.mechanicalFastPath,
+        active: false,
+        status: "INVALID_CONTRACT",
+        endedAt: new Date().toISOString(),
+      };
+    }
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
     recordStopTelemetry(telemetryPath, activeState, payload, "continue", "INVALID_EVIDENCE_CONTRACT");
     console.log(JSON.stringify({
@@ -1500,6 +1532,15 @@ function main() {
       activeState.acceptanceActor = "ORCHESTRATOR";
       activeState.acceptanceObserved = true;
       activeState.state = "DONE";
+      if (activeState.mechanicalFastPath?.active) {
+        activeState.mechanicalFastPath = {
+          ...activeState.mechanicalFastPath,
+          active: false,
+          status: "DONE",
+          acceptedEvidenceId: activeState.acceptanceEvidenceId || null,
+          endedAt: new Date().toISOString(),
+        };
+      }
       try {
         mkdirSync(dirname(statePath), { recursive: true });
         writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");

@@ -44,6 +44,10 @@ jobs:
         run: |
           npm run test:evidence
 
+      - name: Run Mechanical Fast Path Tests
+        run: |
+          npm run test:mechanical
+
       - name: Run Turn Economy Tests
         run: |
           npm run test:turn-economy

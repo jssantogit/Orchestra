@@ -94,6 +94,7 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-cli.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.test.mjs"
   "runtimes/antigravity/GEMINI.md"
 )
@@ -115,6 +116,7 @@ JS_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-cli.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs"
   "scripts/orchestra-project.mjs"
   "scripts/install-antigravity.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
@@ -184,6 +186,12 @@ if node --test "${ROOT_DIR}/tests/evidence/first-class-evidence.test.mjs" "${ROO
   report_pass "First-class and cross-agent evidence tests passed"
 else
   report_fail "Evidence contract/federation tests failed"
+fi
+
+if node --test "${ROOT_DIR}/tests/mechanical/mechanical-fast-path.test.mjs"; then
+  report_pass "Mechanical fast-path tests passed"
+else
+  report_fail "Mechanical fast-path tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/cross-runtime/cross-runtime-firewall.test.mjs" >/dev/null 2>&1; then

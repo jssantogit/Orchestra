@@ -57,6 +57,12 @@ export function deriveAvailableActions(decisionType, state = {}) {
     // If state.task_action === "DIRECT_ACTION" -> [] (outside Dream)
     if (taskAction === "DIRECT_ACTION") return [];
 
+    // MECHANICAL_FIX has a deterministic baseline route to Flash Low.
+    // Retry escalation is governed separately by RETRY_ACTION.
+    if (taskAction === "MECHANICAL_FIX") {
+      return ["FLASH_LOW"];
+    }
+
     // If state.task_action === "TEST" -> ["FLASH_LOW", "FLASH_MEDIUM"]
     if (taskAction === "TEST") {
       return ["FLASH_LOW", "FLASH_MEDIUM"];
