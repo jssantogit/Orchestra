@@ -189,20 +189,49 @@ export function executeGitOperation(options = {}) {
     const parsedStatus = parseGitStatus(statusRes.stdout);
 
     // Idempotency check: if transaction already committed and clean, or commitCreated: true
-    const currentHeadCommitRes = runGit(["rev-parse", "--short", "HEAD"], { cwd: gitCwd });
+    const currentHeadCommitRes = runGit(["rev-parse", "HEAD"], { cwd: gitCwd });
     const currentHeadHash = currentHeadCommitRes.status === 0 ? currentHeadCommitRes.stdout : null;
     const lastHeadMsgRes = runGit(["log", "-1", "--pretty=%B"], { cwd: gitCwd });
     const lastHeadMsg = lastHeadMsgRes.status === 0 ? lastHeadMsgRes.stdout.trim() : "";
+    const requestedMessage = message && message.trim()
+      ? message.trim()
+      : (activeState.changeSummary || "chore: automated direct action commit");
+    const normalizedExpectedFiles = expectedFiles
+      ? [...new Set(expectedFiles)].sort()
+      : null;
 
     let commitAlreadyCreated = false;
     let existingCommitHash = null;
 
-    if (activeState.gitTransaction && activeState.gitTransaction.commitCreated) {
-      if (activeState.gitTransaction.commitHash) {
+    const tx = activeState.gitTransaction;
+    if (tx && tx.commitCreated && tx.commitHash) {
+      const txFiles = Array.isArray(tx.files) ? [...new Set(tx.files)].sort() : null;
+      const sameFiles = JSON.stringify(txFiles) === JSON.stringify(normalizedExpectedFiles);
+      const sameHead = Boolean(
+        currentHeadHash &&
+        (currentHeadHash === tx.commitHash ||
+          currentHeadHash.startsWith(tx.commitHash) ||
+          String(tx.commitHash).startsWith(currentHeadHash))
+      );
+      const sameIntent =
+        tx.action === action &&
+        tx.branch === branch &&
+        tx.remote === remote &&
+        tx.message === requestedMessage &&
+        sameFiles;
+
+      // A prior transaction is reusable only when it is exactly the operation
+      // being retried and the repository has not changed since that commit.
+      if (sameIntent && sameHead && parsedStatus.isClean) {
         commitAlreadyCreated = true;
-        existingCommitHash = activeState.gitTransaction.commitHash;
+        existingCommitHash = currentHeadHash;
       }
-    } else if (message && lastHeadMsg.startsWith(message.trim()) && parsedStatus.isClean) {
+    }
+
+    // Crash recovery when control-plane transaction state was lost after commit:
+    // exact message + clean tree is enough to reuse the current HEAD, but prefix
+    // matches are intentionally rejected.
+    if (!commitAlreadyCreated && lastHeadMsg === requestedMessage && parsedStatus.isClean) {
       commitAlreadyCreated = true;
       existingCommitHash = currentHeadHash;
     }
@@ -319,9 +348,7 @@ export function executeGitOperation(options = {}) {
       }
 
       // Determine commit message
-      const finalMessage = message && message.trim()
-        ? message.trim()
-        : (activeState.changeSummary || "chore: automated direct action commit");
+      const finalMessage = requestedMessage;
 
       // Execute commit
       const commitRes = runGit(["commit", "-m", finalMessage], { cwd: gitCwd });
@@ -345,7 +372,7 @@ export function executeGitOperation(options = {}) {
       }
 
       // Capture commit hash
-      const hashRes = runGit(["rev-parse", "--short", "HEAD"], { cwd: gitCwd });
+      const hashRes = runGit(["rev-parse", "HEAD"], { cwd: gitCwd });
       commitHash = hashRes.status === 0 ? hashRes.stdout : "unknown";
 
       // Update state idempotency tracking
@@ -354,6 +381,7 @@ export function executeGitOperation(options = {}) {
         commitCreated: true,
         commitHash,
         message: finalMessage,
+        files: normalizedExpectedFiles,
         remote,
         branch,
         pushSucceeded: false,
