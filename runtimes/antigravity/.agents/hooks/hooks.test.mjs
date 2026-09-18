@@ -2633,3 +2633,74 @@ test("pre-tool hook: factual INVESTIGATION delegation is strictly read-only", ()
     cleanState();
   }
 });
+
+
+test("governance: native write aliases are intercepted, scoped, and tracked", () => {
+  cleanState();
+  try {
+    const hooksConfig = JSON.parse(readFileSync(resolve(__testDir, "../hooks.json"), "utf8"));
+    const matcher = hooksConfig["scope-enforcer"].PreToolUse[0].matcher;
+    assert.match(matcher, /(?:^|\|)edit_file(?:\||$)/);
+    assert.match(matcher, /(?:^|\|)create_file(?:\||$)/);
+
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "WORKER",
+      taskAction: "IMPLEMENT",
+      mutationSeq: 1,
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }, null, 2), "utf8");
+
+    const createAllowed = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "alias-worker",
+        toolCall: {
+          id: "alias-create",
+          name: "create_file",
+          args: { path: "src/alias-created.js", content: "export const x = 1;" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(createAllowed.decision, "allow");
+
+    const editDenied = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "alias-worker",
+        toolCall: {
+          id: "alias-edit",
+          name: "edit_file",
+          args: { path: "docs/outside.md", content: "nope" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(editDenied.decision, "deny");
+    assert.match(editDenied.reason, /SCOPE_VIOLATION/);
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "alias-worker",
+        toolName: "create_file",
+        toolCall: {
+          id: "alias-create",
+          name: "create_file",
+          args: { path: "src/alias-created.js", content: "export const x = 1;" },
+        },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.write_tool_calls, 1);
+    assert.equal(state.workerWorkspaceWrites, 1);
+    assert.ok(Array.isArray(state.mutations));
+    assert.ok(state.mutations.some((m) => m.path === "src/alias-created.js" && m.tool === "create_file"));
+  } finally {
+    cleanState();
+  }
+});
