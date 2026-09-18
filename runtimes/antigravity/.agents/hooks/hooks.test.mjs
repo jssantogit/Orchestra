@@ -2015,6 +2015,7 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
     assert.equal(bindings.pendingSubagents.length, 1);
     assert.equal(bindings.pendingSubagents[0].role, "WORKER");
     assert.equal(bindings.pendingSubagents[0].originStepIdx, 6);
+    assert.equal(bindings.pendingSubagents[0].model, "gemini-3.8-flash-low", "Pending identity stores canonical runtime model, not flash_lite alias");
 
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       taskDomain: "CODE",
