@@ -142,7 +142,7 @@ Orchestra treats context content and control authority as different domains.
 
 Every Antigravity `PreInvocation` reconstructs a bounded, content-addressed **Runtime Continuation Capsule** from runtime authority. It intentionally excludes task prose, worker messages, and summaries. Capsule payloads include only recent evidence references and bounded identity data while the complete authority remains on disk.
 
-Remote/public effects are classified into explicit capabilities. `NETWORK_WRITE`, `REMOTE_REPO_WRITE`, `VCS_REMOTE_WRITE`, and `PUBLICATION` default-deny unless factual contract/direct-action authority grants them. This prevents an agent from turning a handoff, summary, upload workaround, or arbitrary shell command into an unreviewed side channel.
+Remote/public effects are classified into explicit capabilities. `NETWORK_WRITE`, `REMOTE_REPO_WRITE`, `VCS_REMOTE_WRITE`, and `PUBLICATION` default-deny unless factual contract/direct-action authority grants them. A dedicated global `PreToolUse` side-effect guard runs for **every tool**, including plugins/connectors not listed in the native scope hook. Clearly read-only external operations map to `NETWORK_READ`; unfamiliar external semantics fail conservatively toward `NETWORK_WRITE`. This prevents an agent from turning a handoff, summary, new plugin, upload workaround, or arbitrary shell command into an unreviewed side channel.
 
 ---
 
