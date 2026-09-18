@@ -71,7 +71,7 @@ node scripts/orchestra-project.mjs backups /path/to/project
 node scripts/orchestra-project.mjs rollback-runtime /path/to/project --backup latest
 ```
 
-Updates replace only `.agents/{agents,hooks,skills,dream}`, `.agents/hooks.json`, and `GEMINI.md`. They preserve `.agents/{rules,state,telemetry,dream-data,artifacts,runtime-management}`.
+Updates replace only `.agents/{agents,hooks,skills,dream}`, `.agents/hooks.json`, and `GEMINI.md`. They preserve `.agents/{rules,state,telemetry,dream-data,artifacts,semantic,runtime-management}`.
 
 The manager creates an automatic pre-update backup and refuses active states such as `EXECUTING`, `DELEGATED`, or `CI_WAIT`. `DONE`, `BLOCKED`, and `HUMAN_GATE` are quiescent so runtime defects can be repaired without resetting project state.
 
