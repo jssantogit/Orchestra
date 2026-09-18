@@ -12,8 +12,10 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 
 import { sha256Canonical } from "./canonical.mjs";
+import { CANARY_ROLLOUT_STAGES } from "./canary-rollout.mjs";
 import {
   CANARY_GATES,
+  advanceCanaryStage,
   approveCanary,
   classifyCanaryEligibility,
   deterministicCanarySelection,
@@ -175,11 +177,18 @@ function candidate(choose, id) {
   };
 }
 
-function taskForSelection(policyId, selected, start = 0) {
+function taskForSelection(
+  policyId,
+  selected,
+  start = 0,
+  trafficPercent = CANARY_GATES.initial_traffic_percent,
+) {
   for (let i = start; i < start + 100000; i++) {
     const taskId = "task-canary-" + i;
-    const result = deterministicCanarySelection(taskId, policyId);
-    if (result.selected === selected) return { taskId, bucket: result.bucket };
+    const result = deterministicCanarySelection(taskId, policyId, trafficPercent);
+    if (result.selected === selected) {
+      return { taskId, bucket: result.bucket, trafficPercent: result.traffic_percent };
+    }
   }
   throw new Error("Unable to resolve deterministic Canary task selection");
 }
@@ -291,22 +300,33 @@ function approveFixture(f) {
   return approval;
 }
 
-test("Milestone H fixes initial live traffic at 5 percent and requires NORMAL", () => {
+test("Canary rollout uses deterministic nested 5/20/50/100 cohorts and NORMAL only", () => {
   assert.deepEqual(CANARY_GATES, {
     initial_traffic_percent: 5,
     allowed_criticality: "NORMAL",
+    rollout_traffic_percents: [5, 20, 50, 100],
   });
   assert.equal(Object.isFrozen(CANARY_GATES), true);
+  assert.deepEqual(
+    CANARY_ROLLOUT_STAGES.map((stage) => stage.minimum_completed_outcomes),
+    [1, 3, 5, 10],
+  );
 
   const policyId = "policy-" + "a".repeat(64);
   const a = taskForSelection(policyId, true);
-  const b = deterministicCanarySelection(a.taskId, policyId);
-  assert.equal(b.selected, true);
-  assert.equal(a.bucket, b.bucket);
-  assert.ok(a.bucket >= 0 && a.bucket < 5);
+  const bucket = a.bucket;
+  assert.ok(bucket >= 0 && bucket < 5);
 
-  const outside = taskForSelection(policyId, false);
-  assert.equal(deterministicCanarySelection(outside.taskId, policyId).selected, false);
+  for (const traffic of [5, 20, 50, 100]) {
+    const selected = deterministicCanarySelection(a.taskId, policyId, traffic);
+    assert.equal(selected.selected, true);
+    assert.equal(selected.bucket, bucket);
+    assert.equal(selected.traffic_percent, traffic);
+  }
+
+  const outside5 = taskForSelection(policyId, false);
+  assert.equal(deterministicCanarySelection(outside5.taskId, policyId, 5).selected, false);
+  assert.equal(deterministicCanarySelection(outside5.taskId, policyId, 100).selected, true);
 });
 
 test("Canary eligibility fails closed for critical, Two-Key, critical-path, broad, or nonlocal tasks", () => {
