@@ -243,7 +243,21 @@ test("Task 5 delegated worker: ACK stays pending and factual child Stop records 
     const pending = roleBindings.pendingSubagents.find(p => !p.consumed);
     assert.ok(pending?.decisionCorrelationKey);
 
-    // Let the real PreTool identity resolver bind the child from the pending delegation.
+    // Materialize the factual Antigravity child record. Pending uniqueness alone
+    // is deliberately insufficient for HIGH/RUNTIME_IDENTITY.
+    const brainBaseDir = resolve("scratch/task5-worker-brain");
+    const subagentsDir = resolve(brainBaseDir, "task5-orch-conv-post/.system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(resolve(subagentsDir, "task5-worker-child.json"), JSON.stringify({
+      conversationId: "task5-worker-child",
+      subagentDescriptor: {
+        typeName: "flash-medium-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 5,
+    }, null, 2), "utf-8");
+
+    // Let the real PreTool identity resolver bind the factual child from the pending delegation.
     const childRead = JSON.parse(execFileSync("node", [preToolScript], {
       input: JSON.stringify({
         conversationId: "task5-worker-child",
@@ -255,6 +269,7 @@ test("Task 5 delegated worker: ACK stays pending and factual child Stop records 
         },
       }),
       encoding: "utf-8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
     }).trim());
     assert.equal(childRead.decision, "allow");
 
