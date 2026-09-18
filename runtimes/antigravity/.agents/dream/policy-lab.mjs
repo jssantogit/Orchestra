@@ -1,0 +1,918 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { sha256Canonical } from "./canonical.mjs";
+import { buildDiscoveryTree, BRANCH_STATUS } from "./discovery-tree-builder.mjs";
+import { createReplayReport } from "./evaluator.mjs";
+import { computePolicyId, evaluatePolicy, POLICY_STATUS, validatePolicy } from "./policy-engine.mjs";
+import { replayExact } from "./replay-simulator.mjs";
+import { validateWorld } from "./world-sealer.mjs";
+
+export const POLICY_DATASET_SCHEMA = "orchestra.policy-development-dataset.v1";
+export const POLICY_CYCLE_SCHEMA = "orchestra.policy-lab-cycle.v1";
+export const POLICY_EVALUATION_SCHEMA = "orchestra.policy-lab-evaluation.v1";
+
+export const POLICY_LAB_LIMITS = Object.freeze({
+  train_percent: 80,
+  holdout_percent: 20,
+  max_structured_examples: 20,
+  max_designer_calls: 2,
+  max_candidates_per_call: 4,
+  promotion_min_train_lineages: 100,
+  promotion_min_holdout_lineages: 30,
+});
+
+const STATE_FIELDS = Object.freeze([
+  "task_action",
+  "task_domain",
+  "criticality",
+  "complexity",
+  "state",
+  "attempt",
+  "retry_remaining",
+  "retry_reason",
+  "post_investigation",
+  "evidence",
+]);
+
+const LAB_ROOT = ".agents/dream-data/policy-lab";
+const WORLDS_ROOT = ".agents/dream-data/worlds";
+
+function atomicJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temp = path + "." + process.pid + ".tmp";
+  writeFileSync(temp, JSON.stringify(value, null, 2), "utf8");
+  renameSync(temp, path);
+}
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function sortedObject(input = {}) {
+  const out = {};
+  for (const key of Object.keys(input).sort()) out[key] = input[key];
+  return out;
+}
+
+function increment(map, key, by = 1) {
+  map[key] = (map[key] || 0) + by;
+}
+
+function safeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function percentile(values, q) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const index = Math.floor((sorted.length - 1) * q);
+  return sorted[index];
+}
+
+function sanitizeState(state = {}) {
+  const out = {};
+  for (const key of STATE_FIELDS) {
+    if (!(key in state)) continue;
+    if (key === "evidence") {
+      const evidence = state.evidence;
+      if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) continue;
+      out.evidence = {};
+      for (const evKey of ["tests", "typecheck", "build", "scope_check", "validation_fresh"]) {
+        if (evKey in evidence) out.evidence[evKey] = evidence[evKey];
+      }
+      continue;
+    }
+    out[key] = state[key];
+  }
+  return out;
+}
+
+function stateBucket(decision) {
+  const state = sanitizeState(decision?.state || {});
+  const descriptor = {
+    decision_type: String(decision?.decision_type || "UNKNOWN"),
+    state,
+  };
+  return {
+    bucket_id: "bucket-" + sha256Canonical(descriptor).slice(7, 23),
+    decision_type: descriptor.decision_type,
+    state,
+  };
+}
+
+function lineageRef(world) {
+  return "lineage-" + sha256Canonical({
+    root_snapshot_id: world?.root_snapshot_id || null,
+  }).slice(7, 23);
+}
+
+export function splitLineage(lineageIdentity) {
+  const hash = sha256Canonical({ lineage: String(lineageIdentity || "") }).slice(7);
+  const bucket = Number.parseInt(hash.slice(0, 8), 16) % 100;
+  return {
+    split: bucket < POLICY_LAB_LIMITS.train_percent ? "TRAIN" : "HOLDOUT",
+    bucket,
+  };
+}
+
+function worldCost(world) {
+  const totals = {
+    model_calls: 0,
+    retries: 0,
+    tokens: 0,
+    latency_ms: 0,
+  };
+
+  for (const decision of world.decisions || []) {
+    if (decision?.decision_type === "RETRY_ACTION") totals.retries++;
+  }
+
+  for (const outcome of world.outcomes || []) {
+    const cost = outcome?.cost_metrics || {};
+    totals.model_calls += safeNumber(cost.model_calls);
+    totals.tokens += safeNumber(cost.input_tokens)
+      + safeNumber(cost.output_tokens)
+      + safeNumber(cost.reasoning_tokens);
+    totals.latency_ms += safeNumber(cost.latency_ms ?? cost.latency);
+  }
+
+  return totals;
+}
+
+function terminalState(world) {
+  const outcomes = Array.isArray(world?.outcomes) ? world.outcomes : [];
+  if (!outcomes.length) return "UNKNOWN";
+  return String(outcomes[outcomes.length - 1]?.terminal_state || "UNKNOWN");
+}
+
+function worldFirstPass(world) {
+  return terminalState(world) === "ACCEPTED"
+    && !(world.decisions || []).some((d) => d?.decision_type === "RETRY_ACTION");
+}
+
+function baselineAction(policy, ctx) {
+  const fallback = ctx.availableActions?.[0] || "";
+  const result = evaluatePolicy({
+    policy,
+    decisionType: ctx.decisionType,
+    state: ctx.state,
+    availableActions: ctx.availableActions,
+    baselineAction: fallback,
+  });
+  return result.ok ? result.action : fallback;
+}
+
+function replayPolicy(world, policy, baselinePolicy) {
+  return replayExact({
+    world,
+    chooseAction: (ctx) => {
+      const base = baselineAction(baselinePolicy, ctx);
+      if (policy.policy_id === baselinePolicy.policy_id) return base;
+
+      const result = evaluatePolicy({
+        policy,
+        decisionType: ctx.decisionType,
+        state: ctx.state,
+        availableActions: ctx.availableActions,
+        baselineAction: base,
+      });
+
+      if (result.ok) return result.action;
+      if (result.diagnostic === POLICY_STATUS.NO_MATCHING_RULE) return base;
+      return "__POLICY_INVALID_ACTION__";
+    },
+  });
+}
+
+function sanitizeReplayExample(world, report, split) {
+  const firstDecision = world?.decisions?.[0] || {};
+  return {
+    lineage_ref: lineageRef(world),
+    split,
+    state_bucket: stateBucket(firstDecision),
+    replay_status: report.status,
+    unknown_branch_count: report.unknown_branch_count,
+    ineligible_trajectories: report.ineligible_trajectories,
+    total_trajectories: report.total_trajectories,
+  };
+}
+
+function sourceEntry(world) {
+  const split = splitLineage(world.root_snapshot_id);
+  return {
+    lineage_ref: lineageRef(world),
+    split: split.split,
+    split_bucket: split.bucket,
+    world_manifest_hash: world.world_manifest_hash,
+    root_snapshot_ref: "snapshot-" + sha256Canonical({
+      snapshot: world.root_snapshot_id,
+    }).slice(7, 23),
+  };
+}
+
+export function loadSealedWorlds(repoRoot) {
+  const dir = resolve(repoRoot, WORLDS_ROOT);
+  if (!existsSync(dir)) {
+    return { worlds: [], rejected: [], path: dir };
+  }
+
+  const worlds = [];
+  const rejected = [];
+  const files = readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+
+  for (const name of files) {
+    const path = resolve(dir, name);
+    let world;
+    try {
+      world = readJson(path);
+    } catch {
+      rejected.push({ file: name, reason: "MALFORMED_JSON" });
+      continue;
+    }
+    const validation = validateWorld(world);
+    if (!validation.valid) {
+      rejected.push({ file: name, reason: "WORLD_INVALID" });
+      continue;
+    }
+    worlds.push(world);
+  }
+
+  worlds.sort((a, b) => String(a.world_manifest_hash).localeCompare(String(b.world_manifest_hash)));
+  return { worlds, rejected, path: dir };
+}
+
+export function loadCurrentPolicy(repoRoot) {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(repoRoot, ".agents/dream/policies/static-policy-v1.json"),
+    resolve(moduleDir, "policies/static-policy-v1.json"),
+  ];
+
+  for (const path of candidates) {
+    if (!existsSync(path)) continue;
+    const policy = readJson(path);
+    const validation = validatePolicy(policy);
+    if (!validation.valid) {
+      return { ok: false, reason: "CURRENT_POLICY_INVALID", errors: validation.errors, path };
+    }
+    return { ok: true, policy, path };
+  }
+  return { ok: false, reason: "CURRENT_POLICY_NOT_FOUND" };
+}
+
+export function buildPolicyDevelopmentDataset({
+  worlds = [],
+  currentPolicy,
+  rejectedWorldCount = 0,
+} = {}) {
+  const policyValidation = validatePolicy(currentPolicy);
+  if (!policyValidation.valid) {
+    return { ok: false, reason: "CURRENT_POLICY_INVALID", errors: policyValidation.errors };
+  }
+
+  const validWorlds = [];
+  for (const world of worlds) {
+    const validation = validateWorld(world);
+    if (!validation.valid) {
+      return { ok: false, reason: "WORLD_INVALID", errors: validation.errors };
+    }
+    validWorlds.push(world);
+  }
+  validWorlds.sort((a, b) => String(a.world_manifest_hash).localeCompare(String(b.world_manifest_hash)));
+
+  const stateBuckets = new Map();
+  const support = new Map();
+  const terminalOutcomes = {};
+  const retryReasons = {};
+  const firstPass = { accepted: 0, total: validWorlds.length };
+  const costs = {
+    model_calls: [],
+    retries: [],
+    tokens: [],
+    latency_ms: [],
+  };
+  const sources = [];
+  const replayExamples = [];
+
+  for (const world of validWorlds) {
+    const source = sourceEntry(world);
+    sources.push(source);
+
+    increment(terminalOutcomes, terminalState(world));
+    if (worldFirstPass(world)) firstPass.accepted++;
+
+    const wc = worldCost(world);
+    costs.model_calls.push(wc.model_calls);
+    costs.retries.push(wc.retries);
+    costs.tokens.push(wc.tokens);
+    costs.latency_ms.push(wc.latency_ms);
+
+    const outcomeByDecision = new Map(
+      (world.outcomes || []).map((o) => [o.decision_id, o])
+    );
+
+    for (const decision of world.decisions || []) {
+      const bucket = stateBucket(decision);
+      const existing = stateBuckets.get(bucket.bucket_id) || {
+        ...bucket,
+        count: 0,
+        chosen_actions: {},
+      };
+      existing.count++;
+      increment(existing.chosen_actions, String(decision.chosen_action || "UNKNOWN"));
+      stateBuckets.set(bucket.bucket_id, existing);
+
+      const retryReason = decision?.state?.retry_reason;
+      if (retryReason) increment(retryReasons, String(retryReason));
+
+      const exactKey = sha256Canonical({
+        snapshot_id: decision.snapshot_id,
+        decision_type: decision.decision_type,
+        state: sanitizeState(decision.state || {}),
+      });
+      const branchSet = support.get(exactKey) || {
+        decision_type: decision.decision_type,
+        state_bucket_id: bucket.bucket_id,
+        available_actions: new Set(),
+        observations: new Map(),
+      };
+      for (const action of decision.available_actions || []) branchSet.available_actions.add(action);
+      const action = String(decision.chosen_action || "");
+      if (!branchSet.observations.has(action)) branchSet.observations.set(action, []);
+      const outcome = outcomeByDecision.get(decision.decision_id);
+      branchSet.observations.get(action).push({
+        accepted: outcome?.terminal_state === "ACCEPTED",
+        terminal_state: outcome?.terminal_state || "UNKNOWN",
+      });
+      support.set(exactKey, branchSet);
+    }
+
+    const baselineReplay = replayPolicy(world, currentPolicy, currentPolicy);
+    const baselineReport = createReplayReport({
+      world,
+      replay: baselineReplay,
+      candidatePolicyId: currentPolicy.policy_id,
+    });
+    if (
+      baselineReport.status === "NEEDS_EXPLORATION"
+      || baselineReport.status === "INELIGIBLE"
+    ) {
+      replayExamples.push(sanitizeReplayExample(world, baselineReport, source.split));
+    }
+  }
+
+  const branchCoverage = {
+    total_legal_branches: 0,
+    observed_branches: 0,
+    unknown_branches: 0,
+    ambiguous_branches: 0,
+  };
+
+  for (const item of support.values()) {
+    for (const action of [...item.available_actions].sort()) {
+      branchCoverage.total_legal_branches++;
+      const observations = item.observations.get(action) || [];
+      if (!observations.length) {
+        branchCoverage.unknown_branches++;
+        continue;
+      }
+      branchCoverage.observed_branches++;
+      const acceptance = new Set(observations.map((o) => o.accepted));
+      if (acceptance.size > 1) branchCoverage.ambiguous_branches++;
+    }
+  }
+
+  const buckets = [...stateBuckets.values()]
+    .map((item) => ({
+      ...item,
+      chosen_actions: sortedObject(item.chosen_actions),
+    }))
+    .sort((a, b) => a.bucket_id.localeCompare(b.bucket_id));
+
+  const sourceManifest = sources.sort((a, b) =>
+    a.world_manifest_hash.localeCompare(b.world_manifest_hash)
+  );
+
+  const splitCounts = {
+    train_lineages: new Set(sourceManifest.filter((x) => x.split === "TRAIN").map((x) => x.lineage_ref)).size,
+    holdout_lineages: new Set(sourceManifest.filter((x) => x.split === "HOLDOUT").map((x) => x.lineage_ref)).size,
+  };
+
+  const datasetWithoutId = {
+    schema: POLICY_DATASET_SCHEMA,
+    split_rule: {
+      algorithm: "SHA256_ROOT_LINEAGE_MOD_100",
+      train_percent: POLICY_LAB_LIMITS.train_percent,
+      holdout_percent: POLICY_LAB_LIMITS.holdout_percent,
+    },
+    source_manifest: sourceManifest,
+    source_world_count: validWorlds.length,
+    rejected_world_count: rejectedWorldCount,
+    split_counts: splitCounts,
+    state_buckets: buckets,
+    action_support: {
+      ...branchCoverage,
+      unknown_fraction: branchCoverage.total_legal_branches
+        ? branchCoverage.unknown_branches / branchCoverage.total_legal_branches
+        : 0,
+      ambiguous_fraction: branchCoverage.observed_branches
+        ? branchCoverage.ambiguous_branches / branchCoverage.observed_branches
+        : 0,
+    },
+    terminal_outcomes: sortedObject(terminalOutcomes),
+    first_pass: {
+      ...firstPass,
+      rate: firstPass.total ? firstPass.accepted / firstPass.total : 0,
+    },
+    retry_reasons: sortedObject(retryReasons),
+    cost_quantiles: {
+      model_calls: { p50: percentile(costs.model_calls, 0.5), p90: percentile(costs.model_calls, 0.9) },
+      retries: { p50: percentile(costs.retries, 0.5), p90: percentile(costs.retries, 0.9) },
+      tokens: { p50: percentile(costs.tokens, 0.5), p90: percentile(costs.tokens, 0.9) },
+      latency_ms: { p50: percentile(costs.latency_ms, 0.5), p90: percentile(costs.latency_ms, 0.9) },
+    },
+    replay_counterexamples: replayExamples
+      .sort((a, b) => a.lineage_ref.localeCompare(b.lineage_ref))
+      .slice(0, POLICY_LAB_LIMITS.max_structured_examples),
+    current_policy: structuredClone(currentPolicy),
+  };
+
+  const datasetId = "dataset-" + sha256Canonical(datasetWithoutId).slice(7);
+  return {
+    ok: true,
+    dataset: {
+      dataset_id: datasetId,
+      ...datasetWithoutId,
+    },
+  };
+}
+
+export function persistPolicyDevelopmentDataset(repoRoot, dataset) {
+  if (!dataset || dataset.schema !== POLICY_DATASET_SCHEMA || !dataset.dataset_id) {
+    return { written: false, reason: "INVALID_DATASET" };
+  }
+  const expected = "dataset-" + sha256Canonical((({ dataset_id: _id, ...rest }) => rest)(dataset)).slice(7);
+  if (expected !== dataset.dataset_id) {
+    return { written: false, reason: "DATASET_ID_MISMATCH" };
+  }
+  const path = resolve(repoRoot, LAB_ROOT, "datasets", dataset.dataset_id + ".json");
+  atomicJson(path, dataset);
+  return { written: true, path };
+}
+
+export function buildAndPersistPolicyDataset(repoRoot) {
+  const loadedWorlds = loadSealedWorlds(repoRoot);
+  const current = loadCurrentPolicy(repoRoot);
+  if (!current.ok) return current;
+
+  const built = buildPolicyDevelopmentDataset({
+    worlds: loadedWorlds.worlds,
+    currentPolicy: current.policy,
+    rejectedWorldCount: loadedWorlds.rejected.length,
+  });
+  if (!built.ok) return built;
+
+  const persisted = persistPolicyDevelopmentDataset(repoRoot, built.dataset);
+  if (!persisted.written) return persisted;
+  return {
+    ok: true,
+    dataset: built.dataset,
+    path: persisted.path,
+    rejected_worlds: loadedWorlds.rejected,
+  };
+}
+
+export function openPolicyLabCycle({ repoRoot, dataset } = {}) {
+  if (!repoRoot || !dataset?.dataset_id || dataset.schema !== POLICY_DATASET_SCHEMA) {
+    return { opened: false, reason: "INVALID_CYCLE_INPUT" };
+  }
+  const baseline = dataset.current_policy;
+  const validation = validatePolicy(baseline);
+  if (!validation.valid) {
+    return { opened: false, reason: "BASELINE_POLICY_INVALID", errors: validation.errors };
+  }
+
+  const cycleId = "cycle-" + sha256Canonical({
+    dataset_id: dataset.dataset_id,
+    baseline_policy_id: baseline.policy_id,
+  }).slice(7);
+  const path = resolve(repoRoot, LAB_ROOT, "cycles", cycleId + ".json");
+
+  if (existsSync(path)) {
+    const existing = readJson(path);
+    if (existing?.schema === POLICY_CYCLE_SCHEMA && existing?.cycle_id === cycleId) {
+      return { opened: true, existing: true, cycle: existing, path };
+    }
+    return { opened: false, reason: "CYCLE_ARTIFACT_CONFLICT" };
+  }
+
+  const cycle = {
+    schema: POLICY_CYCLE_SCHEMA,
+    cycle_id: cycleId,
+    dataset_id: dataset.dataset_id,
+    baseline_policy_id: baseline.policy_id,
+    limits: {
+      max_designer_calls: POLICY_LAB_LIMITS.max_designer_calls,
+      max_candidates_per_call: POLICY_LAB_LIMITS.max_candidates_per_call,
+    },
+    designer_calls: [],
+    candidates: [
+      {
+        policy_id: baseline.policy_id,
+        source: "BASELINE",
+      },
+    ],
+    status: "OPEN",
+    activation_allowed: false,
+  };
+  atomicJson(path, cycle);
+  return { opened: true, existing: false, cycle, path };
+}
+
+function materializeCandidate(raw, baselinePolicyId) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { valid: false, errors: ["Candidate must be a JSON object"] };
+  }
+  const candidate = structuredClone(raw);
+  delete candidate.policy_id;
+  delete candidate.created_at;
+  if (candidate.base_policy === undefined || candidate.base_policy === null) {
+    candidate.base_policy = baselinePolicyId;
+  }
+  candidate.policy_id = computePolicyId(candidate);
+  const validation = validatePolicy(candidate);
+  if (!validation.valid) {
+    return { valid: false, errors: validation.errors };
+  }
+  return { valid: true, policy: candidate };
+}
+
+export function submitDesignerCandidates({
+  repoRoot,
+  cyclePath,
+  candidates,
+} = {}) {
+  if (!repoRoot || !cyclePath || !Array.isArray(candidates)) {
+    return { accepted: false, reason: "INVALID_DESIGNER_SUBMISSION" };
+  }
+
+  const cycle = readJson(cyclePath);
+  if (cycle?.schema !== POLICY_CYCLE_SCHEMA) {
+    return { accepted: false, reason: "INVALID_CYCLE" };
+  }
+  if (cycle.status !== "OPEN") {
+    return { accepted: false, reason: "CYCLE_NOT_OPEN" };
+  }
+  if (cycle.designer_calls.length >= POLICY_LAB_LIMITS.max_designer_calls) {
+    return { accepted: false, reason: "DESIGNER_CALL_BUDGET_EXHAUSTED" };
+  }
+  if (candidates.length > POLICY_LAB_LIMITS.max_candidates_per_call) {
+    return { accepted: false, reason: "TOO_MANY_CANDIDATES_IN_CALL" };
+  }
+
+  const callIndex = cycle.designer_calls.length + 1;
+  const accepted = [];
+  const rejected = [];
+
+  for (let i = 0; i < candidates.length; i++) {
+    const materialized = materializeCandidate(candidates[i], cycle.baseline_policy_id);
+    if (!materialized.valid) {
+      rejected.push({ candidate_index: i, errors: materialized.errors });
+      continue;
+    }
+    const policy = materialized.policy;
+    const path = resolve(repoRoot, LAB_ROOT, "candidates", policy.policy_id + ".json");
+    atomicJson(path, policy);
+    if (!cycle.candidates.some((entry) => entry.policy_id === policy.policy_id)) {
+      cycle.candidates.push({
+        policy_id: policy.policy_id,
+        source: callIndex === 1 ? "DESIGNER_CALL_1" : "DESIGNER_CALL_2",
+      });
+    }
+    accepted.push({ policy_id: policy.policy_id, path });
+  }
+
+  cycle.designer_calls.push({
+    call_index: callIndex,
+    submitted_count: candidates.length,
+    accepted_policy_ids: accepted.map((x) => x.policy_id).sort(),
+    rejected_count: rejected.length,
+  });
+  atomicJson(cyclePath, cycle);
+
+  return {
+    accepted: true,
+    call_index: callIndex,
+    cycle,
+    accepted_candidates: accepted,
+    rejected_candidates: rejected,
+  };
+}
+
+function loadDatasetForCycle(repoRoot, cycle) {
+  const path = resolve(repoRoot, LAB_ROOT, "datasets", cycle.dataset_id + ".json");
+  if (!existsSync(path)) return { ok: false, reason: "CYCLE_DATASET_MISSING" };
+  const dataset = readJson(path);
+  if (dataset?.schema !== POLICY_DATASET_SCHEMA || dataset?.dataset_id !== cycle.dataset_id) {
+    return { ok: false, reason: "CYCLE_DATASET_INVALID" };
+  }
+  const expected = "dataset-" + sha256Canonical((({ dataset_id: _id, ...rest }) => rest)(dataset)).slice(7);
+  if (expected !== dataset.dataset_id) return { ok: false, reason: "CYCLE_DATASET_TAMPERED" };
+  return { ok: true, dataset, path };
+}
+
+function loadWorldsForDataset(repoRoot, dataset) {
+  const loaded = loadSealedWorlds(repoRoot);
+  const byManifest = new Map(loaded.worlds.map((w) => [w.world_manifest_hash, w]));
+  const worlds = [];
+  for (const source of dataset.source_manifest || []) {
+    const world = byManifest.get(source.world_manifest_hash);
+    if (!world) {
+      return {
+        ok: false,
+        reason: "DATASET_WORLD_MISSING_OR_CHANGED",
+        world_manifest_hash: source.world_manifest_hash,
+      };
+    }
+    worlds.push({
+      world,
+      split: source.split,
+      lineage_ref: source.lineage_ref,
+    });
+  }
+  return { ok: true, worlds };
+}
+
+function loadCandidatePolicy(repoRoot, dataset, entry) {
+  if (entry.source === "BASELINE") {
+    return { ok: true, policy: dataset.current_policy };
+  }
+  const path = resolve(repoRoot, LAB_ROOT, "candidates", entry.policy_id + ".json");
+  if (!existsSync(path)) return { ok: false, reason: "CANDIDATE_POLICY_MISSING", policy_id: entry.policy_id };
+  const policy = readJson(path);
+  const validation = validatePolicy(policy);
+  if (!validation.valid || policy.policy_id !== entry.policy_id) {
+    return { ok: false, reason: "CANDIDATE_POLICY_INVALID", policy_id: entry.policy_id, errors: validation.errors };
+  }
+  return { ok: true, policy };
+}
+
+function aggregateReports(items) {
+  const aggregate = {
+    world_count: items.length,
+    total_trajectories: 0,
+    ineligible_trajectories: 0,
+    unknown_branch_count: 0,
+    accepted_count: 0,
+    evidence_complete_count: 0,
+    first_pass_count: 0,
+    total_retries: 0,
+    total_model_calls: 0,
+    total_tokens: 0,
+    total_latency_ms: 0,
+  };
+
+  for (const { report } of items) {
+    aggregate.total_trajectories += report.total_trajectories || 0;
+    aggregate.ineligible_trajectories += report.ineligible_trajectories || 0;
+    aggregate.unknown_branch_count += report.unknown_branch_count || 0;
+    aggregate.accepted_count += report.accepted_count || 0;
+    aggregate.first_pass_count += report.first_pass_count || 0;
+    aggregate.total_retries += report.total_retries || 0;
+    const cost = report.aggregate_cost_metrics || {};
+    aggregate.total_model_calls += safeNumber(cost.model_calls);
+    aggregate.total_tokens += safeNumber(cost.input_tokens) + safeNumber(cost.output_tokens) + safeNumber(cost.reasoning_tokens);
+    aggregate.total_latency_ms += safeNumber(cost.latency_ms);
+
+    for (const evaluated of report.evaluated_trajectories || []) {
+      if (evaluated?.evidence_completeness?.complete) aggregate.evidence_complete_count++;
+    }
+  }
+
+  const denom = aggregate.total_trajectories || 1;
+  const acceptedDenom = aggregate.accepted_count || null;
+  return {
+    ...aggregate,
+    acceptance_rate: aggregate.accepted_count / denom,
+    evidence_complete_rate: aggregate.evidence_complete_count / denom,
+    first_pass_rate: aggregate.first_pass_count / denom,
+    retries_per_accepted: acceptedDenom ? aggregate.total_retries / acceptedDenom : null,
+    model_calls_per_accepted: acceptedDenom ? aggregate.total_model_calls / acceptedDenom : null,
+    tokens_per_accepted: acceptedDenom ? aggregate.total_tokens / acceptedDenom : null,
+    latency_ms_per_accepted: acceptedDenom ? aggregate.total_latency_ms / acceptedDenom : null,
+    complete_support: aggregate.ineligible_trajectories === 0 && aggregate.unknown_branch_count === 0,
+  };
+}
+
+function compareMetric(candidate, baseline, higherBetter) {
+  if (candidate === null || baseline === null) return 0;
+  if (candidate === baseline) return 0;
+  if (higherBetter) return candidate > baseline ? 1 : -1;
+  return candidate < baseline ? 1 : -1;
+}
+
+export function compareAggregateReports(candidate, baseline) {
+  if (candidate.ineligible_trajectories > 0) {
+    return { relation: "INELIGIBLE", dimension: "SAFETY_FIDELITY" };
+  }
+  if (candidate.unknown_branch_count > 0) {
+    return { relation: "INSUFFICIENT_SUPPORT", dimension: "SUPPORT" };
+  }
+
+  const dimensions = [
+    ["ACCEPTANCE", "acceptance_rate", true],
+    ["EVIDENCE_COMPLETENESS", "evidence_complete_rate", true],
+    ["FIRST_PASS_ACCEPTANCE", "first_pass_rate", true],
+    ["RETRY_COST", "retries_per_accepted", false],
+    ["MODEL_CALLS", "model_calls_per_accepted", false],
+    ["TOKENS", "tokens_per_accepted", false],
+    ["LATENCY", "latency_ms_per_accepted", false],
+  ];
+
+  for (const [dimension, key, higherBetter] of dimensions) {
+    const cmp = compareMetric(candidate[key], baseline[key], higherBetter);
+    if (cmp > 0) return { relation: "SUPERIOR", dimension };
+    if (cmp < 0) return { relation: "INFERIOR", dimension };
+  }
+  return { relation: "EQUIVALENT", dimension: "NONE" };
+}
+
+function materialImprovement(candidate, baseline, comparison) {
+  if (comparison.relation !== "SUPERIOR") return { material: false, reasons: [] };
+
+  if (["ACCEPTANCE", "EVIDENCE_COMPLETENESS"].includes(comparison.dimension)) {
+    return { material: true, reasons: [comparison.dimension] };
+  }
+
+  const reasons = [];
+  const callsBase = baseline.model_calls_per_accepted;
+  const callsCandidate = candidate.model_calls_per_accepted;
+  if (
+    callsBase !== null && callsBase > 0 && callsCandidate !== null
+    && (callsBase - callsCandidate) / callsBase >= 0.05
+  ) {
+    reasons.push("MODEL_CALLS_REDUCTION_GTE_5_PERCENT");
+  }
+
+  const retryBase = baseline.retries_per_accepted;
+  const retryCandidate = candidate.retries_per_accepted;
+  if (
+    retryBase !== null && retryBase > 0 && retryCandidate !== null
+    && (retryBase - retryCandidate) / retryBase >= 0.10
+  ) {
+    reasons.push("RETRY_REDUCTION_GTE_10_PERCENT");
+  }
+
+  if (candidate.first_pass_rate - baseline.first_pass_rate >= 0.02) {
+    reasons.push("FIRST_PASS_INCREASE_GTE_2PP");
+  }
+
+  return { material: reasons.length > 0, reasons };
+}
+
+function feedbackExamples(items) {
+  return items
+    .filter(({ report }) =>
+      report.status === "NEEDS_EXPLORATION"
+      || report.status === "INELIGIBLE"
+    )
+    .map(({ world, split, report }) => sanitizeReplayExample(world, report, split))
+    .sort((a, b) => a.lineage_ref.localeCompare(b.lineage_ref))
+    .slice(0, POLICY_LAB_LIMITS.max_structured_examples);
+}
+
+export function evaluatePolicyLabCycle({ repoRoot, cyclePath } = {}) {
+  if (!repoRoot || !cyclePath) return { evaluated: false, reason: "INVALID_EVALUATION_INPUT" };
+  const cycle = readJson(cyclePath);
+  if (cycle?.schema !== POLICY_CYCLE_SCHEMA) return { evaluated: false, reason: "INVALID_CYCLE" };
+
+  const loadedDataset = loadDatasetForCycle(repoRoot, cycle);
+  if (!loadedDataset.ok) return { evaluated: false, ...loadedDataset };
+  const dataset = loadedDataset.dataset;
+
+  const loadedWorlds = loadWorldsForDataset(repoRoot, dataset);
+  if (!loadedWorlds.ok) return { evaluated: false, ...loadedWorlds };
+
+  const baselinePolicy = dataset.current_policy;
+  const policyResults = [];
+  let baselineBySplit = null;
+
+  for (const entry of cycle.candidates) {
+    const loadedPolicy = loadCandidatePolicy(repoRoot, dataset, entry);
+    if (!loadedPolicy.ok) return { evaluated: false, ...loadedPolicy };
+    const policy = loadedPolicy.policy;
+
+    const reports = [];
+    for (const source of loadedWorlds.worlds) {
+      const replay = replayPolicy(source.world, policy, baselinePolicy);
+      const report = createReplayReport({
+        world: source.world,
+        replay,
+        candidatePolicyId: policy.policy_id,
+      });
+      reports.push({
+        world: source.world,
+        split: source.split,
+        lineage_ref: source.lineage_ref,
+        report,
+      });
+    }
+
+    const trainItems = reports.filter((item) => item.split === "TRAIN");
+    const holdoutItems = reports.filter((item) => item.split === "HOLDOUT");
+    const train = aggregateReports(trainItems);
+    const holdout = aggregateReports(holdoutItems);
+
+    if (entry.source === "BASELINE") {
+      baselineBySplit = { train, holdout };
+      policyResults.push({
+        policy_id: policy.policy_id,
+        source: "BASELINE",
+        status: "BASELINE",
+        train,
+        holdout,
+        activation_allowed: false,
+        feedback_examples: feedbackExamples(reports),
+      });
+      continue;
+    }
+
+    const trainComparison = compareAggregateReports(train, baselineBySplit.train);
+    const holdoutComparison = compareAggregateReports(holdout, baselineBySplit.holdout);
+    const materiality = materialImprovement(holdout, baselineBySplit.holdout, holdoutComparison);
+
+    let status;
+    if (train.ineligible_trajectories > 0 || holdout.ineligible_trajectories > 0) {
+      status = "INELIGIBLE";
+    } else if (train.unknown_branch_count > 0 || holdout.unknown_branch_count > 0) {
+      status = "NEEDS_EXPLORATION";
+    } else if (holdoutComparison.relation === "INFERIOR") {
+      status = "REGRESSION";
+    } else if (holdoutComparison.relation === "SUPERIOR" && materiality.material) {
+      status = "RECOMMENDATION_CANDIDATE";
+    } else if (holdoutComparison.relation === "SUPERIOR") {
+      status = "IMPROVEMENT_BELOW_MATERIALITY_THRESHOLD";
+    } else {
+      status = "EQUIVALENT";
+    }
+
+    policyResults.push({
+      policy_id: policy.policy_id,
+      source: entry.source,
+      status,
+      train,
+      holdout,
+      train_comparison: trainComparison,
+      holdout_comparison: holdoutComparison,
+      materiality,
+      activation_allowed: false,
+      feedback_examples: feedbackExamples(reports),
+    });
+  }
+
+  const sampleGate = {
+    train_lineages: dataset.split_counts.train_lineages,
+    holdout_lineages: dataset.split_counts.holdout_lineages,
+    min_train_lineages: POLICY_LAB_LIMITS.promotion_min_train_lineages,
+    min_holdout_lineages: POLICY_LAB_LIMITS.promotion_min_holdout_lineages,
+    sufficient:
+      dataset.split_counts.train_lineages >= POLICY_LAB_LIMITS.promotion_min_train_lineages
+      && dataset.split_counts.holdout_lineages >= POLICY_LAB_LIMITS.promotion_min_holdout_lineages,
+  };
+
+  const reportWithoutId = {
+    schema: POLICY_EVALUATION_SCHEMA,
+    cycle_id: cycle.cycle_id,
+    dataset_id: dataset.dataset_id,
+    baseline_policy_id: cycle.baseline_policy_id,
+    sample_gate: sampleGate,
+    candidates: policyResults,
+    recommended_candidate_ids: policyResults
+      .filter((item) => item.status === "RECOMMENDATION_CANDIDATE")
+      .map((item) => item.policy_id)
+      .sort(),
+    activation_allowed: false,
+    next_milestone_required_for_activation: "SHADOW_MODE",
+  };
+
+  const evaluationId = "evaluation-" + sha256Canonical(reportWithoutId).slice(7);
+  const evaluation = { evaluation_id: evaluationId, ...reportWithoutId };
+  const path = resolve(repoRoot, LAB_ROOT, "evaluations", evaluationId + ".json");
+  atomicJson(path, evaluation);
+
+  cycle.last_evaluation_id = evaluationId;
+  cycle.status = "EVALUATED";
+  cycle.activation_allowed = false;
+  atomicJson(cyclePath, cycle);
+
+  return { evaluated: true, evaluation, path, cycle };
+}
