@@ -16,6 +16,9 @@ Delivered when transitioning from `PLANNED` to `DELEGATED`:
 - **Scope Contract**:
   - Allowed Paths: `["src/components/**"]`
   - Forbidden Paths: `["src/core/**", "docs/**"]`
+  - Side-Effect Capabilities: `[]`
+    - Remote/public writes require explicit entries such as `NETWORK_WRITE`, `REMOTE_REPO_WRITE`, `VCS_REMOTE_WRITE`, or `PUBLICATION`.
+    - Omitted/empty means no remote/public write authority.
   - Retry Budget: 2
 - **Objective**: <concise 1-2 sentence description of goal>
 - **Key References**:
