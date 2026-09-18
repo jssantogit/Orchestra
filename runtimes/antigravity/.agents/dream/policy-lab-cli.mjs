@@ -29,7 +29,7 @@ function fail(message, code = 1) { console.error(message); process.exit(code); }
 function usage() {
   console.log("Orchestra Dream Layer — Milestone F Policy Lab\n\n"
     + "dataset  --repo <path>\n"
-    + "open     --repo <path> [--dataset <dataset.json>]\n"
+    + "open     --repo <path>\n"
     + "packet   --repo <path> --cycle <cycle.json>\n"
     + "submit   --repo <path> --cycle <cycle.json> --candidates <json>\n"
     + "evaluate --repo <path> --cycle <cycle.json>\n\n"
@@ -48,16 +48,10 @@ if (command === "dataset") {
 
 if (command === "open") {
   if (!flags.repo) fail("--repo is required");
-  let dataset;
-  if (flags.dataset) {
-    if (!existsSync(resolve(flags.dataset))) fail("Dataset file not found");
-    dataset = json(flags.dataset);
-  } else {
-    const built = buildAndPersistPolicyDataset(resolve(flags.repo));
-    if (!built.ok) { print(built); process.exit(2); }
-    dataset = built.dataset;
-  }
-  const out = openPolicyLabCycle({ repoRoot: resolve(flags.repo), dataset });
+  if (flags.dataset) fail("--dataset is not accepted; cycles must derive from locally sealed worlds");
+  const built = buildAndPersistPolicyDataset(resolve(flags.repo));
+  if (!built.ok) { print(built); process.exit(2); }
+  const out = openPolicyLabCycle({ repoRoot: resolve(flags.repo), dataset: built.dataset });
   print(out); process.exit(out.opened ? 0 : 3);
 }
 
