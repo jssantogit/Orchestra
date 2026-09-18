@@ -936,6 +936,8 @@ export function prepareFullExplorationBranch({
     const abortOutcome = {
       result: {
         factual: true,
+        attributable: false,
+        support_status: "INSUFFICIENT_SUPPORT",
         status: "ABORTED",
         reason: "CONTROLLER_DECISION_RECORDING_INCOMPLETE",
         controller_session_id: control.session_id,
