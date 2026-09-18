@@ -7,6 +7,7 @@ import {
   rollbackCanary,
   summarizeCanarySession,
 } from "./canary-mode.mjs";
+import { rollbackActivePolicy } from "./policy-store.mjs";
 
 function parse(argv) {
   const flags = {}, positional = [];
@@ -28,8 +29,9 @@ function usage() {
     + "approve  --repo <path> --shadow-report <id> --confirm\n"
     + "status   --repo <path>\n"
     + "report   --repo <path> [--session <canary-session-id>]\n"
-    + "rollback --repo <path> --confirm\n"
-    + "promote  --repo <path> --canary-report <id> --confirm\n\n"
+    + "rollback        --repo <path> --confirm\n"
+    + "promote         --repo <path> --canary-report <id> --confirm\n"
+    + "rollback-policy --repo <path> --confirm\n\n"
     + "Canary traffic is fixed at 5%. Approval and final promotion are separate explicit human actions.");
 }
 
@@ -82,6 +84,12 @@ if (command === "promote") {
     humanApproval: true,
   });
   print(out); process.exit(out.promoted ? 0 : 6);
+}
+
+if (command === "rollback-policy") {
+  if (flags.confirm !== true) fail("--confirm is required for human active-policy rollback");
+  const out = rollbackActivePolicy({ repoRoot, humanApproval: true });
+  print(out); process.exit(out.rolled_back ? 0 : 7);
 }
 
 fail("Unknown command: " + command);
