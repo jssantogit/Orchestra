@@ -56,7 +56,7 @@ A Runtime Continuation Capsule is derived only from `RUNTIME_AUTHORITY`; compact
 
 `LOCAL_READ, LOCAL_WRITE, PROCESS_EXEC, NETWORK_READ, NETWORK_WRITE, REMOTE_REPO_WRITE, VCS_REMOTE_WRITE, CROSS_AGENT_MESSAGE, PUBLICATION`.
 
-Remote/public writes default deny unless the active factual contract explicitly grants the required capability.
+Remote/public writes default deny unless the active factual contract explicitly grants the required capability. This boundary is enforced by a global PreToolUse guard independent of the native scope-enforcer matcher, so newly introduced plugins/connectors cannot bypass capability classification. Unknown external-tool semantics fail toward `NETWORK_WRITE`; clearly read-only external verbs may use `NETWORK_READ`.
 
 ## Milestone K — Full Exploration Policy
 
