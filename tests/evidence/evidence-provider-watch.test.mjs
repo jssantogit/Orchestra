@@ -341,7 +341,7 @@ test("Stop Guard: CI_WAIT stops the model turn and persists disabled-runner meta
       readFileSync(join(root, ".agents", "state", "active-state.json"), "utf8")
     );
     assert.equal(after.state, "CI_WAIT");
-    assert.equal(after.ciWait.runner.disabled, true);
+    assert.equal(after.ciWait.runner?.disabled, true, JSON.stringify(after.ciWait.runner));
     assert.equal(after.evidenceSourceUnavailableCount || 0, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
