@@ -74,6 +74,7 @@ import {
   isPathApp,
   checkEvidenceFreshness,
   findReusableEvidence,
+  verifyWorkerValidation,
   recordNativeToolFallback,
   WORKER_PACKET_LIMITS,
   validateWorkerPacket,
@@ -1447,4 +1448,55 @@ test("scope validator canonicalizes dot-dot traversal before authorization", () 
   const outsideWorkspace = validateScopeContract(contract, ["src/../../outside.js"]);
   assert.equal(outsideWorkspace.valid, false);
   assert.ok(outsideWorkspace.violations.some((v) => v.reason === "workspace-escape"));
+});
+
+
+test("validation authority: MEDIUM or missing worker identity confidence cannot satisfy acceptance", () => {
+  const base = {
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+  };
+
+  const medium = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "medium-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+      confidence: "MEDIUM",
+    }],
+  });
+  assert.equal(medium.verified, false);
+  assert.match(medium.reason, /IDENTITY_NOT_FACTUAL/);
+
+  const missing = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "missing-confidence-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+    }],
+  });
+  assert.equal(missing.verified, false);
+  assert.match(missing.reason, /IDENTITY_NOT_FACTUAL/);
+
+  const factual = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "high-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+      confidence: "HIGH",
+    }],
+  });
+  assert.equal(factual.verified, true);
 });
