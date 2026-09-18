@@ -616,7 +616,11 @@ export function evaluateCanaryPolicyOverlay({
   });
   if (!eligibility.eligible) return { active: false, reason: eligibility.reason };
 
-  const selection = deterministicCanarySelection(taskId, config.candidate_policy_id);
+  const selection = deterministicCanarySelection(
+    taskId,
+    config.candidate_policy_id,
+    config.traffic_percent,
+  );
   if (!selection.selected) {
     return { active: false, reason: "CANARY_TASK_NOT_SELECTED", bucket: selection.bucket };
   }
@@ -673,6 +677,9 @@ export function evaluateCanaryPolicyOverlay({
     policy_diagnostic: evaluation.ok ? null : POLICY_STATUS.NO_MATCHING_RULE,
     canary_session_id: config.canary_session_id,
     canary_bucket: selection.bucket,
+    canary_traffic_percent: config.traffic_percent,
+    rollout_stage_index: currentCanaryRolloutStage(config)?.index ?? 0,
+    rollout_generation: rolloutGeneration(config),
     policy_latency_ms: latencyMs,
   };
 }
