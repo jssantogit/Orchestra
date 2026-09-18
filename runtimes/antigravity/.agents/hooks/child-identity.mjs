@@ -58,8 +58,15 @@ export function factualSubagentMatchesPending(record, pending) {
 
   const spawnStepIndex = record.spawnStepIndex;
   const originStepIdx = pending.originStepIdx;
-  if (Number.isInteger(spawnStepIndex) && Number.isInteger(originStepIdx) && spawnStepIndex !== originStepIdx) {
-    return false;
+  const originStepNumber = originStepIdx === null || originStepIdx === undefined ? null : Number(originStepIdx);
+  const spawnStepNumber = spawnStepIndex === null || spawnStepIndex === undefined ? null : Number(spawnStepIndex);
+
+  // When dispatch recorded an origin step, the factual runtime record must prove
+  // the same spawn step. Missing spawn identity is not equivalent to a match.
+  if (Number.isInteger(originStepNumber)) {
+    if (!Number.isInteger(spawnStepNumber) || spawnStepNumber !== originStepNumber) {
+      return false;
+    }
   }
 
   return true;
