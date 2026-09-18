@@ -1458,6 +1458,52 @@ test("recordDecisionOutcome recovers append-before-consume crash without duplica
   assert.equal(existsSync(join(pendingDir, correlationKey + ".consumed")), true);
 });
 
+test("recordDecision rejects replay of an already-consumed correlation", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-consumed-replay-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const correlationKey = "corr-consumed-replay";
+  const decisionInput = {
+    snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+  };
+
+  const first = recordDecision({ telemetryPath, pendingDir, correlationKey, decision: decisionInput });
+  assert.equal(first.recorded, true);
+
+  const outcome = recordDecisionOutcome({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    outcome: {
+      result: "COMPLETED",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+      terminal_state: "UNKNOWN",
+    },
+  });
+  assert.equal(outcome.recorded, true);
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".consumed")), true);
+
+  const replay = recordDecision({ telemetryPath, pendingDir, correlationKey, decision: decisionInput });
+  assert.equal(replay.recorded, false);
+  assert.equal(replay.reason, "DECISION_ALREADY_CONSUMED");
+  assert.equal(replay.error_code, "ERR_CORRELATION_ALREADY_CONSUMED");
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".json")), false);
+
+  const events = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(events.filter(e => e.type === "DECISION").length, 1, "Consumed correlation replay must not duplicate DECISION");
+  assert.equal(events.filter(e => e.type === "DECISION_OUTCOME").length, 1);
+});
+
 test("recordDecisionOutcome returns PENDING_DECISION_NOT_FOUND when correlation missing", (t) => {
   const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-notfound-"));
   t.after(() => {
