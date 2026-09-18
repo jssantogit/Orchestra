@@ -50,7 +50,7 @@ export function readFactualGitIdentity(repoRoot) {
   const branch = git(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const dirty = git(repoRoot, ["status", "--porcelain", "--untracked-files=no"]);
 
-  if (!origin.ok || !head.ok || !branch.ok || !dirty.ok) {
+  if (!head.ok || !branch.ok || !dirty.ok) {
     return {
       ok: false,
       reason: "GIT_IDENTITY_UNAVAILABLE",
@@ -58,19 +58,10 @@ export function readFactualGitIdentity(repoRoot) {
     };
   }
 
-  const repository = parseGitHubRepository(origin.stdout);
-  if (!repository) {
-    return {
-      ok: false,
-      reason: "ORIGIN_NOT_GITHUB_REPOSITORY",
-      origin: origin.stdout,
-    };
-  }
-
   return {
     ok: true,
-    repository,
-    originUrl: origin.stdout,
+    repository: origin.ok ? parseGitHubRepository(origin.stdout) : null,
+    originUrl: origin.ok ? origin.stdout : null,
     headSha: head.stdout,
     branch: branch.stdout === "HEAD" ? null : branch.stdout,
     trackedDirty: dirty.stdout.length > 0,
@@ -349,6 +340,18 @@ export async function collectGitHubActionsRequirement({ repoRoot, activeState = 
       reason: factual.reason,
       activeState,
       factual: null,
+      provider: "GITHUB_ACTIONS",
+      source: "ORCHESTRA_GITHUB_COLLECTOR",
+    });
+  }
+
+  if (!factual.repository) {
+    return runtimeRecord({
+      requirement,
+      result: "UNAVAILABLE",
+      reason: "ORIGIN_NOT_GITHUB_REPOSITORY",
+      activeState,
+      factual,
       provider: "GITHUB_ACTIONS",
       source: "ORCHESTRA_GITHUB_COLLECTOR",
     });
