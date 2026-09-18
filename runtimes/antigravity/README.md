@@ -139,12 +139,12 @@ See [Project Runtime Management](../../docs/project-runtime.md).
 
 ---
 
-## 5. Dream Layer Recursive Policy Lifecycle (Milestones A–H)
+## 5. Dream Layer Recursive Policy Lifecycle (Milestones A–K)
 
-The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–H) for factual history, deterministic replay, bounded exploration, offline policy development, zero-impact Shadow, human-approved Canary, and explicit policy promotion:
+The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–K) for factual history, deterministic replay, attributable feedback, context-trust boundaries, bounded/full exploration, offline policy development, zero-impact Shadow, human-approved Canary, and explicit policy promotion:
 
 - **Real Online Policy Authority (Milestone D Corrective Closure)**: PreToolUse hook enforces `RECORDED_CHOSEN_ACTION == ACTUAL_EXECUTED_ACTION`. Invocations diverging from policy action are deterministically denied pre-execution without recording false DECISION events.
-- **Three Decision Points**: Strict policy governance over `WORKER_TIER`, `INVESTIGATION_STRATEGY` (enforced gate before implementation), and `RETRY_ACTION` (governs retry path and enforces retry budget monotonicity).
+- **Policy Decision Classes**: Production routing retains `WORKER_TIER`, `INVESTIGATION_STRATEGY`, and `RETRY_ACTION`; isolated Milestone K adds `EXPLORATION_BRANCHING`, `PARALLELISM`, `PRUNE_BRANCH`, and `STOPPING` without changing ordinary workspace concurrency.
 - **Declarative Static Policy Engine & Two-Layer Verification**: Evaluates `static-policy-v1.json` via pure policy engine [`policy-engine.mjs`](.agents/dream/policy-engine.mjs). Combines standard Draft 2020-12 Structural Schema (`policy-v1.schema.json`) with Normative Semantic Validation (`validatePolicy()`) enforcing relational constraints (`min <= max`), rule ID uniqueness, content-addressed `policy_id`, and canonical size limits.
   *Note: Structural constraints are aligned with policy-v1.schema.json; validatePolicy additionally enforces normative semantic invariants that standard Draft 2020-12 cannot express directly.*
 - **100% Shadow Parity & Coverage**: Verified across all eligible state combinations against the production router (`decideRoute` -> `classifyBaselineDecision`).
@@ -159,6 +159,10 @@ The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–H
 - **Zero-Impact Shadow Mode (Milestone G)**: Explicitly selected F candidates compute a private action only after the factual DECISION is published. Baseline execution remains authoritative; candidate actions never enter telemetry/model context or Scope Contract. CRITICAL/HUMAN_GATE are excluded. Canary review requires >=50 eligible decisions and <=20% UNKNOWN divergences; G never executes the candidate.
 - **Human-approved Progressive Canary (Milestone H+)**: A ready Shadow report may enter a 5% rollout only after explicit human confirmation. The same deterministic task-ID bucket expands through nested 5% → 20% → 50% → 100% cohorts; every stage advance requires a fresh Canary report and a separate human `--confirm`. Only NORMAL/local/reversible/noncritical tasks are eligible; Two-Key, external-side-effect and critical-path work is excluded. Policy/schema errors, illegal actions, governance attempts, evidence bypass, or exact proven regressions immediately roll Canary back to baseline routing.
 - **Human-only Promotion**: Stage reports can only request the next human rollout approval; they never advance themselves. A healthy, fully observed 100% stage may produce `READY_FOR_HUMAN_PROMOTION_REVIEW`, not activation. A separate explicit human confirmation writes the content-addressed policy version and atomically replaces `.agents/dream-data/policies/active.json`; corruption falls back to static policy. Future Policy Lab cycles use the promoted active policy as baseline. Promoted-policy rollback is separately human-confirmed, restores the recorded predecessor, preserves all policy versions, and appends a `POLICY_ROLLBACK` history event.
+
+- **Attributable Feedback Plane (Milestone I)**: Compact worker hypotheses/experiments remain claims until exact factual Evidence Ledger executions create observations. Runtime-only inference can mark supported/falsified/causally verified; feedback never satisfies acceptance.
+- **Context & Side-Effect Trust Boundary (Milestone J)**: Every PreInvocation receives a bounded Runtime Continuation Capsule reconstructed from factual authority. Remote/public write capabilities default deny; handoff/summary text cannot rewrite scope, roles, evidence requirements, retries, or Human Gates.
+- **Full Exploration Policy (Milestone K)**: A separate isolated controller governs branching, bounded 2-way parallelism, pruning, and stopping across Milestone-E siblings under immutable 3-branch / 6-call / 15-minute ceilings. K decisions use the normal policy store, Shadow/Canary lifecycle, and explicit human promotion.
 
 For architecture and specification details, see [docs/dream-layer.md](../../docs/dream-layer.md).
 
@@ -178,7 +182,7 @@ node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
 # First-class local/remote evidence contract regressions
 npm run test:evidence
 
-# Dream Layer unit and integration tests, including Milestones E–H
+# Dream Layer unit and integration tests, including Milestones E–K
 npm run test:dream
 # or directly:
 node --test runtimes/antigravity/.agents/dream/dream.test.mjs runtimes/antigravity/.agents/dream/exploration.test.mjs runtimes/antigravity/.agents/dream/policy-lab.test.mjs runtimes/antigravity/.agents/dream/shadow-mode.test.mjs runtimes/antigravity/.agents/dream/canary-mode.test.mjs
@@ -188,6 +192,13 @@ npm run dream:policy-lab -- help
 
 # Enable/report zero-impact Milestone G Shadow observation
 npm run dream:shadow -- help
+
+# Bounded Milestone K full-exploration controller
+npm run dream:explore-full -- help
+
+# Milestone I/J focused tests
+npm run test:feedback
+npm run test:trust
 
 # Approve/report/advance/rollback/promote progressive Canary
 npm run dream:canary -- help
