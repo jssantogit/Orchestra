@@ -38,7 +38,19 @@ const SENSITIVE_PATH = [
   /(^|\/)\.(?:ssh|aws)(?:\/|$)/i,
   /\.(?:pem|p12|pfx|key)$/i,
 ];
-const EXTERNAL_TOOL = /(browser|web|http|url|network|deploy|publish|release|database|db_|email|mail|slack|discord|cloud|remote|mcp|plugin|connector|permission|generate_image|manage_task)/i;
+const EXTERNAL_TOOL = /(browser|web|http|url|network|deploy|publish|release|database|db_|email|mail|slack|discord|cloud|remote|mcp|plugin|connector|permission|generate_image|manage_task|ask_question)/i;
+const EXPLORATION_ALLOWED_TOOLS = new Set([
+  "write_to_file",
+  "replace_file_content",
+  "edit_file",
+  "create_file",
+  "invoke_subagent",
+  "run_command",
+  "view_file",
+  "grep_search",
+  "find_by_name",
+  "manage_subagents",
+]);
 
 function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true });
@@ -108,6 +120,43 @@ function loadIndex(repoRoot) {
   } catch {}
   return { schema: "orchestra.exploration-index.v1", entries: {} };
 }
+function activateExplorationPreToolWrapper(branchRoot) {
+  const hooksPath = resolve(branchRoot, ".agents/hooks.json");
+  if (!existsSync(hooksPath)) {
+    return { ok: false, reason: "EXPLORATION_HOOK_CONFIG_MISSING" };
+  }
+
+  let config;
+  try {
+    config = readJson(hooksPath);
+  } catch (error) {
+    return { ok: false, reason: "EXPLORATION_HOOK_CONFIG_INVALID", error: error.message };
+  }
+
+  const entry = config?.["scope-enforcer"]?.PreToolUse?.[0];
+  const handler = entry?.hooks?.[0];
+  if (!entry || !handler || typeof handler.command !== "string") {
+    return { ok: false, reason: "EXPLORATION_HOOK_TOPOLOGY_INVALID" };
+  }
+
+  const original = {
+    matcher: entry.matcher || null,
+    command: handler.command,
+  };
+  entry.matcher = "*";
+  handler.command = "node hooks/pre-tool-exploration-guard.mjs";
+  atomicJson(hooksPath, config);
+  return {
+    ok: true,
+    original,
+    overlay_hash: sha256Canonical({
+      matcher: entry.matcher,
+      command: handler.command,
+      original,
+    }),
+  };
+}
+
 function activeStateFromSeed(seed, sessionId) {
   const s = seed.decision.state || {};
   return {
@@ -342,6 +391,19 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   atomicJson(resolve(branchRoot, ".agents/state/active-contract.json"), seed.scope_contract);
   atomicJson(resolve(branchRoot, SESSION), session);
 
+  const hookOverlay = activateExplorationPreToolWrapper(branchRoot);
+  if (!hookOverlay.ok) {
+    rmSync(branchRoot, { recursive: true, force: true });
+    return { prepared: false, reason: hookOverlay.reason, error: hookOverlay.error || null };
+  }
+  session.hook_overlay = {
+    mode: "EXPLORATION_PRETOOL_WRAPPER",
+    overlay_hash: hookOverlay.overlay_hash,
+    original_matcher: hookOverlay.original.matcher,
+    original_command: hookOverlay.original.command,
+  };
+  atomicJson(resolve(branchRoot, SESSION), session);
+
   mkdirSync(resolve(repoRoot, EXPLORATIONS), { recursive: true });
   atomicJson(resolve(repoRoot, EXPLORATIONS, sessionId + ".json"), { ...session, branch_workspace: branchRoot });
   index.entries[key] = {
@@ -396,6 +458,9 @@ export function enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs = 
   const name = String(toolName || "");
   if (name === "schedule" || name === "send_message" || name === "define_subagent" || EXTERNAL_TOOL.test(name)) {
     return { active: true, allowed: false, reason: "EXPLORATION_EXTERNAL_SIDE_EFFECT_BLOCKED:" + name };
+  }
+  if (!EXPLORATION_ALLOWED_TOOLS.has(name)) {
+    return { active: true, allowed: false, reason: "EXPLORATION_TOOL_NOT_ALLOWLISTED:" + name };
   }
   if (name === "invoke_subagent") {
     const subagents = toolArgs.Subagents || toolArgs.subagents || [];
