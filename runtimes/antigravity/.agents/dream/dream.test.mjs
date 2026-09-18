@@ -20,6 +20,7 @@ import {
 } from "./action-space.mjs";
 import {
   dreamCorrelationKey,
+  isSafeDreamCorrelationKey,
   recordDecision,
 } from "./decision-recorder.mjs";
 import {
@@ -1315,9 +1316,9 @@ test("recordDecision rejects duplicate live correlation without duplicating tele
   assert.equal(first.recorded, true);
 
   const second = recordDecision({ telemetryPath, pendingDir, correlationKey, decision });
-  assert.equal(second.recorded, false);
-  assert.equal(second.reason, "DECISION_ALREADY_PENDING");
-  assert.equal(second.error_code, "ERR_CORRELATION_ALREADY_PENDING");
+  assert.equal(second.recorded, true);
+  assert.equal(second.reused, true);
+  assert.equal(second.decision_id, first.decision_id);
 
   const events = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
   assert.equal(events.filter(e => e.type === "DECISION").length, 1);
@@ -1360,8 +1361,9 @@ test("recordDecision recovers pending-first crash by publishing stored decision 
   assert.equal(events[0].decision_id, first.decision_id);
 
   const duplicate = recordDecision({ telemetryPath, pendingDir, correlationKey, decision });
-  assert.equal(duplicate.recorded, false);
-  assert.equal(duplicate.reason, "DECISION_ALREADY_PENDING");
+  assert.equal(duplicate.recorded, true);
+  assert.equal(duplicate.reused, true);
+  assert.equal(duplicate.decision_id, first.decision_id);
   const after = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean);
   assert.equal(after.length, 1, "Recovered DECISION must never be duplicated");
 });
@@ -1456,6 +1458,104 @@ test("recordDecisionOutcome recovers append-before-consume crash without duplica
   assert.equal(after.length, 2, "Recovery must not append a duplicate DECISION_OUTCOME");
   assert.equal(existsSync(join(pendingDir, correlationKey + ".json")), false);
   assert.equal(existsSync(join(pendingDir, correlationKey + ".consumed")), true);
+});
+
+test("dream correlation keys are filesystem-safe and bounded", () => {
+  const key = dreamCorrelationKey({
+    conversationId: "../../parent\\child",
+    stepIdx: "../7",
+    toolCallId: "call/../../escape\\x",
+    branchOrdinal: "..\\9",
+  });
+  assert.equal(isSafeDreamCorrelationKey(key), true);
+  assert.equal(key.includes("/"), false);
+  assert.equal(key.includes("\\"), false);
+  assert.ok(Buffer.byteLength(key, "utf8") <= 220);
+
+  const huge = dreamCorrelationKey({
+    conversationId: "x".repeat(1000),
+    stepIdx: "y".repeat(1000),
+    toolCallId: "z".repeat(1000),
+    branchOrdinal: "b".repeat(1000),
+  });
+  assert.match(huge, /^dec-h-[a-f0-9]{64}$/);
+  assert.equal(isSafeDreamCorrelationKey(huge), true);
+});
+
+test("recorders reject caller-supplied unsafe correlation paths", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-unsafe-key-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const decision = {
+    snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+  };
+
+  const unsafe = "../outside";
+  const rec = recordDecision({ telemetryPath, pendingDir, correlationKey: unsafe, decision });
+  assert.equal(rec.recorded, false);
+  assert.equal(rec.error_code, "ERR_UNSAFE_CORRELATION_KEY");
+  assert.equal(existsSync(join(tempDir, "outside.json")), false);
+
+  const pending = getPendingDecision({ pendingDir, correlationKey: unsafe });
+  assert.equal(pending.ok, false);
+  assert.equal(pending.reason, "UNSAFE_CORRELATION_KEY");
+
+  const out = recordDecisionOutcome({
+    telemetryPath,
+    pendingDir,
+    correlationKey: unsafe,
+    outcome: {
+      result: "COMPLETED",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+    },
+  });
+  assert.equal(out.recorded, false);
+  assert.equal(out.error_code, "ERR_UNSAFE_CORRELATION_KEY");
+});
+
+test("recordDecision rejects semantic collision on an existing live correlation", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-recorder-correlation-conflict-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const correlationKey = "corr-semantic-conflict";
+  const base = {
+    snapshot_id: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    decision_type: "WORKER_TIER",
+    state: {},
+    available_actions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+  };
+
+  const first = recordDecision({ telemetryPath, pendingDir, correlationKey, decision: base });
+  assert.equal(first.recorded, true);
+
+  const conflict = recordDecision({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    decision: { ...base, chosen_action: "FLASH_LOW" },
+  });
+  assert.equal(conflict.recorded, false);
+  assert.equal(conflict.reason, "CORRELATION_CONFLICT");
+  assert.equal(conflict.error_code, "ERR_CORRELATION_CONFLICT");
+
+  const events = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(events.filter(e => e.type === "DECISION").length, 1);
+  assert.equal(events[0].decision_id, first.decision_id);
 });
 
 test("recordDecision rejects replay of an already-consumed correlation", (t) => {
