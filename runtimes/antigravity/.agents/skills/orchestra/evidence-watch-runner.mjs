@@ -258,6 +258,19 @@ export async function runEvidenceWatchLoop({
   expectedBinding,
 } = {}) {
   while (true) {
+    const currentState = readJson(statePath, null);
+    if (!currentState) return { done: true, reason: "ACTIVE_STATE_UNREADABLE" };
+    if (!sameBinding(bindingOf(currentState), expectedBinding)) {
+      return { done: true, reason: "WATCH_TASK_CHANGED" };
+    }
+    if (String(currentState.state || "").toUpperCase() !== "CI_WAIT") {
+      return { done: true, reason: "STATE_NOT_CI_WAIT" };
+    }
+
+    const nextPollAtMs = currentNextPollMs(currentState);
+    const waitMs = Math.max(0, Math.min(120000, nextPollAtMs - Date.now()));
+    if (waitMs > 0) await sleep(waitMs);
+
     const cycle = runEvidenceWatchCycle({
       repoRoot,
       statePath,
@@ -266,12 +279,6 @@ export async function runEvidenceWatchLoop({
       nowMs: Date.now(),
     });
     if (cycle.done) return cycle;
-
-    const delay = Math.max(1000, Math.min(
-      120000,
-      Number(cycle.nextPollAtMs || Date.now() + 15000) - Date.now()
-    ));
-    await sleep(delay);
   }
 }
 
