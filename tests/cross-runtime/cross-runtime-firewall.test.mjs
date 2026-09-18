@@ -172,6 +172,36 @@ test("AGY Dream source contains zero OpenAI models or foreign providers", () => 
   }
 });
 
+test("Jev semantic service cannot appear in active Codex or Antigravity routing/control files", () => {
+  const files = [
+    "../../runtimes/codex/.codex/config.toml",
+    "../../runtimes/codex/.codex/astra-orchestra/routing-policy.mjs",
+    "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs",
+    "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs",
+    "../../runtimes/antigravity/.agents/hooks/pre-tool-side-effect-guard.mjs",
+    "../../runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs",
+    "../../runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs",
+    "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs",
+  ];
+
+  for (const rel of files) {
+    const file = fileURLToPath(new URL(rel, import.meta.url));
+    if (!existsSync(file)) continue;
+    const content = readFileSync(file, "utf8");
+    assert.equal(
+      /experiments[\\/]jev|jev-latest|api\.typesafe\.ai|TYPESAFE_API_KEY/i.test(content),
+      false,
+      `Active runtime file ${rel} must not depend on Jev`,
+    );
+    const activeLines = content.split("\n").filter((line) => /(?:model|worker|reviewer|executor|profile)\s*[:=]/i.test(line));
+    assert.equal(
+      activeLines.some((line) => /jev|typesafe/i.test(line)),
+      false,
+      `Active runtime file ${rel} must not route to Jev/TypeSafe`,
+    );
+  }
+});
+
 test("AGY Dream source contains no benchmark-specific contamination", () => {
   const dreamDir = fileURLToPath(new URL("../../runtimes/antigravity/.agents/dream", import.meta.url));
   const files = readdirSync(dreamDir)

@@ -42,3 +42,27 @@ Multi-agent coordination can easily exhaust context windows and inflate token co
 ## 5. Direct Action Fast Path
 
 Routine operational requests ("run tests", "show git status", "commit changes") do not spawn worker subagents, author scope contracts, or run multi-step acceptance ceremonies. They execute via single-command operations and conclude directly.
+
+---
+
+## 6. Semantic Retrieval Shadow Layer
+
+Orchestra 0.7 introduces an experimental Jev semantic lab under `experiments/jev/`.
+
+The provider transcript remains append-only/provider-managed. Jev never compacts or deletes transcript history.
+
+The external-memory path is:
+
+```text
+factual memory
+ -> deterministic candidate generation
+ -> sanitized bounded projection
+ -> Jev semantic ranking
+ -> deterministic top-K/byte budget
+ -> original factual reference
+```
+
+Mandatory packet content is never rankable. Goal, Scope Contract, path boundaries, acceptance criteria, required evidence, retry state and governance state remain deterministic.
+
+Jev currently runs offline/shadow only. Retrieval Assist code is fail-closed behind a factual evaluation report, matching human approval and an explicit local feature flag.
+

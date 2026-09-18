@@ -33,6 +33,7 @@ export const PRESERVED_PROJECT_PATHS = Object.freeze([
   ".agents/telemetry",
   ".agents/dream-data",
   ".agents/artifacts",
+  ".agents/semantic",
   ".agents/runtime-management",
 ]);
 
@@ -108,6 +109,7 @@ function ensureProjectStateDirs(targetDir) {
     ".agents/telemetry",
     ".agents/artifacts",
     ".agents/artifacts/outputs",
+    ".agents/semantic",
     ".agents/runtime-management/backups",
   ];
   for (const rel of dirs) mkdirSync(join(targetDir, rel), { recursive: true });
@@ -118,6 +120,7 @@ function ensureProjectStateDirs(targetDir) {
     ".agents/telemetry/.gitkeep",
     ".agents/artifacts/.gitkeep",
     ".agents/artifacts/outputs/.gitkeep",
+    ".agents/semantic/.gitkeep",
   ];
   for (const rel of keepFiles) {
     const path = join(targetDir, rel);

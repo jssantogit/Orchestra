@@ -206,3 +206,18 @@ node scripts/contamination-check.mjs
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
+
+### Semantic Memory Shadow Lab (0.7)
+
+Orchestra includes an optional TypeSafe AI Jev experiment for **semantic priority with zero authority**.
+
+- provider transcripts remain under Claude/Codex/Gemini native context management;
+- deterministic candidate generation narrows factual Orchestra memory before Jev;
+- outbound projections are bounded, secret-redacted and exclude raw transcripts/stdout/reasoning;
+- Jev scores are `authority=NONE` and never satisfy Evidence Contracts, routing, acceptance or Human Gates;
+- Dream analysis writes immutable sidecars rather than changing sealed worlds;
+- Retrieval Assist is implemented but fail-closed until factual evaluation + matching human approval + local feature flag;
+- active Codex/Antigravity runtime files are firewall-tested to reject Jev routing/imports.
+
+See `experiments/jev/README.md` and `docs/superpowers/specs/2026-09-18-orchestra-jev-semantic-memory.md`.
+

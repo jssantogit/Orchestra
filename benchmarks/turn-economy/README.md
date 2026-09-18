@@ -60,6 +60,15 @@ benchmarks/turn-economy/
 | `subagent_invocations` | Exact (events) | Exact (`invoke_subagent` hook) | `DIRECT_COUNTER` | Subagent instances spawned |
 | `forced_stop_continuations`| N/A | Exact (`Stop` hook) | `DIRECT_COUNTER` | Turns forced back by Stop Guard |
 | `advisory_injections` | N/A | Exact (`PreInvocation` hook) | `DIRECT_COUNTER` | Ephemeral system advisories entered into context |
+| `jev_calls` | Optional lab metric | Optional lab metric | `DIRECT_COUNTER` | Jev semantic-ranking requests; zero in normal runtime unless shadow telemetry exists |
+| `jev_latency_ms` | Optional lab metric | Optional lab metric | `ACCUMULATED_COUNTER` | Total Jev request latency |
+| `jev_candidates` | Optional lab metric | Optional lab metric | `DIRECT_COUNTER` | Deterministically generated candidates considered for semantic ranking |
+| `jev_ranked_items` | Optional lab metric | Optional lab metric | `DIRECT_COUNTER` | Candidate items scored by Jev |
+| `jev_candidate_bytes` / `jev_selected_bytes` | Optional lab metric | Optional lab metric | `DIRECT_COUNTER` | Counterfactual auxiliary-context bytes before/after ranking |
+| `potential_context_reduction` | Optional lab metric | Optional lab metric | `DERIVED_COUNTER` | Counterfactual reduction only; never treated as realized provider token savings |
+| `future_use_recall_at_k` | Optional lab metric | Optional lab metric | `DERIVED_COUNTER` | Recall against later factual references |
+| `critical_reference_recall` | Optional lab metric | Optional lab metric | `DERIVED_COUNTER` | Recall for pinned/critical references; required to remain 1.0 for activation |
+| `false_low_relevance` | Optional lab metric | Optional lab metric | `DERIVED_COUNTER` | Fraction of future-used items Jev scored at or below the low-relevance threshold |
 
 ## Formal Definition of Model Turn
 
@@ -117,3 +126,17 @@ node benchmarks/turn-economy/run.mjs --runtime antigravity --task status
 ```bash
 npm run test:turn-economy
 ```
+
+### 4. Jev Semantic Counterfactual Evaluation
+
+No Jev call is made during the normal Turn Economy suite.
+
+```bash
+# Offline deterministic/fake Jev evaluation across status/lookup/simple/multi/investigation/critical.
+npm run benchmark:jev
+
+# Live shadow evaluation against TypeSafe Jev; sends only bounded synthetic candidate metadata.
+TYPESAFE_API_KEY=... npm run benchmark:jev -- --live
+```
+
+The Jev suite evaluates semantic relevance and future-use recall. It does not alter runtime behavior and does not count counterfactual byte reduction as realized token savings.

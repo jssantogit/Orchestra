@@ -22,7 +22,7 @@ test("ARCH-RUNTIME-01: managed boundary excludes project state and Dream history
     ".agents/hooks.json",
     "GEMINI.md",
   ]);
-  for (const forbidden of [".agents/state", ".agents/telemetry", ".agents/dream-data", ".agents/artifacts", ".agents/rules"]) {
+  for (const forbidden of [".agents/state", ".agents/telemetry", ".agents/dream-data", ".agents/artifacts", ".agents/semantic", ".agents/rules"]) {
     assert.equal(MANAGED_RUNTIME_PATHS.includes(forbidden), false);
     assert.equal(PRESERVED_PROJECT_PATHS.includes(forbidden), true);
   }
