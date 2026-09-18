@@ -509,20 +509,28 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
               }
             }
 
-            const isTestCmd = /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd) || cmd.includes("node --test");
-            if (isTestCmd) {
+            if (exitCode !== null) {
               const stepIdx = typeof step.step_index === "number" ? step.step_index : i;
-              const transcriptEvidenceId = `child:${childConvId}:step:${stepIdx}:tool:${tIdx}`;
+              const transcriptEvidenceId = "child:" + childConvId + ":step:" + stepIdx + ":tool:" + tIdx;
               const latestMutationStepBeforeValidation = mutationStepIndices.filter((idx) => idx < i).pop() ?? null;
               const mutationAfterValidation = mutationStepIndices.some((idx) => idx > i);
               const fresh = !mutationAfterValidation && exitCode === 0;
 
+              const classified = classifyExecutionEvidence(
+                cmd,
+                exitCode,
+                "",
+                0,
+                null,
+                null,
+                activeState.mutationSeq || 0,
+              );
               const ev = {
+                ...classified,
                 executionId: null,
                 transcriptEvidenceId,
                 command: cmd,
                 exitCode,
-                mutationSeq: null,
                 actorRole: childRole,
                 actorId: childConvId,
                 conversationId: childConvId,
@@ -535,10 +543,8 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 mutationAfterValidation,
                 fresh,
                 timestamp: step.created_at || new Date().toISOString(),
-                type: "TEST_RUN",
               };
 
-              // Deduplicate strictly by transcriptEvidenceId or non-null executionId
               const existingIdx = activeState.evidenceLedger.findIndex((e) => {
                 if (!e) return false;
                 if (e.transcriptEvidenceId && e.transcriptEvidenceId === transcriptEvidenceId) return true;
@@ -552,13 +558,16 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 activeState.evidenceLedger.push(ev);
               }
 
-              if (isWorkerRole(childRole)) {
+              if (isWorkerRole(childRole) && (
+                ev.type !== "GENERIC_COMMAND_RESULT"
+                || activeState.scopeContract?.requiredEvidence
+              )) {
                 lastWorkerValidationEv = ev;
               } else if (childRole === "REVIEWER") {
                 activeState.reviewerValidationObserved = true;
                 activeState.reviewerValidationCommand = cmd;
                 activeState.reviewerValidationExitCode = exitCode;
-              } else {
+              } else if (!isWorkerRole(childRole)) {
                 activeState.unknownValidationObserved = true;
                 activeState.unknownValidationCommand = cmd;
                 activeState.unknownValidationExitCode = exitCode;
