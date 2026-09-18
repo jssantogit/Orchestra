@@ -2629,11 +2629,20 @@ export function classifyExecutionEvidence(commandLine, exitCode = 0, output = ""
 
   if (/\b(?:pnpm(?:\s+run)?\s+typecheck|tsc\b)/.test(cmd)) {
     type = "TYPECHECK";
-  } else if (/\b(?:pnpm(?:\s+run)?\s+test|node\s+--test|vitest|jest)\b/.test(cmd)) {
+  } else if (
+    /\b(?:pnpm(?:\s+run)?\s+test|node\s+--test|vitest|jest)\b/.test(cmd)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+[^\n]*(?:test|Test)(?:\s|$)/.test(cmd)
+  ) {
     type = "TEST_RUN";
-  } else if (/\b(?:pnpm(?:\s+run)?\s+build)\b/.test(cmd)) {
+  } else if (
+    /\b(?:pnpm(?:\s+run)?\s+build)\b/.test(cmd)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+[^\n]*(?:build|assemble|compile)(?:\w*)?(?:\s|$)/i.test(cmd)
+  ) {
     type = "BUILD";
-  } else if (/\b(?:pnpm(?:\s+run)?\s+lint|eslint)\b/.test(cmd)) {
+  } else if (
+    /\b(?:pnpm(?:\s+run)?\s+lint|eslint)\b/.test(cmd)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+[^\n]*(?:lint|ktlint|spotless)(?:\w*)?(?:\s|$)/i.test(cmd)
+  ) {
     type = "LINT";
   } else if (/\b(?:benchmark|bench)\b/i.test(cmd)) {
     type = "BENCHMARK";
@@ -4170,6 +4179,7 @@ export function isValidationCommand(cmd) {
 
   return (
     /\b(?:pnpm(?:\s+run)?\s+(?:test|typecheck|lint|build)|npm(?:\s+run)?\s+(?:test|typecheck|lint|build)|yarn(?:\s+run)?\s+(?:test|typecheck|lint|build)|node\s+--test|vitest|jest|npx\s+(?:vitest|jest|tsc)|tsc(?:\s+--noEmit)?|pytest|cargo\s+test|go\s+test|git\s+diff\s+--check)\b/.test(trimmed)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+\S+/.test(trimmed)
   );
 }
 
