@@ -172,7 +172,7 @@ else
   report_fail "Antigravity routing policy tests failed"
 fi
 
-if node --test "${ROOT_DIR}/tests/evidence/first-class-evidence.test.mjs" >/dev/null 2>&1; then
+if node --test "${ROOT_DIR}/tests/evidence/first-class-evidence.test.mjs"; then
   report_pass "First-class evidence tests passed"
 else
   report_fail "First-class evidence tests failed"
