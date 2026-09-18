@@ -34,6 +34,7 @@ import {
 } from "../dream/policy-engine.mjs";
 import {
   captureBranchSeedIfArmed,
+  consumeExplorationTarget,
   resolveExplorationPolicyOverlay,
 } from "../dream/exploration-lab.mjs";
 import {
@@ -228,6 +229,12 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
         branch_ordinal: 0,
       },
       correlationKey: corrKey,
+    });
+    consumeExplorationTarget({
+      repoRoot,
+      decisionType: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
+      state: decState,
+      action: "INVESTIGATE_FIRST",
     });
   }
 
@@ -1649,25 +1656,6 @@ function main() {
                 return;
               }
 
-              // IMPLEMENT_DIRECT records immediately, so capture its BranchSeed at
-              // the exact factual decision snapshot. INVESTIGATE_FIRST is captured
-              // later in startPendingInvestigationRequirement, immediately before
-              // its factual DECISION is published.
-              const seedCapture = captureBranchSeedIfArmed({
-                repoRoot,
-                snapshot: snapRes.snapshot,
-                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
-                decisionState,
-                availableActions: invAvailable,
-                scopeContract: contractObj,
-                taskDescriptor: taskObj,
-                evidenceSummary: evidenceObj,
-                runtimeState: activeState,
-              });
-              if (seedCapture.captured) {
-                activeState.explorationSeedCaptured = seedCapture.seed_id;
-                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-              }
             }
           }
 
@@ -1790,6 +1778,12 @@ function main() {
                   branch_ordinal: 0,
                 },
                 correlationKey: corrKey,
+              });
+              consumeExplorationTarget({
+                repoRoot,
+                decisionType: DECISION_TYPES.RETRY_ACTION,
+                state: decisionState,
+                action: "REPLAN",
               });
 
               // Execute deterministic state transition
@@ -1975,6 +1969,12 @@ function main() {
           activeState.dreamRecordingError = decRes.reason || decRes.error_code || "DECISION_RECORD_FAILED";
           try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
         }
+        consumeExplorationTarget({
+          repoRoot,
+          decisionType: item.decision.decision_type,
+          state: item.decision.state,
+          action: item.decision.chosen_action,
+        });
       }
 
       console.log(JSON.stringify({ decision: "allow" }));
@@ -2715,6 +2715,21 @@ function main() {
               evidence: activeState.evidenceSummary || activeState.evidence || { tests: "UNKNOWN", typecheck: "UNKNOWN", build: "UNKNOWN", validation_fresh: false, scope_check: "UNKNOWN" },
             });
             if (snapRes.ok) {
+              const seedCapture = captureBranchSeedIfArmed({
+                repoRoot,
+                snapshot: snapRes.snapshot,
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                decisionState: invState,
+                availableActions: invAvailable,
+                scopeContract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
+                taskDescriptor: taskObj,
+                evidenceSummary: activeState.evidenceSummary || activeState.evidence || {},
+                runtimeState: activeState,
+              });
+              if (seedCapture.captured) {
+                activeState.explorationSeedCaptured = seedCapture.seed_id;
+              }
+
               const corrKey = dreamCorrelationKey({
                 conversationId: payload.conversationId || activeState.conversationId || "default",
                 stepIdx: payload.stepIdx ?? 0,
@@ -2740,6 +2755,12 @@ function main() {
                   branch_ordinal: 0,
                 },
                 correlationKey: corrKey,
+              });
+              consumeExplorationTarget({
+                repoRoot,
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                state: invState,
+                action: "IMPLEMENT_DIRECT",
               });
               if (directDecision.recorded) {
                 activeState.directInvestigationDecisionInFlight = {
