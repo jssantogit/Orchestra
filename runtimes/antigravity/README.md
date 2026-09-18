@@ -157,8 +157,8 @@ The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–H
 - **Prospective Physical Seeds**: A-D historical snapshots remain valid for Exact Replay, but physical exploration requires a Milestone E BranchSeed because older DECISION records intentionally do not contain the complete workspace payload/Scope Contract.
 - **Offline Policy Lab (Milestone F)**: Builds a deterministic sanitized `PolicyDevelopmentDataset`, freezes root lineages into an 80/20 TRAIN/HOLDOUT split, accepts at most two tool-less designer calls with up to four candidate JSON policies per call, and evaluates baseline/candidates through zero-model-call Exact Replay. Unsupported divergence is `NEEDS_EXPLORATION`; candidate artifacts never modify the active policy or online hooks.
 - **Zero-Impact Shadow Mode (Milestone G)**: Explicitly selected F candidates compute a private action only after the factual DECISION is published. Baseline execution remains authoritative; candidate actions never enter telemetry/model context or Scope Contract. CRITICAL/HUMAN_GATE are excluded. Canary review requires >=50 eligible decisions and <=20% UNKNOWN divergences; G never executes the candidate.
-- **Human-approved Canary (Milestone H)**: A ready Shadow report may enter a fixed 5% rollout only after explicit human confirmation. Selection is stable by factual task ID. Only NORMAL/local/reversible/noncritical tasks are eligible; Two-Key, external-side-effect and critical-path work is excluded. Policy/schema errors, illegal actions, governance attempts, evidence bypass, or exact proven regressions immediately roll Canary back to baseline routing.
-- **Human-only Promotion**: A healthy, fully observed Canary produces `READY_FOR_HUMAN_PROMOTION_REVIEW`, not activation. A second explicit human confirmation writes the content-addressed policy version and atomically replaces `.agents/dream-data/policies/active.json`; corruption falls back to static policy. Future Policy Lab cycles use the promoted active policy as baseline. Promoted-policy rollback is separately human-confirmed, restores the recorded predecessor, preserves all policy versions, and appends a `POLICY_ROLLBACK` history event.
+- **Human-approved Progressive Canary (Milestone H+)**: A ready Shadow report may enter a 5% rollout only after explicit human confirmation. The same deterministic task-ID bucket expands through nested 5% → 20% → 50% → 100% cohorts; every stage advance requires a fresh Canary report and a separate human `--confirm`. Only NORMAL/local/reversible/noncritical tasks are eligible; Two-Key, external-side-effect and critical-path work is excluded. Policy/schema errors, illegal actions, governance attempts, evidence bypass, or exact proven regressions immediately roll Canary back to baseline routing.
+- **Human-only Promotion**: Stage reports can only request the next human rollout approval; they never advance themselves. A healthy, fully observed 100% stage may produce `READY_FOR_HUMAN_PROMOTION_REVIEW`, not activation. A separate explicit human confirmation writes the content-addressed policy version and atomically replaces `.agents/dream-data/policies/active.json`; corruption falls back to static policy. Future Policy Lab cycles use the promoted active policy as baseline. Promoted-policy rollback is separately human-confirmed, restores the recorded predecessor, preserves all policy versions, and appends a `POLICY_ROLLBACK` history event.
 
 For architecture and specification details, see [docs/dream-layer.md](../../docs/dream-layer.md).
 
@@ -189,7 +189,7 @@ npm run dream:policy-lab -- help
 # Enable/report zero-impact Milestone G Shadow observation
 npm run dream:shadow -- help
 
-# Approve/report/rollback/promote Milestone H Canary
+# Approve/report/advance/rollback/promote progressive Canary
 npm run dream:canary -- help
 ```
 
@@ -199,4 +199,4 @@ npm run dream:canary -- help
 
 - Requires Google Antigravity environment with support for tool hooks (`PreToolUse`, `PostToolUse`, `PreInvocation`, `Stop`).
 - Does not permit external model fallbacks (Claude, GPT, or Sonnet).
-- Automatic Canary ramping beyond the fixed 5% and automatic promotion remain intentionally out of scope; both require a new architectural review.
+- Automatic Canary stage advancement and automatic promotion remain forbidden. The supported 5% → 20% → 50% → 100% rollout is human-gated at every transition.

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
 import {
+  advanceCanaryStage,
   approveCanary,
   loadCanaryConfig,
   promoteCanary,
@@ -25,14 +26,15 @@ function parse(argv) {
 function print(value) { console.log(JSON.stringify(value, null, 2)); }
 function fail(message, code = 1) { console.error(message); process.exit(code); }
 function usage() {
-  console.log("Orchestra Dream Layer — Milestone H Human-approved Canary\n\n"
+  console.log("Orchestra Dream Layer — Human-approved Progressive Canary\n\n"
     + "approve  --repo <path> --shadow-report <id> --confirm\n"
     + "status   --repo <path>\n"
     + "report   --repo <path> [--session <canary-session-id>]\n"
+    + "advance  --repo <path> --canary-report <id> --confirm\n"
     + "rollback        --repo <path> --confirm\n"
     + "promote         --repo <path> --canary-report <id> --confirm\n"
     + "rollback-policy --repo <path> --confirm\n\n"
-    + "Canary traffic is fixed at 5%. Approval and final promotion are separate explicit human actions.");
+    + "Rollout stages are 5% -> 20% -> 50% -> 100%. Every stage advance and final promotion require separate explicit human confirmation.");
 }
 
 const { flags, positional } = parse(process.argv.slice(2));
@@ -63,6 +65,17 @@ if (command === "report") {
     canarySessionId: flags.session || null,
   });
   print(out); process.exit(out.summarized ? 0 : 4);
+}
+
+if (command === "advance") {
+  if (!flags["canary-report"]) fail("--canary-report is required");
+  if (flags.confirm !== true) fail("--confirm is required for human rollout-stage approval");
+  const out = advanceCanaryStage({
+    repoRoot,
+    canaryReportId: flags["canary-report"],
+    humanApproval: true,
+  });
+  print(out); process.exit(out.advanced ? 0 : 8);
 }
 
 if (command === "rollback") {
