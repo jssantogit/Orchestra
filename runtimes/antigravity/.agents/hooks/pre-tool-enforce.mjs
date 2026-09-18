@@ -1046,6 +1046,7 @@ function main() {
   const actorIdentityIsProvisional = actor.source === "HOOK_PAYLOAD_CORRELATION";
   const actorIdentityIsFactual = actor.source === "RUNTIME_IDENTITY" && actor.confidence === "HIGH";
   const actorHasFactualWorkerAuthority = isWorkerRole(actor.role) && actorIdentityIsFactual;
+  const actorHasOrchestratorAuthority = isOrchestratorRole(actor.role) && actor.confidence === "HIGH";
   const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
@@ -1065,6 +1066,14 @@ function main() {
       console.log(JSON.stringify({
         decision: "deny",
         reason: "Hierarchy violation: Workers and Reviewers cannot spawn or coordinate subagents. All cross-worker coordination must route through Orchestrator."
+      }));
+      return;
+    }
+
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "ORCHESTRATOR_IDENTITY_REQUIRED: Subagent definition and invocation require HIGH-confidence orchestrator identity bound to the active main conversation."
       }));
       return;
     }
@@ -1119,17 +1128,23 @@ function main() {
       activeState.conversationId = roleBindings.mainConversationId || convId;
       activeState.activeRole = "ORCHESTRATOR";
 
-      // Ensure orchestrator binding exists
+      // Ensure the already-authorized orchestrator binding exists without
+      // downgrading or overwriting stronger identity established earlier.
       if (!roleBindings.bindings) roleBindings.bindings = {};
       if (!roleBindings.conversations) roleBindings.conversations = {};
-      const orchRecord = {
-        role: "ORCHESTRATOR",
-        profile: "flash-orchestrator",
-        model: payload.modelName || "gemini-3.8-flash-medium",
-        source: "CONVERSATION_BOUND_IDENTITY",
-      };
-      roleBindings.bindings[convId] = orchRecord;
-      roleBindings.conversations[convId] = orchRecord;
+      const existingOrchestratorBinding = roleBindings.bindings[convId] || roleBindings.conversations[convId] || null;
+      if (!existingOrchestratorBinding) {
+        const orchRecord = {
+          conversationId: convId,
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          model: payload.modelName || "gemini-3.8-flash-medium",
+          source: actor.source || "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        };
+        roleBindings.bindings[convId] = orchRecord;
+        roleBindings.conversations[convId] = orchRecord;
+      }
 
       if (!Array.isArray(roleBindings.pendingSubagents)) {
         roleBindings.pendingSubagents = [];
