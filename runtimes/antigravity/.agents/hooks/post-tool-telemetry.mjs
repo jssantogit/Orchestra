@@ -144,6 +144,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         agentProfile: existing.profile || null,
         model: existing.model || payload.modelName || null,
         delegationKind: existing.delegationKind || null,
+        attempt: Number.isInteger(existing.attempt) ? existing.attempt : 0,
       };
     }
 
@@ -187,6 +188,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             parentConversationId,
             taskId: activeTaskId,
             benchmarkRunId: activeRunId,
+            attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
           });
           if (factualCandidates.length === 1) {
             matched = factualCandidates[0];
@@ -252,6 +254,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             agentProfile: matched.profile || matched.typeName || null,
             model: matched.model || payload.modelName || null,
             delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
           };
         }
 
@@ -275,6 +278,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             taskIdentifier: matched.taskIdentifier || activeTaskId || null,
             benchmarkRunId: matched.benchmarkRunId || activeRunId || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
             originToolCallId: matched.originToolCallId || matched.toolCallId || null,
             originStepIdx: matched.originStepIdx ?? null,
             pendingSeq: matched.seq ?? null,
@@ -302,6 +306,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             agentProfile: childProfile,
             model: childModel,
             delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
           };
         }
       }
@@ -889,6 +894,7 @@ function main() {
               source: actor.source,
               confidence: actor.confidence,
               delegationKind: actor.delegationKind,
+              attempt: Number.isInteger(actor.attempt) ? actor.attempt : 0,
             };
             activeState.implementationComplete = true;
           } else {
@@ -899,6 +905,7 @@ function main() {
               source: actor.source || "UNRESOLVED",
               confidence: actor.confidence || "LOW",
               delegationKind: actor.delegationKind || null,
+              attempt: Number.isInteger(actor.attempt) ? actor.attempt : null,
               timestamp: new Date().toISOString(),
             };
           }
@@ -965,6 +972,7 @@ function main() {
         recordedEvidence.confidence = actor.confidence || "LOW";
         recordedEvidence.evidenceSource = actor.source || "EXECUTION_HOOK";
         recordedEvidence.delegationKind = actor.delegationKind || null;
+        recordedEvidence.attempt = Number.isInteger(actor.attempt) ? actor.attempt : null;
 
         const existingIdx = activeState.evidenceLedger.findIndex(
           (e) => e && e.command === recordedEvidence.command && e.type === recordedEvidence.type && e.scope === recordedEvidence.scope
