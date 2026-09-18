@@ -20,6 +20,7 @@ These project/state-owned paths are preserved across update and rollback:
 - `.agents/telemetry/`
 - `.agents/dream-data/`
 - `.agents/artifacts/`
+- `.agents/semantic/`
 - `.agents/runtime-management/`
 
 Dream history, task state, telemetry, project rules, and generated artifacts therefore survive Orchestra runtime upgrades.
