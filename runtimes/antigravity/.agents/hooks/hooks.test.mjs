@@ -4292,3 +4292,53 @@ test("governance: WORK delegation preserves contract criticality for later Two-K
     cleanState();
   }
 });
+
+
+test("governance: corrupted authority state fails closed before tool authorization", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    const runRead = () => JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-state-parent",
+        toolCall: {
+          name: "view_file",
+          args: { AbsolutePath: resolve("README.md") },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    writeFileSync(".agents/state/active-state.json", "{broken-json", "utf8");
+    let out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ACTIVE_STATE_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "corrupt-state-parent",
+    }), "utf8");
+    writeFileSync(".agents/state/active-contract.json", "[]", "utf8");
+    out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ACTIVE_CONTRACT_INVALID_SHAPE/);
+
+    unlinkSync(".agents/state/active-contract.json");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "corrupt-state-parent",
+      bindings: [],
+      pendingSubagents: [],
+    }), "utf8");
+    out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_INVALID_SHAPE/);
+
+    writeFileSync(".agents/state/role-bindings.json", "{still-broken", "utf8");
+    out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_MALFORMED_JSON/);
+  } finally {
+    cleanState();
+  }
+});
