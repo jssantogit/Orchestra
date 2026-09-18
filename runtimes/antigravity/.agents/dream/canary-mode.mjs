@@ -15,6 +15,7 @@ import { dirname, resolve } from "node:path";
 
 import { sha256Canonical } from "./canonical.mjs";
 import { evaluatePolicy, POLICY_STATUS, validatePolicy, computePolicyId } from "./policy-engine.mjs";
+import { activatePolicy, loadRuntimePolicy } from "./policy-store.mjs";
 
 export const CANARY_CONFIG_SCHEMA = "orchestra.canary-config.v1";
 export const CANARY_APPROVAL_SCHEMA = "orchestra.canary-approval.v1";
@@ -859,7 +860,7 @@ export function summarizeCanarySession({ repoRoot, canarySessionId = null } = {}
   let status;
   if (rollbacks.length > 0 || session.status === "ROLLED_BACK") {
     status = "ROLLED_BACK";
-  } else if (outcomes.length === 0) {
+  } else if (outcomes.length === 0 || outcomes.length !== executed.length) {
     status = "COLLECT_CANARY_OUTCOMES";
   } else {
     status = "READY_FOR_HUMAN_PROMOTION_REVIEW";
@@ -888,3 +889,121 @@ export function summarizeCanarySession({ repoRoot, canarySessionId = null } = {}
   atomicJson(path, report);
   return { summarized: true, report, path };
 }
+
+function loadCanaryReport(repoRoot, canaryReportId) {
+  const path = resolve(repoRoot, ROOT, "reports", canaryReportId + ".json");
+  if (!existsSync(path)) return { ok: false, reason: "CANARY_REPORT_MISSING" };
+  let report;
+  try {
+    report = readJson(path);
+  } catch {
+    return { ok: false, reason: "CANARY_REPORT_INVALID" };
+  }
+  if (
+    report?.schema !== CANARY_REPORT_SCHEMA
+    || report.report_id !== canaryReportId
+    || reportId(report) !== canaryReportId
+    || report.status !== "READY_FOR_HUMAN_PROMOTION_REVIEW"
+    || report.automatic_promotion_allowed !== false
+    || report.human_promotion_required !== true
+    || report.rollback_count !== 0
+    || report.exact_regression_count !== 0
+    || report.completed_canary_outcomes <= 0
+    || report.completed_canary_outcomes !== report.executed_canary_decisions
+  ) {
+    return { ok: false, reason: "CANARY_REPORT_NOT_PROMOTABLE" };
+  }
+  return { ok: true, report, path };
+}
+
+export function promoteCanary({
+  repoRoot,
+  canaryReportId,
+  humanApproval = false,
+} = {}) {
+  if (!repoRoot || !canaryReportId) {
+    return { promoted: false, reason: "INVALID_PROMOTION_INPUT" };
+  }
+  if (humanApproval !== true) {
+    return { promoted: false, reason: "EXPLICIT_HUMAN_PROMOTION_REQUIRED" };
+  }
+
+  const reportResult = loadCanaryReport(repoRoot, canaryReportId);
+  if (!reportResult.ok) return { promoted: false, ...reportResult };
+  const report = reportResult.report;
+
+  const current = loadCanaryConfig(repoRoot);
+  if (
+    !current.active
+    || current.config.canary_session_id !== report.canary_session_id
+    || current.config.candidate_policy_id !== report.candidate_policy_id
+    || current.config.baseline_policy_id !== report.baseline_policy_id
+  ) {
+    return { promoted: false, reason: "CANARY_SESSION_NOT_ACTIVE_FOR_REPORT" };
+  }
+
+  const runtime = loadRuntimePolicy(repoRoot);
+  if (
+    !runtime.ok
+    || runtime.policy?.policy_id !== report.baseline_policy_id
+    || runtime.diagnostic
+  ) {
+    return {
+      promoted: false,
+      reason: "PROMOTION_BASELINE_CHANGED_OR_INVALID",
+      observed_policy_id: runtime.policy?.policy_id || null,
+      diagnostic: runtime.diagnostic || runtime.reason || null,
+    };
+  }
+
+  const candidate = loadCandidate(
+    repoRoot,
+    report.candidate_policy_id,
+    report.baseline_policy_id,
+  );
+  if (!candidate.ok) return { promoted: false, ...candidate };
+
+  const activation = activatePolicy({
+    repoRoot,
+    policy: candidate.policy,
+    canaryReportId: report.report_id,
+    canarySessionId: report.canary_session_id,
+  });
+  if (!activation.activated) return { promoted: false, ...activation };
+
+  const promotedSession = {
+    ...current.config,
+    status: "PROMOTED",
+    promoted_policy_id: candidate.policy.policy_id,
+    canary_report_id: report.report_id,
+    promoted_at: new Date().toISOString(),
+  };
+  promotedSession.config_hash = configHash(promotedSession);
+  const sessionPath = resolve(
+    repoRoot,
+    ROOT,
+    "sessions",
+    current.config.canary_session_id + ".json",
+  );
+  atomicJson(sessionPath, promotedSession);
+  try { rmSync(activeConfigPath(repoRoot), { force: true }); } catch {}
+
+  const event = appendEvent(repoRoot, report.canary_session_id, "POLICY_PROMOTED", {
+    policy_id: candidate.policy.policy_id,
+    canary_report_id: report.report_id,
+    pointer_hash: activation.pointer.pointer_hash,
+    approved_by: "HUMAN_EXPLICIT_CLI",
+  });
+
+  return {
+    promoted: true,
+    policy_id: candidate.policy.policy_id,
+    canary_session_id: report.canary_session_id,
+    active_pointer: activation.pointer,
+    pointer_path: activation.pointer_path,
+    version_path: activation.version_path,
+    history_path: activation.history_path,
+    event: event.event,
+  };
+}
+
