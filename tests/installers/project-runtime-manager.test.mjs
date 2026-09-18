@@ -69,12 +69,14 @@ function seedPreservedProjectData(project) {
   mkdirSync(join(project, ".agents", "telemetry"), { recursive: true });
   mkdirSync(join(project, ".agents", "dream-data", "worlds"), { recursive: true });
   mkdirSync(join(project, ".agents", "artifacts", "outputs"), { recursive: true });
+  mkdirSync(join(project, ".agents", "semantic"), { recursive: true });
 
   writeFileSync(join(project, ".agents", "rules", "tsuzuki.md"), "project rule\n");
   writeFileSync(join(project, ".agents", "state", "custom-state.json"), "{\"keep\":true}\n");
   writeFileSync(join(project, ".agents", "telemetry", "events.jsonl"), "{\"event\":\"keep\"}\n");
   writeFileSync(join(project, ".agents", "dream-data", "worlds", "history.json"), "{\"keep\":true}\n");
   writeFileSync(join(project, ".agents", "artifacts", "outputs", "artifact.txt"), "keep\n");
+  writeFileSync(join(project, ".agents", "semantic", "jev-approval.json"), "{\"keep\":true}\n");
 }
 
 function assertPreservedProjectData(project) {
@@ -83,6 +85,7 @@ function assertPreservedProjectData(project) {
   assert.equal(readFileSync(join(project, ".agents", "telemetry", "events.jsonl"), "utf8"), "{\"event\":\"keep\"}\n");
   assert.equal(readFileSync(join(project, ".agents", "dream-data", "worlds", "history.json"), "utf8"), "{\"keep\":true}\n");
   assert.equal(readFileSync(join(project, ".agents", "artifacts", "outputs", "artifact.txt"), "utf8"), "keep\n");
+  assert.equal(readFileSync(join(project, ".agents", "semantic", "jev-approval.json"), "utf8"), "{\"keep\":true}\n");
 }
 
 test("project runtime: clean install writes metadata and passes project doctor", () => {
