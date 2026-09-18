@@ -168,6 +168,11 @@ export function federateDelegatedEvidence({
     const sameChild = ev.conversationId === childConversationId || ev.actorId === childConversationId;
     if (!sameChild) return ev;
 
+    const currentTaskId = activeTaskId(activeState);
+    if (ev.binding?.taskId && currentTaskId && ev.binding.taskId !== currentTaskId) {
+      return ev;
+    }
+
     const evAttempt = Number.isInteger(ev.attempt)
       ? ev.attempt
       : Number.isInteger(ev.binding?.attempt)
