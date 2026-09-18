@@ -936,6 +936,21 @@ function main() {
         } catch {}
       }
 
+      if (subagents.length > 1) {
+        const allReviewers = subagents.every((sub) => {
+          const typeName = String(sub.TypeName || sub.name || "");
+          const roleStr = String(sub.Role || sub.role || typeName).toLowerCase();
+          return roleStr.includes("reviewer") || typeName === "flash-reviewer";
+        });
+        if (!allReviewers) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: "PARALLEL_MUTATING_SUBAGENTS_UNSUPPORTED: Multi-subagent batches are reserved for the read-only Two-Key reviewer pair. Delegate workers/investigators one at a time so scope contracts and causal identity remain unambiguous.",
+          }));
+          return;
+        }
+      }
+
       // Check retry budget monotonicity using factual state only.
       // Never manufacture a retry attempt or remaining budget when the control-plane state is incomplete.
       if (activeState.retry || (activeState.attempt && activeState.attempt > 0) || activeState.retryReason || activeState.retry_reason) {
