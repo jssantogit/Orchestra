@@ -18,6 +18,7 @@ import { evaluateLiveEgress } from "../../experiments/jev/egress-policy.mjs";
 import {
   createProjectEvaluationReport,
   createLocalApproval,
+  checkRetrievalAssistGate,
   writeEvaluationReport,
   writeLocalApproval,
 } from "../../experiments/jev/activation-gate.mjs";
@@ -157,6 +158,88 @@ test("retrieval assist is identity fallback without flag/report/approval", () =>
   assert.equal(result.active, false);
   assert.equal(result.fallback_identity, true);
   assert.equal(result.packet, core);
+});
+
+test("unlabeled shadow reports can never become Retrieval Assist evidence", () => {
+  const root = mkdtempSync(join(tmpdir(), "jev-unlabeled-"));
+  try {
+    const telemetryDir = join(root, ".agents", "telemetry");
+    mkdirSync(telemetryDir, { recursive: true });
+    const reports = Array.from({ length: 40 }, (_, i) => ({
+      schema: "orchestra.jev-shadow-report.v1",
+      shadow_id: `unlabeled-${i}`,
+      task_category: ["status", "lookup", "simple", "multi", "investigation"][i % 5],
+      jev_calls: 1,
+      potential_context_reduction: 0.9,
+    }));
+    writeFileSync(join(telemetryDir, "jev-shadow.jsonl"), reports.map(JSON.stringify).join("\n")+"\n");
+    const report = createProjectEvaluationReport(root);
+    assert.equal(report.source_labeled_run_count, 0);
+    assert.equal(report.eligible_for_retrieval_assist, false);
+    assert.ok(report.violations.includes("INSUFFICIENT_SAMPLES"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("malformed or post-approval shadow telemetry invalidates Retrieval Assist", () => {
+  const root = mkdtempSync(join(tmpdir(), "jev-tamper-"));
+  try {
+    const telemetryDir = join(root, ".agents", "telemetry");
+    mkdirSync(telemetryDir, { recursive: true });
+    const lines = [];
+    for (let i = 0; i < 30; i++) {
+      const shadowId = `s-${i}`;
+      lines.push(JSON.stringify({
+        schema: "orchestra.jev-shadow-report.v1",
+        shadow_id: shadowId,
+        task_category: ["status", "lookup", "simple", "multi", "investigation"][i % 5],
+        jev_calls: 1,
+        jev_candidate_bytes: 1000,
+        jev_selected_bytes: 400,
+        potential_context_reduction: 0.6,
+        fallback_identity_failures: 0,
+      }));
+      lines.push(JSON.stringify({
+        schema: "orchestra.jev-shadow-label.v1",
+        shadow_id: shadowId,
+        future_use_recall_at_k: 1,
+        future_use_precision_at_k: 0.8,
+        critical_reference_recall: 1,
+        false_low_relevance: 0,
+        false_prune_risk: 0,
+        tool_reexecution_delta: 0,
+        acceptance_delta: 0,
+      }));
+    }
+    const telemetryPath = join(telemetryDir, "jev-shadow.jsonl");
+    writeFileSync(telemetryPath, lines.join("\n")+"\n");
+    const report = createProjectEvaluationReport(root);
+    assert.equal(report.eligible_for_retrieval_assist, true);
+    writeEvaluationReport(root, report);
+    writeLocalApproval(root, createLocalApproval({ report }));
+
+    let gate = checkRetrievalAssistGate({
+      projectRoot: root,
+      env: { ORCHESTRA_JEV_RETRIEVAL_ASSIST: "1" },
+    });
+    assert.equal(gate.allowed, true);
+
+    writeFileSync(telemetryPath, JSON.stringify({ schema: "orchestra.jev-shadow-report.v1", shadow_id: "new" })+"\n", { flag: "a" });
+    gate = checkRetrievalAssistGate({
+      projectRoot: root,
+      env: { ORCHESTRA_JEV_RETRIEVAL_ASSIST: "1" },
+    });
+    assert.equal(gate.allowed, false);
+    assert.ok(gate.reasons.includes("SHADOW_TELEMETRY_CHANGED"));
+
+    writeFileSync(telemetryPath, "{malformed-json}\n", { flag: "a" });
+    const malformedReport = createProjectEvaluationReport(root);
+    assert.equal(malformedReport.eligible_for_retrieval_assist, false);
+    assert.ok(malformedReport.violations.includes("MALFORMED_SHADOW_TELEMETRY"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("retrieval assist activates only with eligible report + matching human approval + feature flag", () => {
