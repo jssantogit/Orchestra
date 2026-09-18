@@ -48,9 +48,9 @@ jobs:
         run: |
           npm run test:turn-economy
 
-      - name: Run Dream Architecture Invariants
+      - name: Run Architecture Invariants
         run: |
-          node --test tests/architecture-invariants/dream-authority.test.mjs
+          npm run test:architecture-invariants
 
       - name: Run Cross-Runtime Firewall Tests
         run: |
