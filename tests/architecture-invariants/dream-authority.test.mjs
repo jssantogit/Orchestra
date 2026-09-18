@@ -1670,10 +1670,27 @@ test("ARCH-024: Pending Uniqueness Is Not Factual Child Identity", () => {
     assert.equal(bindings.pendingSubagents[0].consumed, false);
     assert.equal(bindings.bindings[child], undefined);
 
-    // B. A factual child record with conflicting spawn identity must also fail closed.
+    // B. A factual child record missing the known spawn identity must fail closed.
     const subagentsDir = resolve(brainBaseDir, parent, ".system_generated/subagents");
     mkdirSync(subagentsDir, { recursive: true });
     const childRecordPath = resolve(subagentsDir, child + ".json");
+    writeFileSync(childRecordPath, JSON.stringify({
+      conversationId: child,
+      subagentDescriptor: {
+        typeName: "flash-medium-worker",
+        role: "Worker",
+      },
+    }, null, 2), "utf-8");
+
+    res = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify(childWrite),
+      encoding: "utf-8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }).trim());
+    assert.equal(res.decision, "deny");
+    assert.match(res.reason, /ROLE_IDENTITY_UNRESOLVED/);
+
+    // C. A conflicting spawn step is equally non-factual for this pending slot.
     writeFileSync(childRecordPath, JSON.stringify({
       conversationId: child,
       subagentDescriptor: {
@@ -1694,7 +1711,7 @@ test("ARCH-024: Pending Uniqueness Is Not Factual Child Identity", () => {
     bindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
     assert.equal(bindings.pendingSubagents[0].consumed, false);
 
-    // C. Exact child conversation + descriptor + matching spawn step is factual.
+    // D. Exact child conversation + descriptor + matching spawn step is factual.
     writeFileSync(childRecordPath, JSON.stringify({
       conversationId: child,
       subagentDescriptor: {
