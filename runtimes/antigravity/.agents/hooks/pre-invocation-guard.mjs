@@ -86,22 +86,41 @@ function main() {
   }
 
   const convId = payload.conversationId || null;
+  const knownMainConversationId = roleBindings.mainConversationId || state.conversationId || null;
+  const hasPendingDelegations = Array.isArray(roleBindings.pendingSubagents)
+    && roleBindings.pendingSubagents.some((p) => !p?.consumed);
+
   if (convId && !roleBindings.mainConversationId) {
-    roleBindings.mainConversationId = convId;
-    if (!roleBindings.bindings) roleBindings.bindings = {};
-    if (!roleBindings.conversations) roleBindings.conversations = {};
-    const orchRecord = {
-      role: "ORCHESTRATOR",
-      profile: "flash-orchestrator",
-      model: payload.modelName || "gemini-3.8-flash-medium",
-      source: "RUNTIME_BOOTSTRAP",
-    };
-    roleBindings.bindings[convId] = orchRecord;
-    roleBindings.conversations[convId] = orchRecord;
-    try {
-      mkdirSync(dirname(roleBindingsPath), { recursive: true });
-      writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
-    } catch {}
+    const conflictsWithKnownMain = Boolean(
+      knownMainConversationId && convId !== knownMainConversationId
+    );
+
+    if (!conflictsWithKnownMain && !hasPendingDelegations) {
+      roleBindings.mainConversationId = convId;
+      if (!roleBindings.bindings) roleBindings.bindings = {};
+      if (!roleBindings.conversations) roleBindings.conversations = {};
+      const orchRecord = {
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+        source: "RUNTIME_BOOTSTRAP",
+        confidence: "HIGH",
+      };
+      roleBindings.bindings[convId] = orchRecord;
+      roleBindings.conversations[convId] = orchRecord;
+      state.conversationId = state.conversationId || convId;
+      try {
+        mkdirSync(dirname(roleBindingsPath), { recursive: true });
+        writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
+      } catch {}
+    } else {
+      state.identityBootstrapRejected = {
+        conversationId: convId,
+        knownMainConversationId,
+        reason: conflictsWithKnownMain ? "KNOWN_MAIN_MISMATCH" : "PENDING_DELEGATIONS_EXIST",
+        timestamp: new Date().toISOString(),
+      };
+    }
   }
 
   if (!state.activeRole && !state.role) {
