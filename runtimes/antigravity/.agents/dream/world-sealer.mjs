@@ -402,17 +402,27 @@ export function sealWorld({
     worldId ||
     `world-${world_manifest_hash.slice(7, 23)}`;
 
+  // Detach the sealed world from caller-owned event objects. Events are the
+  // factual source of truth; decisions/outcomes are materialized projections.
+  const sealedEvents = orderedEvents.map((event) => structuredClone(event));
+  const sealedDecisions = sealedEvents
+    .filter((event) => event?.type === "DECISION" || event?.schema === DREAM_SCHEMAS.DECISION)
+    .map((event) => structuredClone(event));
+  const sealedOutcomes = sealedEvents
+    .filter((event) => event?.type === "DECISION_OUTCOME" || event?.schema === DREAM_SCHEMAS.OUTCOME)
+    .map((event) => structuredClone(event));
+
   const world = {
     schema: DREAM_SCHEMAS.WORLD,
     world_id: generatedWorldId,
     root_snapshot_id: resolvedRootSnapshotId,
-    runtime_fingerprint: resolvedRuntimeFp,
-    event_hashes,
+    runtime_fingerprint: structuredClone(resolvedRuntimeFp),
+    event_hashes: [...event_hashes],
     world_manifest_hash,
     status: "SEALED",
-    decisions: orderedDecisions,
-    outcomes: orderedOutcomes,
-    events: orderedEvents,
+    decisions: sealedDecisions,
+    outcomes: sealedOutcomes,
+    events: sealedEvents,
     created_at: new Date().toISOString(),
   };
 
@@ -500,12 +510,15 @@ export function validateWorld(world) {
     (ev) => ev?.type === "DECISION_OUTCOME" || ev?.schema === DREAM_SCHEMAS.OUTCOME
   );
 
-  if (decisions.length !== eventDecisions.length) {
+  const hasDecisionProjection = Object.prototype.hasOwnProperty.call(world, "decisions");
+  const hasOutcomeProjection = Object.prototype.hasOwnProperty.call(world, "outcomes");
+
+  if (hasDecisionProjection && decisions.length !== eventDecisions.length) {
     errors.push(
       `WORLD_DECISION_PROJECTION_COUNT_MISMATCH: decisions=${decisions.length}, event_decisions=${eventDecisions.length}`
     );
   }
-  if (outcomes.length !== eventOutcomes.length) {
+  if (hasOutcomeProjection && outcomes.length !== eventOutcomes.length) {
     errors.push(
       `WORLD_OUTCOME_PROJECTION_COUNT_MISMATCH: outcomes=${outcomes.length}, event_outcomes=${eventOutcomes.length}`
     );
@@ -529,8 +542,8 @@ export function validateWorld(world) {
     }
   };
 
-  compareProjection(decisions, eventDecisions, "DECISION");
-  compareProjection(outcomes, eventOutcomes, "OUTCOME");
+  if (hasDecisionProjection) compareProjection(decisions, eventDecisions, "DECISION");
+  if (hasOutcomeProjection) compareProjection(outcomes, eventOutcomes, "OUTCOME");
 
   return { valid: errors.length === 0, errors };
 }
