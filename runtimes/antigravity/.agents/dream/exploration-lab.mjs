@@ -317,8 +317,10 @@ export function captureBranchSeedIfArmed({
   if (runtimeState?.state === "HUMAN_GATE" || runtimeState?.humanGateRequired) { consumeArm(repoRoot); return { captured: false, reason: "EXPLORATION_INELIGIBLE_HUMAN_GATE" }; }
   if (!snapshot?.snapshot_id || !snapshot?.workspace_fingerprint) { consumeArm(repoRoot); return { captured: false, reason: "EXPLORATION_SEED_SNAPSHOT_INVALID" }; }
   if (!Array.isArray(availableActions) || availableActions.length < 2) { consumeArm(repoRoot); return { captured: false, reason: "EXPLORATION_NO_ALTERNATIVE_ACTION" }; }
-  const ephemeral = ephemeralKeys(scopeContract || {});
-  if (ephemeral.length) { consumeArm(repoRoot); return { captured: false, reason: "BRANCH_SEED_EPHEMERAL_CONTRACT_UNSAFE", paths: ephemeral }; }
+  // BranchSeed preserves the Scope Contract's authority envelope while
+  // regenerating/removing runtime-only metadata (timestamps, conversation /
+  // execution correlations, locks, ports, etc.) instead of cloning it.
+  const cleanContract = stripEphemeral(scopeContract || {});
 
   const manifestResult = buildWorkspaceManifest(repoRoot);
   if (!manifestResult.ok) { consumeArm(repoRoot); return { captured: false, reason: manifestResult.reason }; }
@@ -351,7 +353,7 @@ export function captureBranchSeedIfArmed({
       state_hash: stateHash,
       available_actions: [...availableActions],
     },
-    scope_contract: structuredClone(scopeContract || {}),
+    scope_contract: cleanContract,
     task_descriptor: structuredClone(taskDescriptor || {}),
     evidence_summary: stripEphemeral(evidenceSummary || {}),
     runtime_fingerprint: snapshot.runtime_fingerprint,
