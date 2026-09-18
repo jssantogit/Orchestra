@@ -985,23 +985,49 @@ export function summarizeCanarySession({ repoRoot, canarySessionId = null } = {}
   if (!eventsResult.ok) return { summarized: false, reason: eventsResult.reason };
   const events = eventsResult.events;
   const session = sessionResult.session;
+  const stage = currentCanaryRolloutStage(session);
+  if (!stage) return { summarized: false, reason: "CANARY_ROLLOUT_STAGE_INVALID" };
+  const generation = rolloutGeneration(session);
 
-  const executed = events.filter((e) => e.type === "CANARY_DECISION_EXECUTED");
-  const outcomes = events.filter((e) => e.type === "CANARY_DECISION_OUTCOME");
+  const allExecuted = events.filter((e) => e.type === "CANARY_DECISION_EXECUTED");
+  const allOutcomes = events.filter((e) => e.type === "CANARY_DECISION_OUTCOME");
   const rollbacks = events.filter((e) => e.type === "CANARY_ROLLED_BACK");
   const regressions = rollbacks.filter(
     (e) => e.details?.trigger === "EXACT_PROVEN_REGRESSION"
   );
 
+  const eventGeneration = (event) => Number.isInteger(event.details?.rollout_generation)
+    ? event.details.rollout_generation
+    : 0;
+  const executed = allExecuted.filter((event) => eventGeneration(event) === generation);
+  const outcomes = allOutcomes.filter((event) => eventGeneration(event) === generation);
+
+  const stageGate = isFinalCanaryRolloutStage(session)
+    ? canPromoteFinalCanaryStage({
+        config: session,
+        executedDecisions: executed.length,
+        completedOutcomes: outcomes.length,
+        rollbackCount: rollbacks.length,
+      })
+    : canAdvanceCanaryRollout({
+        config: session,
+        executedDecisions: executed.length,
+        completedOutcomes: outcomes.length,
+        rollbackCount: rollbacks.length,
+      });
+
   let status;
   if (rollbacks.length > 0 || session.status === "ROLLED_BACK") {
     status = "ROLLED_BACK";
-  } else if (outcomes.length === 0 || outcomes.length !== executed.length) {
+  } else if (!stageGate.ready) {
     status = "COLLECT_CANARY_OUTCOMES";
-  } else {
+  } else if (isFinalCanaryRolloutStage(session)) {
     status = "READY_FOR_HUMAN_PROMOTION_REVIEW";
+  } else {
+    status = "READY_FOR_HUMAN_STAGE_ADVANCE";
   }
 
+  const nextStage = nextCanaryRolloutStage(session);
   const body = {
     schema: CANARY_REPORT_SCHEMA,
     canary_session_id: sessionId,
@@ -1009,13 +1035,24 @@ export function summarizeCanarySession({ repoRoot, canarySessionId = null } = {}
     baseline_policy_id: session.baseline_policy_id,
     shadow_report_id: session.shadow_report_id,
     traffic_percent: session.traffic_percent,
+    rollout_stage_index: stage.index,
+    rollout_stage_name: stage.name,
+    rollout_generation: generation,
+    minimum_completed_outcomes: stage.minimum_completed_outcomes,
+    next_traffic_percent: nextStage?.traffic_percent || null,
     executed_canary_decisions: executed.length,
     completed_canary_outcomes: outcomes.length,
+    cumulative_executed_canary_decisions: allExecuted.length,
+    cumulative_completed_canary_outcomes: allOutcomes.length,
     rollback_count: rollbacks.length,
     exact_regression_count: regressions.length,
+    stage_gate_ready: stageGate.ready,
+    stage_gate_reason: stageGate.reason || null,
     status,
+    automatic_stage_advance_allowed: false,
+    human_stage_advance_required: !isFinalCanaryRolloutStage(session),
     automatic_promotion_allowed: false,
-    human_promotion_required: true,
+    human_promotion_required: isFinalCanaryRolloutStage(session),
   };
   const report = {
     report_id: "canary-report-" + sha256Canonical(body).slice(7),
