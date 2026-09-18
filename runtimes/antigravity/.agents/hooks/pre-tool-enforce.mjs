@@ -33,6 +33,11 @@ import {
   validatePolicy,
 } from "../dream/policy-engine.mjs";
 import {
+  captureBranchSeedIfArmed,
+  enforceExplorationToolBoundary,
+  resolveExplorationPolicyOverlay,
+} from "../dream/exploration-lab.mjs";
+import {
   factualSubagentMatchesPending,
   filterFactualPendingCandidates,
   findFactualSubagentRecord,
@@ -86,9 +91,30 @@ function loadActivePolicy() {
   return { policy: parsed, diagnostic: null };
 }
 
-function evaluatePolicyWithFallback({ decisionType, state, availableActions, baselineAction }) {
-  const loaded = loadActivePolicy();
+function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableActions, baselineAction }) {
   const safeBaseline = typeof baselineAction === "string" ? baselineAction : "";
+  const exploration = resolveExplorationPolicyOverlay({
+    repoRoot,
+    decisionType,
+    state,
+    availableActions,
+    baselineAction: safeBaseline,
+  });
+  if (exploration?.active) {
+    if (exploration.blocked) {
+      return {
+        ok: false,
+        action: "",
+        source: "EXPLORATION_LAB",
+        policy_id: null,
+        baseline_action: safeBaseline,
+        policy_diagnostic: exploration.reason,
+        block_execution: true,
+      };
+    }
+    return exploration;
+  }
+  const loaded = loadActivePolicy();
   if (loaded.diagnostic) {
     return {
       ok: false,
@@ -171,7 +197,7 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
     const availableActions = deriveAvailableActions(req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY, decState);
     recordDecision({
       repoRoot,
-      snapshot: snapRes.snapshot,
+      snapshot: req.source_snapshot_id || snapRes.snapshot,
       decision: {
         decision_type: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
         state: decState,
@@ -1160,6 +1186,16 @@ function main() {
   const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
+  // Milestone E confinement runs only after factual governance/identity loading.
+  const explorationBoundary = enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs });
+  if (explorationBoundary.active && !explorationBoundary.allowed) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: explorationBoundary.reason || "EXPLORATION_BOUNDARY_DENIED",
+    }));
+    return;
+  }
+
   // Check 1: Worker or Reviewer spawning subagents, OR any subagent during DIRECT_ACTION
   if (toolName === "invoke_subagent" || toolName === "define_subagent") {
     if (isDirectAction) {
@@ -1577,12 +1613,36 @@ function main() {
                 facts,
                 state: decisionState,
               }) || "IMPLEMENT_DIRECT";
+              const seedCapture = captureBranchSeedIfArmed({
+                repoRoot,
+                snapshot: snapRes.snapshot,
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                decisionState,
+                availableActions: invAvailable,
+                scopeContract: contractObj,
+                taskDescriptor: taskObj,
+                evidenceSummary: evidenceObj,
+                runtimeState: activeState,
+              });
+              if (seedCapture.captured) {
+                activeState.explorationSeedCaptured = seedCapture.seed_id;
+                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+              }
+
               const invEval = evaluatePolicyWithFallback({
+                repoRoot,
                 decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
                 state: decisionState,
                 availableActions: invAvailable,
                 baselineAction: invBaseline,
               });
+              if (invEval.block_execution) {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: `EXPLORATION_POLICY_INVALID: ${invEval.policy_diagnostic || "blocked"}`,
+                }));
+                return;
+              }
               if (invEval.action === "INVESTIGATE_FIRST") {
                 activeState.pendingPolicyRequirement = {
                   decision_type: DECISION_TYPES.INVESTIGATION_STRATEGY,
@@ -1591,6 +1651,7 @@ function main() {
                   policy_id: invEval.policy_id,
                   baseline_action: invBaseline,
                   policy_diagnostic: invEval.policy_diagnostic,
+                  source_snapshot_id: invEval.source_snapshot_id || null,
                 };
                 try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
                 console.log(JSON.stringify({
@@ -1611,12 +1672,36 @@ function main() {
             state: decisionState,
           }) || (decisionType === DECISION_TYPES.WORKER_TIER ? "FLASH_MEDIUM" : "RETRY_SAME");
 
+          const seedCapture = captureBranchSeedIfArmed({
+            repoRoot,
+            snapshot: snapRes.snapshot,
+            decisionType,
+            decisionState,
+            availableActions,
+            scopeContract: contractObj,
+            taskDescriptor: taskObj,
+            evidenceSummary: evidenceObj,
+            runtimeState: activeState,
+          });
+          if (seedCapture.captured) {
+            activeState.explorationSeedCaptured = seedCapture.seed_id;
+            try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+          }
+
           const evalResult = evaluatePolicyWithFallback({
+            repoRoot,
             decisionType,
             state: decisionState,
             availableActions,
             baselineAction,
           });
+          if (evalResult.block_execution) {
+            console.log(JSON.stringify({
+              decision: "deny",
+              reason: `EXPLORATION_POLICY_INVALID: ${evalResult.policy_diagnostic || "blocked"}`,
+            }));
+            return;
+          }
 
           // 3. Real Online Policy Authority Enforcements
           if (decisionType === DECISION_TYPES.WORKER_TIER) {
@@ -1676,7 +1761,7 @@ function main() {
 
               recordDecision({
                 repoRoot,
-                snapshot: snapRes.snapshot,
+                snapshot: evalResult.source_snapshot_id || snapRes.snapshot,
                 decision: {
                   decision_type: DECISION_TYPES.RETRY_ACTION,
                   state: decisionState,
@@ -1775,7 +1860,7 @@ function main() {
           };
 
           decisionsToRecord.push({
-            snapshot: snapRes.snapshot,
+            snapshot: evalResult.source_snapshot_id || snapRes.snapshot,
             decision: decRecordInput,
             correlationKey: corrKey,
             profile,
@@ -2582,11 +2667,19 @@ function main() {
             state: invState,
           }) || "IMPLEMENT_DIRECT";
           const invRes = evaluatePolicyWithFallback({
+            repoRoot,
             decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
             state: invState,
             availableActions: invAvailable,
             baselineAction: invBaseline,
           });
+          if (invRes.block_execution) {
+            console.log(JSON.stringify({
+              decision: "deny",
+              reason: `EXPLORATION_POLICY_INVALID: ${invRes.policy_diagnostic || "blocked"}`,
+            }));
+            return;
+          }
           if (invRes.action === "INVESTIGATE_FIRST") {
             console.log(JSON.stringify({
               decision: "deny",
@@ -2618,7 +2711,7 @@ function main() {
               });
               const directDecision = recordDecision({
                 repoRoot,
-                snapshot: snapRes.snapshot,
+                snapshot: invRes.source_snapshot_id || snapRes.snapshot,
                 decision: {
                   decision_type: DECISION_TYPES.INVESTIGATION_STRATEGY,
                   state: invState,
