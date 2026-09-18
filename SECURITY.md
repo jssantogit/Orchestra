@@ -29,6 +29,7 @@ Orchestra is a local multi-agent orchestration framework designed to coordinate 
 
 6. **Remote/Public Side Effects Are Capability-Gated**:
    - Network writes, remote-repository writes, VCS pushes, and public uploads default to denied unless explicitly authorized by factual task/contract state.
+   - Antigravity applies a dedicated PreToolUse side-effect boundary to every tool call, including connector/plugin tools outside the native file/shell matcher. Unknown external-tool semantics are treated conservatively as remote writes until explicitly authorized.
    - Do not use temporary file-hosting, paste services, artifact stores, or other external channels to bypass the governed parent/child messaging and artifact paths.
 
 ## Reporting Security Issues
