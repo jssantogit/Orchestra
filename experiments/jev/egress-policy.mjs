@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const syntheticFixture = resolve(fileURLToPath(new URL("../../benchmarks/turn-economy/fixture", import.meta.url)));
@@ -6,7 +6,8 @@ const syntheticFixture = resolve(fileURLToPath(new URL("../../benchmarks/turn-ec
 function within(child, parent) {
   const c = resolve(child);
   const p = resolve(parent);
-  return c === p || c.startsWith(p + "/");
+  const rel = relative(p, c);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 export function evaluateLiveEgress({
