@@ -58,17 +58,6 @@ export function loadStaticPolicy() {
   } catch {
     return { ok: false, reason: "STATIC_POLICY_MALFORMED", path };
   }
-  const previousRuntime = loadRuntimePolicy(repoRoot);
-  if (!previousRuntime.ok || previousRuntime.diagnostic) {
-    return {
-      activated: false,
-      reason: "POLICY_ACTIVATION_BASELINE_INVALID",
-      diagnostic: previousRuntime.diagnostic || previousRuntime.reason || null,
-    };
-  }
-  const previousPolicyId = previousRuntime.policy?.policy_id || null;
-  const previousPolicySource = previousRuntime.source || null;
-
   const validation = validatePolicy(policy);
   if (
     !validation.valid
@@ -233,6 +222,18 @@ export function activatePolicy({
   if (!repoRoot || !policy || !canaryReportId || !canarySessionId) {
     return { activated: false, reason: "INVALID_POLICY_ACTIVATION_INPUT" };
   }
+
+  const previousRuntime = loadRuntimePolicy(repoRoot);
+  if (!previousRuntime.ok || previousRuntime.diagnostic) {
+    return {
+      activated: false,
+      reason: "POLICY_ACTIVATION_BASELINE_INVALID",
+      diagnostic: previousRuntime.diagnostic || previousRuntime.reason || null,
+    };
+  }
+  const previousPolicyId = previousRuntime.policy?.policy_id || null;
+  const previousPolicySource = previousRuntime.source || null;
+
   const validation = validatePolicy(policy);
   if (
     !validation.valid
