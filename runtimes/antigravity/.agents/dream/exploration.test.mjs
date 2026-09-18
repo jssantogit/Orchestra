@@ -203,7 +203,11 @@ test("armed capture creates one sanitized physical BranchSeed and refuses CRITIC
       decisionType: "WORKER_TIER",
       decisionState: f.state,
       availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
-      scopeContract: f.contract,
+      scopeContract: {
+        ...f.contract,
+        contractId: "contract-e-fixture",
+        createdAt: "2026-09-18T00:00:00.000Z",
+      },
       taskDescriptor: f.task,
       evidenceSummary: f.evidence,
       runtimeState: { state: "EXECUTING" },
@@ -213,6 +217,8 @@ test("armed capture creates one sanitized physical BranchSeed and refuses CRITIC
     const seed = JSON.parse(readFileSync(captured.seed_path, "utf8"));
     assert.equal(seed.snapshot.snapshot_id, f.snapshot.snapshot_id);
     assert.deepEqual(seed.decision.available_actions, ["FLASH_LOW", "FLASH_MEDIUM"]);
+    assert.equal(seed.scope_contract.contractId, "contract-e-fixture");
+    assert.equal(seed.scope_contract.createdAt, undefined, "factual timestamps must not be cloned into BranchSeed");
     assert.equal(existsSync(join(captured.seed_path, "..", "workspace", "src", "unit.js")), true);
 
     armExplorationCapture({ repoRoot: f.repo, decisionType: "WORKER_TIER" });
