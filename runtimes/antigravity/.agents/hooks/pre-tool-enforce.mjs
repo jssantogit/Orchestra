@@ -1004,7 +1004,10 @@ export function isValidAgentName(name) {
 function main() {
   const rawInput = readStdin();
   if (!rawInput.trim()) {
-    console.log(JSON.stringify({ decision: "allow" }));
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "INVALID_HOOK_PAYLOAD: PreToolUse received no authorization payload."
+    }));
     return;
   }
 
@@ -1012,13 +1015,41 @@ function main() {
   try {
     payload = JSON.parse(rawInput);
   } catch {
-    console.log(JSON.stringify({ decision: "allow" }));
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "MALFORMED_HOOK_PAYLOAD: PreToolUse payload is not valid JSON."
+    }));
     return;
   }
 
-  const toolCall = payload.toolCall || {};
-  const toolName = toolCall.name || "";
-  const toolArgs = toolCall.args || {};
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "INVALID_HOOK_PAYLOAD: PreToolUse payload must be a JSON object."
+    }));
+    return;
+  }
+
+  const toolCall = payload.toolCall && typeof payload.toolCall === "object" && !Array.isArray(payload.toolCall)
+    ? payload.toolCall
+    : (
+      typeof payload.toolName === "string" && payload.toolName.trim()
+        ? { name: payload.toolName, args: payload.toolArgs || payload.args || {} }
+        : null
+    );
+
+  if (!toolCall || typeof toolCall.name !== "string" || !toolCall.name.trim()) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "INVALID_HOOK_PAYLOAD: PreToolUse payload is missing a valid tool call name."
+    }));
+    return;
+  }
+
+  const toolName = toolCall.name.trim();
+  const toolArgs = toolCall.args && typeof toolCall.args === "object" && !Array.isArray(toolCall.args)
+    ? toolCall.args
+    : {};
 
   const { repoRoot, statePath, contractPath, roleBindingsPath, pendingExecutionsDir } = getWorkspacePaths(payload);
 
