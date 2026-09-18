@@ -178,10 +178,82 @@ function stateBucket(decision) {
   };
 }
 
-function lineageRef(world) {
+function lineageRef(lineageIdentity) {
   return "lineage-" + sha256Canonical({
-    root_snapshot_id: world?.root_snapshot_id || null,
+    root_snapshot_id: lineageIdentity || null,
   }).slice(7, 23);
+}
+
+function worldSnapshotSet(world) {
+  const snapshots = new Set();
+  if (world?.root_snapshot_id) snapshots.add(world.root_snapshot_id);
+  for (const decision of world?.decisions || []) {
+    if (decision?.snapshot_id) snapshots.add(decision.snapshot_id);
+  }
+  for (const outcome of world?.outcomes || []) {
+    if (outcome?.resulting_snapshot_id) snapshots.add(outcome.resulting_snapshot_id);
+  }
+  return snapshots;
+}
+
+export function deriveLineageAssignments(worlds = []) {
+  const ordered = [...worlds].sort((a, b) =>
+    String(a?.world_manifest_hash || "").localeCompare(String(b?.world_manifest_hash || ""))
+  );
+  const roots = [...new Set(ordered.map((world) => world?.root_snapshot_id).filter(Boolean))];
+  const snapshotsByWorld = ordered.map((world) => worldSnapshotSet(world));
+  const parentRoots = new Map(roots.map((root) => [root, new Set()]));
+
+  for (const childRoot of roots) {
+    for (let i = 0; i < ordered.length; i++) {
+      const parentRoot = ordered[i]?.root_snapshot_id;
+      if (!parentRoot || parentRoot === childRoot) continue;
+      if (snapshotsByWorld[i].has(childRoot)) {
+        parentRoots.get(childRoot).add(parentRoot);
+      }
+    }
+  }
+
+  function canonicalRoot(start) {
+    const visited = new Set();
+    let frontier = [start];
+    let top = new Set([start]);
+
+    while (frontier.length) {
+      const next = [];
+      const nextTop = new Set();
+      for (const node of frontier) {
+        if (visited.has(node)) continue;
+        visited.add(node);
+        const parents = [...(parentRoots.get(node) || [])].sort();
+        if (!parents.length) {
+          nextTop.add(node);
+          continue;
+        }
+        for (const parent of parents) next.push(parent);
+      }
+      if (next.length) {
+        frontier = [...new Set(next)].sort();
+        top = new Set(frontier);
+      } else if (nextTop.size) {
+        top = nextTop;
+        frontier = [];
+      }
+    }
+
+    return [...top].sort()[0] || start;
+  }
+
+  const assignments = new Map();
+  for (const world of ordered) {
+    const lineageRoot = canonicalRoot(world.root_snapshot_id);
+    assignments.set(world.world_manifest_hash, {
+      lineage_root_snapshot_id: lineageRoot,
+      lineage_ref: lineageRef(lineageRoot),
+      ...splitLineage(lineageRoot),
+    });
+  }
+  return assignments;
 }
 
 export function splitLineage(lineageIdentity) {
@@ -262,11 +334,11 @@ function replayPolicy(world, policy, baselinePolicy) {
   });
 }
 
-function sanitizeReplayExample(world, report, split) {
+function sanitizeReplayExample(world, report, lineage) {
   const firstDecision = world?.decisions?.[0] || {};
   return {
-    lineage_ref: lineageRef(world),
-    split,
+    lineage_ref: lineage.lineage_ref,
+    split: lineage.split,
     state_bucket: stateBucket(firstDecision),
     replay_status: report.status,
     unknown_branch_count: report.unknown_branch_count,
@@ -275,12 +347,11 @@ function sanitizeReplayExample(world, report, split) {
   };
 }
 
-function sourceEntry(world) {
-  const split = splitLineage(world.root_snapshot_id);
+function sourceEntry(world, lineage) {
   return {
-    lineage_ref: lineageRef(world),
-    split: split.split,
-    split_bucket: split.bucket,
+    lineage_ref: lineage.lineage_ref,
+    split: lineage.split,
+    split_bucket: lineage.bucket,
     world_manifest_hash: world.world_manifest_hash,
     root_snapshot_ref: "snapshot-" + sha256Canonical({
       snapshot: world.root_snapshot_id,
@@ -372,9 +443,14 @@ export function buildPolicyDevelopmentDataset({
   };
   const sources = [];
   const replayExamples = [];
+  const lineageAssignments = deriveLineageAssignments(validWorlds);
 
   for (const world of validWorlds) {
-    const source = sourceEntry(world);
+    const lineage = lineageAssignments.get(world.world_manifest_hash);
+    if (!lineage) {
+      return { ok: false, reason: "LINEAGE_ASSIGNMENT_MISSING" };
+    }
+    const source = sourceEntry(world, lineage);
     sources.push(source);
 
     increment(terminalOutcomes, terminalState(world));
@@ -464,7 +540,7 @@ export function buildPolicyDevelopmentDataset({
       baselineReport.status === "NEEDS_EXPLORATION"
       || baselineReport.status === "INELIGIBLE"
     ) {
-      replayExamples.push(sanitizeReplayExample(world, baselineReport, source.split));
+      replayExamples.push(sanitizeReplayExample(world, baselineReport, lineage));
     }
   }
 
@@ -685,9 +761,7 @@ function materializeCandidate(raw, baselinePolicyId) {
   const candidate = structuredClone(raw);
   delete candidate.policy_id;
   delete candidate.created_at;
-  if (candidate.base_policy === undefined || candidate.base_policy === null) {
-    candidate.base_policy = baselinePolicyId;
-  }
+  candidate.base_policy = baselinePolicyId;
   candidate.policy_id = computePolicyId(candidate);
   const validation = validatePolicy(candidate);
   if (!validation.valid) {
