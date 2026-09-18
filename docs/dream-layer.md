@@ -607,4 +607,11 @@ npm run dream:canary -- promote \
   --confirm
 ```
 
+Promoted-policy rollback is also explicit and human-gated. `rollback-policy --confirm` restores the exact previous policy recorded in activation metadata (or removes `active.json` when that previous baseline is `static-policy-v1`) and appends a `POLICY_ROLLBACK` history event. Promoted versions are retained.
+
+```bash
+# Explicitly roll back the currently promoted policy to its recorded predecessor.
+npm run dream:canary -- rollback-policy --repo /path/to/project --confirm
+```
+
 Automatic ramping to 20/50/100% and `auto_promote` remain out of scope and require a separate architectural review.
