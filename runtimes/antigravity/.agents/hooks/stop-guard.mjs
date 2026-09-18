@@ -4,6 +4,11 @@ import { homedir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
 import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
+import {
+  factualSubagentMatchesPending,
+  filterFactualPendingCandidates,
+  isSymmetricReviewerSet,
+} from "./child-identity.mjs";
 
 function readStdin() {
   try {
@@ -137,56 +142,46 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         || (roleBindings.conversations && roleBindings.conversations[childConvId])
         || null;
 
+      const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || process.env.BENCHMARK_TASK_ID || null;
+      const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
+
+      // A provisional hook-payload correlation is authorization context, not factual
+      // runtime identity. Upgrade it only when this exact child exists in the parent
+      // brain and the factual descriptor/spawn metadata matches the originating pending slot.
+      if (binding && binding.source !== "RUNTIME_IDENTITY") {
+        const pending = Array.isArray(roleBindings.pendingSubagents)
+          ? roleBindings.pendingSubagents.find((p) => p.seq === binding.pendingSeq)
+          : null;
+        if (pending && factualSubagentMatchesPending(sub, pending)) {
+          binding.confidence = "HIGH";
+          binding.source = "RUNTIME_IDENTITY";
+          binding.factualIdentityAt = new Date().toISOString();
+          if (!roleBindings.bindings) roleBindings.bindings = {};
+          if (!roleBindings.conversations) roleBindings.conversations = {};
+          roleBindings.bindings[childConvId] = binding;
+          roleBindings.conversations[childConvId] = binding;
+          roleBindingsModified = true;
+        }
+      }
+
       if (!binding && Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0) {
-        // Step 1: Filter candidates by available scope:
-        // parentConversationId === current parent
-        // taskIdentifier/taskId === current task
-        // benchmarkRunId === current run
-        let candidates = roleBindings.pendingSubagents.filter((p) => !p.consumed);
-        if (parentConvId) {
-          candidates = candidates.filter((p) => p.parentConversationId && p.parentConversationId === parentConvId);
-        }
-        const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || process.env.BENCHMARK_TASK_ID || null;
-        if (activeTaskId) {
-          candidates = candidates.filter((p) => (p.taskIdentifier || p.taskId) && (p.taskIdentifier || p.taskId) === activeTaskId);
-        }
-        const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
-        if (activeRunId) {
-          candidates = candidates.filter((p) => p.benchmarkRunId && p.benchmarkRunId === activeRunId);
-        }
-
-        // Step 2: Use role/profile evidence from descriptor
-        const descTypeName = sub.subagentDescriptor?.typeName || "";
-        const descRole = String(sub.subagentDescriptor?.role || "").toLowerCase();
-
-        let matchedCandidates = [];
-        if (descTypeName || descRole) {
-          matchedCandidates = candidates.filter((p) => {
-            if (descTypeName && (p.profile === descTypeName || p.typeName === descTypeName)) return true;
-            if (descRole && p.role && descRole.includes(p.role.toLowerCase())) return true;
-            return false;
-          });
-        } else {
-          matchedCandidates = candidates;
-        }
+        const matchedCandidates = filterFactualPendingCandidates({
+          pendingSubagents: roleBindings.pendingSubagents,
+          record: sub,
+          parentConversationId: parentConvId,
+          taskId: activeTaskId,
+          benchmarkRunId: activeRunId,
+        });
 
         let match = null;
+        let slotAssignment = null;
         if (matchedCandidates.length === 1) {
           match = matchedCandidates[0];
-        } else if (matchedCandidates.length > 1) {
-          const firstRole = matchedCandidates[0].role;
-          const firstProfile = matchedCandidates[0].profile;
-          const allSameRoleAndProfile = matchedCandidates.every((c) => c.role === firstRole && c.profile === firstProfile);
-          const homogeneousReviewerPair = allSameRoleAndProfile
-            && firstRole === "REVIEWER"
-            && matchedCandidates.every((c) => c.delegationKind === "REVIEW");
-          if (homogeneousReviewerPair) {
-            match = matchedCandidates[0];
-          } else {
-            match = null;
-          }
-        } else {
-          match = null;
+        } else if (isSymmetricReviewerSet(matchedCandidates)) {
+          // Reviewer slots are permission- and policy-equivalent. The exact child
+          // identity is factual; only the A/B slot label is symmetric.
+          match = matchedCandidates.slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0];
+          slotAssignment = "SYMMETRIC_REVIEW_SLOT";
         }
 
         if (match) {
@@ -196,8 +191,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
           match.consumedAt = consumedAt;
 
           const childRole = match.role || null;
-          const childProfile = match.profile || match.typeName || (descTypeName || null);
-          const isFactual = Boolean(childRole && childProfile);
+          const childProfile = match.profile || match.typeName || sub.subagentDescriptor?.typeName || null;
 
           const boundRecord = {
             conversationId: childConvId,
@@ -208,13 +202,16 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
             taskIdentifier: match.taskIdentifier || activeTaskId || null,
             benchmarkRunId: match.benchmarkRunId || activeRunId || null,
             originToolCallId: match.originToolCallId || match.toolCallId || null,
+            originStepIdx: match.originStepIdx ?? null,
             pendingSeq: match.seq ?? null,
             delegationKind: match.delegationKind || null,
             decisionCorrelationKey: match.decisionCorrelationKey || null,
             decisionType: match.decisionType || null,
             decisionBranchOrdinal: match.decisionBranchOrdinal ?? null,
-            confidence: isFactual ? "HIGH" : "LOW",
-            source: isFactual ? "RUNTIME_IDENTITY" : "UNRESOLVED",
+            confidence: "HIGH",
+            source: "RUNTIME_IDENTITY",
+            slotAssignment,
+            factualIdentityAt: new Date().toISOString(),
             consumed: true,
             consumedBy: childConvId,
             consumedAt,
