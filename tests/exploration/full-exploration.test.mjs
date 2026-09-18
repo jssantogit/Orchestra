@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -12,6 +13,9 @@ import {
 } from "../../runtimes/antigravity/.agents/dream/action-space.mjs";
 import {
   FULL_EXPLORATION_LIMITS,
+  fullExplorationStatus,
+  startFullExploration,
+  stopFullExploration,
 } from "../../runtimes/antigravity/.agents/dream/full-exploration.mjs";
 import {
   computePolicyId,
@@ -28,6 +32,37 @@ test("full exploration hard ceilings are static and bounded", () => {
     max_total_model_calls: 6,
     timeout_ms: 900000,
   });
+});
+
+test("full exploration controller persists an explicit bounded lifecycle", () => {
+  const repo = mkdtempSync(join(tmpdir(), "orchestra-k-controller-"));
+  try {
+    const started = startFullExploration({ repoRoot: repo });
+    assert.equal(started.started, true);
+    assert.equal(started.control.status, "ACTIVE");
+    assert.equal(started.control.branches_remaining, 3);
+    assert.equal(started.control.total_model_calls, 0);
+
+    const duplicate = startFullExploration({ repoRoot: repo });
+    assert.equal(duplicate.started, false);
+    assert.equal(duplicate.reason, "FULL_EXPLORATION_ALREADY_ACTIVE");
+
+    const status = fullExplorationStatus({ repoRoot: repo });
+    assert.equal(status.active, true);
+    assert.equal(status.branches_started, 0);
+    assert.deepEqual(status.limits, FULL_EXPLORATION_LIMITS);
+
+    const stopped = stopFullExploration({ repoRoot: repo, reason: "TEST_COMPLETE" });
+    assert.equal(stopped.stopped, true);
+    assert.equal(stopped.control.status, "STOPPED");
+    assert.equal(stopped.control.stop_reason, "TEST_COMPLETE");
+
+    const finalStatus = fullExplorationStatus({ repoRoot: repo });
+    assert.equal(finalStatus.active, false);
+    assert.equal(finalStatus.status, "STOPPED");
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test("K action spaces fail closed at budget and criticality boundaries", () => {
