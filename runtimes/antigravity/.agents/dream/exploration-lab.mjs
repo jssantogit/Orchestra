@@ -45,6 +45,7 @@ const EXPLORATION_ALLOWED_TOOLS = new Set([
   "edit_file",
   "create_file",
   "invoke_subagent",
+  "define_subagent",
   "run_command",
   "view_file",
   "grep_search",
@@ -591,7 +592,7 @@ export function enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs = 
   if (!["PREPARED", "RUNNING"].includes(session.status)) return { active: true, allowed: false, reason: "EXPLORATION_SESSION_NOT_ACTIVE" };
   if (Date.now() > Date.parse(session.deadline_at)) return { active: true, allowed: false, reason: "EXPLORATION_TIMEOUT" };
   const name = String(toolName || "");
-  if (name === "schedule" || name === "send_message" || name === "define_subagent" || EXTERNAL_TOOL.test(name)) {
+  if (name === "schedule" || name === "send_message" || EXTERNAL_TOOL.test(name)) {
     return { active: true, allowed: false, reason: "EXPLORATION_EXTERNAL_SIDE_EFFECT_BLOCKED:" + name };
   }
   if (!EXPLORATION_ALLOWED_TOOLS.has(name)) {
