@@ -12,6 +12,11 @@ import {
   getEvidenceProvider,
   normalizeEvidenceProviderId,
 } from "./evidence-provider-registry.mjs";
+import {
+  markEvidenceWatchTimedOut,
+  noteEvidenceWatchResult,
+  shouldPollEvidenceWatch,
+} from "./evidence-watch.mjs";
 
 function digest(value) {
   return createHash("sha256").update(String(value)).digest("hex");
@@ -540,7 +545,13 @@ export function runRemoteCollectorSync(repoRoot, activeState, requirement) {
   }
 }
 
-export function collectRuntimeEvidenceSync({ repoRoot, activeState = {}, contract = null } = {}) {
+export function collectRuntimeEvidenceSync({
+  repoRoot,
+  activeState = {},
+  contract = null,
+  forceRemotePoll = false,
+  nowMs = Date.now(),
+} = {}) {
   const effectiveContract = contract || activeState.scopeContract || {};
   const normalized = normalizeEvidenceRequirements(effectiveContract, activeState);
   if (!normalized.valid) {
@@ -549,6 +560,8 @@ export function collectRuntimeEvidenceSync({ repoRoot, activeState = {}, contrac
 
   const factual = readFactualGitIdentity(repoRoot);
   const records = [];
+  const skipped = [];
+
   for (const requirement of normalized.requirements) {
     if (requirement.kind === "LOCAL_FACT") {
       records.push(collectLocalFactRequirement({
@@ -557,13 +570,75 @@ export function collectRuntimeEvidenceSync({ repoRoot, activeState = {}, contrac
         requirement,
         factualGit: factual,
       }));
-    } else if (requirement.kind === "REMOTE_CI") {
-      records.push(runRemoteCollectorSync(repoRoot, activeState, requirement));
+      continue;
+    }
+
+    if (requirement.kind !== "REMOTE_CI") continue;
+
+    const provider = getEvidenceProvider(requirement.provider);
+    if (!provider) {
+      const unsupported = runRemoteCollectorSync(repoRoot, activeState, requirement);
+      records.push(unsupported);
+      continue;
+    }
+
+    if (provider.supportsWatch) {
+      const watchDecision = shouldPollEvidenceWatch(
+        activeState,
+        requirement,
+        nowMs,
+        { force: forceRemotePoll },
+      );
+
+      if (watchDecision.timedOut) {
+        markEvidenceWatchTimedOut(activeState, requirement, nowMs);
+        const timedOut = runtimeRecord({
+          requirement,
+          result: "UNAVAILABLE",
+          reason: "EVIDENCE_WATCH_TIMEOUT",
+          activeState,
+          factual: factual.ok ? factual : null,
+          provider: provider.id,
+          source: provider.provenanceSource,
+          suffix: "watch-timeout",
+          details: {
+            collectorDetails: {
+              watchStatus: "TIMED_OUT",
+              deadlineAt: watchDecision.watch?.deadlineAt || null,
+            },
+          },
+        });
+        records.push(timedOut);
+        continue;
+      }
+
+      if (!watchDecision.poll) {
+        skipped.push({
+          requirementId: requirement.id,
+          provider: provider.id,
+          reason: watchDecision.reason,
+          nextPollAt: watchDecision.watch?.nextPollAt || null,
+          deadlineAt: watchDecision.watch?.deadlineAt || null,
+          status: watchDecision.watch?.status || null,
+        });
+        continue;
+      }
+    }
+
+    const record = runRemoteCollectorSync(repoRoot, activeState, requirement);
+    records.push(record);
+    if (provider.supportsWatch) {
+      noteEvidenceWatchResult(activeState, requirement, record, nowMs);
     }
   }
 
   for (const record of records) mergeEvidenceRecord(activeState, record);
-  return { collected: true, records };
+  return {
+    collected: true,
+    records,
+    skipped,
+    remotePollPerformed: records.some((record) => record.kind === "REMOTE_CI"),
+  };
 }
 
 async function cliMain() {
