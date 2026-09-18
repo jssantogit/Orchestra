@@ -71,7 +71,9 @@ New decision points:
 
 Hard ceilings remain static governance, not learned policy. Learned policy may choose a value only inside the legal action set computed by runtime authority.
 
-K preserves standalone Milestone-E semantics. Additional siblings are legal only when `prepareExploration` can verify an active `orchestra.full-exploration.v1` controller with the exact static limits and a fresh branch ordinal. The controller namespaces E reservations and excludes alternatives already selected for the same factual source decision, so repeated exploration cannot silently rerun the same unknown action.
+K preserves standalone Milestone-E semantics. Additional siblings are legal only when `prepareExploration` can verify an active `orchestra.full-exploration.v1` controller with the exact static limits, a fresh branch ordinal, and an exact O_EXCL-created branch-slot capability token. The controller namespaces E reservations and excludes alternatives already selected for the same factual source decision. It also scans valid sealed worlds for the exact `snapshot_id + decision_type + state_hash` and excludes already observed actions across previous K sessions. No similarity inference is used.
+
+Controller shutdown is quiescence-aware. A human stop with live branches or pending causal outcomes enters `STOP_REQUESTED`; a successor controller cannot start until those branches terminate and every recorded control decision is closed. Budget exhaustion follows the same quiescence requirement.
 
 K control decisions use **deferred causal outcomes**:
 - `CONTINUE_EXPLORATION`, `OPEN_BRANCH`, and `PARALLELISM` are recorded before execution but remain outcome-pending;
