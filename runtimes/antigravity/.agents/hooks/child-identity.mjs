@@ -87,6 +87,7 @@ export function filterFactualPendingCandidates({
   parentConversationId = null,
   taskId = null,
   benchmarkRunId = null,
+  attempt = 0,
 } = {}) {
   let candidates = Array.isArray(pendingSubagents)
     ? pendingSubagents.filter((p) => !p.consumed)
@@ -101,6 +102,12 @@ export function filterFactualPendingCandidates({
   if (benchmarkRunId) {
     candidates = candidates.filter((p) => p.benchmarkRunId === benchmarkRunId);
   }
+
+  const activeAttempt = Number.isInteger(attempt) && attempt >= 0 ? attempt : 0;
+  candidates = candidates.filter((p) => {
+    const pendingAttempt = Number.isInteger(p?.attempt) && p.attempt >= 0 ? p.attempt : 0;
+    return pendingAttempt === activeAttempt;
+  });
 
   return candidates.filter((p) => factualSubagentMatchesPending(record, p));
 }
