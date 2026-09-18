@@ -47,6 +47,24 @@ function cleanState() {
   try { unlinkSync(".agents/telemetry/events.jsonl"); } catch {}
 }
 
+function seedFactualOrchestrator(conversationId) {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: conversationId,
+    bindings: {
+      [conversationId]: {
+        conversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf-8");
+}
+
 test.beforeEach(() => {
   cleanState();
 });
@@ -261,6 +279,7 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
 test("turn-diet: polling is restricted and reactive wakeup is favored after worker spawn", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2088,6 +2107,7 @@ test("fidelity-reactive-wakeup: regression 11: second sync reuses persisted exac
 test("fidelity-reactive-wakeup: regression 12: healthy delegation does not require manage_subagents polling", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("parent-orch-poll");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2184,6 +2204,7 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
 test("reactive-delegation-lock: 1. Orchestrator + DELEGATED + healthy + schedule -> DENY", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2206,6 +2227,7 @@ test("reactive-delegation-lock: 1. Orchestrator + DELEGATED + healthy + schedule
 test("reactive-delegation-lock: 2. Orchestrator + DELEGATED + healthy + manage_task status -> DENY on first attempt", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2228,6 +2250,7 @@ test("reactive-delegation-lock: 2. Orchestrator + DELEGATED + healthy + manage_t
 test("reactive-delegation-lock: 3. Orchestrator + DELEGATED + healthy + manage_subagents list/status -> DENY", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2417,6 +2440,7 @@ test("reactive-delegation-lock: 9. Orchestrator outside DELEGATED state performi
 test("reactive-delegation-lock: 10. explicit cancellation/recovery path -> coordination action allowed", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-cancel-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2448,6 +2472,7 @@ test("reactive-delegation-lock: 10. explicit cancellation/recovery path -> coord
 test("reactive-delegation-lock: 11. diagnosed stalled/recovery state -> appropriate coordination action allowed", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-stalled-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
