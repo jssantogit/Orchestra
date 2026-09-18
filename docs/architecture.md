@@ -65,11 +65,13 @@ Execution advances through a formal, deterministic state machine:
 
 ```text
 INTAKE ──> CLASSIFIED ──> PLANNED ──> DELEGATED ──> EXECUTING ──> EVIDENCE_READY ──> ACCEPTANCE ──> DONE
-  │            │                                       │                                │
-  │            │                                       ├──> PARTIAL_RESULT (Retry)      ├──> RETRY (Delta)
-  │            │                                       ├──> CROSS_DOMAIN_REQUEST        ├──> INTEGRATING
-  │            │                                       └──> STALLED ──> HUMAN_GATE      ├──> CRITICAL_REVIEW
-  │            │                                                                        └──> HUMAN_GATE
+  │            │                                  │             │
+  │            │                                  ├──> CI_WAIT ─┘
+  │            │                                  │      ├── success -> EVIDENCE_READY
+  │            │                                  │      ├── failure -> Delta Retry / BLOCKED
+  │            │                                  │      └── source unavailable -> bounded fail-closed recovery
+  │            │                                  ├──> PARTIAL_RESULT (Retry)
+  │            │                                  └──> STALLED ──> HUMAN_GATE
   │            ▼
   └──> DIRECT_ACTION ──> EXECUTING ──> DONE / BLOCKED
 ```
@@ -84,6 +86,10 @@ INTAKE ──> CLASSIFIED ──> PLANNED ──> DELEGATED ──> EXECUTING �
 - **Scope Enforcement**: File writes outside `allowedPaths` are blocked immediately.
 - **Side-Quest Prevention**: Direct operational tasks (git status, commit, test runs) follow a lightweight fast path with zero subagents and strict bounds against unsolicited refactoring.
 - **Evidence Freshness**: Subsequent code mutations invalidate previous test results, ensuring that acceptance is based only on fresh verification facts.
+- **Typed Evidence Contracts**: Scope Contracts may declare `requiredEvidence` independently of `testsRequired`. Acceptance consumes typed factual proofs rather than assuming every task must execute a local test.
+- **Provider-Verified Remote CI**: GitHub Actions evidence is collected by Orchestra itself and bound to the factual origin repository, workflow, current HEAD/ref, required jobs, retry attempt, and mutation state. Model text or arbitrary URLs never satisfy the gate.
+- **Runtime Mechanical Facts**: Deterministic facts such as `FILE_EXISTS`, `GIT_IGNORED`, `GIT_CLEAN`, and `EXPECTED_FILE_MODIFIED` can be collected directly by the runtime instead of forcing shell-command ceremony on a worker.
+- **Child Evidence Lock**: A factual WORK child cannot terminate while it still owes an actionable local command from its Scope Contract. Runtime-owned facts and remote CI remain parent/runtime responsibilities.
 
 ---
 
