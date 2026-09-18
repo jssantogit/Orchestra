@@ -212,6 +212,9 @@ function evaluateRequirement(requirement, ledger, activeState) {
     if (!attemptMatches(ev, activeState)) continue;
 
     if (requirement.kind === "LOCAL_COMMAND") {
+      if (ev.evidenceSource === "CHILD_TRANSCRIPT" && (ev.mutationAfterValidation === true || ev.fresh === false)) {
+        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "CHILD_MUTATION_AFTER_VALIDATION", evidence: ev, requirement };
+      }
       if (!mutationMatches(ev, activeState)) {
         return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "MUTATION_SEQ_MISMATCH", evidence: ev, requirement };
       }
