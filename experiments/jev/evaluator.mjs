@@ -6,6 +6,8 @@ export const DEFAULT_PROMOTION_GATES = Object.freeze({
   min_future_use_recall_at_k: 0.95,
   min_critical_reference_recall: 1.0,
   max_false_low_relevance: 0.02,
+  min_comparative_samples: 5,
+  min_comparative_task_categories: 5,
   max_tool_reexecution_delta: 0,
   min_acceptance_delta: 0,
   min_context_reduction: 0.10,
@@ -18,15 +20,20 @@ function finite(value, fallback = 0) {
 export function aggregateJevRuns(runs = []) {
   const samples = runs.length;
   const categories = new Set(runs.map((run) => run.task_category).filter(Boolean));
-  const weighted = (field) => samples > 0
-    ? runs.reduce((sum, run) => sum + finite(run[field]), 0) / samples
-    : 0;
+  const comparativeRuns = runs.filter((run) => run.comparative_outcome_verified === true);
+  const comparativeCategories = new Set(comparativeRuns.map((run) => run.task_category).filter(Boolean));
+  const average = (items, field, fallback = 0) => items.length > 0
+    ? items.reduce((sum, run) => sum + finite(run[field]), 0) / items.length
+    : fallback;
   const sum = (field) => runs.reduce((total, run) => total + finite(run[field]), 0);
 
   return {
     samples,
     task_categories: [...categories].sort(),
     task_category_count: categories.size,
+    comparative_samples: comparativeRuns.length,
+    comparative_task_categories: [...comparativeCategories].sort(),
+    comparative_task_category_count: comparativeCategories.size,
     jev_calls: sum("jev_calls"),
     jev_latency_ms: sum("jev_latency_ms"),
     jev_input_tokens: sum("jev_input_tokens"),
@@ -34,15 +41,19 @@ export function aggregateJevRuns(runs = []) {
     jev_ranked_items: sum("jev_ranked_items"),
     jev_candidate_bytes: sum("jev_candidate_bytes"),
     jev_selected_bytes: sum("jev_selected_bytes"),
-    potential_context_reduction: weighted("potential_context_reduction"),
-    future_use_recall_at_k: weighted("future_use_recall_at_k"),
-    future_use_precision_at_k: weighted("future_use_precision_at_k"),
-    critical_reference_recall: weighted("critical_reference_recall"),
-    false_low_relevance: weighted("false_low_relevance"),
+    potential_context_reduction: average(runs, "potential_context_reduction"),
+    future_use_recall_at_k: average(runs, "future_use_recall_at_k"),
+    future_use_precision_at_k: average(runs, "future_use_precision_at_k"),
+    critical_reference_recall: average(runs, "critical_reference_recall"),
+    false_low_relevance: average(runs, "false_low_relevance"),
     redundant_tool_candidates: sum("redundant_tool_candidates"),
     rehydration_count: sum("rehydration_count"),
-    tool_reexecution_delta: weighted("tool_reexecution_delta"),
-    acceptance_delta: weighted("acceptance_delta"),
+    tool_reexecution_delta: comparativeRuns.length > 0
+      ? average(comparativeRuns, "tool_reexecution_delta")
+      : null,
+    acceptance_delta: comparativeRuns.length > 0
+      ? average(comparativeRuns, "acceptance_delta")
+      : null,
     fallback_identity_failures: sum("fallback_identity_failures"),
   };
 }
@@ -55,8 +66,14 @@ export function evaluateForRetrievalAssist(runs = [], gates = DEFAULT_PROMOTION_
   if (metrics.future_use_recall_at_k < gates.min_future_use_recall_at_k) violations.push("FUTURE_USE_RECALL");
   if (metrics.critical_reference_recall < gates.min_critical_reference_recall) violations.push("CRITICAL_REFERENCE_RECALL");
   if (metrics.false_low_relevance > gates.max_false_low_relevance) violations.push("FALSE_LOW_RELEVANCE");
-  if (metrics.tool_reexecution_delta > gates.max_tool_reexecution_delta) violations.push("TOOL_REEXECUTION_REGRESSION");
-  if (metrics.acceptance_delta < gates.min_acceptance_delta) violations.push("ACCEPTANCE_REGRESSION");
+  if (metrics.comparative_samples < gates.min_comparative_samples) violations.push("COMPARATIVE_OUTCOMES_UNVERIFIED");
+  if (metrics.comparative_task_category_count < gates.min_comparative_task_categories) violations.push("COMPARATIVE_TASK_COVERAGE");
+  if (metrics.tool_reexecution_delta === null || metrics.tool_reexecution_delta > gates.max_tool_reexecution_delta) {
+    violations.push("TOOL_REEXECUTION_REGRESSION_OR_UNKNOWN");
+  }
+  if (metrics.acceptance_delta === null || metrics.acceptance_delta < gates.min_acceptance_delta) {
+    violations.push("ACCEPTANCE_REGRESSION_OR_UNKNOWN");
+  }
   if (metrics.potential_context_reduction < gates.min_context_reduction) violations.push("CONTEXT_REDUCTION_INSUFFICIENT");
   if (metrics.fallback_identity_failures > 0) violations.push("FALLBACK_NOT_IDENTITY");
 
