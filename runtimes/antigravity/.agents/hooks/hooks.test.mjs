@@ -3828,3 +3828,74 @@ test("governance: pre-tool firewall fails closed on malformed or missing payload
   }));
   assert.equal(alternateShape.decision, "allow", "Supported runtime toolName/toolArgs shape remains compatible");
 });
+
+
+test("governance: reviewer scope contracts cannot overwrite implementation acceptance contract", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("scope-isolation-parent");
+
+    const implementationContract = {
+      contractId: "implementation-contract-stable",
+      taskId: "scope-isolation-task",
+      targetAgent: "flash-medium-worker",
+      delegationKind: "WORK",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["npm test"],
+      createdAt: "2026-09-18T00:00:00.000Z",
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "scope-isolation-parent",
+      taskAction: "REVIEW",
+      taskId: "scope-isolation-task",
+      scopeContract: implementationContract,
+      mutationSeq: 4,
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify(implementationContract, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "scope-isolation-parent",
+        toolCall: {
+          id: "review-contract-isolation",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [
+              {
+                TypeName: "flash-reviewer",
+                Role: "reviewer",
+                Prompt: "Review A. allowedPaths: [docs/**] testsRequired: [\"npm run reviewer-only-a\"]",
+              },
+              {
+                TypeName: "flash-reviewer",
+                Role: "reviewer",
+                Prompt: "Review B. allowedPaths: [test/**] testsRequired: [\"npm run reviewer-only-b\"]",
+              },
+            ],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "allow");
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    const diskContract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf8"));
+    assert.deepEqual(state.scopeContract, implementationContract);
+    assert.deepEqual(diskContract, implementationContract);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    const reviewPending = bindings.pendingSubagents.filter((p) => p.delegationKind === "REVIEW");
+    assert.equal(reviewPending.length, 2);
+    assert.deepEqual(reviewPending[0].scopeContract.allowedPaths, ["docs/**"]);
+    assert.deepEqual(reviewPending[0].scopeContract.testsRequired, ["npm run reviewer-only-a"]);
+    assert.deepEqual(reviewPending[1].scopeContract.allowedPaths, ["test/**"]);
+    assert.deepEqual(reviewPending[1].scopeContract.testsRequired, ["npm run reviewer-only-b"]);
+  } finally {
+    cleanState();
+  }
+});
