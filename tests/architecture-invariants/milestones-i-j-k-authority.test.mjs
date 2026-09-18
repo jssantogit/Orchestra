@@ -21,6 +21,9 @@ import {
 import {
   FULL_EXPLORATION_LIMITS,
 } from "../../runtimes/antigravity/.agents/dream/full-exploration.mjs";
+import {
+  EXPLORATION_BUDGET,
+} from "../../runtimes/antigravity/.agents/dream/exploration-lab.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../..");
@@ -129,4 +132,39 @@ test("ARCH-K04: policy and decision schemas expose exactly the bounded K decisio
     assert.ok(policy.properties.rules.items.properties.decision_type.enum.includes(type));
     assert.ok(decision.properties.decision_type.enum.includes(type));
   }
+});
+
+test("ARCH-K05: K cannot weaken standalone Milestone-E budgets", () => {
+  assert.deepEqual(EXPLORATION_BUDGET, {
+    max_sibling_branches: 1,
+    max_model_calls: 2,
+    timeout_ms: 300000,
+  });
+  const lab = read("runtimes/antigravity/.agents/dream/exploration-lab.mjs");
+  assert.match(lab, /validateFullExplorationContext/);
+  assert.match(lab, /FULL_EXPLORATION_CONTROL_NOT_AUTHORIZED/);
+  assert.match(lab, /FULL_EXPLORATION_BRANCH_ORDINAL_STALE/);
+});
+
+test("ARCH-K06: K control decisions are sealed as independent replay-safe decision worlds", () => {
+  const controller = read("runtimes/antigravity/.agents/dream/full-exploration.mjs");
+  assert.match(controller, /sealControllerDecisionWorld/);
+  assert.match(controller, /events: \[decision, outcome\]/);
+  assert.match(controller, /outcome_status: recorded\.recorded === true \? "PENDING"/);
+  assert.match(controller, /completeBranchDecisionSet/);
+  assert.equal(/recordControllerDecision[\s\S]{0,2500}terminal_state:\s*"ACCEPTED"/.test(controller), false);
+});
+
+test("ARCH-K07: branch attempts consume controller budget even when materialization fails", () => {
+  const controller = read("runtimes/antigravity/.agents/dream/full-exploration.mjs");
+  assert.match(controller, /control\.branches\.push\(branch\)/);
+  assert.match(controller, /status: prepared\.prepared \? "PREPARED" : "FAILED_TO_START"/);
+  assert.match(controller, /completeBranchDecisionSet\([\s\S]*EXPLORATION_PREPARE_FAILED/);
+});
+
+test("ARCH-K08: repeated K exploration of one source decision cannot repeat a prior selected action", () => {
+  const lab = read("runtimes/antigravity/.agents/dream/exploration-lab.mjs");
+  assert.match(lab, /priorControlledActions/);
+  assert.match(lab, /excludedActions: priorControlledActions/);
+  assert.match(lab, /full_exploration_branch_ordinal/);
 });
