@@ -63,6 +63,8 @@ export function createShadowLabel({
   selectedIds,
   futureEvents,
   criticalIds = [],
+  labelSource = "EXPLICIT_FUTURE_EVENTS",
+  comparativeOutcome = null,
 } = {}) {
   if (!shadowId) throw new Error("JEV_SHADOW_ID_REQUIRED");
   if (!Array.isArray(futureEvents) || futureEvents.length === 0) {
@@ -79,7 +81,7 @@ export function createShadowLabel({
     schema: JEV_SCHEMAS.SHADOW_LABEL,
     shadow_id: shadowId,
     authority: JEV_AUTHORITY,
-    label_source: "FACTUAL_FUTURE_EVENTS",
+    label_source: labelSource,
     timestamp: new Date().toISOString(),
     future_event_count: oracle.future_event_count,
     future_used_total: oracle.future_used_total,
@@ -89,10 +91,18 @@ export function createShadowLabel({
     critical_reference_recall: oracle.critical_reference_recall,
     false_low_relevance: oracle.false_low_relevance,
     false_prune_risk: oracle.false_low_relevance,
-    comparative_outcome_verified: false,
-    comparison_source: null,
-    tool_reexecution_delta: null,
-    acceptance_delta: null,
+    comparative_outcome_verified: comparativeOutcome?.verified === true,
+    comparison_source: comparativeOutcome?.verified === true
+      ? String(comparativeOutcome.source || "UNKNOWN_COMPARISON")
+      : null,
+    tool_reexecution_delta: comparativeOutcome?.verified === true
+      && typeof comparativeOutcome.tool_reexecution_delta === "number"
+        ? comparativeOutcome.tool_reexecution_delta
+        : null,
+    acceptance_delta: comparativeOutcome?.verified === true
+      && typeof comparativeOutcome.acceptance_delta === "number"
+        ? comparativeOutcome.acceptance_delta
+        : null,
   };
 }
 
@@ -115,6 +125,64 @@ export function labelShadowRun({
     selectedIds: state.selected_ids,
     futureEvents,
     criticalIds,
+    labelSource: "EXPLICIT_FUTURE_EVENTS",
+  });
+  appendEvent(projectRoot, label);
+  return label;
+}
+
+function readRuntimeTelemetryAfter(projectRoot, timestamp) {
+  const path = resolve(projectRoot, ".agents/telemetry/events.jsonl");
+  if (!existsSync(path)) return { events: [], malformed: 0 };
+  const threshold = Date.parse(timestamp || "");
+  const events = [];
+  let malformed = 0;
+  for (const line of readFileSync(path, "utf8").split("\n").map((item) => item.trim()).filter(Boolean)) {
+    try {
+      const event = JSON.parse(line);
+      const eventTime = Date.parse(event.timestamp || event.created_at || event.observedAt || "");
+      if (Number.isFinite(threshold) && Number.isFinite(eventTime) && eventTime <= threshold) continue;
+      events.push(event);
+    } catch {
+      malformed++;
+    }
+  }
+  return { events, malformed };
+}
+
+export function labelShadowRunFromProjectTelemetry({
+  projectRoot,
+  shadowId,
+} = {}) {
+  const prior = readShadowTelemetry(projectRoot);
+  if (prior.some((event) => event?.schema === JEV_SCHEMAS.SHADOW_LABEL && event?.shadow_id === shadowId)) {
+    throw new Error("JEV_SHADOW_ALREADY_LABELED");
+  }
+  const report = prior.find((event) => (
+    event?.schema === JEV_SCHEMAS.SHADOW_REPORT
+    && event?.shadow_id === shadowId
+    && event?.authority === JEV_AUTHORITY
+  ));
+  if (!report) throw new Error("JEV_SHADOW_REPORT_NOT_FOUND");
+
+  const state = readShadowState(projectRoot, shadowId);
+  if (!state) throw new Error("JEV_SHADOW_STATE_NOT_FOUND");
+  const runtime = readRuntimeTelemetryAfter(projectRoot, report.timestamp);
+  if (runtime.malformed > 0) throw new Error("JEV_RUNTIME_TELEMETRY_MALFORMED");
+  if (runtime.events.length === 0) throw new Error("JEV_NO_FUTURE_RUNTIME_EVENTS");
+
+  const criticalIds = (state.candidates || [])
+    .filter((candidate) => candidate.pinned === true)
+    .map((candidate) => candidate.id);
+
+  const label = createShadowLabel({
+    shadowId,
+    candidates: state.candidates,
+    ranking: state.ranking,
+    selectedIds: state.selected_ids,
+    futureEvents: runtime.events,
+    criticalIds,
+    labelSource: "PROJECT_RUNTIME_TELEMETRY",
   });
   appendEvent(projectRoot, label);
   return label;
@@ -125,8 +193,21 @@ export function readLabeledShadowRuns(projectRoot) {
   const reports = new Map();
   const labels = new Map();
   for (const event of events) {
-    if (event?.schema === JEV_SCHEMAS.SHADOW_REPORT) reports.set(event.shadow_id, event);
-    if (event?.schema === JEV_SCHEMAS.SHADOW_LABEL) labels.set(event.shadow_id, event);
+    if (
+      event?.schema === JEV_SCHEMAS.SHADOW_REPORT
+      && event?.authority === JEV_AUTHORITY
+      && event?.shadow_id
+    ) {
+      reports.set(event.shadow_id, event);
+    }
+    if (
+      event?.schema === JEV_SCHEMAS.SHADOW_LABEL
+      && event?.authority === JEV_AUTHORITY
+      && event?.label_source === "PROJECT_RUNTIME_TELEMETRY"
+      && event?.shadow_id
+    ) {
+      labels.set(event.shadow_id, event);
+    }
   }
   const runs = [];
   for (const [shadowId, report] of reports) {
@@ -245,6 +326,7 @@ export async function runArtifactRankingShadow({
       selectedIds: selected.selected_ids,
       futureEvents,
       criticalIds,
+      labelSource: "OFFLINE_FUTURE_EVENTS",
     });
     appendEvent(projectRoot, label);
   }
