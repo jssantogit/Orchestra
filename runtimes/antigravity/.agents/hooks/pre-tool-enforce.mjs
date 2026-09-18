@@ -1135,13 +1135,39 @@ function main() {
             profile = isReviewer ? "flash-reviewer" : (activeState.requested_agent || "flash-worker");
           }
         }
-        let modelStr = sub.Model || null;
-        if (!modelStr || modelStr === "inherit" || modelStr === "pro" || modelStr === "high") {
+        const rawModel = String(sub.Model || "").trim();
+        const normalizedModel = rawModel.toLowerCase();
+        let modelStr = rawModel || null;
+
+        if (
+          !normalizedModel ||
+          normalizedModel === "inherit" ||
+          normalizedModel === "low" ||
+          normalizedModel === "flash_lite" ||
+          normalizedModel === "flash-lite" ||
+          normalizedModel === "medium" ||
+          normalizedModel === "flash" ||
+          normalizedModel === "flash_medium" ||
+          normalizedModel === "flash-medium" ||
+          normalizedModel === "pro" ||
+          normalizedModel === "high"
+        ) {
           if (isReviewer) {
             modelStr = "gemini-3.8-flash-high";
-          } else if (profile === "flash-low-worker") {
+          } else if (
+            normalizedModel === "low" ||
+            normalizedModel === "flash_lite" ||
+            normalizedModel === "flash-lite" ||
+            profile === "flash-low-worker"
+          ) {
             modelStr = "gemini-3.8-flash-low";
-          } else if (profile === "flash-medium-worker") {
+          } else if (
+            normalizedModel === "medium" ||
+            normalizedModel === "flash" ||
+            normalizedModel === "flash_medium" ||
+            normalizedModel === "flash-medium" ||
+            profile === "flash-medium-worker"
+          ) {
             modelStr = "gemini-3.8-flash-medium";
           } else {
             modelStr = "gemini-3.8-flash-high";
