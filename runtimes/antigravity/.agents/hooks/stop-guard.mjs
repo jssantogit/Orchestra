@@ -1054,8 +1054,35 @@ function main() {
     activeState.workerValidationExecutionId = null;
   }
 
+  const currentAttempt = Number.isInteger(activeState.attempt) && activeState.attempt >= 0
+    ? activeState.attempt
+    : 0;
+  const completionIdentity = activeState.workerCompletionClaimIdentity || null;
+  const completionAttempt = Number.isInteger(completionIdentity?.attempt)
+    ? completionIdentity.attempt
+    : 0;
+  const completionIdentityFactual = Boolean(
+    completionIdentity &&
+    completionIdentity.source === "RUNTIME_IDENTITY" &&
+    completionIdentity.confidence === "HIGH" &&
+    completionIdentity.delegationKind === "WORK" &&
+    completionAttempt === currentAttempt
+  );
   const completionClaimed = activeState.workerCompletionClaimed === true
-    && activeState.workerCompletionClaimFactual === true;
+    && activeState.workerCompletionClaimFactual === true
+    && completionIdentityFactual;
+
+  if (
+    activeState.workerCompletionClaimed === true &&
+    activeState.workerCompletionClaimFactual === true &&
+    !completionIdentityFactual
+  ) {
+    activeState.completionClaimRejectedReason = completionAttempt !== currentAttempt
+      ? "ATTEMPT_MISMATCH"
+      : "COMPLETION_IDENTITY_NOT_FACTUAL";
+  } else {
+    delete activeState.completionClaimRejectedReason;
+  }
 
   const noScopeViolation = !activeState.scopeViolation && !activeState.forbiddenAccessDetected;
   const noUnresolvedWrites = (activeState.orchestratorWorkspaceWrites || 0) === 0
