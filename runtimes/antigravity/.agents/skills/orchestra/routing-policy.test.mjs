@@ -1486,6 +1486,22 @@ test("validation authority: MEDIUM or missing worker identity confidence cannot 
   assert.equal(missing.verified, false);
   assert.match(missing.reason, /IDENTITY_NOT_FACTUAL/);
 
+  const investigator = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "investigator-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+      confidence: "HIGH",
+      delegationKind: "INVESTIGATION",
+    }],
+  });
+  assert.equal(investigator.verified, false);
+  assert.match(investigator.reason, /INVALID_DELEGATION/);
+
   const factual = verifyWorkerValidation({
     ...base,
     evidenceLedger: [{
@@ -1496,6 +1512,7 @@ test("validation authority: MEDIUM or missing worker identity confidence cannot 
       mutationSeq: 0,
       actorRole: "WORKER",
       confidence: "HIGH",
+      delegationKind: "WORK",
     }],
   });
   assert.equal(factual.verified, true);
