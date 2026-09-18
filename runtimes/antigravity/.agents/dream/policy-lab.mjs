@@ -216,32 +216,23 @@ export function deriveLineageAssignments(worlds = []) {
 
   function canonicalRoot(start) {
     const visited = new Set();
-    let frontier = [start];
-    let top = new Set([start]);
+    const terminalRoots = new Set();
+    const stack = [start];
 
-    while (frontier.length) {
-      const next = [];
-      const nextTop = new Set();
-      for (const node of frontier) {
-        if (visited.has(node)) continue;
-        visited.add(node);
-        const parents = [...(parentRoots.get(node) || [])].sort();
-        if (!parents.length) {
-          nextTop.add(node);
-          continue;
-        }
-        for (const parent of parents) next.push(parent);
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node || visited.has(node)) continue;
+      visited.add(node);
+      const parents = [...(parentRoots.get(node) || [])].sort();
+      if (!parents.length) {
+        terminalRoots.add(node);
+        continue;
       }
-      if (next.length) {
-        frontier = [...new Set(next)].sort();
-        top = new Set(frontier);
-      } else if (nextTop.size) {
-        top = nextTop;
-        frontier = [];
-      }
+      for (const parent of parents) stack.push(parent);
     }
 
-    return [...top].sort()[0] || start;
+    if (terminalRoots.size) return [...terminalRoots].sort()[0];
+    return [...visited].sort()[0] || start;
   }
 
   const assignments = new Map();
