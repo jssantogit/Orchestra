@@ -463,6 +463,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         agentProfile: existing.profile || null,
         model: existing.model || payload.modelName || null,
         delegationKind: existing.delegationKind || null,
+        attempt: Number.isInteger(existing.attempt) ? existing.attempt : 0,
       };
     }
 
@@ -508,6 +509,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             parentConversationId,
             taskId: activeTaskId,
             benchmarkRunId: activeRunId,
+            attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
           });
           if (factualCandidates.length === 1) {
             matched = factualCandidates[0];
@@ -578,6 +580,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             agentProfile: matched.profile || matched.typeName || null,
             model: matched.model || payload.modelName || null,
             delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
           };
         }
 
@@ -601,6 +604,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             taskIdentifier: matched.taskIdentifier || activeTaskId || null,
             benchmarkRunId: matched.benchmarkRunId || activeRunId || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
             originToolCallId: matched.originToolCallId || matched.toolCallId || null,
             originStepIdx: matched.originStepIdx ?? null,
             pendingSeq: matched.seq ?? null,
@@ -628,6 +632,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             agentProfile: childProfile,
             model: childModel,
             delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
           };
         }
       }
@@ -1347,6 +1352,7 @@ function main() {
           model: modelStr,
           taskIdentifier: taskId,
           benchmarkRunId,
+          attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
           toolCallId,
           originToolCallId: toolCallId,
           originStepIdx: payload.stepIdx ?? null,
