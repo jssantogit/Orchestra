@@ -12,6 +12,7 @@ import {
   sha256,
 } from "./schemas.mjs";
 import { DEFAULT_PROMOTION_GATES, evaluateForRetrievalAssist } from "./evaluator.mjs";
+import { readLabeledShadowRuns } from "./shadow-runner.mjs";
 
 export const APPROVAL_PATH = ".agents/semantic/jev-approval.json";
 export const EVALUATION_PATH = ".agents/semantic/jev-evaluation.json";
@@ -29,32 +30,51 @@ function shadowTelemetry(projectRoot) {
   const path = resolve(projectRoot, SHADOW_TELEMETRY_PATH);
   let raw = "";
   try { raw = readFileSync(path, "utf8"); } catch {}
-  const events = raw.split("\n").map((line) => line.trim()).filter(Boolean).flatMap((line) => {
+  let malformedCount = 0;
+  let validEventCount = 0;
+  for (const line of raw.split("\n").map((item) => item.trim()).filter(Boolean)) {
     try {
       const parsed = JSON.parse(line);
-      return parsed?.schema === JEV_SCHEMAS.SHADOW_REPORT ? [parsed] : [];
+      if (
+        parsed?.schema === JEV_SCHEMAS.SHADOW_REPORT
+        || parsed?.schema === JEV_SCHEMAS.SHADOW_LABEL
+      ) {
+        validEventCount++;
+      }
     } catch {
-      return [];
+      malformedCount++;
     }
-  });
+  }
+  const events = readLabeledShadowRuns(projectRoot);
   return {
     path,
     raw,
     events,
     sha256: sha256(raw),
+    valid_event_count: validEventCount,
+    malformed_count: malformedCount,
   };
 }
 
 export function createEvaluationReport(runs, gates = DEFAULT_PROMOTION_GATES, provenance = {}) {
   const base = evaluateForRetrievalAssist(runs, gates);
+  const violations = [...base.violations];
+  const malformed = Number.isInteger(provenance.source_malformed_count)
+    ? provenance.source_malformed_count
+    : 0;
+  if (malformed > 0) violations.push("MALFORMED_SHADOW_TELEMETRY");
   const report = {
     ...base,
+    eligible_for_retrieval_assist: base.eligible_for_retrieval_assist && malformed === 0,
+    violations: [...new Set(violations)],
     generated_at: new Date().toISOString(),
     source_kind: provenance.source_kind || "EXPLICIT_RUNS",
     source_telemetry_sha256: provenance.source_telemetry_sha256 || null,
     source_event_count: Number.isInteger(provenance.source_event_count)
       ? provenance.source_event_count
       : runs.length,
+    source_labeled_run_count: runs.length,
+    source_malformed_count: malformed,
   };
   delete report.report_id;
   report.report_id = contentId("jev-evaluation", report);
@@ -66,7 +86,8 @@ export function createProjectEvaluationReport(projectRoot, gates = DEFAULT_PROMO
   return createEvaluationReport(source.events, gates, {
     source_kind: "PROJECT_SHADOW_TELEMETRY",
     source_telemetry_sha256: source.sha256,
-    source_event_count: source.events.length,
+    source_event_count: source.valid_event_count,
+    source_malformed_count: source.malformed_count,
   });
 }
 
@@ -124,7 +145,9 @@ export function checkRetrievalAssistGate({
     if (!report.eligible_for_retrieval_assist) reasons.push("REPORT_NOT_ELIGIBLE");
     const source = shadowTelemetry(projectRoot);
     if (report.source_telemetry_sha256 !== source.sha256) reasons.push("SHADOW_TELEMETRY_CHANGED");
-    if (report.source_event_count !== source.events.length) reasons.push("SHADOW_EVENT_COUNT_CHANGED");
+    if (report.source_event_count !== source.valid_event_count) reasons.push("SHADOW_EVENT_COUNT_CHANGED");
+    if (report.source_labeled_run_count !== source.events.length) reasons.push("SHADOW_LABEL_COUNT_CHANGED");
+    if (source.malformed_count > 0) reasons.push("MALFORMED_SHADOW_TELEMETRY");
   }
 
   const approvalPath = resolve(projectRoot, APPROVAL_PATH);
