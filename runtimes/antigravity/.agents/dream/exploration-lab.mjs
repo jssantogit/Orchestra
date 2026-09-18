@@ -38,7 +38,7 @@ const SENSITIVE_PATH = [
   /(^|\/)\.(?:ssh|aws)(?:\/|$)/i,
   /\.(?:pem|p12|pfx|key)$/i,
 ];
-const EXTERNAL_TOOL = /(browser|web|http|fetch_url|network|deploy|publish|release|database|db_|email|mail|slack|discord|cloud|remote)/i;
+const EXTERNAL_TOOL = /(browser|web|http|url|network|deploy|publish|release|database|db_|email|mail|slack|discord|cloud|remote|mcp|plugin|connector|permission|generate_image|manage_task)/i;
 
 function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true });
@@ -367,8 +367,14 @@ export function enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs = 
   if (!["PREPARED", "RUNNING"].includes(session.status)) return { active: true, allowed: false, reason: "EXPLORATION_SESSION_NOT_ACTIVE" };
   if (Date.now() > Date.parse(session.deadline_at)) return { active: true, allowed: false, reason: "EXPLORATION_TIMEOUT" };
   const name = String(toolName || "");
-  if (name === "schedule" || name === "send_message" || EXTERNAL_TOOL.test(name)) {
+  if (name === "schedule" || name === "send_message" || name === "define_subagent" || EXTERNAL_TOOL.test(name)) {
     return { active: true, allowed: false, reason: "EXPLORATION_EXTERNAL_SIDE_EFFECT_BLOCKED:" + name };
+  }
+  if (name === "invoke_subagent") {
+    const subagents = toolArgs.Subagents || toolArgs.subagents || [];
+    if (!Array.isArray(subagents) || subagents.length !== 1) {
+      return { active: true, allowed: false, reason: "EXPLORATION_PARALLEL_SUBAGENT_BLOCKED" };
+    }
   }
   if (name === "run_command" && !isSafeExplorationCommand(commandFrom(toolArgs))) {
     return { active: true, allowed: false, reason: "EXPLORATION_COMMAND_NOT_ALLOWLISTED" };
