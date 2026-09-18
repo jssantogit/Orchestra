@@ -86,6 +86,80 @@ function ephemeralKeys(value, prefix = "") {
   }
   return found;
 }
+function rawToolPath(toolName, args = {}) {
+  if (toolName === "view_file") {
+    return args.AbsolutePath || args.absolutePath || args.FilePath || args.filePath || args.path || "";
+  }
+  if (toolName === "grep_search") {
+    return args.SearchPath || args.searchPath || args.Directory || args.directory || args.path || "";
+  }
+  if (toolName === "find_by_name") {
+    return args.SearchDirectory || args.searchDirectory || args.Directory || args.directory || args.path || "";
+  }
+  if (["write_to_file", "replace_file_content", "edit_file", "create_file"].includes(toolName)) {
+    return args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || "";
+  }
+  return "";
+}
+
+function explorationPathConfined(repoRoot, rawPath) {
+  if (!rawPath) return true;
+  const cleaned = String(rawPath).trim().replace(/^["']|["']$/g, "");
+  if (!cleaned) return true;
+
+  const lexical = resolve(repoRoot, cleaned);
+  if (!inside(repoRoot, lexical)) return false;
+
+  let physicalRoot = resolve(repoRoot);
+  try { physicalRoot = realpathSync(repoRoot); } catch {}
+
+  if (existsSync(lexical)) {
+    try {
+      return inside(physicalRoot, realpathSync(lexical));
+    } catch {
+      return false;
+    }
+  }
+
+  // For non-existing mutation targets, resolve the deepest existing ancestor
+  // so a symlinked parent cannot escape the sibling.
+  let ancestor = lexical;
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    ancestor = parent;
+  }
+  try {
+    return inside(physicalRoot, realpathSync(ancestor));
+  } catch {
+    return false;
+  }
+}
+
+function reserveSiblingSlot(repoRoot, key) {
+  const reservationDir = resolve(repoRoot, EXPLORATIONS, "reservations");
+  mkdirSync(reservationDir, { recursive: true });
+  const token = String(key || "").replace(/^sha256:/, "");
+  const path = resolve(reservationDir, token + ".json");
+  try {
+    writeFileSync(path, JSON.stringify({
+      schema: "orchestra.exploration-reservation.v1",
+      key,
+      reserved_at: new Date().toISOString(),
+    }), { encoding: "utf8", flag: "wx" });
+    return { reserved: true, path };
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      return { reserved: false, reason: "SIBLING_LIMIT_REACHED", path };
+    }
+    return {
+      reserved: false,
+      reason: "EXPLORATION_RESERVATION_FAILED",
+      error: String(error?.message || error),
+    };
+  }
+}
+
 function commandFrom(args = {}) {
   for (const key of ["CommandLine", "command", "Command", "cmd", "shell_command", "script"]) {
     if (typeof args[key] === "string" && args[key].trim()) return args[key].trim();
@@ -369,6 +443,19 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
     return { prepared: false, reason: "BRANCH_SEED_PAYLOAD_HASH_MISMATCH" };
   }
 
+  // Reserve the single sibling slot with O_EXCL semantics before materializing
+  // anything. The durable reservation makes the hard budget race-safe across
+  // concurrent prepare processes.
+  const reservation = reserveSiblingSlot(repoRoot, key);
+  if (!reservation.reserved) {
+    return {
+      prepared: false,
+      reason: reservation.reason,
+      reservation_path: reservation.path || null,
+      error: reservation.error || null,
+    };
+  }
+
   const sessionId = "explore-" + randomUUID();
   const branchRoot = join(tmpdir(), "orchestra-dream-" + sessionId.replace(/[^A-Za-z0-9._-]/g, "-"));
   rmSync(branchRoot, { recursive: true, force: true });
@@ -409,6 +496,7 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   const hookOverlay = activateExplorationPreToolWrapper(branchRoot);
   if (!hookOverlay.ok) {
     rmSync(branchRoot, { recursive: true, force: true });
+    try { unlinkSync(reservation.path); } catch {}
     return { prepared: false, reason: hookOverlay.reason, error: hookOverlay.error || null };
   }
   session.hook_overlay = {
@@ -429,6 +517,20 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
     created_at: session.created_at,
   };
   atomicJson(resolve(repoRoot, INDEX), index);
+  try {
+    writeFileSync(reservation.path, JSON.stringify({
+      schema: "orchestra.exploration-reservation.v1",
+      key,
+      status: "MATERIALIZED",
+      session_id: sessionId,
+      branch_workspace: branchRoot,
+      selected_action: selection.selected,
+      materialized_at: new Date().toISOString(),
+    }, null, 2), "utf8");
+  } catch {
+    // Reservation already exists and therefore still enforces the hard sibling
+    // ceiling even if this descriptive metadata update fails.
+  }
   return { prepared: true, session, branch_workspace: branchRoot, selection };
 }
 
@@ -477,6 +579,16 @@ export function enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs = 
   if (!EXPLORATION_ALLOWED_TOOLS.has(name)) {
     return { active: true, allowed: false, reason: "EXPLORATION_TOOL_NOT_ALLOWLISTED:" + name };
   }
+
+  const rawPath = rawToolPath(name, toolArgs);
+  if (rawPath && !explorationPathConfined(repoRoot, rawPath)) {
+    return {
+      active: true,
+      allowed: false,
+      reason: "EXPLORATION_WORKSPACE_ESCAPE:" + String(rawPath),
+    };
+  }
+
   if (name === "invoke_subagent") {
     const subagents = toolArgs.Subagents || toolArgs.subagents || [];
     if (!Array.isArray(subagents) || subagents.length !== 1) {
