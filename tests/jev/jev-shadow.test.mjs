@@ -65,7 +65,7 @@ test("artifact ranking shadow writes telemetry and never changes packet behavior
       live: true,
       mandatoryCore: { goal: "fix auth test", requiredEvidence: ["TEST_RUN"] },
       futureEvents: [{ type: "ACCEPTANCE", evidenceId: "ev-1" }],
-      criticalIds: [result?.catalog?.candidates?.[0]?.id].filter(Boolean),
+      criticalIds: [],
     });
     assert.equal(result.event.blocks_tool, false);
     assert.equal(result.event.changes_packet, false);
