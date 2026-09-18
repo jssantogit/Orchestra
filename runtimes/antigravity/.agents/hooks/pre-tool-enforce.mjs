@@ -1,4 +1,5 @@
 import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve, relative, dirname, basename, sep, isAbsolute } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
@@ -303,6 +304,25 @@ function isAgentControlPlanePath(relPath) {
 function isRepositoryConstitutionPath(relPath) {
   const norm = normalizePath(relPath);
   return norm === "AGENTS.md" || norm.endsWith("/AGENTS.md");
+}
+
+function readGitHead(repoRoot) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function isReviewerSubagentDescriptor(sub = {}) {
+  const typeName = String(sub.TypeName || sub.name || "");
+  const roleStr = String(sub.Role || sub.role || typeName).toLowerCase();
+  return roleStr.includes("reviewer") || typeName === "flash-reviewer";
 }
 
 function pathMatchesPattern(filePath, pattern) {
@@ -1114,19 +1134,47 @@ function main() {
         } catch {}
       }
 
-      if (subagents.length > 1) {
-        const allReviewers = subagents.every((sub) => {
-          const typeName = String(sub.TypeName || sub.name || "");
-          const roleStr = String(sub.Role || sub.role || typeName).toLowerCase();
-          return roleStr.includes("reviewer") || typeName === "flash-reviewer";
-        });
-        if (!allReviewers) {
-          console.log(JSON.stringify({
-            decision: "deny",
-            reason: "PARALLEL_MUTATING_SUBAGENTS_UNSUPPORTED: Multi-subagent batches are reserved for the read-only Two-Key reviewer pair. Delegate workers/investigators one at a time so scope contracts and causal identity remain unambiguous.",
-          }));
-          return;
-        }
+      const reviewerSubagents = subagents.filter(isReviewerSubagentDescriptor);
+      const isReviewerBatch = reviewerSubagents.length > 0;
+      const isTwoKeyBatch = subagents.length === 2 && reviewerSubagents.length === 2;
+      const isCriticalTask = String(activeState.criticality || activeContract?.criticality || "").toUpperCase() === "CRITICAL";
+
+      if (subagents.length > 1 && reviewerSubagents.length !== subagents.length) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "PARALLEL_MUTATING_SUBAGENTS_UNSUPPORTED: Multi-subagent batches are reserved for the read-only Two-Key reviewer pair. Delegate workers/investigators one at a time so scope contracts and causal identity remain unambiguous.",
+        }));
+        return;
+      }
+
+      if (isReviewerBatch && subagents.length !== 2) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "TWO_KEY_REVIEW_CARDINALITY: Reviewer dispatch must contain exactly two independent reviewers in one batch. Third-vote and single-reviewer critical consensus are prohibited.",
+        }));
+        return;
+      }
+
+      if (isCriticalTask && isReviewerBatch && !isTwoKeyBatch) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "TWO_KEY_REVIEW_REQUIRED: CRITICAL review requires exactly two independent reviewers.",
+        }));
+        return;
+      }
+
+      const reviewCandidateHead = isTwoKeyBatch ? readGitHead(repoRoot) : null;
+      const reviewCandidateMutationSeq = isTwoKeyBatch
+        ? (activeState.mutationSeq || activeState.mutation_seq || 0)
+        : null;
+      const reviewOriginToolCallId = isTwoKeyBatch ? (toolCall.id || payload.toolCallId || null) : null;
+
+      if (isTwoKeyBatch && !reviewCandidateHead) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "TWO_KEY_CANDIDATE_IDENTITY_UNRESOLVED: Cannot dispatch critical reviewers without a factual Git HEAD for the candidate.",
+        }));
+        return;
       }
 
       // Check retry budget monotonicity using factual state only.
@@ -1249,6 +1297,9 @@ function main() {
           originToolCallId: toolCallId,
           originStepIdx: payload.stepIdx ?? null,
           delegationKind,
+          reviewBatchId: isReviewer ? reviewOriginToolCallId : null,
+          reviewCandidateHead: isReviewer ? reviewCandidateHead : null,
+          reviewCandidateMutationSeq: isReviewer ? reviewCandidateMutationSeq : null,
           creationOrder: idx,
           timestamp: new Date().toISOString(),
           consumed: false,
@@ -1594,7 +1645,22 @@ function main() {
         }
       }
 
-      // All subagents approved: commit state, bindings, and record decisions
+      // All subagents approved: commit state, bindings, and record decisions.
+      // A Two-Key batch is bound to the exact candidate version visible at dispatch.
+      if (isTwoKeyBatch) {
+        activeState.twoKeyReview = {
+          status: "IN_FLIGHT",
+          reviewBatchId: reviewOriginToolCallId,
+          candidateHead: reviewCandidateHead,
+          candidateMutationSeq: reviewCandidateMutationSeq,
+          expectedReviewerCount: 2,
+          reviewerConversationIds: [],
+          reviews: {},
+          startedAt: new Date().toISOString(),
+        };
+        activeState.twoKeyReviewConsensus = null;
+      }
+
       roleBindings.pendingSubagents.push(...candidatePending);
       roleBindings.pendingSeq = seq;
       saveRoleBindings(roleBindingsPath, roleBindings);
