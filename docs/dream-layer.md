@@ -445,3 +445,82 @@ npm run dream:policy-lab -- evaluate --repo /path/to/project --cycle <cycle.json
 ```
 
 Candidate statuses include `NEEDS_EXPLORATION`, `INELIGIBLE`, `REGRESSION`, `EQUIVALENT`, `IMPROVEMENT_BELOW_MATERIALITY_THRESHOLD`, and `RECOMMENDATION_CANDIDATE`. None of these statuses activate a policy in Milestone F.
+---
+
+## 13. Milestone G: Zero-Impact Shadow Mode
+
+Milestone G allows one evaluated candidate policy to compute a **private counterfactual action on each factual DECISION** without executing that action or exposing it to the model.
+
+### Authority boundary
+
+- Shadow is explicitly enabled by CLI from a persisted Milestone F evaluation/candidate pair.
+- Only schema-valid, content-addressed candidate policies from local Policy Lab artifacts are eligible.
+- `REGRESSION`, `INELIGIBLE`, and baseline entries cannot be shadowed.
+- Shadow is invoked only after a factual `DECISION` has been durably published.
+- The factual `chosen_action` remains the only action returned to the runtime. Candidate action, divergence, support, latency, and Shadow errors are written only under `.agents/dream-data/shadow/`.
+- `CRITICAL` and `HUMAN_GATE` decisions are excluded before candidate evaluation.
+- Shadow performs no model/tool calls, no writes to active policy state, and no Canary execution.
+
+### Frozen support index
+
+When Shadow is enabled, the runtime builds a content-addressed support index from valid sealed worlds. The index freezes exact support for that Shadow session:
+
+```text
+snapshot_id + decision_type + canonical policy-visible state
+  -> observed actions + factual outcomes
+```
+
+A divergent candidate action is labeled `EXACT_SUPPORTED` only when that exact factual branch already exists. Otherwise it is `UNKNOWN_BRANCH`. Shadow never infers support by similarity.
+
+### Observation semantics
+
+Each factual DECISION produces at most one idempotent `orchestra.shadow-observation.v1` artifact for the active Shadow session. It records:
+
+- factual baseline action;
+- private candidate action;
+- whether the candidate diverged;
+- exact replay-support status;
+- candidate-policy evaluation latency;
+- eligibility/exclusion reason;
+- deterministic errors, if any.
+
+The observation artifact is not written to `events.jsonl`, active state, Scope Contract, tool return values, or model-visible context.
+
+### Canary-readiness gate
+
+A Shadow report requires:
+
+- at least **50 eligible Shadow decisions** before Canary review;
+- no Shadow policy-evaluation errors;
+- `UNKNOWN_BRANCH` on no more than **20% of divergent decisions**.
+
+If more than 20% of divergences are unsupported, status is `GATHER_SUPPORT`. If fewer than 50 eligible decisions exist, status is `COLLECT_MORE_DECISIONS`. Passing all Shadow gates produces only `READY_FOR_HUMAN_CANARY_REVIEW`.
+
+Milestone G still emits:
+
+```text
+activation_allowed: false
+canary_execution_allowed: false
+human_approval_required: true
+```
+
+Actual candidate execution belongs to Milestone H.
+
+### CLI flow
+
+```bash
+# Explicitly enable one validated Policy Lab candidate for Shadow observation.
+npm run dream:shadow -- enable \
+  --repo /path/to/project \
+  --candidate <policy-id> \
+  --evaluation <evaluation-id>
+
+# Inspect active Shadow session.
+npm run dream:shadow -- status --repo /path/to/project
+
+# Build a zero-impact Shadow report.
+npm run dream:shadow -- report --repo /path/to/project
+
+# Stop future Shadow observations. Historical session artifacts remain local.
+npm run dream:shadow -- disable --repo /path/to/project
+```
