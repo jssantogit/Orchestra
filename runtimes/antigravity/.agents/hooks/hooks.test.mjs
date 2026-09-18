@@ -2145,81 +2145,34 @@ test("pre-tool hook: ambiguous identical workers fail closed instead of FIFO bin
   }
 });
 
-test("pre-tool hook: two pending subagents are consumed sequentially and cannot be reused", () => {
+test("pre-tool hook: multi-worker batch fails closed to prevent scope-contract aliasing", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
-    // Write scope contract
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({ allowedPaths: ["src/**"] }));
 
-    // Orchestrator invokes two subagents
     const invokeInput = JSON.stringify({
       conversationId: "orch-main",
       toolCall: {
         name: "invoke_subagent",
         args: {
           Subagents: [
-            { TypeName: "flash-low-worker", Role: "Worker 1", Model: "flash_lite", Prompt: "Task 1" },
-            { TypeName: "flash-worker", Role: "Worker 2", Model: "pro", Prompt: "Task 2" },
+            { TypeName: "flash-low-worker", Role: "Worker 1", Model: "flash_lite", Prompt: "Task 1. allowedPaths: [src/a/**]" },
+            { TypeName: "flash-worker", Role: "Worker 2", Model: "pro", Prompt: "Task 2. allowedPaths: [src/b/**]" },
           ],
         },
       },
     });
+
     const invokeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: invokeInput }));
-    assert.equal(invokeOutput.decision, "allow");
+    assert.equal(invokeOutput.decision, "deny");
+    assert.match(invokeOutput.reason, /PARALLEL_MUTATING_SUBAGENTS_UNSUPPORTED/);
 
     const bindingsPath = resolve(".agents/state/role-bindings.json");
-    let bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.pendingSubagents.length, 2);
-    assert.equal(bindings.pendingSubagents[0].consumed, false);
-    assert.equal(bindings.pendingSubagents[1].consumed, false);
-
-    // Child 1 calls tool with distinguishing profile
-    const child1Input = JSON.stringify({
-      conversationId: "child-conv-1",
-      agentProfile: "flash-low-worker",
-      toolCall: {
-        name: "write_to_file",
-        args: { TargetFile: resolve("src/formatter.js") },
-      },
-    });
-    const child1Output = JSON.parse(execFileSync("node", [preToolScript], { input: child1Input }));
-    assert.equal(child1Output.decision, "allow");
-
-    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.pendingSubagents[0].consumed, true);
-    assert.equal(bindings.pendingSubagents[0].consumedBy, "child-conv-1");
-    assert.equal(bindings.pendingSubagents[1].consumed, false);
-    assert.equal(bindings.bindings["child-conv-1"].profile, "flash-low-worker");
-
-    // Child 2 calls tool with second profile
-    const child2Input = JSON.stringify({
-      conversationId: "child-conv-2",
-      agentProfile: "flash-worker",
-      toolCall: {
-        name: "write_to_file",
-        args: { TargetFile: resolve("src/formatter.js") },
-      },
-    });
-    const child2Output = JSON.parse(execFileSync("node", [preToolScript], { input: child2Input }));
-    assert.equal(child2Output.decision, "allow");
-
-    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.pendingSubagents[1].consumed, true);
-    assert.equal(bindings.pendingSubagents[1].consumedBy, "child-conv-2");
-    assert.equal(bindings.bindings["child-conv-2"].profile, "flash-worker");
-
-    // Child 3 calls tool -> NO unconsumed pending subagents remain!
-    const child3Input = JSON.stringify({
-      conversationId: "child-conv-3",
-      toolCall: {
-        name: "write_to_file",
-        args: { TargetFile: resolve("src/formatter.js") },
-      },
-    });
-    const child3Output = JSON.parse(execFileSync("node", [preToolScript], { input: child3Input }));
-    assert.equal(child3Output.decision, "deny", "Child 3 cannot bind already consumed pending subagents");
-    assert(child3Output.reason.includes("ROLE_IDENTITY_UNRESOLVED"));
+    if (existsSync(bindingsPath)) {
+      const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+      assert.equal(bindings.pendingSubagents?.length ?? 0, 0, "Denied batch must not create pending worker identities");
+    }
   } finally {
     cleanState();
   }
