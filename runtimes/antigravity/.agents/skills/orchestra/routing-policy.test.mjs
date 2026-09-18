@@ -1517,3 +1517,55 @@ test("validation authority: MEDIUM or missing worker identity confidence cannot 
   });
   assert.equal(factual.verified, true);
 });
+
+
+test("validation authority: retry attempts cannot reuse prior-attempt evidence", () => {
+  const previousAttemptEvidence = {
+    executionId: "attempt-0-test",
+    type: "TEST_RUN",
+    command: "npm test",
+    exitCode: 0,
+    mutationSeq: 0,
+    actorRole: "WORKER",
+    confidence: "HIGH",
+    delegationKind: "WORK",
+    attempt: 0,
+  };
+
+  const retryWithoutNewEvidence = verifyWorkerValidation({
+    attempt: 1,
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+    evidenceLedger: [previousAttemptEvidence],
+  });
+  assert.equal(retryWithoutNewEvidence.verified, false);
+  assert.match(retryWithoutNewEvidence.reason, /ATTEMPT_MISMATCH/);
+
+  const retryWithCurrentEvidence = verifyWorkerValidation({
+    attempt: 1,
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+    evidenceLedger: [
+      previousAttemptEvidence,
+      {
+        ...previousAttemptEvidence,
+        executionId: "attempt-1-test",
+        attempt: 1,
+      },
+    ],
+  });
+  assert.equal(retryWithCurrentEvidence.verified, true);
+  assert.equal(retryWithCurrentEvidence.evidence.attempt, 1);
+
+  const initialLegacyEvidence = verifyWorkerValidation({
+    attempt: 0,
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+    evidenceLedger: [{
+      ...previousAttemptEvidence,
+      executionId: "legacy-attempt-zero",
+      attempt: undefined,
+    }],
+  });
+  assert.equal(initialLegacyEvidence.verified, true, "Legacy missing attempt is compatible only with initial attempt 0");
+});
