@@ -216,6 +216,7 @@ export function captureBranchSeedIfArmed({
     task_descriptor: structuredClone(taskDescriptor || {}),
     evidence_summary: stripEphemeral(evidenceSummary || {}),
     runtime_fingerprint: snapshot.runtime_fingerprint,
+    human_approved_major: criticality === "MAJOR" && arm.approve_major === true,
     workspace_manifest: manifestResult.manifest,
     archive_workspace_relative: "workspace",
     captured_at: new Date().toISOString(),
@@ -247,6 +248,18 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   let seed;
   try { seed = readJson(seedPath); } catch (error) { return { prepared: false, reason: "EXPLORATION_SEED_UNAVAILABLE", error: error.message }; }
   if (seed?.schema !== BRANCH_SEED_SCHEMA) return { prepared: false, reason: "BRANCH_SEED_INVALID" };
+  if (!seed.decision || !seed.snapshot || !Array.isArray(seed.workspace_manifest)) {
+    return { prepared: false, reason: "BRANCH_SEED_INVALID" };
+  }
+  if (sha256Canonical(seed.decision.state || {}) !== seed.decision.state_hash) {
+    return { prepared: false, reason: "BRANCH_SEED_STATE_HASH_MISMATCH" };
+  }
+  if (sha256Canonical(seed.workspace_manifest) !== seed.snapshot.workspace_fingerprint) {
+    return { prepared: false, reason: "BRANCH_SEED_MANIFEST_HASH_MISMATCH" };
+  }
+  if (seed.workspace_manifest.some((entry) => sensitive(entry?.path))) {
+    return { prepared: false, reason: "BRANCH_SEED_SECRET_PATH_UNSAFE" };
+  }
 
   const candidates = worldDecisions(world).filter((d) =>
     d?.snapshot_id === seed.snapshot?.snapshot_id
@@ -256,8 +269,17 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   );
   if (candidates.length !== 1) return { prepared: false, reason: candidates.length ? "SOURCE_DECISION_AMBIGUOUS" : "SOURCE_DECISION_NOT_FOUND" };
   const source = candidates[0];
-  if (severity(source.state?.criticality) === "CRITICAL") return { prepared: false, reason: "EXPLORATION_INELIGIBLE_CRITICAL" };
+  const sourceCriticality = severity(source.state?.criticality);
+  if (sourceCriticality === "CRITICAL") return { prepared: false, reason: "EXPLORATION_INELIGIBLE_CRITICAL" };
+  if (sourceCriticality === "MAJOR" && seed.human_approved_major !== true) {
+    return { prepared: false, reason: "EXPLORATION_INELIGIBLE_MAJOR_REQUIRES_APPROVAL" };
+  }
   if (source.state?.state === "HUMAN_GATE" || source.state?.human_gate_active) return { prepared: false, reason: "EXPLORATION_INELIGIBLE_HUMAN_GATE" };
+  const sourceActionsHash = sha256Canonical([...new Set(source.available_actions || [])].sort());
+  const seedActionsHash = sha256Canonical([...new Set(seed.decision.available_actions || [])].sort());
+  if (sourceActionsHash !== seedActionsHash) {
+    return { prepared: false, reason: "BRANCH_SEED_ACTION_SPACE_MISMATCH" };
+  }
 
   const tree = buildDiscoveryTree(world);
   const selection = selectLeastObservedLegalAction({ tree, snapshotId: source.snapshot_id, availableActions: source.available_actions });
@@ -277,6 +299,11 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   const primaryFingerprint = sha256Canonical(primary.manifest);
   const archive = resolve(dirname(resolve(seedPath)), seed.archive_workspace_relative || "workspace");
   if (!existsSync(archive)) return { prepared: false, reason: "BRANCH_SEED_PAYLOAD_MISSING" };
+  const archiveManifest = buildWorkspaceManifest(archive);
+  if (!archiveManifest.ok) return { prepared: false, reason: archiveManifest.reason };
+  if (sha256Canonical(archiveManifest.manifest) !== seed.snapshot.workspace_fingerprint) {
+    return { prepared: false, reason: "BRANCH_SEED_PAYLOAD_HASH_MISMATCH" };
+  }
 
   const sessionId = "explore-" + randomUUID();
   const branchRoot = join(tmpdir(), "orchestra-dream-" + sessionId.replace(/[^A-Za-z0-9._-]/g, "-"));
