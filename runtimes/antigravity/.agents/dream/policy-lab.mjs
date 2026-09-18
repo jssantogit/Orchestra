@@ -7,13 +7,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { sha256Canonical } from "./canonical.mjs";
 import { createReplayReport } from "./evaluator.mjs";
 import { computePolicyId, evaluatePolicy, POLICY_STATUS, validatePolicy } from "./policy-engine.mjs";
 import { replayExact } from "./replay-simulator.mjs";
 import { validateWorld } from "./world-sealer.mjs";
+import { loadRuntimePolicy } from "./policy-store.mjs";
 
 export const POLICY_DATASET_SCHEMA = "orchestra.policy-development-dataset.v1";
 export const POLICY_CYCLE_SCHEMA = "orchestra.policy-lab-cycle.v1";
@@ -385,22 +385,22 @@ export function loadSealedWorlds(repoRoot) {
 }
 
 export function loadCurrentPolicy(repoRoot) {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(repoRoot, ".agents/dream/policies/static-policy-v1.json"),
-    resolve(moduleDir, "policies/static-policy-v1.json"),
-  ];
-
-  for (const path of candidates) {
-    if (!existsSync(path)) continue;
-    const policy = readJson(path);
-    const validation = validatePolicy(policy);
-    if (!validation.valid) {
-      return { ok: false, reason: "CURRENT_POLICY_INVALID", errors: validation.errors, path };
-    }
-    return { ok: true, policy, path };
+  const loaded = loadRuntimePolicy(repoRoot);
+  if (!loaded.ok) {
+    return {
+      ok: false,
+      reason: loaded.reason || "CURRENT_POLICY_NOT_FOUND",
+      errors: loaded.errors || [],
+      path: loaded.path || null,
+    };
   }
-  return { ok: false, reason: "CURRENT_POLICY_NOT_FOUND" };
+  return {
+    ok: true,
+    policy: loaded.policy,
+    path: loaded.path,
+    source: loaded.source,
+    diagnostic: loaded.diagnostic || null,
+  };
 }
 
 export function buildPolicyDevelopmentDataset({
