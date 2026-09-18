@@ -36,31 +36,50 @@ export async function rankCandidates({
   live = false,
 } = {}) {
   if (!client?.ask) throw new Error("JEV_CLIENT_REQUIRED");
-  const questions = buildRankingQuestions(projection);
-  if (Object.keys(questions).length > DEFAULT_JEV_LIMITS.max_questions_per_request) {
-    throw new Error("JEV_TOO_MANY_QUESTIONS");
-  }
-  const started = Date.now();
-  const response = await client.ask(projection, questions, { live });
-  if (response.skipped) {
-    return {
-      schema: JEV_SCHEMAS.RANKING,
-      ranking_id: contentId("jev-ranking", { projection_id: projection.projection_id, skipped: true }),
-      authority: JEV_AUTHORITY,
-      projection_id: projection.projection_id,
-      model: response.model || null,
-      skipped: true,
-      reason: response.reason || "JEV_SKIPPED",
-      latency_ms: 0,
-      usage: response.usage || {},
-      items: [],
-    };
+  const allQuestions = buildRankingQuestions(projection);
+  const entries = Object.entries(allQuestions);
+  const batches = [];
+  for (let i = 0; i < entries.length; i += DEFAULT_JEV_LIMITS.max_questions_per_request) {
+    batches.push(Object.fromEntries(entries.slice(i, i + DEFAULT_JEV_LIMITS.max_questions_per_request)));
   }
 
+  const started = Date.now();
+  const combinedAnswers = {};
+  const usage = { input_tokens: 0, output_tokens: 0 };
+  let model = null;
+  let latencyMs = 0;
+  let requestCount = 0;
+
+  for (const questions of batches) {
+    const response = await client.ask(projection, questions, { live });
+    if (response.skipped) {
+      return {
+        schema: JEV_SCHEMAS.RANKING,
+        ranking_id: contentId("jev-ranking", { projection_id: projection.projection_id, skipped: true }),
+        authority: JEV_AUTHORITY,
+        projection_id: projection.projection_id,
+        model: response.model || null,
+        skipped: true,
+        reason: response.reason || "JEV_SKIPPED",
+        request_count: 0,
+        latency_ms: 0,
+        usage: response.usage || {},
+        items: [],
+      };
+    }
+    requestCount++;
+    model ||= response.model || null;
+    latencyMs += response.latency_ms || 0;
+    usage.input_tokens += response.usage?.input_tokens || 0;
+    usage.output_tokens += response.usage?.output_tokens || 0;
+    Object.assign(combinedAnswers, response.answers || {});
+  }
+
+  const combinedResponse = { answers: combinedAnswers };
   const items = (projection.candidates || []).map((candidate) => {
-    const relevance = noul(response, `useful__${candidate.id}`);
-    const futureUse = noul(response, `future__${candidate.id}`);
-    const duplicate = noul(response, `duplicate__${candidate.id}`);
+    const relevance = noul(combinedResponse, `useful__${candidate.id}`);
+    const futureUse = noul(combinedResponse, `future__${candidate.id}`);
+    const duplicate = noul(combinedResponse, `duplicate__${candidate.id}`);
     const score = Math.max(0, Math.min(1, (0.55 * relevance) + (0.35 * futureUse) + (0.10 * (1 - duplicate))));
     return {
       id: candidate.id,
@@ -81,15 +100,16 @@ export async function rankCandidates({
     schema: JEV_SCHEMAS.RANKING,
     ranking_id: contentId("jev-ranking", {
       projection_id: projection.projection_id,
-      model: response.model || null,
+      model,
       items,
     }),
     authority: JEV_AUTHORITY,
     projection_id: projection.projection_id,
-    model: response.model || null,
+    model,
     skipped: false,
-    latency_ms: response.latency_ms ?? (Date.now() - started),
-    usage: response.usage || {},
+    request_count: requestCount,
+    latency_ms: latencyMs || (Date.now() - started),
+    usage,
     items,
   };
   const validation = validateRanking(ranking);
