@@ -285,6 +285,33 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     const blocked = enforceExplorationToolBoundary({ repoRoot: branch, toolName: "run_command", toolArgs: { CommandLine: "git push origin main" } });
     assert.equal(blocked.allowed, false);
     assert.equal(enforceExplorationToolBoundary({ repoRoot: branch, toolName: "search_web", toolArgs: {} }).allowed, false);
+    assert.equal(
+      enforceExplorationToolBoundary({
+        repoRoot: branch,
+        toolName: "view_file",
+        toolArgs: { AbsolutePath: resolve(branch, "..", "outside-secret.txt") },
+      }).allowed,
+      false,
+    );
+
+    const wrapperAllow = JSON.parse(execFileSync("node", [explorationGuardScript], {
+      input: JSON.stringify({
+        workspacePaths: [branch],
+        toolCall: { name: "view_file", args: { AbsolutePath: join(branch, "src", "unit.js") } },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(wrapperAllow.decision, "allow");
+
+    const wrapperExternal = JSON.parse(execFileSync("node", [explorationGuardScript], {
+      input: JSON.stringify({
+        workspacePaths: [branch],
+        toolCall: { name: "search_web", args: { Query: "forbidden" } },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(wrapperExternal.decision, "deny");
+    assert.match(wrapperExternal.reason, /EXPLORATION_EXTERNAL_SIDE_EFFECT_BLOCKED/);
 
     const missingIdentity = recordExplorationModelCall({ repoRoot: branch, payload: { conversationId: "fresh-a", modelName: "test" } });
     assert.equal(missingIdentity.terminate, true);
@@ -316,9 +343,13 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     assert.equal(stopOutput.decision, "stop");
     assert.match(stopOutput.reason, /EXPLORATION_MODEL_CALL_BUDGET_EXHAUSTED/);
 
+    // Remove the descriptive index to prove the O_EXCL reservation itself
+    // enforces the one-sibling ceiling.
+    rmSync(join(f.repo, ".agents", "dream-data", "explorations", "index.json"), { force: true });
     const duplicate = prepareExploration({ repoRoot: f.repo, seedPath: captured.seed_path, world });
     assert.equal(duplicate.prepared, false);
     assert.equal(duplicate.reason, "SIBLING_LIMIT_REACHED");
+    assert.match(duplicate.reservation_path, /reservations/);
   } finally {
     rmSync(f.repo, { recursive: true, force: true });
     if (branch) rmSync(branch, { recursive: true, force: true });
