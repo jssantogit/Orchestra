@@ -320,7 +320,8 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
     if (stateRole === "ORCHESTRATOR" || stateRole === "FLASH_ORCHESTRATOR") {
-      if (roleBindings.mainConversationId && convId && convId !== roleBindings.mainConversationId) {
+      const expectedMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+      if (expectedMainConversationId && convId && convId !== expectedMainConversationId) {
         return {
           role: "UNKNOWN",
           source: "UNRESOLVED",
@@ -330,8 +331,10 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       }
       return {
         role: "ORCHESTRATOR",
-        source: "STATE_DERIVED",
-        confidence: "MEDIUM",
+        source: expectedMainConversationId && convId === expectedMainConversationId
+          ? "CONVERSATION_BOUND_IDENTITY"
+          : "STATE_DERIVED",
+        confidence: expectedMainConversationId && convId === expectedMainConversationId ? "HIGH" : "MEDIUM",
         actorId: convId,
         agentProfile: "flash-orchestrator",
         model: payload.modelName || "gemini-3.8-flash-medium",
