@@ -440,7 +440,9 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   const primaryFingerprint = sha256Canonical(primary.manifest);
   const archive = resolve(dirname(resolve(seedPath)), seed.archive_workspace_relative || "workspace");
   if (!existsSync(archive)) return { prepared: false, reason: "BRANCH_SEED_PAYLOAD_MISSING" };
-  const archiveManifest = buildWorkspaceManifest(archive);
+  // Verify the immutable archive without creating a workspace-hash cache
+  // inside it; the archive itself must remain free of regenerated runtime state.
+  const archiveManifest = buildWorkspaceManifest(archive, { cacheFilePath: "" });
   if (!archiveManifest.ok) return { prepared: false, reason: archiveManifest.reason };
   if (sha256Canonical(archiveManifest.manifest) !== seed.snapshot.workspace_fingerprint) {
     return { prepared: false, reason: "BRANCH_SEED_PAYLOAD_HASH_MISMATCH" };
