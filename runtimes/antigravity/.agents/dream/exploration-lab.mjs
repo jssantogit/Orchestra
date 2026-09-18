@@ -544,6 +544,7 @@ export function prepareExploration({
       source: {
         world_id: world.world_id,
         seed_id: seed.seed_id,
+        decision_id: source.decision_id,
         snapshot_id: source.snapshot_id,
         decision_type: source.decision_type,
         state_hash: seed.decision.state_hash,
