@@ -2955,7 +2955,7 @@ test("governance: child Stop cannot inherit orchestrator acceptance authority", 
       encoding: "utf8",
     }));
 
-    assert.equal(output.decision, "continue", "A child Stop must not finalize parent acceptance");
+    assert.equal(output.decision, "stop", "A terminal child Stop must close the child without finalizing parent acceptance");
     const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
     assert.notEqual(state.state, "DONE");
     assert.notEqual(state.acceptanceState, "ACCEPTED");
@@ -3354,6 +3354,233 @@ test("governance: AGENTS.md constitution is immutable through shell as well as n
     }));
     assert.equal(output.decision, "deny");
     assert.match(output.reason, /AGENTS\.md is the provider-neutral repository constitution/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: critical task cannot auto-accept without factual Two-Key review", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "critical-parent",
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      criticality: "CRITICAL",
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerValidationObserved: true,
+      workerValidationVerified: true,
+      workerValidationFresh: true,
+      evidenceLedger: [{
+        executionId: "critical-evidence",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "critical-parent",
+      bindings: {
+        "critical-parent": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "critical-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /TWO_KEY_REVIEW_MISSING|Two-Key|two factual independent reviewer approvals/i);
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.notEqual(state.acceptanceState, "ACCEPTED");
+    assert.equal(state.twoKeyReviewGate.required, true);
+    assert.equal(state.twoKeyReviewGate.satisfied, false);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: reviewer batch cardinality is exactly two", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "cardinality-parent",
+      state: "ACCEPTANCE",
+      taskAction: "REVIEW",
+      criticality: "CRITICAL",
+    }, null, 2), "utf8");
+
+    const out = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "cardinality-parent",
+        toolCall: {
+          id: "three-reviewers",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [
+              { TypeName: "flash-reviewer", Role: "Reviewer A", Prompt: "Review A" },
+              { TypeName: "flash-reviewer", Role: "Reviewer B", Prompt: "Review B" },
+              { TypeName: "flash-reviewer", Role: "Reviewer C", Prompt: "Review C" },
+            ],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /TWO_KEY_REVIEW_CARDINALITY/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: two factual reviewer approvals unlock only the exact reviewed candidate", () => {
+  cleanState();
+  try {
+    const candidateHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+
+    mkdirSync(".agents/state", { recursive: true });
+    const baseState = {
+      activeRole: "ORCHESTRATOR",
+      conversationId: "two-key-parent",
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      criticality: "CRITICAL",
+      mutationSeq: 0,
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerValidationObserved: true,
+      workerValidationVerified: true,
+      workerValidationFresh: true,
+      evidenceLedger: [{
+        executionId: "two-key-worker-evidence",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+      twoKeyReview: {
+        status: "EVIDENCE_READY",
+        reviewBatchId: "review-batch-1",
+        candidateHead,
+        candidateMutationSeq: 0,
+        expectedReviewerCount: 2,
+        reviewerConversationIds: ["reviewer-a", "reviewer-b"],
+        reviews: {
+          "reviewer-a": {
+            conversationId: "reviewer-a",
+            verdict: "ACCEPT",
+            reviewBatchId: "review-batch-1",
+            candidateHead,
+            candidateMutationSeq: 0,
+            completionHead: candidateHead,
+            completionMutationSeq: 0,
+            readOnlyViolation: false,
+          },
+          "reviewer-b": {
+            conversationId: "reviewer-b",
+            verdict: "ACCEPT_WITH_NOTES",
+            reviewBatchId: "review-batch-1",
+            candidateHead,
+            candidateMutationSeq: 0,
+            completionHead: candidateHead,
+            completionMutationSeq: 0,
+            readOnlyViolation: false,
+          },
+        },
+      },
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(baseState, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "two-key-parent",
+      bindings: {
+        "two-key-parent": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        "reviewer-a": {
+          role: "REVIEWER",
+          profile: "flash-reviewer",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          delegationKind: "REVIEW",
+        },
+        "reviewer-b": {
+          role: "REVIEWER",
+          profile: "flash-reviewer",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          delegationKind: "REVIEW",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const accepted = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "two-key-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(accepted.decision, "stop");
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.state, "DONE");
+    assert.equal(state.acceptanceState, "ACCEPTED");
+    assert.equal(state.twoKeyReviewGate.satisfied, true);
+    assert.equal(state.twoKeyReviewConsensus, "ACCEPT_WITH_NOTES");
+
+    // Same approvals cannot authorize a newer mutation.
+    const staleState = {
+      ...baseState,
+      state: "EVIDENCE_READY",
+      acceptanceState: "PENDING",
+      mutationSeq: 1,
+      evidenceLedger: [{
+        executionId: "two-key-worker-evidence-new",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 1,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(staleState, null, 2), "utf8");
+
+    const stale = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "two-key-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(stale.decision, "continue");
+    assert.match(stale.reason, /TWO_KEY_REVIEW_STALE|two factual independent reviewer approvals/i);
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.equal(state.twoKeyReviewGate.satisfied, false);
+    assert.equal(state.twoKeyReviewGate.reason, "TWO_KEY_REVIEW_STALE");
   } finally {
     cleanState();
   }
