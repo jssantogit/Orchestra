@@ -98,22 +98,42 @@ function readGitHead(repoRoot) {
   }
 }
 
-function extractReviewerVerdict(steps = []) {
+export function parseReviewerVerdictText(text = "") {
+  const norm = String(text || "");
+  const explicit = norm.match(/(?:^|\n)\s*(?:VERDICT|DECISION|RECOMMENDATION)\s*[:=\-]\s*([^\r\n]+)/im);
+  if (!explicit) return { present: false, verdict: null };
+
+  const raw = explicit[1]
+    .replace(/[\`*_]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (/^(?:ACCEPT_WITH_NOTES|ACCEPT_NOTES|PASS_WITH_NOTES)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "ACCEPT_WITH_NOTES" };
+  }
+  if (/^(?:CHANGES_REQUIRED|CHANGE_REQUIRED|REWORK|RETRY)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "CHANGES_REQUIRED" };
+  }
+  if (/^(?:BLOCK|BLOCKED|REJECT|REJECTED)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "BLOCK" };
+  }
+  if (/^(?:NOT_ACCEPT|DO_NOT_ACCEPT|NO_ACCEPT|NOT_APPROVED|DO_NOT_APPROVE)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: null };
+  }
+  if (/^(?:ACCEPT|ACCEPTED|PASS|PASSED)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "ACCEPT" };
+  }
+
+  return { present: true, verdict: null };
+}
+
+export function extractReviewerVerdict(steps = []) {
   for (let i = steps.length - 1; i >= 0; i--) {
     const text = String(steps[i]?.content || "");
     if (!text) continue;
-    const explicit = text.match(/(?:VERDICT|DECISION|RECOMMENDATION)\s*[:=\-]?\s*[\`*]*([A-Z_]+)[\`*]*/i);
-    const raw = explicit?.[1]?.toUpperCase() || null;
-    if (raw) {
-      if (["ACCEPT", "ACCEPTED", "PASS", "PASSED"].includes(raw)) return "ACCEPT";
-      if (["ACCEPT_WITH_NOTES", "ACCEPT_NOTES", "PASS_WITH_NOTES"].includes(raw)) return "ACCEPT_WITH_NOTES";
-      if (["CHANGES_REQUIRED", "CHANGE_REQUIRED", "REWORK", "RETRY"].includes(raw)) return "CHANGES_REQUIRED";
-      if (["BLOCK", "BLOCKED", "REJECT", "REJECTED"].includes(raw)) return "BLOCK";
-    }
-    if (/\bACCEPT_WITH_NOTES\b/i.test(text)) return "ACCEPT_WITH_NOTES";
-    if (/\bCHANGES_REQUIRED\b/i.test(text)) return "CHANGES_REQUIRED";
-    if (/\b(?:VERDICT|DECISION)[\s\S]{0,40}\bACCEPT\b/i.test(text)) return "ACCEPT";
-    if (/\bBLOCK\b/i.test(text)) return "BLOCK";
+    const parsed = parseReviewerVerdictText(text);
+    if (parsed.present) return parsed.verdict;
   }
   return null;
 }
