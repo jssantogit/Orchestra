@@ -359,6 +359,7 @@ export function buildPolicyDevelopmentDataset({
   validWorlds.sort((a, b) => String(a.world_manifest_hash).localeCompare(String(b.world_manifest_hash)));
 
   const stateBuckets = new Map();
+  const bucketActionSupport = new Map();
   const support = new Map();
   const terminalOutcomes = {};
   const retryReasons = {};
@@ -399,6 +400,34 @@ export function buildPolicyDevelopmentDataset({
       existing.count++;
       increment(existing.chosen_actions, String(decision.chosen_action || "UNKNOWN"));
       stateBuckets.set(bucket.bucket_id, existing);
+
+      const bucketSupport = bucketActionSupport.get(bucket.bucket_id) || {};
+      for (const legalAction of decision.available_actions || []) {
+        const actionKey = String(legalAction);
+        const actionStats = bucketSupport[actionKey] || {
+          legal_occurrences: 0,
+          observations: 0,
+          accepted_observations: 0,
+          terminal_outcomes: {},
+        };
+        actionStats.legal_occurrences++;
+        bucketSupport[actionKey] = actionStats;
+      }
+      const chosenKey = String(decision.chosen_action || "");
+      if (chosenKey) {
+        const chosenStats = bucketSupport[chosenKey] || {
+          legal_occurrences: 0,
+          observations: 0,
+          accepted_observations: 0,
+          terminal_outcomes: {},
+        };
+        const chosenOutcome = outcomeByDecision.get(decision.decision_id);
+        chosenStats.observations++;
+        if (chosenOutcome?.terminal_state === "ACCEPTED") chosenStats.accepted_observations++;
+        increment(chosenStats.terminal_outcomes, String(chosenOutcome?.terminal_state || "UNKNOWN"));
+        bucketSupport[chosenKey] = chosenStats;
+      }
+      bucketActionSupport.set(bucket.bucket_id, bucketSupport);
 
       const retryReason = decision?.state?.retry_reason;
       if (retryReason) increment(retryReasons, String(retryReason));
@@ -461,10 +490,25 @@ export function buildPolicyDevelopmentDataset({
   }
 
   const buckets = [...stateBuckets.values()]
-    .map((item) => ({
-      ...item,
-      chosen_actions: sortedObject(item.chosen_actions),
-    }))
+    .map((item) => {
+      const rawSupport = bucketActionSupport.get(item.bucket_id) || {};
+      const actionSupport = {};
+      for (const action of Object.keys(rawSupport).sort()) {
+        const stats = rawSupport[action];
+        actionSupport[action] = {
+          legal_occurrences: stats.legal_occurrences,
+          observations: stats.observations,
+          accepted_observations: stats.accepted_observations,
+          terminal_outcomes: sortedObject(stats.terminal_outcomes),
+          unknown: stats.observations === 0,
+        };
+      }
+      return {
+        ...item,
+        chosen_actions: sortedObject(item.chosen_actions),
+        action_support: actionSupport,
+      };
+    })
     .sort((a, b) => a.bucket_id.localeCompare(b.bucket_id));
 
   const sourceManifest = sources.sort((a, b) =>
@@ -567,6 +611,29 @@ export function openPolicyLabCycle({ repoRoot, dataset } = {}) {
   const datasetIntegrity = validateDatasetIntegrity(dataset);
   if (!datasetIntegrity.valid) {
     return { opened: false, reason: datasetIntegrity.reason, errors: datasetIntegrity.errors || [] };
+  }
+  const persistedDatasetPath = resolve(
+    repoRoot,
+    LAB_ROOT,
+    "datasets",
+    dataset.dataset_id + ".json",
+  );
+  if (!existsSync(persistedDatasetPath)) {
+    return { opened: false, reason: "DATASET_NOT_BUILT_LOCALLY" };
+  }
+  let persistedDataset;
+  try {
+    persistedDataset = readJson(persistedDatasetPath);
+  } catch {
+    return { opened: false, reason: "PERSISTED_DATASET_INVALID" };
+  }
+  const persistedIntegrity = validateDatasetIntegrity(persistedDataset);
+  if (
+    !persistedIntegrity.valid
+    || persistedDataset.dataset_id !== dataset.dataset_id
+    || sha256Canonical(persistedDataset) !== sha256Canonical(dataset)
+  ) {
+    return { opened: false, reason: "PERSISTED_DATASET_MISMATCH" };
   }
   const baseline = dataset.current_policy;
   const validation = validatePolicy(baseline);
