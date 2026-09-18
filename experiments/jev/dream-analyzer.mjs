@@ -8,6 +8,7 @@ import {
 } from "./schemas.mjs";
 import { projectForJev } from "./outbound-projector.mjs";
 import { rankCandidates } from "./artifact-ranker.mjs";
+import { assertLiveEgressAllowed } from "./egress-policy.mjs";
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -77,7 +78,9 @@ export async function annotateDreamDirectory({
   projectRoot,
   client,
   live = false,
+  env = process.env,
 } = {}) {
+  assertLiveEgressAllowed({ projectRoot, live, env });
   const worldsDir = resolve(projectRoot, ".agents/dream-data/worlds");
   const outputDir = resolve(projectRoot, ".agents/dream-data/jev-annotations");
   if (!existsSync(worldsDir)) return { annotated: 0, paths: [] };
