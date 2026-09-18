@@ -15,6 +15,7 @@ import {
   detectDirectActionOverhead,
   isControlPlanePath,
   verifyWorkerValidation,
+  isWorkerRole,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 import { recordDecisionOutcome, getPendingDecision } from "../dream/outcome-recorder.mjs";
 import { dreamCorrelationKey } from "../dream/decision-recorder.mjs";
@@ -861,6 +862,11 @@ function main() {
     } else if (toolName === "send_message") {
       activeState.send_message_calls = (activeState.send_message_calls || 0) + 1;
       const msg = toolArgs.Message || "";
+      const isFactualImplementationWorker =
+        isWorkerRole(actor.role) &&
+        actor.confidence === "HIGH" &&
+        actor.source === "RUNTIME_IDENTITY" &&
+        actor.delegationKind === "WORK";
       if (msg) {
         const pBytes = Buffer.byteLength(String(msg), "utf-8");
         activeState.toolMix.worker_packet_chars = (activeState.toolMix.worker_packet_chars || 0) + msg.length;
@@ -869,14 +875,33 @@ function main() {
         activeState.handoffObserved = true;
         activeState.handoffBytes = (activeState.handoffBytes || 0) + pBytes;
         activeState.handoffStatus = "MESSAGE_DELIVERED";
-        if (actor.role === "WORKER" || actor.role === "FLASH" || actor.role === "FLASH_WORKER" || actor.role === "FLASH_LOW_WORKER" || actor.role === "FLASH_MEDIUM_WORKER") {
+        if (isFactualImplementationWorker) {
           activeState.workerConversationId = conversationId;
         }
         const msgStr = typeof msg === "string" ? msg : JSON.stringify(msg);
         if (msgStr.includes("IMPLEMENTATION_COMPLETE")) {
-          activeState.workerCompletionClaimed = true;
-          activeState.workerCompletionClaimTimestamp = new Date().toISOString();
-          activeState.implementationComplete = true;
+          if (isFactualImplementationWorker) {
+            activeState.workerCompletionClaimed = true;
+            activeState.workerCompletionClaimFactual = true;
+            activeState.workerCompletionClaimTimestamp = new Date().toISOString();
+            activeState.workerCompletionClaimIdentity = {
+              actorId: actor.actorId || conversationId || null,
+              source: actor.source,
+              confidence: actor.confidence,
+              delegationKind: actor.delegationKind,
+            };
+            activeState.implementationComplete = true;
+          } else {
+            activeState.nonFactualCompletionClaims = (activeState.nonFactualCompletionClaims || 0) + 1;
+            activeState.lastNonFactualCompletionClaim = {
+              actorId: actor.actorId || conversationId || null,
+              role: actor.role || "UNKNOWN",
+              source: actor.source || "UNRESOLVED",
+              confidence: actor.confidence || "LOW",
+              delegationKind: actor.delegationKind || null,
+              timestamp: new Date().toISOString(),
+            };
+          }
 
           const matchCmd = msgStr.match(/(?:verified with\s+)?(node\s+--test|npm\s+test|pnpm\s+test|pytest|cargo\s+test|vitest|jest)[^\n\r\]]*/i);
           if (matchCmd) {
@@ -939,6 +964,7 @@ function main() {
         recordedEvidence.conversationId = conversationId || null;
         recordedEvidence.confidence = actor.confidence || "LOW";
         recordedEvidence.evidenceSource = actor.source || "EXECUTION_HOOK";
+        recordedEvidence.delegationKind = actor.delegationKind || null;
 
         const existingIdx = activeState.evidenceLedger.findIndex(
           (e) => e && e.command === recordedEvidence.command && e.type === recordedEvidence.type && e.scope === recordedEvidence.scope
