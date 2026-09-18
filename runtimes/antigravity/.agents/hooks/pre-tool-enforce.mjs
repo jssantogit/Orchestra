@@ -32,6 +32,7 @@ import {
   computePolicyId,
   validatePolicy,
 } from "../dream/policy-engine.mjs";
+import { loadRuntimePolicy } from "../dream/policy-store.mjs";
 import {
   captureBranchSeedIfArmed,
   consumeExplorationTarget,
@@ -61,39 +62,20 @@ const PROFILE_TO_WORKER_ACTION = Object.freeze({
   "flash-worker": "FLASH_HIGH",
 });
 
-function loadActivePolicy() {
-  const activePolicyPath = resolve(dirname(fileURLToPath(import.meta.url)), "../dream/policies/static-policy-v1.json");
-  if (!existsSync(activePolicyPath)) {
-    return { policy: null, diagnostic: "MISSING_POLICY" };
+function loadActivePolicy(repoRoot) {
+  const loaded = loadRuntimePolicy(repoRoot);
+  if (!loaded.ok) {
+    return {
+      policy: null,
+      diagnostic: loaded.reason || "INVALID_POLICY",
+      source: "STATIC_ROUTING_FALLBACK",
+    };
   }
-  let raw = "";
-  try {
-    raw = readFileSync(activePolicyPath, "utf-8");
-  } catch {
-    return { policy: null, diagnostic: "MISSING_POLICY" };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { policy: null, diagnostic: "MALFORMED_JSON" };
-  }
-  if (!parsed || typeof parsed !== "object" || parsed.schema !== DREAM_SCHEMAS.POLICY) {
-    return { policy: parsed, diagnostic: "UNSUPPORTED_SCHEMA" };
-  }
-  try {
-    const computedId = computePolicyId(parsed);
-    if (parsed.policy_id !== computedId) {
-      return { policy: parsed, diagnostic: "POLICY_HASH_MISMATCH" };
-    }
-  } catch {
-    return { policy: parsed, diagnostic: "INVALID_POLICY" };
-  }
-  const val = validatePolicy(parsed);
-  if (!val.valid) {
-    return { policy: parsed, diagnostic: "INVALID_POLICY" };
-  }
-  return { policy: parsed, diagnostic: null };
+  return {
+    policy: loaded.policy,
+    diagnostic: loaded.diagnostic || null,
+    source: loaded.source || "STATIC_POLICY_V1",
+  };
 }
 
 function evaluatePolicyWithFallback({
@@ -129,7 +111,7 @@ function evaluatePolicyWithFallback({
     return exploration;
   }
 
-  const loaded = loadActivePolicy();
+  const loaded = loadActivePolicy(repoRoot);
   if (loaded.diagnostic) {
     return {
       ok: false,
@@ -155,7 +137,7 @@ function evaluatePolicyWithFallback({
       staticResult = {
         ok: true,
         action: evalRes.action,
-        source: "STATIC_POLICY_V1",
+        source: loaded.source === "ACTIVE_POLICY" ? "ACTIVE_POLICY" : "STATIC_POLICY_V1",
         policy_id: evalRes.policy_id,
         baseline_action: safeBaseline,
         policy_diagnostic: null,
