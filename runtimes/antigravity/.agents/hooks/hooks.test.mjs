@@ -2502,6 +2502,59 @@ test("v5: git-operation stages repo-relative explicit files from nested cwd", ()
 });
 
 
+
+test("v5: git-operation does not reuse stale transaction state for a new commit", () => {
+  cleanState();
+  const fixtureDir = resolve("scratch/git-fixture-stale-tx-" + Date.now());
+  try {
+    mkdirSync(resolve(fixtureDir, ".agents/state"), { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "init.txt"), "init\n");
+    execFileSync("git", ["add", "init.txt"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: fixtureDir });
+    const oldHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf8" }).trim();
+
+    writeFileSync(resolve(fixtureDir, ".agents/state/active-state.json"), JSON.stringify({
+      gitTransaction: {
+        action: "commit",
+        commitCreated: true,
+        commitHash: oldHead,
+        message: "feat: old transaction",
+        files: ["old.ts"],
+        remote: "origin",
+        branch: "main",
+        pushSucceeded: false,
+      },
+    }, null, 2), "utf8");
+
+    writeFileSync(resolve(fixtureDir, "target.ts"), "export const target = 2;\n");
+
+    const res = executeGitOperation({
+      cwd: fixtureDir,
+      action: "commit",
+      files: ["target.ts"],
+      message: "feat: new transaction",
+    });
+
+    assert.equal(res.success, true);
+    const newHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf8" }).trim();
+    assert.notEqual(newHead, oldHead, "Stale transaction state must not suppress a new commit");
+    assert.equal(res.commit, newHead, "Result must report the newly-created factual HEAD");
+
+    const changed = execFileSync("git", ["show", "--pretty=", "--name-only", "HEAD"], {
+      cwd: fixtureDir,
+      encoding: "utf8",
+    }).trim();
+    assert.equal(changed, "target.ts");
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+    cleanState();
+  }
+});
+
 test("pre-tool hook: factual INVESTIGATION delegation is strictly read-only", () => {
   cleanState();
   try {
