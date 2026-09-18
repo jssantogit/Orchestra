@@ -54,9 +54,12 @@ export function projectForJev({
 } = {}) {
   if (!goal || typeof goal !== "string") throw new Error("JEV_PROJECTION_GOAL_REQUIRED");
   if (!Array.isArray(candidates)) throw new Error("JEV_PROJECTION_CANDIDATES_REQUIRED");
+  if (candidates.length > limits.max_candidates_before_jev) {
+    throw new Error("JEV_PROJECTION_CANDIDATE_OVERFLOW");
+  }
 
   const projected = [];
-  for (const candidate of candidates.slice(0, limits.max_candidates_before_jev)) {
+  for (const candidate of candidates) {
     const validation = validateCandidate(candidate);
     if (!validation.valid) throw new Error(`JEV_INVALID_CANDIDATE:${validation.issues.join(",")}`);
     assertNoRawFields(candidate);
