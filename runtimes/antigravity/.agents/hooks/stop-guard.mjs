@@ -68,6 +68,7 @@ function getWorkspacePaths(payload = {}) {
   return {
     repoRoot,
     statePath: resolve(repoRoot, ".agents/state/active-state.json"),
+    contractPath: resolve(repoRoot, ".agents/state/active-contract.json"),
     telemetryPath: resolve(repoRoot, ".agents/telemetry/events.jsonl"),
   };
 }
@@ -1008,7 +1009,7 @@ function main() {
     return;
   }
 
-  const { repoRoot, statePath, telemetryPath } = getWorkspacePaths(payload);
+  const { repoRoot, statePath, contractPath, telemetryPath } = getWorkspacePaths(payload);
 
   // Milestone E budget is a hard upper bound. If PostInvocation exhausted the
   // exploration allowance, Stop must not reopen the execution loop even when
