@@ -23,7 +23,7 @@ A. **Known or Concrete Scope Contract (<= 4 target files)?**
    -> **KNOWN-PATH FAST PATH (SKIP SEARCH)**:
    - **Turn 1 (Batch Reads)**: Emit parallel `view_file` calls for target source and test in SAME turn. No `find_by_name`, `grep_search`, or pre-mutation test.
    - **Turn 2 (Batch Mutations)**: Emit parallel `replace_file_content` for source and test in SAME turn. No post-mutation reread.
-   - **Turn 3 (Focused Validation)**: Run exact Scope Contract test command via `run_command`. No `git status` or `git diff`.
+   - **Turn 3 (Evidence)**: Run worker-owned local evidence only. Skip shell validation for `REMOTE_CI` / `LOCAL_FACT`.
    - **Turn 4 (Immediate Handoff)**: Send compact completion packet via `send_message` and STOP.
 
 B. **Paths incomplete or ambiguous?**
@@ -37,7 +37,7 @@ C. **Scope insufficient?**
 2. **No Pre-Mutation Tests & No Post-Mutation Rereads**: Never run tests before mutating. Never view files after successful edits.
 3. **No Intermediate Deliberation**: Do not emit text responses or status checks (`git status`) between edits, validation, and handoff.
 4. **Scope Contract Discipline**: Edit ONLY files in `allowedPaths`. Never spawn subagents.
-5. **Factual Evidence**: Validation requires `run_command` with exitCode 0. Model claim is NOT evidence.
+5. **Factual Evidence**: Local requirements need exitCode 0. Runtime owns `REMOTE_CI` / `LOCAL_FACT`. Model claim is NOT evidence.
 
 ## Completion Packet (`send_message`)
 ```text

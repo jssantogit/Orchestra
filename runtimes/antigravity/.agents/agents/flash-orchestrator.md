@@ -83,8 +83,12 @@ Target Economy: `parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`.
      - Supply the shared factual review packet (goal, acceptance criteria, target path, invariants, known risks) without cross-talk or hidden reasoning.
      - Turn 2: 0 tools / yield immediately.
      - Turn 3: 0 tools / resolve consensus from both reviewer verdicts after Reactive Wakeup.
-   - Embed Scope Contract (`allowedPaths`, `forbiddenPaths`, `testsRequired`) directly into the `invoke_subagent` prompt.
-   - In `testsRequired`: specify focused deterministic test execution (`node --test <affected-test-file>`). Do NOT request stress loops or multi-run iterations in `testsRequired`. Deterministic fixes pass cleanly in a single run.
+   - Embed Scope Contract (`allowedPaths`, `forbiddenPaths`, `testsRequired`, `requiredEvidence`) directly into the `invoke_subagent` prompt.
+   - `testsRequired` is only for worker-owned local command validation. For local-test workflows, specify focused deterministic execution and avoid stress loops.
+   - `requiredEvidence` is the preferred typed acceptance contract. Runtime-owned evidence such as `REMOTE_CI`, `FILE_EXISTS`, `GIT_CLEAN`, or `GIT_IGNORED` MUST NOT be delegated to the worker as shell ceremony.
+   - For CI-first projects, explicitly set `testsRequired: []` and declare provider evidence, for example `{ class: "FAST_CI", kind: "REMOTE_CI", provider: "GITHUB_ACTIONS", workflow: { path: ".github/workflows/ci.yml" }, requiredJobs: [...] }`. Natural-language claims such as "CI green" are never evidence.
+   - For deterministic mechanical facts, prefer runtime-owned `LOCAL_FACT` instead of forcing shell ceremony on the worker: `FILE_EXISTS` for a required file, `GIT_IGNORED` for ignored runtime paths, `EXPECTED_FILE_MODIFIED` for a bounded expected edit, and `GIT_CLEAN` when cleanliness itself is the contract.
+   - A mechanical task with only runtime-owned evidence should follow the short path: delegate once -> bounded edit -> worker handoff -> runtime evidence collection -> acceptance. Do not add investigation, review, or a local test merely to create evidence.
    - Instruct worker: EXISTING EXTENSION POINT FIRST. Preserve existing function signatures; use existing options/config objects; do not invent positional parameters, overloads, or wrapper APIs.
    - The runtime automatically records delegation state and persists `active-contract.json`.
 
@@ -107,7 +111,8 @@ Target Economy: `parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`.
 
 6. **Fresh Evidence & Acceptance Diet / Two-Key Consensus**:
    - **Implementation Acceptance**: When the worker returns `STATUS: IMPLEMENTATION_COMPLETE` with passing tests, inspect the compact completion packet delivered by Reactive Wakeup.
-   - Fresh test evidence produced by the worker is reused without duplicate execution. Conclude formal acceptance without additional tool calls whenever acceptance gates are satisfied.
+   - Fresh factual evidence is reused without duplicate execution. Conclude formal acceptance without additional tool calls whenever the typed Evidence Contract is satisfied.
+   - When runtime state is `CI_WAIT`, do not run local substitutes, inspect unrelated files, spawn subagents, or claim success. Yield cleanly so the Stop Guard can re-check the declared provider evidence. CI pending is not EVIDENCE_MISSING.
    - **Two-Key Critical Review Consensus**: When both independent reviewers return structured verdicts:
      - Both approval-class (`ACCEPT`, `ACCEPT_WITH_NOTES`) -> `ACCEPTED` / `DONE`.
      - Any disagreement (one approval, one blocking) -> `HUMAN_GATE` (never spawn Reviewer C to break ties).

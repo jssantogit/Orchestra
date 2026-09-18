@@ -1048,64 +1048,116 @@ function isReviewerRole(role) {
   return role === "REVIEWER" || role === "FLASH_REVIEWER" || role === "OPUS";
 }
 
+function extractJsonArrayAfterKey(text, key) {
+  if (typeof text !== "string") return { found: false, value: null };
+  const keyMatch = new RegExp("\\b" + key + "\\s*:", "i").exec(text);
+  if (!keyMatch) return { found: false, value: null };
+  const start = text.indexOf("[", keyMatch.index + keyMatch[0].length);
+  if (start < 0) return { found: true, value: null };
+
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "[") depth++;
+    if (ch === "]") {
+      depth--;
+      if (depth === 0) {
+        const raw = text.slice(start, i + 1);
+        try {
+          return { found: true, value: JSON.parse(raw) };
+        } catch {
+          return { found: true, value: null };
+        }
+      }
+    }
+  }
+  return { found: true, value: null };
+}
+
 function extractScopeContractFromPrompt(promptText = "", sub = {}) {
   let allowed = [];
   let forbidden = [];
   let tests = [];
+  let requiredEvidence = [];
+  let hasTestsRequired = false;
+  let hasRequiredEvidence = false;
 
   if (sub.ScopeContract || sub.scopeContract) {
     const sc = sub.ScopeContract || sub.scopeContract;
     if (Array.isArray(sc.allowedPaths)) allowed = sc.allowedPaths;
     if (Array.isArray(sc.forbiddenPaths)) forbidden = sc.forbiddenPaths;
-    if (Array.isArray(sc.testsRequired)) tests = sc.testsRequired;
+    if (Object.prototype.hasOwnProperty.call(sc, "testsRequired")) {
+      hasTestsRequired = true;
+      if (Array.isArray(sc.testsRequired)) tests = sc.testsRequired;
+    }
+    if (Object.prototype.hasOwnProperty.call(sc, "requiredEvidence")) {
+      hasRequiredEvidence = true;
+      if (Array.isArray(sc.requiredEvidence)) requiredEvidence = sc.requiredEvidence;
+    }
   }
 
   if (allowed.length === 0 && typeof promptText === "string") {
     const allowedMatch = promptText.match(/allowedPaths\s*:\s*\[([^\]]*)\]/i);
-    if (allowedMatch && allowedMatch[1]) {
-      allowed = allowedMatch[1]
+    if (allowedMatch) {
+      allowed = String(allowedMatch[1] || "")
         .split(",")
-        .map(s => s.trim().replace(/^["'`]|["'`]$/g, ""))
+        .map((item) => item.trim().replace(/^["'\x60]|["'\x60]$/g, ""))
         .filter(Boolean);
     }
   }
 
   if (forbidden.length === 0 && typeof promptText === "string") {
     const forbiddenMatch = promptText.match(/forbiddenPaths\s*:\s*\[([^\]]*)\]/i);
-    if (forbiddenMatch && forbiddenMatch[1]) {
-      forbidden = forbiddenMatch[1]
+    if (forbiddenMatch) {
+      forbidden = String(forbiddenMatch[1] || "")
         .split(",")
-        .map(s => s.trim().replace(/^["'`]|["'`]$/g, ""))
+        .map((item) => item.trim().replace(/^["'\x60]|["'\x60]$/g, ""))
         .filter(Boolean);
     }
   }
 
-  if (tests.length === 0 && typeof promptText === "string") {
-    // 1. Explicit array in testsRequired: [...]
-    const arrayMatch = promptText.match(/testsRequired\s*:\s*(\[[^\]]+\])/i);
-    if (arrayMatch && arrayMatch[1]) {
-      try {
-        tests = JSON.parse(arrayMatch[1]);
-      } catch {
-        tests = arrayMatch[1].slice(1, -1).split(",").map(s => s.trim().replace(/^["'`]|["'`]$/g, "")).filter(Boolean);
-      }
+  if (!hasRequiredEvidence && typeof promptText === "string") {
+    const parsed = extractJsonArrayAfterKey(promptText, "requiredEvidence");
+    if (Array.isArray(parsed.value)) {
+      hasRequiredEvidence = true;
+      requiredEvidence = parsed.value;
+    }
+  }
+
+  if (!hasTestsRequired && typeof promptText === "string") {
+    const parsedTests = extractJsonArrayAfterKey(promptText, "testsRequired");
+    if (Array.isArray(parsedTests.value)) {
+      hasTestsRequired = true;
+      tests = parsedTests.value;
     }
 
-    // 2. Explicit backticked test command anywhere in validation instructions
-    if (tests.length === 0) {
-      const codeMatch = promptText.match(/`((?:node\s+--test|npm\s+(?:run\s+)?test|pnpm\s+test|yarn\s+test|pytest|cargo\s+test|vitest|jest)[^`\n]+)`/i);
+    if (!hasTestsRequired) {
+      const codeMatch = promptText.match(/\x60((?:node\s+--test|npm\s+(?:run\s+)?test|pnpm\s+test|yarn\s+test|pytest|cargo\s+test|vitest|jest)[^\x60\n]+)\x60/i);
       if (codeMatch && codeMatch[1]) {
         tests = [codeMatch[1].trim()];
+        hasTestsRequired = true;
       }
     }
 
-    // 3. Structured line testsRequired: ... or Validate using: ...
-    if (tests.length === 0) {
-      const testMatch = promptText.match(/(?:testsRequired|Validate(?: changes)?(?: using)?)\s*:\s*`?([^`\n]+)`?/i);
+    if (!hasTestsRequired) {
+      const testMatch = promptText.match(/(?:testsRequired|Validate(?: changes)?(?: using)?)\s*:\s*\x60?([^\x60\n]+)\x60?/i);
       if (testMatch && testMatch[1]) {
-        let raw = testMatch[1].trim().replace(/^["'`]|["'`]$/g, "");
+        const raw = testMatch[1].trim().replace(/^["'\x60]|["'\x60]$/g, "");
         if (raw.toLowerCase() !== "true" && raw.toLowerCase() !== "false") {
           tests = [raw];
+          hasTestsRequired = true;
         }
       }
     }
@@ -1122,6 +1174,9 @@ function extractScopeContractFromPrompt(promptText = "", sub = {}) {
     allowedPaths: allowed,
     forbiddenPaths: forbidden,
     testsRequired: tests,
+    requiredEvidence,
+    hasTestsRequired,
+    hasRequiredEvidence,
   };
 }
 
@@ -1970,6 +2025,7 @@ function main() {
         const baseAllowedPaths = activeContract?.allowedPaths || [];
         const baseForbiddenPaths = activeContract?.forbiddenPaths || [".agents/**"];
         const baseTestsRequired = activeContract?.testsRequired || [];
+        const baseRequiredEvidence = activeContract?.requiredEvidence || [];
 
         const delegationContract = {
           ...(activeContract && typeof activeContract === "object" ? activeContract : {}),
@@ -1980,7 +2036,8 @@ function main() {
           criticality: String(activeState.criticality || activeContract?.criticality || "NORMAL").toUpperCase(),
           allowedPaths: extracted.allowedPaths.length > 0 ? extracted.allowedPaths : baseAllowedPaths,
           forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : baseForbiddenPaths,
-          testsRequired: extracted.testsRequired.length > 0 ? extracted.testsRequired : baseTestsRequired,
+          testsRequired: extracted.hasTestsRequired ? extracted.testsRequired : baseTestsRequired,
+          requiredEvidence: extracted.hasRequiredEvidence ? extracted.requiredEvidence : baseRequiredEvidence,
           createdAt: new Date().toISOString(),
         };
 

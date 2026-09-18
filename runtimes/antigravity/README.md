@@ -79,9 +79,14 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
    - Long commands run as background tasks. The agent yields control instead of polling `manage_task(Action='status')` in a loop.
    - Polling is capped to prevent coordination overhead.
 
-3. **Evidence Ledger & Evidence Freshness**:
-   - Tool execution facts (exit code, test counts, duration) are automatically recorded by `post-tool-telemetry.mjs`.
-   - Each mutation increments `mutationSeq`. Test evidence is marked stale if subsequent mutations touch affected code paths.
+3. **Typed Evidence Ledger & Evidence Freshness**:
+   - Scope Contracts support both legacy `testsRequired` and first-class `requiredEvidence`.
+   - Local command facts remain factual worker evidence; optional Gradle test/build/lint commands are classified normally when a project chooses local validation.
+   - Runtime-owned `LOCAL_FACT` evidence can verify mechanical facts such as `FILE_EXISTS`, `GIT_IGNORED`, `GIT_CLEAN`, and `EXPECTED_FILE_MODIFIED` without requiring ceremonial shell commands from a worker.
+   - `REMOTE_CI` with provider `GITHUB_ACTIONS` is queried by Orchestra and must match the factual origin repository, workflow, current HEAD/ref, and every required job. A model saying "CI green" is never evidence.
+   - Remote CI still running enters `CI_WAIT`; success advances to acceptance, failure enters bounded Delta Retry / `BLOCKED`, and stale runs are rejected.
+   - Each mutation increments `mutationSeq`. Evidence bound to an older candidate is stale and cannot satisfy acceptance.
+   - A WORK child that owes a local command cannot terminate until the factual command result is present in the Ledger.
 
 4. **Two-Key Critical Review**:
    - High-risk changes (`criticality == CRITICAL`) require approval from two independent Flash High reviewers (`flash-reviewer` A and B). Any disagreement halts to `HUMAN_GATE`.
@@ -126,6 +131,9 @@ node --test runtimes/antigravity/tests/routing-policy.test.mjs
 
 # Deterministic hook lifecycle test (run with concurrency 1)
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+
+# First-class local/remote evidence contract regressions
+npm run test:evidence
 
 # Dream Layer unit and integration tests, including Milestones E–H
 npm run test:dream

@@ -33,7 +33,7 @@ Orchestra provides a 100% **ALL-GEMINI** local architecture in the Antigravity C
 - Orchestrator does NOT explore implementation details for simple/standard tasks.
 - Worker owns implementation discovery.
 - **Same-Turn Delegation**: When worker profile is known, emit `define_subagent` and `invoke_subagent` together in the SAME first model response (`parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`).
-- Scope Contract is embedded directly in `invoke_subagent` prompt (`allowedPaths`, `forbiddenPaths`, `testsRequired`).
+- Scope Contract is embedded directly in `invoke_subagent` prompt (`allowedPaths`, `forbiddenPaths`, `testsRequired`, `requiredEvidence`). Use `testsRequired` only for worker-owned local commands. Use typed `requiredEvidence` for runtime-owned facts and verified remote CI.
 - Runtime hooks auto-persist `active-contract.json` and transition state to `DELEGATED`.
 
 ### 4. Terminal Delegation Discipline (INVOKE_SUBAGENT IS TERMINAL)
@@ -43,8 +43,12 @@ Orchestra provides a 100% **ALL-GEMINI** local architecture in the Antigravity C
 - No tool is required to "wait". Await asynchronous reactive wakeup on child completion.
 
 ### 5. Fresh Evidence & Acceptance Diet
-- Fresh test evidence produced by worker is reused without re-running.
-- Conclude formal acceptance without additional tool calls whenever acceptance gates are satisfied.
+- MODEL CLAIM IS NOT EVIDENCE. Verified runtime/provider facts are evidence.
+- Fresh factual evidence is reused without re-running.
+- CI-first tasks should set `testsRequired: []` and declare a structured `REMOTE_CI` requirement. GitHub Actions evidence must bind to the current origin/HEAD/workflow and all required jobs.
+- Mechanical facts should use runtime-owned `LOCAL_FACT` requirements instead of asking workers to run `test -f`, `git status`, or equivalent commands solely to create evidence.
+- If remote CI is still running, enter `CI_WAIT`; do not substitute local validation or create side quests.
+- Conclude formal acceptance without additional model-claimed proof whenever the typed Evidence Contract is satisfied.
 - Orchestrator acceptance concludes in 1 parent model turn to accept and summarize.
 - Acceptance state is recorded deterministically by runtime hooks.
 

@@ -40,13 +40,17 @@ jobs:
         run: |
           npm run test:dream
 
+      - name: Run Evidence Contract Tests
+        run: |
+          npm run test:evidence
+
       - name: Run Turn Economy Tests
         run: |
           npm run test:turn-economy
 
-      - name: Run Dream Architecture Invariants
+      - name: Run Architecture Invariants
         run: |
-          node --test tests/architecture-invariants/dream-authority.test.mjs
+          npm run test:architecture-invariants
 
       - name: Run Cross-Runtime Firewall Tests
         run: |

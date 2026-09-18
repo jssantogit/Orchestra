@@ -15,6 +15,7 @@ import {
   detectDirectActionOverhead,
   isControlPlanePath,
   verifyWorkerValidation,
+  verifyTaskEvidence,
   isWorkerRole,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 import { recordDecisionOutcome, getPendingDecision } from "../dream/outcome-recorder.mjs";
@@ -1073,7 +1074,7 @@ function main() {
     }
 
     // Evaluate worker validation verification against authoritative Evidence Ledger
-    const valEval = verifyWorkerValidation(activeState);
+    const valEval = verifyTaskEvidence(activeState);
     activeState.workerValidationVerified = valEval.verified;
     activeState.workerValidationFresh = valEval.fresh;
     if (valEval.verified && valEval.evidence) {

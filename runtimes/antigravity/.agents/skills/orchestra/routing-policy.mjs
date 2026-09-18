@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { verifyEvidenceContract } from "./evidence-contract.mjs";
 
 /**
  * ALL-GEMINI Deterministic Routing Policy & State Machine Governance
@@ -52,6 +53,7 @@ export const STATE_NAMES = Object.freeze([
   "DELEGATED",
   "EXECUTING",
   "EVIDENCE_READY",
+  "CI_WAIT",
   "ACCEPTANCE",
   "INTEGRATING",
   "DONE",
@@ -64,9 +66,10 @@ export const VALID_TRANSITIONS = Object.freeze({
   CLASSIFIED: ["PLANNED", "DIRECT_ACTION", "BLOCKED", "HUMAN_GATE"],
   DIRECT_ACTION: ["EXECUTING", "DONE", "BLOCKED", "HUMAN_GATE"],
   PLANNED: ["DELEGATED", "CLASSIFIED", "BLOCKED", "HUMAN_GATE"],
-  DELEGATED: ["EXECUTING", "PLANNED", "BLOCKED", "HUMAN_GATE"],
+  DELEGATED: ["EXECUTING", "CI_WAIT", "PLANNED", "BLOCKED", "HUMAN_GATE"],
   EXECUTING: [
     "EVIDENCE_READY",
+    "CI_WAIT",
     "EXECUTING",
     "DELEGATED",
     "PLANNED",
@@ -74,7 +77,8 @@ export const VALID_TRANSITIONS = Object.freeze({
     "BLOCKED",
     "HUMAN_GATE",
   ],
-  EVIDENCE_READY: ["ACCEPTANCE", "EXECUTING", "BLOCKED", "HUMAN_GATE"],
+  EVIDENCE_READY: ["ACCEPTANCE", "CI_WAIT", "EXECUTING", "BLOCKED", "HUMAN_GATE"],
+  CI_WAIT: ["CI_WAIT", "EVIDENCE_READY", "PLANNED", "BLOCKED", "HUMAN_GATE"],
   ACCEPTANCE: [
     "DONE",
     "PLANNED",
@@ -103,6 +107,7 @@ export const RETRY_REASONS = Object.freeze([
   "MISINTERPRETED_REQUIREMENT",
   "INCOMPLETE_IMPLEMENTATION",
   "FAILED_TEST",
+  "REMOTE_VALIDATION_FAILURE",
   "SCOPE_GAP",
   "MISSING_CONTEXT",
   "INTEGRATION_FAILURE",
@@ -2624,11 +2629,20 @@ export function classifyExecutionEvidence(commandLine, exitCode = 0, output = ""
 
   if (/\b(?:pnpm(?:\s+run)?\s+typecheck|tsc\b)/.test(cmd)) {
     type = "TYPECHECK";
-  } else if (/\b(?:pnpm(?:\s+run)?\s+test|node\s+--test|vitest|jest)\b/.test(cmd)) {
+  } else if (
+    /\b(?:pnpm(?:\s+run)?\s+test|node\s+--test|vitest|jest)\b/.test(cmd)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+[^\n]*(?:test|Test)(?:\s|$)/.test(cmd)
+  ) {
     type = "TEST_RUN";
-  } else if (/\b(?:pnpm(?:\s+run)?\s+build)\b/.test(cmd)) {
+  } else if (
+    /\b(?:pnpm(?:\s+run)?\s+build)\b/.test(cmd)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+[^\n]*(?:build|assemble|compile)(?:\w*)?(?:\s|$)/i.test(cmd)
+  ) {
     type = "BUILD";
-  } else if (/\b(?:pnpm(?:\s+run)?\s+lint|eslint)\b/.test(cmd)) {
+  } else if (
+    /\b(?:pnpm(?:\s+run)?\s+lint|eslint)\b/.test(cmd)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+[^\n]*(?:lint|ktlint|spotless)(?:\w*)?(?:\s|$)/i.test(cmd)
+  ) {
     type = "LINT";
   } else if (/\b(?:benchmark|bench)\b/i.test(cmd)) {
     type = "BENCHMARK";
@@ -4058,6 +4072,36 @@ export function verifyWorkerValidation(activeState = {}) {
   };
 }
 
+
+export function verifyTaskEvidence(activeState = {}) {
+  const contract = activeState.scopeContract || {};
+  if (Array.isArray(contract.requiredEvidence)) {
+    return verifyEvidenceContract({
+      activeState,
+      contract,
+      evidenceLedger: activeState.evidenceLedger || [],
+    });
+  }
+
+  const legacy = verifyWorkerValidation(activeState);
+  return {
+    status: legacy.verified
+      ? "SATISFIED"
+      : String(legacy.reason || "").startsWith("STALE:")
+        ? "STALE"
+        : String(legacy.reason || "").startsWith("FAILED:")
+          ? "FAILED"
+          : "MISSING_ACTIONABLE",
+    verified: legacy.verified,
+    fresh: legacy.fresh,
+    reason: legacy.reason,
+    evidence: legacy.evidence || null,
+    requirements: [],
+    results: [],
+    source: "LEGACY_WORKER_VALIDATION",
+  };
+}
+
 /**
  * Determines whether a file path is concrete (specific relative file path without wildcards).
  */
@@ -4135,6 +4179,7 @@ export function isValidationCommand(cmd) {
 
   return (
     /\b(?:pnpm(?:\s+run)?\s+(?:test|typecheck|lint|build)|npm(?:\s+run)?\s+(?:test|typecheck|lint|build)|yarn(?:\s+run)?\s+(?:test|typecheck|lint|build)|node\s+--test|vitest|jest|npx\s+(?:vitest|jest|tsc)|tsc(?:\s+--noEmit)?|pytest|cargo\s+test|go\s+test|git\s+diff\s+--check)\b/.test(trimmed)
+    || /(?:^|\s)(?:\.\/)?gradlew?\s+\S+/.test(trimmed)
   );
 }
 

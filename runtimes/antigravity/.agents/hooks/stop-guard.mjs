@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
+import { findReusableEvidence, verifyWorkerValidation, verifyTaskEvidence, classifyExecutionEvidence, classifyShellMutation, isWorkerRole, createRetryBudget, consumeRetryBudget } from "../skills/agy-orchestra/routing-policy.mjs";
+import { childOwnedMissingRequirements } from "../skills/agy-orchestra/evidence-contract.mjs";
+import { collectRuntimeEvidenceSync } from "../skills/agy-orchestra/evidence-collectors.mjs";
 import { evaluateTwoKeyReview } from "../skills/orchestra/routing-policy.mjs";
 import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
 import { getExplorationBudgetState } from "../dream/exploration-lab.mjs";
@@ -509,20 +511,28 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
               }
             }
 
-            const isTestCmd = /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd) || cmd.includes("node --test");
-            if (isTestCmd) {
+            if (exitCode !== null) {
               const stepIdx = typeof step.step_index === "number" ? step.step_index : i;
-              const transcriptEvidenceId = `child:${childConvId}:step:${stepIdx}:tool:${tIdx}`;
+              const transcriptEvidenceId = "child:" + childConvId + ":step:" + stepIdx + ":tool:" + tIdx;
               const latestMutationStepBeforeValidation = mutationStepIndices.filter((idx) => idx < i).pop() ?? null;
               const mutationAfterValidation = mutationStepIndices.some((idx) => idx > i);
               const fresh = !mutationAfterValidation && exitCode === 0;
 
+              const classified = classifyExecutionEvidence(
+                cmd,
+                exitCode,
+                "",
+                0,
+                null,
+                null,
+                activeState.mutationSeq || 0,
+              );
               const ev = {
+                ...classified,
                 executionId: null,
                 transcriptEvidenceId,
                 command: cmd,
                 exitCode,
-                mutationSeq: null,
                 actorRole: childRole,
                 actorId: childConvId,
                 conversationId: childConvId,
@@ -535,10 +545,8 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 mutationAfterValidation,
                 fresh,
                 timestamp: step.created_at || new Date().toISOString(),
-                type: "TEST_RUN",
               };
 
-              // Deduplicate strictly by transcriptEvidenceId or non-null executionId
               const existingIdx = activeState.evidenceLedger.findIndex((e) => {
                 if (!e) return false;
                 if (e.transcriptEvidenceId && e.transcriptEvidenceId === transcriptEvidenceId) return true;
@@ -552,13 +560,16 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 activeState.evidenceLedger.push(ev);
               }
 
-              if (isWorkerRole(childRole)) {
+              if (isWorkerRole(childRole) && (
+                ev.type !== "GENERIC_COMMAND_RESULT"
+                || activeState.scopeContract?.requiredEvidence
+              )) {
                 lastWorkerValidationEv = ev;
               } else if (childRole === "REVIEWER") {
                 activeState.reviewerValidationObserved = true;
                 activeState.reviewerValidationCommand = cmd;
                 activeState.reviewerValidationExitCode = exitCode;
-              } else {
+              } else if (!isWorkerRole(childRole)) {
                 activeState.unknownValidationObserved = true;
                 activeState.unknownValidationCommand = cmd;
                 activeState.unknownValidationExitCode = exitCode;
@@ -1120,6 +1131,75 @@ function main() {
     (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR")
   );
 
+  // A successful factual WORK child cannot terminate while it still owns an
+  // actionable local evidence requirement. Runtime-owned LOCAL_FACT/REMOTE_CI
+  // requirements never keep the child alive; the parent/runtime collects them.
+  const factualWorkChild = Boolean(
+    payload.fullyIdle === true
+    && terminalSucceeded
+    && !isMainConversation
+    && bound
+    && bound.role === "WORKER"
+    && bound.confidence === "HIGH"
+    && bound.source === "RUNTIME_IDENTITY"
+    && bound.delegationKind === "WORK"
+  );
+  if (factualWorkChild) {
+    const explicitEvidenceContract = Array.isArray(activeState.scopeContract?.requiredEvidence);
+    if (explicitEvidenceContract) {
+      const childEvidence = verifyTaskEvidence(activeState);
+      const missingOwned = childOwnedMissingRequirements(childEvidence);
+      if (missingOwned.length > 0) {
+        const commands = missingOwned
+          .map((req) => req.command)
+          .filter(Boolean);
+        activeState.childEvidenceContinuation = {
+          conversationId: convId,
+          requirementIds: missingOwned.map((req) => req.id),
+          commands,
+          observedAt: new Date().toISOString(),
+        };
+        try {
+          mkdirSync(dirname(statePath), { recursive: true });
+          writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+        } catch {}
+        recordStopTelemetry(telemetryPath, activeState, payload, "continue", "CHILD_EVIDENCE_REQUIRED");
+        console.log(JSON.stringify({
+          decision: "continue",
+          reason: "CHILD_EVIDENCE_REQUIRED: Before completing this WORK delegation, execute the missing factual local validation requirement(s): " + commands.join(" ; ") + ". MODEL CLAIM IS NOT EVIDENCE.",
+        }));
+        return;
+      }
+    } else {
+      const requiredLegacyTests = Array.isArray(activeState.scopeContract?.testsRequired)
+        ? activeState.scopeContract.testsRequired
+        : [];
+      if (requiredLegacyTests.length > 0) {
+        const legacyValidation = verifyWorkerValidation(activeState);
+        const missingLegacy = !legacyValidation.verified
+          && /^(?:MISSING:|NO_VERIFIED_WORKER_VALIDATION)/.test(String(legacyValidation.reason || ""));
+        if (missingLegacy) {
+          activeState.childEvidenceContinuation = {
+            conversationId: convId,
+            requirementIds: ["legacy-tests-required"],
+            commands: requiredLegacyTests,
+            observedAt: new Date().toISOString(),
+          };
+          try {
+            mkdirSync(dirname(statePath), { recursive: true });
+            writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+          } catch {}
+          recordStopTelemetry(telemetryPath, activeState, payload, "continue", "CHILD_EVIDENCE_REQUIRED");
+          console.log(JSON.stringify({
+            decision: "continue",
+            reason: "CHILD_EVIDENCE_REQUIRED: Required local validation is still missing: " + requiredLegacyTests.join(" ; ") + ". Execute it before completing the worker.",
+          }));
+          return;
+        }
+      }
+    }
+  }
+
   // Factual investigation completion boundary: terminal Stop of the exact bound
   // investigator child. Dispatch ACKs and manage_subagents observations cannot reach here.
   const investigationStop = finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings);
@@ -1149,18 +1229,158 @@ function main() {
     return;
   }
 
-  // Re-evaluate worker validation verification against authoritative Evidence Ledger
-  const valEval = verifyWorkerValidation(activeState);
+  // Collect runtime-owned facts (LOCAL_FACT and REMOTE_CI) before acceptance.
+  // Model text never enters this path as evidence.
+  if (Array.isArray(activeState.scopeContract?.requiredEvidence)) {
+    const collection = collectRuntimeEvidenceSync({
+      repoRoot,
+      activeState,
+      contract: activeState.scopeContract,
+    });
+    activeState.lastEvidenceCollection = {
+      collected: collection.collected === true,
+      reason: collection.reason || null,
+      records: Array.isArray(collection.records)
+        ? collection.records.map((record) => ({
+            evidenceId: record.evidenceId,
+            requirementId: record.requirementId,
+            class: record.class,
+            kind: record.kind,
+            result: record.result,
+            reason: record.reason || null,
+          }))
+        : [],
+      observedAt: new Date().toISOString(),
+    };
+  }
+
+  const valEval = verifyTaskEvidence(activeState);
+  activeState.evidenceContractStatus = valEval.status || (valEval.verified ? "SATISFIED" : "MISSING_ACTIONABLE");
   activeState.workerValidationVerified = valEval.verified;
   activeState.workerValidationFresh = valEval.fresh;
   if (valEval.verified && valEval.evidence) {
-    activeState.workerValidationExecutionId = valEval.evidence.executionId || null;
-    activeState.workerValidationTranscriptEvidenceId = valEval.evidence.transcriptEvidenceId || null;
-    activeState.workerValidationCommand = valEval.evidence.command || activeState.workerValidationCommand;
-    activeState.workerValidationExitCode = valEval.evidence.exitCode ?? activeState.workerValidationExitCode;
-    activeState.workerValidationActor = valEval.evidence.actorRole || activeState.workerValidationActor;
+    activeState.acceptanceEvidenceId = valEval.evidence.evidenceId || valEval.evidence.executionId || valEval.evidence.transcriptEvidenceId || null;
+    if (valEval.evidence.command) {
+      activeState.workerValidationExecutionId = valEval.evidence.executionId || null;
+      activeState.workerValidationTranscriptEvidenceId = valEval.evidence.transcriptEvidenceId || null;
+      activeState.workerValidationCommand = valEval.evidence.command || activeState.workerValidationCommand;
+      activeState.workerValidationExitCode = valEval.evidence.exitCode ?? activeState.workerValidationExitCode;
+      activeState.workerValidationActor = valEval.evidence.actorRole || activeState.workerValidationActor;
+    }
   } else {
     activeState.workerValidationExecutionId = null;
+  }
+
+  // Asynchronous verified providers are a factual wait state, not missing evidence.
+  if (valEval.status === "PENDING") {
+    activeState.state = "CI_WAIT";
+    activeState.acceptanceState = "PENDING";
+    activeState.ciWait = {
+      requirementIds: (valEval.results || []).filter((r) => r.status === "PENDING").map((r) => r.id),
+      pollCount: (activeState.ciWait?.pollCount || 0) + 1,
+      observedAt: new Date().toISOString(),
+    };
+    activeState.lastStopBlockedReason = null;
+    activeState.stopBlockedCount = 0;
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", "CI_WAIT");
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "CI_WAIT: Authoritative remote validation is still pending. Do not treat this as EVIDENCE_MISSING; wait and re-check the declared provider evidence.",
+    }));
+    return;
+  }
+
+  if (valEval.status === "FAILED") {
+    const remoteFailure = (valEval.results || []).some((r) => r.status === "FAILED" && r.kind === "REMOTE_CI");
+    const currentBudget = createRetryBudget(activeState);
+    const nextBudget = consumeRetryBudget(currentBudget);
+    activeState.evidenceFailure = {
+      reason: valEval.reason || "EVIDENCE_FAILED",
+      requirementIds: (valEval.results || []).filter((r) => r.status === "FAILED").map((r) => r.id),
+      observedAt: new Date().toISOString(),
+    };
+    activeState.acceptanceState = "PENDING";
+    activeState.retryReason = remoteFailure ? "REMOTE_VALIDATION_FAILURE" : "INCOMPLETE_IMPLEMENTATION";
+    activeState.retry_reason = activeState.retryReason;
+    activeState.retry = nextBudget.remainingAttempts > 0;
+    activeState.prevRemainingAttempts = currentBudget.remainingAttempts;
+    activeState.maxAttempts = nextBudget.maxAttempts;
+    activeState.attempt = nextBudget.attempt;
+    activeState.remainingAttempts = nextBudget.remainingAttempts;
+    activeState.retry_remaining = nextBudget.remainingAttempts;
+    activeState.retriesUsed = nextBudget.attempt;
+    activeState.workerCompletionClaimed = false;
+    activeState.workerCompletionClaimFactual = false;
+    activeState.implementationComplete = false;
+    activeState.state = nextBudget.remainingAttempts > 0 ? "PLANNED" : "BLOCKED";
+    activeState.lastStopBlockedReason = null;
+    activeState.stopBlockedCount = 0;
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", activeState.retryReason);
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: nextBudget.remainingAttempts > 0
+        ? "EVIDENCE_FAILED: Verified acceptance evidence failed. Delta Retry prepared with attempt " + nextBudget.attempt + ", remaining " + nextBudget.remainingAttempts + ", reason " + activeState.retryReason + "."
+        : "EVIDENCE_FAILED: Verified acceptance evidence failed and retry budget is exhausted. Task is BLOCKED.",
+    }));
+    return;
+  }
+
+  if (valEval.status === "STALE") {
+    activeState.state = "PLANNED";
+    activeState.acceptanceState = "PENDING";
+    delete activeState.retryReason;
+    delete activeState.retry_reason;
+    delete activeState.retry;
+    activeState.evidenceStale = {
+      reason: valEval.reason || "EVIDENCE_STALE",
+      requirementIds: (valEval.results || []).filter((r) => r.status === "STALE").map((r) => r.id),
+      observedAt: new Date().toISOString(),
+    };
+    activeState.workerCompletionClaimed = false;
+    activeState.workerCompletionClaimFactual = false;
+    activeState.implementationComplete = false;
+    activeState.lastStopBlockedReason = null;
+    activeState.stopBlockedCount = 0;
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", "EVIDENCE_STALE");
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "EVIDENCE_STALE: Acceptance evidence is not bound to the current candidate state. Re-establish the declared evidence for the current HEAD/mutation state.",
+    }));
+    return;
+  }
+
+  if (valEval.status === "SOURCE_UNAVAILABLE") {
+    const count = (activeState.evidenceSourceUnavailableCount || 0) + 1;
+    activeState.evidenceSourceUnavailableCount = count;
+    activeState.acceptanceState = "PENDING";
+    activeState.state = count >= 3 ? "HUMAN_GATE" : "CI_WAIT";
+    activeState.lastStopBlockedReason = null;
+    activeState.stopBlockedCount = 0;
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", "EVIDENCE_SOURCE_UNAVAILABLE");
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: count >= 3
+        ? "EVIDENCE_SOURCE_UNAVAILABLE: Authoritative evidence source remained unavailable after bounded retries. Halting to HUMAN_GATE."
+        : "EVIDENCE_SOURCE_UNAVAILABLE: Authoritative evidence source is temporarily unavailable. Fail-closed and retry collection without accepting.",
+    }));
+    return;
+  }
+
+  if (valEval.status === "INVALID_CONTRACT") {
+    activeState.state = "HUMAN_GATE";
+    activeState.acceptanceState = "PENDING";
+    activeState.humanGateReason = "INVALID_EVIDENCE_CONTRACT";
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", "INVALID_EVIDENCE_CONTRACT");
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "INVALID_EVIDENCE_CONTRACT: Acceptance requirements are malformed or ambiguous. Fail-closed to HUMAN_GATE.",
+    }));
+    return;
   }
 
   const currentAttempt = Number.isInteger(activeState.attempt) && activeState.attempt >= 0
@@ -1226,9 +1446,9 @@ function main() {
     activeState.twoKeyReviewConsensus = twoKeyGate.consensus?.decision || "ACCEPT";
   }
 
-  // Hardened Turn Diet acceptance: Orchestrator automatically accepts if and only if
+  // Hardened acceptance: Orchestrator automatically accepts if and only if
   // 1. Worker claimed completion
-  // 2. Required fresh validation evidence from WORKER (exitCode 0) is verified in ledger
+  // 2. The typed Evidence Contract is satisfied by factual fresh evidence
   // 3. No scope violation
   // 4. No unresolved workspace writes
   // 5. Orchestrator concluding turn
