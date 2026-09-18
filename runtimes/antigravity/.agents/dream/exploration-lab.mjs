@@ -30,6 +30,7 @@ const SEEDS = ".agents/dream-data/branch-seeds";
 const EXPLORATIONS = ".agents/dream-data/explorations";
 const INDEX = ".agents/dream-data/explorations/index.json";
 const FULL_EXPLORATION_CONTROL = ".agents/dream-data/full-exploration/control.json";
+const FULL_EXPLORATION_RESERVATIONS = ".agents/dream-data/full-exploration/reservations";
 
 const EPHEMERAL_KEY = /(conversation(?:_?id)?|execution(?:_?id)?|correlation|role_?bindings?|pending|lock|\bpid\b|\bport\b|telemetry|timestamp|created_?at|updated_?at|started_?at|finished_?at)$/i;
 const SENSITIVE_PATH = [
@@ -205,7 +206,14 @@ function validateFullExplorationContext(repoRoot, context) {
   }
   const sessionId = String(context.session_id || "").trim();
   const branchOrdinal = context.branch_ordinal;
-  if (!sessionId || !Number.isInteger(branchOrdinal) || branchOrdinal < 0 || branchOrdinal >= FULL_EXPLORATION_LIMITS.max_branches) {
+  const reservationToken = String(context.reservation_token || "").trim();
+  if (
+    !sessionId
+    || !reservationToken
+    || !Number.isInteger(branchOrdinal)
+    || branchOrdinal < 0
+    || branchOrdinal >= FULL_EXPLORATION_LIMITS.max_branches
+  ) {
     return { ok: false, reason: "FULL_EXPLORATION_CONTEXT_INVALID" };
   }
 
@@ -229,11 +237,33 @@ function validateFullExplorationContext(repoRoot, context) {
     return { ok: false, reason: "FULL_EXPLORATION_BRANCH_ORDINAL_STALE" };
   }
 
+  const reservationPath = resolve(
+    repoRoot,
+    FULL_EXPLORATION_RESERVATIONS,
+    sessionId + "-" + branchOrdinal + ".json",
+  );
+  let reservation;
+  try {
+    reservation = readJson(reservationPath);
+  } catch {
+    return { ok: false, reason: "FULL_EXPLORATION_BRANCH_RESERVATION_MISSING" };
+  }
+  if (
+    reservation?.schema !== "orchestra.full-exploration-branch-reservation.v1"
+    || reservation.session_id !== sessionId
+    || reservation.branch_ordinal !== branchOrdinal
+    || reservation.reservation_token !== reservationToken
+    || !fullExplorationLimitsMatch(reservation.limits)
+  ) {
+    return { ok: false, reason: "FULL_EXPLORATION_BRANCH_RESERVATION_INVALID" };
+  }
+
   return {
     ok: true,
     controlled: true,
     session_id: sessionId,
     branch_ordinal: branchOrdinal,
+    reservation_path: reservationPath,
     control,
     excluded_actions: [],
   };
