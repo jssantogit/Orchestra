@@ -15,8 +15,9 @@ import { rankCandidates } from "../../experiments/jev/artifact-ranker.mjs";
 import { buildCounterfactualPacket, assertMandatoryCoreIdentity } from "../../experiments/jev/packet-builder.mjs";
 import { buildRetrievalAssistedPacket } from "../../experiments/jev/retrieval-assist.mjs";
 import {
-  createEvaluationReport,
+  createProjectEvaluationReport,
   createLocalApproval,
+  writeEvaluationReport,
   writeLocalApproval,
 } from "../../experiments/jev/activation-gate.mjs";
 
@@ -129,7 +130,6 @@ test("retrieval assist is identity fallback without flag/report/approval", () =>
   const core = { goal: "x", scopeContract: { allowedPaths: ["src/**"] } };
   const result = buildRetrievalAssistedPacket({
     projectRoot: "/tmp/no-approval",
-    report: null,
     mandatoryCore: core,
     candidates: [],
     ranking: { items: [] },
@@ -144,7 +144,10 @@ test("retrieval assist activates only with eligible report + matching human appr
   const root = mkdtempSync(join(tmpdir(), "jev-gate-"));
   try {
     mkdirSync(join(root, ".agents"), { recursive: true });
+    const telemetryDir = join(root, ".agents", "telemetry");
+    mkdirSync(telemetryDir, { recursive: true });
     const runs = Array.from({ length: 30 }, (_, i) => ({
+      schema: "orchestra.jev-shadow-report.v1",
       task_category: ["status", "lookup", "simple", "multi", "investigation"][i % 5],
       jev_calls: 1,
       jev_latency_ms: 10,
@@ -164,15 +167,16 @@ test("retrieval assist activates only with eligible report + matching human appr
       acceptance_delta: 0,
       fallback_identity_failures: 0,
     }));
-    const report = createEvaluationReport(runs);
+    writeFileSync(join(telemetryDir, "jev-shadow.jsonl"), runs.map(JSON.stringify).join("\n")+"\n");
+    const report = createProjectEvaluationReport(root);
     assert.equal(report.eligible_for_retrieval_assist, true);
+    writeEvaluationReport(root, report);
     const approval = createLocalApproval({ report });
     writeLocalApproval(root, approval);
 
     const core = { goal: "x", scopeContract: { allowedPaths: ["src/**"] } };
     const result = buildRetrievalAssistedPacket({
       projectRoot: root,
-      report,
       mandatoryCore: core,
       candidates: [],
       ranking: { items: [] },
