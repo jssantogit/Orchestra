@@ -180,7 +180,7 @@ export async function runJevTurnEconomyEvaluation({
     const candidateBytes = selection.candidate_bytes || 0;
     runs.push({
       task_category: caseDef.task_category,
-      jev_calls: ranking.skipped ? 0 : 1,
+      jev_calls: ranking.skipped ? 0 : (ranking.request_count || 1),
       jev_latency_ms: ranking.latency_ms || 0,
       jev_input_tokens: ranking.usage?.input_tokens || 0,
       jev_candidates: caseDef.candidates.length,
