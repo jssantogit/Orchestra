@@ -254,17 +254,32 @@ export function deriveLineageAssignments(worlds = []) {
       for (const parent of parents) stack.push(parent);
     }
 
-    if (terminalRoots.size) return [...terminalRoots].sort()[0];
-    return [...visited].sort()[0] || start;
+    const roots = [...terminalRoots].sort();
+    if (roots.length === 1) {
+      return { root: roots[0], ambiguous: false, cycle: false, terminal_roots: roots };
+    }
+    if (roots.length > 1) {
+      return { root: null, ambiguous: true, cycle: false, terminal_roots: roots };
+    }
+    return {
+      root: null,
+      ambiguous: true,
+      cycle: visited.size > 0,
+      terminal_roots: [],
+    };
   }
 
   const assignments = new Map();
   for (const world of ordered) {
-    const lineageRoot = canonicalRoot(world.root_snapshot_id);
+    const resolution = canonicalRoot(world.root_snapshot_id);
+    const lineageRoot = resolution.root;
     assignments.set(world.world_manifest_hash, {
       lineage_root_snapshot_id: lineageRoot,
-      lineage_ref: lineageRef(lineageRoot),
-      ...splitLineage(lineageRoot),
+      lineage_ref: lineageRoot ? lineageRef(lineageRoot) : null,
+      ambiguous: resolution.ambiguous,
+      cycle: resolution.cycle,
+      terminal_roots: resolution.terminal_roots,
+      ...(lineageRoot ? splitLineage(lineageRoot) : { split: null, bucket: null }),
     });
   }
   return assignments;
@@ -428,6 +443,15 @@ export function buildPolicyDevelopmentDataset({
     const lineage = lineageAssignments.get(world.world_manifest_hash);
     if (!lineage) {
       return { ok: false, reason: "LINEAGE_ASSIGNMENT_MISSING" };
+    }
+    if (lineage.ambiguous || !lineage.lineage_root_snapshot_id) {
+      return {
+        ok: false,
+        reason: "LINEAGE_ASSIGNMENT_AMBIGUOUS",
+        world_manifest_hash: world.world_manifest_hash,
+        terminal_roots: lineage.terminal_roots || [],
+        cycle: lineage.cycle === true,
+      };
     }
     const source = sourceEntry(world, lineage);
     sources.push(source);
