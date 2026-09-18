@@ -918,6 +918,8 @@ function main() {
   const roleBindings = loadRoleBindings(roleBindingsPath);
   const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot, roleBindingsPath);
   const activeRole = actor.role;
+  const actorDelegationKind = actor.delegationKind || null;
+  const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
   // Check 1: Worker or Reviewer spawning subagents, OR any subagent during DIRECT_ACTION
@@ -1700,6 +1702,25 @@ function main() {
     const nonControlRedir = redir.targets.filter(t => !isControlPlanePath(t));
     const hasWorkspaceMutationTargets = nonControlTargets.length > 0 || nonControlRedir.length > 0;
 
+    // Investigator is a specialist read-only plane even though it reuses the
+    // flash-worker profile/model. Delegation purpose, not profile, controls authority.
+    if (isInvestigatorActor) {
+      const mutation = classifyShellMutation(cmd);
+      const safeInvestigationCommand =
+        !hasWorkspaceMutationTargets &&
+        redir.targets.length === 0 &&
+        (isReadOnly || (isValidation && mutation.isMutation === false));
+      if (safeInvestigationCommand) {
+        allowCommand(cmd);
+        return;
+      }
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "INVESTIGATOR_READ_ONLY: Investigation delegation is strictly non-mutating. Return findings to Orchestrator; implementation must be delegated separately."
+      }));
+      return;
+    }
+
     // Unknown role: read-only/validation without workspace redirections is safe; mutating commands fail closed!
     if (!activeRole || activeRole === "UNKNOWN") {
       if ((isReadOnly || isValidation) && !hasWorkspaceMutationTargets && redir.targets.length === 0 && targets.length === 0) {
@@ -1894,6 +1915,16 @@ function main() {
       console.log(JSON.stringify({
         decision: "deny",
         reason: "AGENTS.md is the provider-neutral repository constitution and is strictly read-only for all agents."
+      }));
+      return;
+    }
+
+    // Investigator: strictly read-only. Reusing a flash-worker model/profile
+    // never grants implementation authority to an INVESTIGATION delegation.
+    if (isInvestigatorActor) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `INVESTIGATOR_READ_ONLY: Investigation delegation cannot modify files ("${relTarget}"). Return findings to Orchestrator for a separate implementation handoff.`
       }));
       return;
     }
