@@ -4,14 +4,26 @@ import { resolve, dirname } from "node:path";
 
 function getWorkspacePaths(cwdOverride, customStatePath) {
   const cwd = cwdOverride || process.cwd();
-  const repoRoot = existsSync(resolve(cwd, "packages"))
-    ? cwd
-    : (existsSync(resolve(cwd, "../packages")) ? resolve(cwd, "..") : cwd);
+
+  // Git is the authoritative workspace boundary for git-operation. This avoids
+  // resolving nested invocation directories as independent repositories and
+  // guarantees that transaction state always lives under the actual repo root.
+  const gitRootRes = runGit(["rev-parse", "--show-toplevel"], { cwd });
+  let repoRoot;
+  if (gitRootRes.status === 0 && gitRootRes.stdout) {
+    repoRoot = resolve(gitRootRes.stdout);
+  } else if (existsSync(resolve(cwd, "packages"))) {
+    repoRoot = cwd;
+  } else if (existsSync(resolve(cwd, "../packages"))) {
+    repoRoot = resolve(cwd, "..");
+  } else {
+    repoRoot = cwd;
+  }
+
   const statePath = customStatePath
-    ? customStatePath
-    : (cwdOverride && cwdOverride !== repoRoot
-        ? resolve(cwdOverride, ".git/active-state.json")
-        : resolve(repoRoot, ".agents/state/active-state.json"));
+    ? resolve(customStatePath)
+    : resolve(repoRoot, ".agents/state/active-state.json");
+
   return {
     repoRoot,
     statePath,
