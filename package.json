@@ -15,6 +15,7 @@
     "test:turn-economy": "node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs",
     "test:architecture-invariants": "node --test tests/architecture-invariants/dream-authority.test.mjs",
     "check:contamination": "node scripts/contamination-check.mjs",
-    "doctor": "./scripts/doctor.sh"
+    "doctor": "./scripts/doctor.sh",
+    "dream:explore": "node runtimes/antigravity/.agents/dream/exploration-cli.mjs"
   }
 }
