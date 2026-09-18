@@ -223,3 +223,87 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     if (branch) rmSync(branch, { recursive: true, force: true });
   }
 });
+
+
+test("prepare fails closed when BranchSeed metadata or archived workspace is tampered", () => {
+  const f = fixture();
+  try {
+    armExplorationCapture({ repoRoot: f.repo, decisionType: "WORKER_TIER" });
+    const captured = captureBranchSeedIfArmed({
+      repoRoot: f.repo,
+      snapshot: f.snapshot,
+      decisionType: "WORKER_TIER",
+      decisionState: f.state,
+      availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+      scopeContract: f.contract,
+      taskDescriptor: f.task,
+      evidenceSummary: f.evidence,
+      runtimeState: { state: "EXECUTING" },
+    });
+    assert.equal(captured.captured, true);
+    const world = sealedWorld(f.snapshot, f.state);
+    const original = JSON.parse(readFileSync(captured.seed_path, "utf8"));
+
+    const tamperedState = structuredClone(original);
+    tamperedState.decision.state.complexity = "DIFFICULT";
+    writeFileSync(captured.seed_path, JSON.stringify(tamperedState, null, 2));
+    const stateResult = prepareExploration({ repoRoot: f.repo, seedPath: captured.seed_path, world });
+    assert.equal(stateResult.prepared, false);
+    assert.equal(stateResult.reason, "BRANCH_SEED_STATE_HASH_MISMATCH");
+
+    writeFileSync(captured.seed_path, JSON.stringify(original, null, 2));
+    const archiveFile = join(captured.seed_path, "..", "workspace", "src", "unit.js");
+    writeFileSync(archiveFile, "export const value = 999;\n");
+    const payloadResult = prepareExploration({ repoRoot: f.repo, seedPath: captured.seed_path, world });
+    assert.equal(payloadResult.prepared, false);
+    assert.equal(payloadResult.reason, "BRANCH_SEED_PAYLOAD_HASH_MISMATCH");
+  } finally {
+    rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test("MAJOR exploration requires approval captured in the immutable BranchSeed", () => {
+  const f = fixture();
+  let branch = null;
+  try {
+    const majorState = { ...f.state, criticality: "MAJOR" };
+    armExplorationCapture({ repoRoot: f.repo, decisionType: "WORKER_TIER" });
+    const denied = captureBranchSeedIfArmed({
+      repoRoot: f.repo,
+      snapshot: f.snapshot,
+      decisionType: "WORKER_TIER",
+      decisionState: majorState,
+      availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+      scopeContract: { ...f.contract, criticality: "MAJOR" },
+      taskDescriptor: { ...f.task, criticality: "MAJOR" },
+      evidenceSummary: f.evidence,
+      runtimeState: { state: "EXECUTING" },
+    });
+    assert.equal(denied.captured, false);
+    assert.equal(denied.reason, "EXPLORATION_INELIGIBLE_MAJOR_REQUIRES_APPROVAL");
+
+    armExplorationCapture({ repoRoot: f.repo, decisionType: "WORKER_TIER", approveMajor: true });
+    const approved = captureBranchSeedIfArmed({
+      repoRoot: f.repo,
+      snapshot: f.snapshot,
+      decisionType: "WORKER_TIER",
+      decisionState: majorState,
+      availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+      scopeContract: { ...f.contract, criticality: "MAJOR" },
+      taskDescriptor: { ...f.task, criticality: "MAJOR" },
+      evidenceSummary: f.evidence,
+      runtimeState: { state: "EXECUTING" },
+    });
+    assert.equal(approved.captured, true);
+    const seed = JSON.parse(readFileSync(approved.seed_path, "utf8"));
+    assert.equal(seed.human_approved_major, true);
+
+    const world = sealedWorld(f.snapshot, majorState);
+    const prepared = prepareExploration({ repoRoot: f.repo, seedPath: approved.seed_path, world });
+    assert.equal(prepared.prepared, true, JSON.stringify(prepared));
+    branch = prepared.branch_workspace;
+  } finally {
+    rmSync(f.repo, { recursive: true, force: true });
+    if (branch) rmSync(branch, { recursive: true, force: true });
+  }
+});
