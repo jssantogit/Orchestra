@@ -91,6 +91,7 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.test.mjs"
   "runtimes/antigravity/GEMINI.md"
 )
@@ -109,6 +110,7 @@ JS_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
   "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs"
   "runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs"
@@ -172,10 +174,10 @@ else
   report_fail "Antigravity routing policy tests failed"
 fi
 
-if node --test "${ROOT_DIR}/tests/evidence/first-class-evidence.test.mjs"; then
-  report_pass "First-class evidence tests passed"
+if node --test "${ROOT_DIR}/tests/evidence/first-class-evidence.test.mjs" "${ROOT_DIR}/tests/evidence/cross-agent-evidence.test.mjs"; then
+  report_pass "First-class and cross-agent evidence tests passed"
 else
-  report_fail "First-class evidence tests failed"
+  report_fail "Evidence contract/federation tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/cross-runtime/cross-runtime-firewall.test.mjs" >/dev/null 2>&1; then
