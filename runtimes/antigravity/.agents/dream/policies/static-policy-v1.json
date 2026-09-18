@@ -1,8 +1,8 @@
 {
-  "policy_id": "policy-02af7aa43f8a40aca9c2bc5b4cca3129cd4d59980edd27d13f62721b1570c052",
+  "policy_id": "policy-0348de0c5e833dfad3ae430236c5ca83a4748012311072ee39240a42efdb0740",
   "schema": "orchestra.exploration-policy.v1",
   "base_policy": "static-policy-v1",
-  "description": "Declarative static baseline policy for Orchestra Dream Layer (Milestone D)",
+  "description": "Declarative static baseline policy for Orchestra Dream Layer (Milestones D-K)",
   "rules": [
     {
       "id": "worker-tier-post-investigation",
@@ -182,6 +182,90 @@
       },
       "choose": "ESCALATE_WORKER",
       "description": "Integration failure escalates worker"
+    },
+    {
+      "id": "exploration-branching-budgeted",
+      "decision_type": "EXPLORATION_BRANCHING",
+      "priority": 80,
+      "when": {
+        "exploration_branches_remaining": {
+          "min": 1,
+          "max": 3
+        }
+      },
+      "choose": "OPEN_BRANCH",
+      "description": "Open another isolated branch while static exploration budget remains"
+    },
+    {
+      "id": "exploration-branching-exhausted",
+      "decision_type": "EXPLORATION_BRANCHING",
+      "priority": 90,
+      "when": {
+        "exploration_branches_remaining": 0
+      },
+      "choose": "NO_NEW_BRANCH",
+      "description": "Do not open branches after the static budget is exhausted"
+    },
+    {
+      "id": "parallelism-conservative-default",
+      "decision_type": "PARALLELISM",
+      "priority": 50,
+      "when": {},
+      "choose": "SERIAL",
+      "description": "Full exploration remains serial unless a promoted policy proves bounded parallelism"
+    },
+    {
+      "id": "prune-falsified-branch",
+      "decision_type": "PRUNE_BRANCH",
+      "priority": 90,
+      "when": {
+        "branch_feedback_status": [
+          "FALSIFIED"
+        ]
+      },
+      "choose": "PRUNE_BRANCH",
+      "description": "Prune a branch after factual feedback falsifies its hypothesis"
+    },
+    {
+      "id": "prune-invalid-branch",
+      "decision_type": "PRUNE_BRANCH",
+      "priority": 95,
+      "when": {
+        "branch_invalid": true
+      },
+      "choose": "PRUNE_BRANCH",
+      "description": "Prune a branch after runtime marks it invalid"
+    },
+    {
+      "id": "prune-default-keep",
+      "decision_type": "PRUNE_BRANCH",
+      "priority": 50,
+      "when": {},
+      "choose": "KEEP_BRANCH",
+      "description": "Keep factual branches absent a deterministic prune reason"
+    },
+    {
+      "id": "stopping-budgeted",
+      "decision_type": "STOPPING",
+      "priority": 80,
+      "when": {
+        "exploration_branches_remaining": {
+          "min": 1,
+          "max": 3
+        }
+      },
+      "choose": "CONTINUE_EXPLORATION",
+      "description": "Continue isolated exploration while static branch budget remains"
+    },
+    {
+      "id": "stopping-exhausted",
+      "decision_type": "STOPPING",
+      "priority": 90,
+      "when": {
+        "exploration_branches_remaining": 0
+      },
+      "choose": "STOP_EXPLORATION",
+      "description": "Stop exploration when the static branch budget is exhausted"
     }
   ]
 }
