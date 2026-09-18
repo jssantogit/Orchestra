@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
-import { isSafeDreamCorrelationKey } from "./decision-recorder.mjs";
+import {
+  isSafeDreamCorrelationKey,
+  findRecordedDecision,
+  validatePendingDecisionArtifact,
+} from "./decision-recorder.mjs";
+import { sha256Canonical } from "./canonical.mjs";
 
 /**
  * Retrieves and parses a pending decision correlation record.
@@ -124,6 +129,15 @@ export function recordDecisionOutcome({
     }
 
     const pending = pendingRes.pending;
+    const pendingIntegrity = validatePendingDecisionArtifact(pending);
+    if (!pendingIntegrity.valid) {
+      return {
+        recorded: false,
+        reason: "PENDING_DECISION_CORRUPT",
+        error_code: "ERR_PENDING_DECISION_CORRUPT",
+        details: pendingIntegrity.errors,
+      };
+    }
 
     const resolvedTelemetryPath =
       telemetryPath ||
@@ -131,11 +145,52 @@ export function recordDecisionOutcome({
         ? resolve(repoRoot, ".agents/telemetry/events.jsonl")
         : resolve(".agents/telemetry/events.jsonl"));
 
+    // Ensure the causal DECISION is durably published before any outcome.
+    // A crash may leave a valid pending artifact after its atomic rename but
+    // before telemetry append; recover that exact event here.
+    const publishedDecision = findRecordedDecision(resolvedTelemetryPath, pending.decision_id);
+    if (publishedDecision) {
+      const publishedIntegrity = validatePendingDecisionArtifact({
+        ...pending,
+        event_hash: publishedDecision.event_hash,
+        decision_event: publishedDecision,
+      });
+      if (!publishedIntegrity.valid || publishedDecision.event_hash !== pending.event_hash) {
+        return {
+          recorded: false,
+          reason: "PUBLISHED_DECISION_MISMATCH",
+          error_code: "ERR_PUBLISHED_DECISION_MISMATCH",
+          details: publishedIntegrity.errors,
+        };
+      }
+    } else {
+      mkdirSync(dirname(resolvedTelemetryPath), { recursive: true });
+      appendFileSync(resolvedTelemetryPath, JSON.stringify(pending.decision_event) + "\n", "utf8");
+    }
+
     // Crash/retry recovery: if the outcome event was already appended but the
     // pending->consumed rename did not complete, finalize consumption without
     // appending a duplicate telemetry event.
     const existingOutcome = findRecordedOutcome(resolvedTelemetryPath, pending.decision_id);
     if (existingOutcome) {
+      const outcomeValidation = validateDreamRecord(DREAM_SCHEMAS.OUTCOME, existingOutcome);
+      const { event_hash: existingHash, ...existingBase } = existingOutcome;
+      let recomputedExistingHash = null;
+      try { recomputedExistingHash = sha256Canonical(existingBase); } catch {}
+      if (
+        !outcomeValidation.valid ||
+        !existingHash ||
+        recomputedExistingHash !== existingHash ||
+        existingOutcome.decision_id !== pending.decision_id
+      ) {
+        return {
+          recorded: false,
+          reason: "PUBLISHED_OUTCOME_CORRUPT",
+          error_code: "ERR_PUBLISHED_OUTCOME_CORRUPT",
+          details: outcomeValidation.errors,
+        };
+      }
+
       const pendingPath = join(resolvedPendingDir, `${key}.json`);
       try {
         renameSync(pendingPath, consumedPath);
