@@ -390,13 +390,63 @@ function getWorkspacePaths(payload = {}) {
   };
 }
 
-function loadRoleBindings(roleBindingsPath) {
-  if (existsSync(roleBindingsPath)) {
-    try {
-      return JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
-    } catch {}
+function readGovernanceObject(path, label) {
+  if (!existsSync(path)) {
+    return { ok: true, exists: false, value: null };
   }
-  return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return { ok: false, exists: true, value: null, reason: `${label}_MALFORMED_JSON` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, exists: true, value: null, reason: `${label}_INVALID_SHAPE` };
+  }
+  return { ok: true, exists: true, value: parsed };
+}
+
+function validateRoleBindingsShape(roleBindings) {
+  if (!roleBindings || typeof roleBindings !== "object" || Array.isArray(roleBindings)) return false;
+  if (
+    roleBindings.mainConversationId !== undefined &&
+    roleBindings.mainConversationId !== null &&
+    typeof roleBindings.mainConversationId !== "string"
+  ) return false;
+  if (
+    roleBindings.bindings !== undefined &&
+    (!roleBindings.bindings || typeof roleBindings.bindings !== "object" || Array.isArray(roleBindings.bindings))
+  ) return false;
+  if (
+    roleBindings.conversations !== undefined &&
+    (!roleBindings.conversations || typeof roleBindings.conversations !== "object" || Array.isArray(roleBindings.conversations))
+  ) return false;
+  if (roleBindings.pendingSubagents !== undefined && !Array.isArray(roleBindings.pendingSubagents)) return false;
+  return true;
+}
+
+function loadRoleBindings(roleBindingsPath) {
+  const loaded = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
+  if (!loaded.ok) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: loaded.reason,
+    };
+  }
+  if (!loaded.exists) {
+    return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  }
+  if (!validateRoleBindingsShape(loaded.value)) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: "ROLE_BINDINGS_INVALID_SHAPE",
+    };
+  }
+  return loaded.value;
 }
 
 function saveRoleBindings(roleBindingsPath, data) {
@@ -1061,21 +1111,45 @@ function main() {
   let activeState = {};
   let activeContract = null;
 
-  if (existsSync(statePath)) {
-    try {
-      activeState = JSON.parse(readFileSync(statePath, "utf-8"));
-    } catch {}
+  const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");
+  if (!stateLoad.ok) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `GOVERNANCE_STATE_INVALID: ${stateLoad.reason}. Existing governance state must be repaired before tool execution.`
+    }));
+    return;
   }
+  if (stateLoad.exists) activeState = stateLoad.value;
 
-  if (existsSync(contractPath)) {
-    try {
-      activeContract = JSON.parse(readFileSync(contractPath, "utf-8"));
-    } catch {}
+  const contractLoad = readGovernanceObject(contractPath, "ACTIVE_CONTRACT");
+  if (!contractLoad.ok) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `GOVERNANCE_STATE_INVALID: ${contractLoad.reason}. Existing scope contract must be repaired before tool execution.`
+    }));
+    return;
+  }
+  if (contractLoad.exists) {
+    activeContract = contractLoad.value;
   } else if (activeState.scopeContract) {
+    if (!activeState.scopeContract || typeof activeState.scopeContract !== "object" || Array.isArray(activeState.scopeContract)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "GOVERNANCE_STATE_INVALID: ACTIVE_STATE_SCOPE_CONTRACT_INVALID_SHAPE."
+      }));
+      return;
+    }
     activeContract = activeState.scopeContract;
   }
 
   const roleBindings = loadRoleBindings(roleBindingsPath);
+  if (roleBindings.__governanceLoadError) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `GOVERNANCE_STATE_INVALID: ${roleBindings.__governanceLoadError}. Role identity state must be repaired before tool execution.`
+    }));
+    return;
+  }
   const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot, roleBindingsPath);
   const activeRole = actor.role;
   const actorDelegationKind = actor.delegationKind || null;
