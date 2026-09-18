@@ -976,11 +976,11 @@ function main() {
   // Terminal child Stop closes the child only. Parent acceptance is evaluated
   // exclusively when the factual main conversation reaches Stop.
   if (payload.conversationId && !isMainConversation) {
+    activeState.clean_stops = (activeState.clean_stops || 0) + 1;
     try {
       mkdirSync(dirname(statePath), { recursive: true });
       writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
     } catch {}
-    activeState.clean_stops = (activeState.clean_stops || 0) + 1;
     recordStopTelemetry(telemetryPath, activeState, payload, "stop");
     console.log(JSON.stringify({ decision: "stop" }));
     return;
