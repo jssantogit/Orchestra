@@ -1747,6 +1747,7 @@ function main() {
           taskId: activeState.taskId || activeState.taskKey || null,
           targetAgent: sub.TypeName || (pending?.role === "REVIEWER" ? "flash-reviewer" : "flash-low-worker"),
           delegationKind: pending?.delegationKind || null,
+          criticality: String(activeState.criticality || activeContract?.criticality || "NORMAL").toUpperCase(),
           allowedPaths: extracted.allowedPaths.length > 0 ? extracted.allowedPaths : baseAllowedPaths,
           forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : baseForbiddenPaths,
           testsRequired: extracted.testsRequired.length > 0 ? extracted.testsRequired : baseTestsRequired,
