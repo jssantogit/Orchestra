@@ -85,7 +85,7 @@ export async function runArtifactRankingShadow({
     task_id: task.task_id || null,
     task_category: task.task_category || task.task_action || null,
     timestamp: new Date().toISOString(),
-    jev_calls: ranking.skipped ? 0 : 1,
+    jev_calls: ranking.skipped ? 0 : (ranking.request_count || 1),
     jev_latency_ms: ranking.latency_ms || 0,
     jev_input_tokens: ranking.usage?.input_tokens || 0,
     jev_candidates: generated.candidate_count_after,
