@@ -3764,3 +3764,37 @@ test("governance: authorized orchestrator delegation preserves HIGH identity", (
     cleanState();
   }
 });
+
+
+test("governance: pre-tool firewall fails closed on malformed or missing payload", () => {
+  const malformed = JSON.parse(execFileSync("node", [preToolScript], {
+    input: "{not-json",
+    encoding: "utf8",
+  }));
+  assert.equal(malformed.decision, "deny");
+  assert.match(malformed.reason, /MALFORMED_HOOK_PAYLOAD/);
+
+  const nullPayload = JSON.parse(execFileSync("node", [preToolScript], {
+    input: "null",
+    encoding: "utf8",
+  }));
+  assert.equal(nullPayload.decision, "deny");
+  assert.match(nullPayload.reason, /INVALID_HOOK_PAYLOAD/);
+
+  const missingTool = JSON.parse(execFileSync("node", [preToolScript], {
+    input: JSON.stringify({ conversationId: "missing-tool" }),
+    encoding: "utf8",
+  }));
+  assert.equal(missingTool.decision, "deny");
+  assert.match(missingTool.reason, /missing a valid tool call name/);
+
+  const alternateShape = JSON.parse(execFileSync("node", [preToolScript], {
+    input: JSON.stringify({
+      conversationId: "alternate-shape",
+      toolName: "view_file",
+      toolArgs: { AbsolutePath: resolve("package.json") },
+    }),
+    encoding: "utf8",
+  }));
+  assert.equal(alternateShape.decision, "allow", "Supported runtime toolName/toolArgs shape remains compatible");
+});
