@@ -146,28 +146,41 @@ test("retrieval assist activates only with eligible report + matching human appr
     mkdirSync(join(root, ".agents"), { recursive: true });
     const telemetryDir = join(root, ".agents", "telemetry");
     mkdirSync(telemetryDir, { recursive: true });
-    const runs = Array.from({ length: 30 }, (_, i) => ({
-      schema: "orchestra.jev-shadow-report.v1",
-      task_category: ["status", "lookup", "simple", "multi", "investigation"][i % 5],
-      jev_calls: 1,
-      jev_latency_ms: 10,
-      jev_input_tokens: 10,
-      jev_candidates: 4,
-      jev_ranked_items: 4,
-      jev_candidate_bytes: 1000,
-      jev_selected_bytes: 500,
-      potential_context_reduction: 0.5,
-      future_use_recall_at_k: 1,
-      future_use_precision_at_k: 0.8,
-      critical_reference_recall: 1,
-      false_low_relevance: 0,
-      redundant_tool_candidates: 0,
-      rehydration_count: 0,
-      tool_reexecution_delta: 0,
-      acceptance_delta: 0,
-      fallback_identity_failures: 0,
-    }));
-    writeFileSync(join(telemetryDir, "jev-shadow.jsonl"), runs.map(JSON.stringify).join("\n")+"\n");
+    const lines = [];
+    for (let i = 0; i < 30; i++) {
+      const shadowId = `shadow-${i}`;
+      lines.push({
+        schema: "orchestra.jev-shadow-report.v1",
+        shadow_id: shadowId,
+        task_category: ["status", "lookup", "simple", "multi", "investigation"][i % 5],
+        jev_calls: 1,
+        jev_latency_ms: 10,
+        jev_input_tokens: 10,
+        jev_candidates: 4,
+        jev_ranked_items: 4,
+        jev_candidate_bytes: 1000,
+        jev_selected_bytes: 500,
+        potential_context_reduction: 0.5,
+        redundant_tool_candidates: 0,
+        rehydration_count: 0,
+        tool_reexecution_delta: 0,
+        acceptance_delta: 0,
+        fallback_identity_failures: 0,
+      });
+      lines.push({
+        schema: "orchestra.jev-shadow-label.v1",
+        shadow_id: shadowId,
+        future_event_count: 2,
+        future_used_total: 2,
+        critical_reference_total: 1,
+        future_use_recall_at_k: 1,
+        future_use_precision_at_k: 0.8,
+        critical_reference_recall: 1,
+        false_low_relevance: 0,
+        false_prune_risk: 0,
+      });
+    }
+    writeFileSync(join(telemetryDir, "jev-shadow.jsonl"), lines.map(JSON.stringify).join("\n")+"\n");
     const report = createProjectEvaluationReport(root);
     assert.equal(report.eligible_for_retrieval_assist, true);
     writeEvaluationReport(root, report);
