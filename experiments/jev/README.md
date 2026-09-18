@@ -35,11 +35,10 @@ npm run jev:lab -- shadow --repo /path/to/project --goal "current goal"
 # Shadow first records only the prediction.
 npm run jev:lab -- shadow --repo /path/to/project --goal "current goal"
 
-# After factual future events exist, append exactly one label for that prediction.
+# After factual future runtime telemetry exists, append exactly one label for that prediction.
+# The CLI reads .agents/telemetry/events.jsonl after the Shadow timestamp; it does not accept model-supplied future-event files.
 npm run jev:lab -- label --repo /path/to/project \
-  --shadow-id <jev-shadow-id> \
-  --future-events /path/to/factual-events.json \
-  --critical-ids id1,id2
+  --shadow-id <jev-shadow-id>
 
 # Evaluation uses only report+label pairs and persists a hash-bound report.
 npm run jev:lab -- evaluate --repo /path/to/project
