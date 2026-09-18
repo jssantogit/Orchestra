@@ -458,80 +458,97 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
 
   const sessionId = "explore-" + randomUUID();
   const branchRoot = join(tmpdir(), "orchestra-dream-" + sessionId.replace(/[^A-Za-z0-9._-]/g, "-"));
-  rmSync(branchRoot, { recursive: true, force: true });
-  cpSync(archive, branchRoot, { recursive: true, dereference: false });
-  const now = Date.now();
-  const session = {
-    schema: EXPLORATION_SESSION_SCHEMA,
-    session_id: sessionId,
-    mode: "EXPLICIT_LOCAL",
-    source: {
-      world_id: world.world_id,
-      seed_id: seed.seed_id,
-      snapshot_id: source.snapshot_id,
-      decision_type: source.decision_type,
-      state_hash: seed.decision.state_hash,
-    },
-    target: {
-      decision_type: source.decision_type,
-      state_hash: seed.decision.state_hash,
-      selected_action: selection.selected,
-      available_actions: [...source.available_actions],
-      selection_rule: "LEAST_OBSERVED_LEGAL_ACTION",
-    },
-    budget: { ...EXPLORATION_BUDGET },
-    primary_workspace_fingerprint: primaryFingerprint,
-    status: "PREPARED",
-    created_at: new Date(now).toISOString(),
-    deadline_at: new Date(now + EXPLORATION_BUDGET.timeout_ms).toISOString(),
-  };
+  let indexCommitted = false;
 
-  mkdirSync(resolve(branchRoot, ".agents/state/dream"), { recursive: true });
-  mkdirSync(resolve(branchRoot, ".agents/telemetry"), { recursive: true });
-  writeFileSync(resolve(branchRoot, ".agents/telemetry/events.jsonl"), "", "utf8");
-  atomicJson(resolve(branchRoot, ".agents/state/active-state.json"), activeStateFromSeed(seed, sessionId));
-  atomicJson(resolve(branchRoot, ".agents/state/active-contract.json"), seed.scope_contract);
-  atomicJson(resolve(branchRoot, SESSION), session);
-
-  const hookOverlay = activateExplorationPreToolWrapper(branchRoot);
-  if (!hookOverlay.ok) {
-    rmSync(branchRoot, { recursive: true, force: true });
-    try { unlinkSync(reservation.path); } catch {}
-    return { prepared: false, reason: hookOverlay.reason, error: hookOverlay.error || null };
-  }
-  session.hook_overlay = {
-    mode: "EXPLORATION_PRETOOL_WRAPPER",
-    overlay_hash: hookOverlay.overlay_hash,
-    original_matcher: hookOverlay.original.matcher,
-    original_command: hookOverlay.original.command,
-  };
-  atomicJson(resolve(branchRoot, SESSION), session);
-
-  mkdirSync(resolve(repoRoot, EXPLORATIONS), { recursive: true });
-  atomicJson(resolve(repoRoot, EXPLORATIONS, sessionId + ".json"), { ...session, branch_workspace: branchRoot });
-  index.entries[key] = {
-    session_id: sessionId,
-    source_world_id: world.world_id,
-    source_snapshot_id: source.snapshot_id,
-    selected_action: selection.selected,
-    created_at: session.created_at,
-  };
-  atomicJson(resolve(repoRoot, INDEX), index);
   try {
-    writeFileSync(reservation.path, JSON.stringify({
-      schema: "orchestra.exploration-reservation.v1",
-      key,
-      status: "MATERIALIZED",
+    rmSync(branchRoot, { recursive: true, force: true });
+    cpSync(archive, branchRoot, { recursive: true, dereference: false });
+    const now = Date.now();
+    const session = {
+      schema: EXPLORATION_SESSION_SCHEMA,
       session_id: sessionId,
-      branch_workspace: branchRoot,
+      mode: "EXPLICIT_LOCAL",
+      source: {
+        world_id: world.world_id,
+        seed_id: seed.seed_id,
+        snapshot_id: source.snapshot_id,
+        decision_type: source.decision_type,
+        state_hash: seed.decision.state_hash,
+      },
+      target: {
+        decision_type: source.decision_type,
+        state_hash: seed.decision.state_hash,
+        selected_action: selection.selected,
+        available_actions: [...source.available_actions],
+        selection_rule: "LEAST_OBSERVED_LEGAL_ACTION",
+      },
+      budget: { ...EXPLORATION_BUDGET },
+      primary_workspace_fingerprint: primaryFingerprint,
+      status: "PREPARED",
+      created_at: new Date(now).toISOString(),
+      deadline_at: new Date(now + EXPLORATION_BUDGET.timeout_ms).toISOString(),
+    };
+
+    mkdirSync(resolve(branchRoot, ".agents/state/dream"), { recursive: true });
+    mkdirSync(resolve(branchRoot, ".agents/telemetry"), { recursive: true });
+    writeFileSync(resolve(branchRoot, ".agents/telemetry/events.jsonl"), "", "utf8");
+    atomicJson(resolve(branchRoot, ".agents/state/active-state.json"), activeStateFromSeed(seed, sessionId));
+    atomicJson(resolve(branchRoot, ".agents/state/active-contract.json"), seed.scope_contract);
+    atomicJson(resolve(branchRoot, SESSION), session);
+
+    const hookOverlay = activateExplorationPreToolWrapper(branchRoot);
+    if (!hookOverlay.ok) {
+      rmSync(branchRoot, { recursive: true, force: true });
+      try { unlinkSync(reservation.path); } catch {}
+      return { prepared: false, reason: hookOverlay.reason, error: hookOverlay.error || null };
+    }
+    session.hook_overlay = {
+      mode: "EXPLORATION_PRETOOL_WRAPPER",
+      overlay_hash: hookOverlay.overlay_hash,
+      original_matcher: hookOverlay.original.matcher,
+      original_command: hookOverlay.original.command,
+    };
+    atomicJson(resolve(branchRoot, SESSION), session);
+
+    mkdirSync(resolve(repoRoot, EXPLORATIONS), { recursive: true });
+    atomicJson(resolve(repoRoot, EXPLORATIONS, sessionId + ".json"), { ...session, branch_workspace: branchRoot });
+    index.entries[key] = {
+      session_id: sessionId,
+      source_world_id: world.world_id,
+      source_snapshot_id: source.snapshot_id,
       selected_action: selection.selected,
-      materialized_at: new Date().toISOString(),
-    }, null, 2), "utf8");
-  } catch {
-    // Reservation already exists and therefore still enforces the hard sibling
-    // ceiling even if this descriptive metadata update fails.
+      created_at: session.created_at,
+    };
+    atomicJson(resolve(repoRoot, INDEX), index);
+    indexCommitted = true;
+
+    try {
+      writeFileSync(reservation.path, JSON.stringify({
+        schema: "orchestra.exploration-reservation.v1",
+        key,
+        status: "MATERIALIZED",
+        session_id: sessionId,
+        branch_workspace: branchRoot,
+        selected_action: selection.selected,
+        materialized_at: new Date().toISOString(),
+      }, null, 2), "utf8");
+    } catch {
+      // Reservation already exists and therefore still enforces the hard
+      // sibling ceiling even if this descriptive metadata update fails.
+    }
+
+    return { prepared: true, session, branch_workspace: branchRoot, selection };
+  } catch (error) {
+    try { rmSync(branchRoot, { recursive: true, force: true }); } catch {}
+    if (!indexCommitted) {
+      try { unlinkSync(reservation.path); } catch {}
+    }
+    return {
+      prepared: false,
+      reason: "EXPLORATION_MATERIALIZATION_FAILED",
+      error: String(error?.message || error),
+    };
   }
-  return { prepared: true, session, branch_workspace: branchRoot, selection };
 }
 
 export function loadExplorationSession(repoRoot) {
