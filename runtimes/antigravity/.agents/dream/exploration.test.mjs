@@ -15,6 +15,7 @@ import {
   buildSandboxedExplorationCommand,
   captureBranchSeedIfArmed,
   collectExplorationResult,
+  consumeExplorationTarget,
   enforceExplorationToolBoundary,
   getExplorationBudgetState,
   isSafeExplorationCommand,
@@ -280,6 +281,25 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     assert.equal(overlay.action, "FLASH_MEDIUM");
     assert.equal(overlay.source, "EXPLORATION_LAB");
     assert.equal(overlay.source_snapshot_id, f.snapshot.snapshot_id);
+
+    const consumed = consumeExplorationTarget({
+      repoRoot: branch,
+      decisionType: "WORKER_TIER",
+      state: f.state,
+      action: "FLASH_MEDIUM",
+    });
+    assert.equal(consumed.consumed, true);
+    assert.equal(
+      resolveExplorationPolicyOverlay({
+        repoRoot: branch,
+        decisionType: "WORKER_TIER",
+        state: f.state,
+        availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+        baselineAction: "FLASH_LOW",
+      }),
+      null,
+      "exploration policy authority must be one-shot after the factual target decision",
+    );
 
     const safe = enforceExplorationToolBoundary({ repoRoot: branch, toolName: "run_command", toolArgs: { CommandLine: "git status" } });
     assert.equal(safe.allowed, true);
