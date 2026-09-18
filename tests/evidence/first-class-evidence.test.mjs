@@ -57,6 +57,27 @@ const FAST_CI_REQUIREMENT = Object.freeze({
   ],
 });
 
+const TASK_1_RUN = Object.freeze({
+  id: 35366248028,
+  workflow_id: 360365122,
+  name: "Fast CI",
+  path: ".github/workflows/ci.yml",
+  head_sha: "754fd787e8e736a2a636b40fbb7e78bf3121dfd4",
+  head_branch: "tsuzuki/mvp-v1-catalog-kitsu-search-discover",
+  status: "completed",
+  conclusion: "success",
+  event: "push",
+  run_attempt: 1,
+  repository: { full_name: "jssantogit/mihon" },
+});
+
+const TASK_1_JOBS = Object.freeze([
+  { id: 105669321160, name: "Kotlin Compile", status: "completed", conclusion: "success", head_sha: TASK_1_RUN.head_sha },
+  { id: 105669321375, name: "SQLDelight Migrations", status: "completed", conclusion: "success", head_sha: TASK_1_RUN.head_sha },
+  { id: 105669321460, name: "Format", status: "completed", conclusion: "success", head_sha: TASK_1_RUN.head_sha },
+  { id: 105669321656, name: "Unit Tests", status: "completed", conclusion: "success", head_sha: TASK_1_RUN.head_sha },
+]);
+
 const TASK_2_RUN = Object.freeze({
   id: 35368076713,
   workflow_id: 360365122,
@@ -239,6 +260,20 @@ test("evidence: provider evidence from previous mutation is stale", () => {
   assert.equal(result.status, "STALE");
   assert.equal(result.verified, false);
   assert.equal(result.results[0].reason, "MUTATION_SEQ_MISMATCH");
+});
+
+test("evidence: Tsuzuki Task 1 Fast CI run is first-class evidence for its exact commit", () => {
+  const verdict = validateGitHubActionsPayload({
+    requirement: FAST_CI_REQUIREMENT,
+    run: TASK_1_RUN,
+    jobs: TASK_1_JOBS,
+    factual: factualGit({
+      headSha: TASK_1_RUN.head_sha,
+      branch: TASK_1_RUN.head_branch,
+    }),
+  });
+  assert.equal(verdict.result, "PASS");
+  assert.equal(verdict.reason, null);
 });
 
 test("evidence: real Tsuzuki Fast CI fixture is accepted only for exact commit and required jobs", () => {
