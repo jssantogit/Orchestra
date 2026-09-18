@@ -8,6 +8,7 @@ import { rankCandidates, selectRankedReferences } from "./artifact-ranker.mjs";
 import { evaluateRankingAgainstFutureUse } from "./future-use-oracle.mjs";
 import { buildCounterfactualPacket } from "./packet-builder.mjs";
 import { JEV_AUTHORITY, JEV_SCHEMAS, contentId } from "./schemas.mjs";
+import { assertLiveEgressAllowed } from "./egress-policy.mjs";
 
 export const SHADOW_TELEMETRY_PATH = ".agents/telemetry/jev-shadow.jsonl";
 
@@ -29,7 +30,9 @@ export async function runArtifactRankingShadow({
   mandatoryCore = {},
   pathHints = [],
   symbolHints = [],
+  env = process.env,
 } = {}) {
+  const egress = assertLiveEgressAllowed({ projectRoot, live, env });
   const started = Date.now();
   const catalog = buildCatalog(projectRoot);
   const generated = generateCandidates({
@@ -80,6 +83,7 @@ export async function runArtifactRankingShadow({
     }),
     authority: JEV_AUTHORITY,
     mode: live ? "LIVE_SHADOW" : "OFFLINE_SHADOW",
+    egress_mode: egress.mode,
     blocks_tool: false,
     changes_packet: false,
     task_id: task.task_id || null,
