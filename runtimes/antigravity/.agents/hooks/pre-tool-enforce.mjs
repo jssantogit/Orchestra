@@ -194,13 +194,28 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
   if (snapRes.ok) {
     const decState = deriveDecisionState(taskObj, activeState, activeState.evidenceSummary || activeState.evidence || {});
     const availableActions = deriveAvailableActions(req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY, decState);
+    const effectiveActions = availableActions.length > 0 ? availableActions : ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"];
+    const seedCapture = captureBranchSeedIfArmed({
+      repoRoot,
+      snapshot: snapRes.snapshot,
+      decisionType: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
+      decisionState: decState,
+      availableActions: effectiveActions,
+      scopeContract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
+      taskDescriptor: taskObj,
+      evidenceSummary: activeState.evidenceSummary || activeState.evidence || {},
+      runtimeState: activeState,
+    });
+    if (seedCapture.captured) {
+      activeState.explorationSeedCaptured = seedCapture.seed_id;
+    }
     recordDecision({
       repoRoot,
       snapshot: req.source_snapshot_id || snapRes.snapshot,
       decision: {
         decision_type: req.decision_type || DECISION_TYPES.INVESTIGATION_STRATEGY,
         state: decState,
-        available_actions: availableActions.length > 0 ? availableActions : ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+        available_actions: effectiveActions,
         chosen_action: "INVESTIGATE_FIRST",
         policy_source: req.policy_source || "STATIC_POLICY_V1",
         policy_id: req.policy_id || null,
@@ -1602,22 +1617,6 @@ function main() {
                 facts,
                 state: decisionState,
               }) || "IMPLEMENT_DIRECT";
-              const seedCapture = captureBranchSeedIfArmed({
-                repoRoot,
-                snapshot: snapRes.snapshot,
-                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
-                decisionState,
-                availableActions: invAvailable,
-                scopeContract: contractObj,
-                taskDescriptor: taskObj,
-                evidenceSummary: evidenceObj,
-                runtimeState: activeState,
-              });
-              if (seedCapture.captured) {
-                activeState.explorationSeedCaptured = seedCapture.seed_id;
-                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-              }
-
               const invEval = evaluatePolicyWithFallback({
                 repoRoot,
                 decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
@@ -1649,6 +1648,26 @@ function main() {
                 }));
                 return;
               }
+
+              // IMPLEMENT_DIRECT records immediately, so capture its BranchSeed at
+              // the exact factual decision snapshot. INVESTIGATE_FIRST is captured
+              // later in startPendingInvestigationRequirement, immediately before
+              // its factual DECISION is published.
+              const seedCapture = captureBranchSeedIfArmed({
+                repoRoot,
+                snapshot: snapRes.snapshot,
+                decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                decisionState,
+                availableActions: invAvailable,
+                scopeContract: contractObj,
+                taskDescriptor: taskObj,
+                evidenceSummary: evidenceObj,
+                runtimeState: activeState,
+              });
+              if (seedCapture.captured) {
+                activeState.explorationSeedCaptured = seedCapture.seed_id;
+                try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+              }
             }
           }
 
@@ -1660,22 +1679,6 @@ function main() {
             facts,
             state: decisionState,
           }) || (decisionType === DECISION_TYPES.WORKER_TIER ? "FLASH_MEDIUM" : "RETRY_SAME");
-
-          const seedCapture = captureBranchSeedIfArmed({
-            repoRoot,
-            snapshot: snapRes.snapshot,
-            decisionType,
-            decisionState,
-            availableActions,
-            scopeContract: contractObj,
-            taskDescriptor: taskObj,
-            evidenceSummary: evidenceObj,
-            runtimeState: activeState,
-          });
-          if (seedCapture.captured) {
-            activeState.explorationSeedCaptured = seedCapture.seed_id;
-            try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-          }
 
           const evalResult = evaluatePolicyWithFallback({
             repoRoot,
@@ -1690,6 +1693,26 @@ function main() {
               reason: `EXPLORATION_POLICY_INVALID: ${evalResult.policy_diagnostic || "blocked"}`,
             }));
             return;
+          }
+
+          // RETRY_ACTION=INVESTIGATE_FIRST is published only when the factual
+          // investigation dispatch begins; defer BranchSeed capture until then.
+          if (!(decisionType === DECISION_TYPES.RETRY_ACTION && evalResult.action === "INVESTIGATE_FIRST")) {
+            const seedCapture = captureBranchSeedIfArmed({
+              repoRoot,
+              snapshot: snapRes.snapshot,
+              decisionType,
+              decisionState,
+              availableActions,
+              scopeContract: contractObj,
+              taskDescriptor: taskObj,
+              evidenceSummary: evidenceObj,
+              runtimeState: activeState,
+            });
+            if (seedCapture.captured) {
+              activeState.explorationSeedCaptured = seedCapture.seed_id;
+              try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+            }
           }
 
           // 3. Real Online Policy Authority Enforcements
