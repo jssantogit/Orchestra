@@ -1,6 +1,6 @@
 import { execSync, execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, relative } from "node:path";
 
 function getWorkspacePaths(cwdOverride, customStatePath) {
   const cwd = cwdOverride || process.cwd();
@@ -199,6 +199,10 @@ export function executeGitOperation(options = {}) {
     const normalizedExpectedFiles = expectedFiles
       ? [...new Set(expectedFiles)].sort()
       : null;
+    const transactionStateRel = String(relative(repoRoot, statePath)).replace(/\\/g, "/");
+    const isTransactionStateOnlyDirty = parsedStatus.allDirty.length > 0
+      && parsedStatus.allDirty.every((p) => p === transactionStateRel);
+    const idempotencyTreeClean = parsedStatus.isClean || isTransactionStateOnlyDirty;
 
     let commitAlreadyCreated = false;
     let existingCommitHash = null;
@@ -222,7 +226,7 @@ export function executeGitOperation(options = {}) {
 
       // A prior transaction is reusable only when it is exactly the operation
       // being retried and the repository has not changed since that commit.
-      if (sameIntent && sameHead && parsedStatus.isClean) {
+      if (sameIntent && sameHead && idempotencyTreeClean) {
         commitAlreadyCreated = true;
         existingCommitHash = currentHeadHash;
       }
@@ -231,7 +235,7 @@ export function executeGitOperation(options = {}) {
     // Crash recovery when control-plane transaction state was lost after commit:
     // exact message + clean tree is enough to reuse the current HEAD, but prefix
     // matches are intentionally rejected.
-    if (!commitAlreadyCreated && lastHeadMsg === requestedMessage && parsedStatus.isClean) {
+    if (!commitAlreadyCreated && lastHeadMsg === requestedMessage && idempotencyTreeClean) {
       commitAlreadyCreated = true;
       existingCommitHash = currentHeadHash;
     }
