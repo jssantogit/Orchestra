@@ -63,6 +63,7 @@ test("artifact ranking shadow writes telemetry and never changes packet behavior
       goal: "fix auth test",
       task: { task_id: "task-shadow", task_category: "investigation" },
       live: true,
+      env: { ORCHESTRA_JEV_ALLOW_PROJECT_EGRESS: "1" },
       mandatoryCore: { goal: "fix auth test", requiredEvidence: ["TEST_RUN"] },
       futureEvents: [{ type: "ACCEPTANCE", evidenceId: "ev-1" }],
       criticalIds: [],
@@ -104,7 +105,12 @@ test("Dream analysis writes sidecars only and leaves world bytes unchanged", asy
     writeFileSync(worldPath, JSON.stringify(world, null, 2));
     const before = readFileSync(worldPath, "utf8");
     const client = createFakeJevClient(() => 0.5);
-    const out = await annotateDreamDirectory({ projectRoot: root, client, live: true });
+    const out = await annotateDreamDirectory({
+      projectRoot: root,
+      client,
+      live: true,
+      env: { ORCHESTRA_JEV_ALLOW_PROJECT_EGRESS: "1" },
+    });
     assert.equal(out.annotated, 1);
     assert.equal(readFileSync(worldPath, "utf8"), before);
     const sidecar = JSON.parse(readFileSync(out.paths[0], "utf8"));
