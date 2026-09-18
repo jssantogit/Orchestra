@@ -846,8 +846,26 @@ test("turn-diet: regression 38: batching guidance preserves allowedPaths enforce
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "child-worker-1": { role: "WORKER", profile: "flash-low-worker" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-1": {
+        conversationId: "child-worker-1",
+        role: "WORKER",
+        profile: "flash-low-worker",
+        parentConversationId: "orch-parent",
+        delegationKind: "WORK",
+        attempt: 0,
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+      },
     },
+    conversations: {},
+    pendingSubagents: [],
   }));
 
   // Allowed edit
@@ -1546,6 +1564,7 @@ test("evidence-sync-integrity: regression 10: transcriptEvidenceId is separate f
 });
 
 test("evidence-sync-integrity: regression 11: invalid agent names are denied", () => {
+  seedFactualOrchestrator("parent-orch");
   const invalidNames = [
     "../worker",
     "../../foo",
@@ -1574,6 +1593,7 @@ test("evidence-sync-integrity: regression 11: invalid agent names are denied", (
 });
 
 test("evidence-sync-integrity: regression 12: valid registered profile is allowed with authoritative prompt", () => {
+  seedFactualOrchestrator("parent-orch");
   const input = JSON.stringify({
     conversationId: "parent-orch",
     toolCall: {
@@ -1589,6 +1609,7 @@ test("evidence-sync-integrity: regression 12: valid registered profile is allowe
 });
 
 test("evidence-sync-integrity: regression 13: valid name syntax but nonexistent profile is denied", () => {
+  seedFactualOrchestrator("parent-orch");
   const input = JSON.stringify({
     conversationId: "parent-orch",
     toolCall: {
@@ -1623,7 +1644,9 @@ test("evidence-sync-integrity: regression 14: module import does not invoke main
 });
 
 test("evidence-sync-integrity: regression 15: direct script execution still invokes hook", () => {
+  seedFactualOrchestrator("parent-orch");
   const input = JSON.stringify({
+    conversationId: "parent-orch",
     toolCall: {
       name: "define_subagent",
       args: { name: "invalid/name" },
@@ -2997,8 +3020,16 @@ test("task5-v1.2: 5. legitimate recovery or cancellation behavior remains intact
   const preToolScript = resolve(runtimeRoot, ".agents/hooks/pre-tool-enforce.mjs");
   const tempDir = mkdtempSync(join(tmpdir(), "orch-recovery-"));
   try {
-    // Cancellation (manage_task kill) is always allowed even during delegation
+    seedFactualOrchestrator("orch-recovery");
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "orch-recovery",
+      state: "DELEGATED",
+    }), "utf-8");
+
+    // Cancellation (manage_task kill) is allowed to the factual orchestrator during delegation
     const killPayload = JSON.stringify({
+      conversationId: "orch-recovery",
       toolName: "manage_task",
       toolArgs: { Action: "kill", TaskId: "task-999" },
       cwdOverride: tempDir,
@@ -3007,15 +3038,16 @@ test("task5-v1.2: 5. legitimate recovery or cancellation behavior remains intact
     assert.equal(killRes.decision, "allow");
 
     // Outside healthy delegation (e.g. idle/direct action), schedule is not blocked by delegation lock
-    const idleState = { state: "IDLE" };
-    const idleStatePath = join(tempDir, "active-state.json");
-    writeFileSync(idleStatePath, JSON.stringify(idleState), "utf-8");
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "orch-recovery",
+      state: "IDLE",
+    }), "utf-8");
 
     const idleSchedPayload = JSON.stringify({
+      conversationId: "orch-recovery",
       toolName: "schedule",
       toolArgs: { DurationSeconds: 10, Prompt: "remind" },
-      cwdOverride: tempDir,
-      customStatePath: idleStatePath,
     });
     const idleSchedRes = JSON.parse(execFileSync("node", [preToolScript], { input: idleSchedPayload }));
     assert.equal(idleSchedRes.decision, "allow");
@@ -3045,10 +3077,35 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
     const roleBindings = {
       mainConversationId: "orch-parent",
       bindings: {
-        "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
-        "worker-child": { role: "WORKER", profile: "flash-worker" },
-        "reviewer-child": { role: "REVIEWER", profile: "flash-reviewer" },
+        "orch-parent": {
+          conversationId: "orch-parent",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        "worker-child": {
+          conversationId: "worker-child",
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: "orch-parent",
+          delegationKind: "WORK",
+          attempt: 0,
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
+        "reviewer-child": {
+          conversationId: "reviewer-child",
+          role: "REVIEWER",
+          profile: "flash-reviewer",
+          parentConversationId: "orch-parent",
+          delegationKind: "REVIEW",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
       },
+      conversations: {},
+      pendingSubagents: [],
     };
     writeFileSync(join(stateDir, "role-bindings.json"), JSON.stringify(roleBindings), "utf-8");
 
@@ -3084,6 +3141,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3115,6 +3174,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3138,6 +3199,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1, // stale!
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3165,6 +3228,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3185,6 +3250,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
         {
           command: "node --test test/b.test.js",
@@ -3192,6 +3259,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3213,6 +3282,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 0, // stale pre-mutation!
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
