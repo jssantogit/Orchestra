@@ -2454,3 +2454,136 @@ test("v5: git-operation stages repo-relative explicit files from nested cwd", ()
     cleanState();
   }
 });
+
+
+test("pre-tool hook: factual INVESTIGATION delegation is strictly read-only", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "investigator-read-only",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "investigator-parent",
+      bindings: {
+        "investigator-parent": {
+          conversationId: "investigator-parent",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        "investigator-child": {
+          conversationId: "investigator-child",
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: "investigator-parent",
+          delegationKind: "INVESTIGATION",
+          originToolCallId: "call-investigator",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf-8");
+
+    const write = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-write",
+          name: "write_to_file",
+          args: { TargetFile: "src/investigator.ts", CodeContent: "export const bad = true;" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(write.decision, "deny");
+    assert.match(write.reason, /INVESTIGATOR_READ_ONLY/);
+
+    const shellMutation = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-shell-write",
+          name: "run_command",
+          args: { CommandLine: "touch src/investigator-created.ts" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(shellMutation.decision, "deny");
+    assert.match(shellMutation.reason, /INVESTIGATOR_READ_ONLY/);
+
+    const read = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-read",
+          name: "view_file",
+          args: { AbsolutePath: resolve("package.json") },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(read.decision, "allow");
+
+    const gitStatus = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-git-status",
+          name: "run_command",
+          args: { CommandLine: "git status --short" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(gitStatus.decision, "allow");
+
+    const testCommand = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-test",
+          name: "run_command",
+          args: { CommandLine: "node --test test/example.test.js" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(testCommand.decision, "allow", "Read-only validation is permitted for investigation");
+
+    const buildCommand = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-build",
+          name: "run_command",
+          args: { CommandLine: "npm run build" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(buildCommand.decision, "deny", "Build is workspace-mutating and forbidden to investigator");
+    assert.match(buildCommand.reason, /INVESTIGATOR_READ_ONLY/);
+  } finally {
+    cleanState();
+  }
+});
