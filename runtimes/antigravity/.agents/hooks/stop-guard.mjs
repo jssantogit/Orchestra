@@ -177,7 +177,10 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
           const firstRole = matchedCandidates[0].role;
           const firstProfile = matchedCandidates[0].profile;
           const allSameRoleAndProfile = matchedCandidates.every((c) => c.role === firstRole && c.profile === firstProfile);
-          if (allSameRoleAndProfile) {
+          const homogeneousReviewerPair = allSameRoleAndProfile
+            && firstRole === "REVIEWER"
+            && matchedCandidates.every((c) => c.delegationKind === "REVIEW");
+          if (homogeneousReviewerPair) {
             match = matchedCandidates[0];
           } else {
             match = null;
