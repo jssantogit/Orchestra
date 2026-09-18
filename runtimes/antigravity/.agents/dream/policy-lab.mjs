@@ -804,6 +804,9 @@ export function submitDesignerCandidates({
     || !pendingCall
     || pendingCall.status !== "PACKET_ISSUED"
   ) {
+    if (cycle.designer_calls.length >= POLICY_LAB_LIMITS.max_designer_calls) {
+      return { accepted: false, reason: "DESIGNER_CALL_BUDGET_EXHAUSTED" };
+    }
     return { accepted: false, reason: "DESIGNER_PACKET_REQUIRED" };
   }
 
