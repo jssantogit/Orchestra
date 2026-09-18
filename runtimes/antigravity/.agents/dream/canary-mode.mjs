@@ -355,53 +355,97 @@ function validateApproval(repoRoot, config) {
 }
 
 
+function loadRolloutApproval(repoRoot, approvalId) {
+  if (!approvalId) return { ok: false, reason: "CANARY_ROLLOUT_APPROVAL_MISSING" };
+  const path = resolve(repoRoot, ROOT, "rollout-approvals", approvalId + ".json");
+  if (!existsSync(path)) return { ok: false, reason: "CANARY_ROLLOUT_APPROVAL_MISSING" };
+  let approval;
+  try {
+    approval = readJson(path);
+  } catch {
+    return { ok: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
+  }
+  if (
+    approval?.schema !== CANARY_ROLLOUT_APPROVAL_SCHEMA
+    || approval.rollout_approval_id !== approvalId
+    || approval.rollout_approval_hash !== rolloutApprovalHash(approval)
+    || approval.approved_by !== "HUMAN_EXPLICIT_CLI"
+  ) {
+    return { ok: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
+  }
+  return { ok: true, approval, path };
+}
+
 function validateRolloutApproval(repoRoot, config) {
   const stage = currentCanaryRolloutStage(config);
   if (!stage) return { valid: false, reason: "CANARY_ROLLOUT_STAGE_INVALID" };
   if (stage.index === 0) {
-    return { valid: true, approval: null, path: null };
+    return { valid: true, approval: null, path: null, chain: [] };
   }
 
   if (!config.rollout_approval_id || !config.rollout_approval_hash) {
     return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_MISSING" };
   }
 
-  const path = resolve(
-    repoRoot,
-    ROOT,
-    "rollout-approvals",
-    config.rollout_approval_id + ".json",
-  );
-  if (!existsSync(path)) {
-    return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_MISSING" };
-  }
-
-  let approval;
-  try {
-    approval = readJson(path);
-  } catch {
-    return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
-  }
-
   const generation = rolloutGeneration(config);
-  if (
-    approval?.schema !== CANARY_ROLLOUT_APPROVAL_SCHEMA
-    || approval.rollout_approval_id !== config.rollout_approval_id
-    || approval.rollout_approval_hash !== config.rollout_approval_hash
-    || rolloutApprovalHash(approval) !== approval.rollout_approval_hash
-    || approval.approved_by !== "HUMAN_EXPLICIT_CLI"
-    || approval.canary_session_id !== config.canary_session_id
-    || approval.candidate_policy_id !== config.candidate_policy_id
-    || approval.baseline_policy_id !== config.baseline_policy_id
-    || approval.from_stage_index !== stage.index - 1
-    || approval.to_stage_index !== stage.index
-    || approval.to_traffic_percent !== stage.traffic_percent
-    || approval.rollout_generation !== generation
-  ) {
-    return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
+  let expectedApprovalId = config.rollout_approval_id;
+  let expectedToStageIndex = stage.index;
+  let expectedGeneration = generation;
+  const chain = [];
+
+  for (let depth = 0; depth < CANARY_ROLLOUT_STAGES.length; depth++) {
+    const loaded = loadRolloutApproval(repoRoot, expectedApprovalId);
+    if (!loaded.ok) return { valid: false, reason: loaded.reason };
+
+    const approval = loaded.approval;
+    const toStage = getCanaryRolloutStage(expectedToStageIndex);
+    const fromStage = getCanaryRolloutStage(expectedToStageIndex - 1);
+    if (
+      !toStage
+      || !fromStage
+      || approval.canary_session_id !== config.canary_session_id
+      || approval.candidate_policy_id !== config.candidate_policy_id
+      || approval.baseline_policy_id !== config.baseline_policy_id
+      || approval.from_stage_index !== fromStage.index
+      || approval.from_traffic_percent !== fromStage.traffic_percent
+      || approval.to_stage_index !== toStage.index
+      || approval.to_traffic_percent !== toStage.traffic_percent
+      || approval.rollout_generation !== expectedGeneration
+    ) {
+      return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
+    }
+
+    if (depth === 0 && approval.rollout_approval_hash !== config.rollout_approval_hash) {
+      return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
+    }
+
+    chain.push({ approval, path: loaded.path });
+
+    if (fromStage.index === 0) {
+      if (approval.previous_rollout_approval_id !== null) {
+        return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_CHAIN_INVALID" };
+      }
+      if (chain.length !== stage.index) {
+        return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_CHAIN_INVALID" };
+      }
+      return {
+        valid: true,
+        approval: chain[0].approval,
+        path: chain[0].path,
+        chain,
+      };
+    }
+
+    if (!approval.previous_rollout_approval_id) {
+      return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_CHAIN_INVALID" };
+    }
+
+    expectedApprovalId = approval.previous_rollout_approval_id;
+    expectedToStageIndex -= 1;
+    expectedGeneration -= 1;
   }
 
-  return { valid: true, approval, path };
+  return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_CHAIN_INVALID" };
 }
 
 export function loadCanaryConfig(repoRoot) {
