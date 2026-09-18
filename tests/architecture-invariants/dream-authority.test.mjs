@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, rmSync, unlinkSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, unlinkSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -43,6 +43,14 @@ import {
 import {
   recordDecision,
 } from "../../runtimes/antigravity/.agents/dream/decision-recorder.mjs";
+import {
+  EXPLORATION_BUDGET,
+  armExplorationCapture,
+  buildSandboxedExplorationCommand,
+  captureBranchSeedIfArmed,
+  enforceExplorationToolBoundary,
+  recordExplorationModelCall,
+} from "../../runtimes/antigravity/.agents/dream/exploration-lab.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -1978,4 +1986,142 @@ test("ARCH-026: Sealed World Material Integrity", () => {
   });
   assert.equal(unsafeId.status, "WORLD_INVALID");
   assert.match(unsafeId.errors.join("; "), /world_id must be a safe filename token/);
+});
+
+
+// ---------------------------------------------------------------------------
+// ARCH-027: Explicit Exploration Authority Is Non-Escalating
+// Milestone E must remain opt-in, bounded, sandbox-forced, and unable to
+// acquire external side-effect authority or CRITICAL eligibility.
+// ---------------------------------------------------------------------------
+test("ARCH-027: Explicit Exploration Authority Is Non-Escalating", () => {
+  assert.deepEqual(EXPLORATION_BUDGET, {
+    max_sibling_branches: 1,
+    max_model_calls: 2,
+    timeout_ms: 300000,
+  });
+  assert.equal(Object.isFrozen(EXPLORATION_BUDGET), true);
+
+  const launch = buildSandboxedExplorationCommand("agy", ["--model=test-model"]);
+  assert.equal(launch.ok, true);
+  assert.deepEqual(launch.args, ["--sandbox", "--model=test-model"]);
+  assert.equal(buildSandboxedExplorationCommand("./agy", []).ok, false);
+  assert.equal(buildSandboxedExplorationCommand("node", []).ok, false);
+  assert.equal(
+    buildSandboxedExplorationCommand("agy", ["--dangerously-skip-permissions"]).reason,
+    "EXPLORATION_SANDBOX_BYPASS_FORBIDDEN",
+  );
+
+  const root = mkdtempSync(resolve(repoRoot, "tmp-arch-027-"));
+  try {
+    const sessionDir = resolve(root, ".agents/state/dream");
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(resolve(sessionDir, "exploration-session.json"), JSON.stringify({
+      schema: "orchestra.exploration-session.v1",
+      session_id: "arch-027-session",
+      status: "RUNNING",
+      deadline_at: new Date(Date.now() + 60_000).toISOString(),
+      budget: { ...EXPLORATION_BUDGET },
+      target: {},
+      source: {},
+    }, null, 2), "utf-8");
+
+    assert.equal(
+      enforceExplorationToolBoundary({ repoRoot: root, toolName: "send_message", toolArgs: {} }).allowed,
+      false,
+    );
+    assert.equal(
+      enforceExplorationToolBoundary({ repoRoot: root, toolName: "search_web", toolArgs: {} }).allowed,
+      false,
+    );
+    assert.equal(
+      enforceExplorationToolBoundary({
+        repoRoot: root,
+        toolName: "run_command",
+        toolArgs: { CommandLine: "git push origin main" },
+      }).allowed,
+      false,
+    );
+    assert.equal(
+      enforceExplorationToolBoundary({
+        repoRoot: root,
+        toolName: "run_command",
+        toolArgs: { CommandLine: "git status" },
+      }).allowed,
+      true,
+    );
+    assert.equal(
+      enforceExplorationToolBoundary({
+        repoRoot: root,
+        toolName: "invoke_subagent",
+        toolArgs: { Subagents: [{}, {}] },
+      }).allowed,
+      false,
+    );
+
+    const armed = armExplorationCapture({ repoRoot: root, decisionType: "WORKER_TIER" });
+    assert.equal(armed.armed, true);
+    const critical = captureBranchSeedIfArmed({
+      repoRoot: root,
+      snapshot: {},
+      decisionType: "WORKER_TIER",
+      decisionState: { criticality: "CRITICAL" },
+      availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+      scopeContract: { criticality: "CRITICAL" },
+      runtimeState: { state: "EXECUTING" },
+    });
+    assert.equal(critical.captured, false);
+    assert.equal(critical.reason, "EXPLORATION_INELIGIBLE_CRITICAL");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ARCH-028: Exploration Budget Is Hard Across Stop Boundary
+// PostInvocation exhaustion cannot be undone by the ordinary Stop acceptance
+// loop; the second model call is a true upper bound for the exploratory branch.
+// ---------------------------------------------------------------------------
+test("ARCH-028: Exploration Budget Is Hard Across Stop Boundary", () => {
+  const root = mkdtempSync(resolve(repoRoot, "tmp-arch-028-"));
+  try {
+    const sessionDir = resolve(root, ".agents/state/dream");
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(resolve(sessionDir, "exploration-session.json"), JSON.stringify({
+      schema: "orchestra.exploration-session.v1",
+      session_id: "arch-028-session",
+      status: "RUNNING",
+      deadline_at: new Date(Date.now() + 60_000).toISOString(),
+      budget: { ...EXPLORATION_BUDGET },
+      target: {},
+      source: {},
+    }, null, 2), "utf-8");
+
+    const first = recordExplorationModelCall({
+      repoRoot: root,
+      payload: { conversationId: "arch-028", invocationNum: 0, modelName: "test" },
+    });
+    const second = recordExplorationModelCall({
+      repoRoot: root,
+      payload: { conversationId: "arch-028", invocationNum: 1, modelName: "test" },
+    });
+    assert.equal(first.terminate, false);
+    assert.equal(second.terminate, true);
+    assert.equal(second.model_calls, 2);
+
+    const stop = JSON.parse(execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-028",
+        fullyIdle: true,
+        terminationReason: "model_stop",
+        workspacePaths: [root],
+        modelName: "test",
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(stop.decision, "stop");
+    assert.match(stop.reason, /EXPLORATION_MODEL_CALL_BUDGET_EXHAUSTED/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
