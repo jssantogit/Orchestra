@@ -285,6 +285,49 @@ test("K defers control outcomes until a factual branch consequence and seals one
   }
 });
 
+test("human stop cannot orphan pending K outcomes or allow a successor session early", () => {
+  const fixture = controllerFixture();
+  try {
+    assert.equal(startFullExploration({ repoRoot: fixture.repo }).started, true);
+    const prepared = prepareFullExplorationBranch({
+      repoRoot: fixture.repo,
+      seedPath: fixture.seedPath,
+      world: fixture.world,
+      decisionId: "decision-k-source",
+    });
+    assert.equal(prepared.prepared, true, JSON.stringify(prepared));
+
+    const requested = stopFullExploration({ repoRoot: fixture.repo, reason: "TEST_STOP" });
+    assert.equal(requested.stopped, false);
+    assert.equal(requested.stop_requested, true);
+    assert.equal(requested.pending_decision_outcomes, 3);
+    assert.equal(requested.active_branches, 1);
+
+    const blockedSuccessor = startFullExploration({ repoRoot: fixture.repo });
+    assert.equal(blockedSuccessor.started, false);
+    assert.equal(blockedSuccessor.reason, "FULL_EXPLORATION_STOP_PENDING");
+
+    const terminal = runFullExplorationBranch({
+      repoRoot: fixture.repo,
+      branchId: prepared.branch.branch_id,
+      command: "node",
+      args: ["script.mjs"],
+    });
+    assert.equal(terminal.ran, false);
+
+    const closed = fullExplorationStatus({ repoRoot: fixture.repo });
+    assert.equal(closed.status, "STOPPED");
+    assert.equal(closed.pending_decision_outcomes, 0);
+    assert.equal(closed.branches_active, 0);
+
+    const successor = startFullExploration({ repoRoot: fixture.repo });
+    assert.equal(successor.started, true);
+    assert.notEqual(successor.control.session_id, prepared.control.session_id);
+  } finally {
+    rmSync(fixture.repo, { recursive: true, force: true });
+  }
+});
+
 test("K namespacing permits another attempt but never repeats the same unknown action for one source decision", () => {
   const fixture = controllerFixture();
   try {
