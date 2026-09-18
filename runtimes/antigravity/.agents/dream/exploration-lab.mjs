@@ -425,7 +425,7 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   if (!selection.selected) return { prepared: false, reason: selection.reason, ranked: selection.ranked };
 
   const key = sha256Canonical({
-    world_id: world.world_id,
+    decision_id: source.decision_id,
     snapshot_id: source.snapshot_id,
     decision_type: source.decision_type,
     state_hash: seed.decision.state_hash,
@@ -517,6 +517,7 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
     index.entries[key] = {
       session_id: sessionId,
       source_world_id: world.world_id,
+      source_decision_id: source.decision_id,
       source_snapshot_id: source.snapshot_id,
       selected_action: selection.selected,
       created_at: session.created_at,
