@@ -1063,7 +1063,7 @@ export function summarizeCanarySession({ repoRoot, canarySessionId = null } = {}
   return { summarized: true, report, path };
 }
 
-function loadCanaryReport(repoRoot, canaryReportId) {
+function loadCanaryReportArtifact(repoRoot, canaryReportId) {
   const path = resolve(repoRoot, ROOT, "reports", canaryReportId + ".json");
   if (!existsSync(path)) return { ok: false, reason: "CANARY_REPORT_MISSING" };
   let report;
@@ -1076,17 +1076,199 @@ function loadCanaryReport(repoRoot, canaryReportId) {
     report?.schema !== CANARY_REPORT_SCHEMA
     || report.report_id !== canaryReportId
     || reportId(report) !== canaryReportId
-    || report.status !== "READY_FOR_HUMAN_PROMOTION_REVIEW"
+  ) {
+    return { ok: false, reason: "CANARY_REPORT_INVALID" };
+  }
+  return { ok: true, report, path };
+}
+
+function loadStageAdvanceReport(repoRoot, canaryReportId) {
+  const result = loadCanaryReportArtifact(repoRoot, canaryReportId);
+  if (!result.ok) return result;
+  const report = result.report;
+
+  if (
+    report.status !== "READY_FOR_HUMAN_STAGE_ADVANCE"
+    || report.stage_gate_ready !== true
+    || report.automatic_stage_advance_allowed !== false
+    || report.human_stage_advance_required !== true
+    || report.automatic_promotion_allowed !== false
+    || report.rollback_count !== 0
+    || report.exact_regression_count !== 0
+    || report.next_traffic_percent === null
+    || report.completed_canary_outcomes <= 0
+    || report.completed_canary_outcomes !== report.executed_canary_decisions
+    || report.completed_canary_outcomes < report.minimum_completed_outcomes
+  ) {
+    return { ok: false, reason: "CANARY_REPORT_NOT_STAGE_ADVANCEABLE" };
+  }
+  return result;
+}
+
+function loadPromotionReport(repoRoot, canaryReportId) {
+  const result = loadCanaryReportArtifact(repoRoot, canaryReportId);
+  if (!result.ok) return result;
+  const report = result.report;
+  const finalStage = CANARY_ROLLOUT_STAGES[CANARY_ROLLOUT_STAGES.length - 1];
+
+  if (
+    report.status !== "READY_FOR_HUMAN_PROMOTION_REVIEW"
+    || report.stage_gate_ready !== true
+    || report.rollout_stage_index !== finalStage.index
+    || report.traffic_percent !== finalStage.traffic_percent
+    || report.next_traffic_percent !== null
+    || report.automatic_stage_advance_allowed !== false
+    || report.human_stage_advance_required !== false
     || report.automatic_promotion_allowed !== false
     || report.human_promotion_required !== true
     || report.rollback_count !== 0
     || report.exact_regression_count !== 0
     || report.completed_canary_outcomes <= 0
     || report.completed_canary_outcomes !== report.executed_canary_decisions
+    || report.completed_canary_outcomes < report.minimum_completed_outcomes
   ) {
     return { ok: false, reason: "CANARY_REPORT_NOT_PROMOTABLE" };
   }
-  return { ok: true, report, path };
+  return result;
+}
+
+export function advanceCanaryStage({
+  repoRoot,
+  canaryReportId,
+  humanApproval = false,
+} = {}) {
+  if (!repoRoot || !canaryReportId) {
+    return { advanced: false, reason: "INVALID_CANARY_STAGE_ADVANCE_INPUT" };
+  }
+  if (humanApproval !== true) {
+    return { advanced: false, reason: "EXPLICIT_HUMAN_STAGE_APPROVAL_REQUIRED" };
+  }
+
+  const reportResult = loadStageAdvanceReport(repoRoot, canaryReportId);
+  if (!reportResult.ok) return { advanced: false, ...reportResult };
+  const report = reportResult.report;
+
+  const current = loadCanaryConfig(repoRoot);
+  if (!current.active) {
+    return { advanced: false, reason: current.reason || "CANARY_NOT_ACTIVE" };
+  }
+
+  const currentStage = currentCanaryRolloutStage(current.config);
+  const nextStage = nextCanaryRolloutStage(current.config);
+  const generation = rolloutGeneration(current.config);
+  if (
+    !currentStage
+    || !nextStage
+    || current.config.canary_session_id !== report.canary_session_id
+    || current.config.candidate_policy_id !== report.candidate_policy_id
+    || current.config.baseline_policy_id !== report.baseline_policy_id
+    || current.config.traffic_percent !== report.traffic_percent
+    || currentStage.index !== report.rollout_stage_index
+    || generation !== report.rollout_generation
+    || nextStage.traffic_percent !== report.next_traffic_percent
+  ) {
+    return { advanced: false, reason: "CANARY_STAGE_REPORT_STALE" };
+  }
+
+  const runtime = loadRuntimePolicy(repoRoot);
+  if (
+    !runtime.ok
+    || runtime.policy?.policy_id !== report.baseline_policy_id
+    || runtime.diagnostic
+  ) {
+    return {
+      advanced: false,
+      reason: "CANARY_STAGE_BASELINE_CHANGED_OR_INVALID",
+      observed_policy_id: runtime.policy?.policy_id || null,
+      diagnostic: runtime.diagnostic || runtime.reason || null,
+    };
+  }
+
+  const candidate = loadCandidate(
+    repoRoot,
+    report.candidate_policy_id,
+    report.baseline_policy_id,
+  );
+  if (!candidate.ok) return { advanced: false, ...candidate };
+  const support = loadSupport(repoRoot, current.config.support_index_id);
+  if (!support.ok) return { advanced: false, ...support };
+
+  const nextGeneration = generation + 1;
+  const approval = {
+    schema: CANARY_ROLLOUT_APPROVAL_SCHEMA,
+    rollout_approval_id: "canary-rollout-approval-" + randomUUID(),
+    canary_session_id: current.config.canary_session_id,
+    canary_report_id: report.report_id,
+    candidate_policy_id: current.config.candidate_policy_id,
+    baseline_policy_id: current.config.baseline_policy_id,
+    from_stage_index: currentStage.index,
+    from_traffic_percent: currentStage.traffic_percent,
+    to_stage_index: nextStage.index,
+    to_traffic_percent: nextStage.traffic_percent,
+    rollout_generation: nextGeneration,
+    previous_rollout_approval_id: current.config.rollout_approval_id || null,
+    approved_by: "HUMAN_EXPLICIT_CLI",
+    created_at: new Date().toISOString(),
+  };
+  approval.rollout_approval_hash = rolloutApprovalHash(approval);
+
+  const nextConfig = {
+    ...current.config,
+    traffic_percent: nextStage.traffic_percent,
+    rollout_stage_index: nextStage.index,
+    rollout_generation: nextGeneration,
+    rollout_stage_started_at: new Date().toISOString(),
+    previous_rollout_approval_id: current.config.rollout_approval_id || null,
+    rollout_approval_id: approval.rollout_approval_id,
+    rollout_approval_hash: approval.rollout_approval_hash,
+    previous_stage_report_id: report.report_id,
+  };
+  nextConfig.config_hash = configHash(nextConfig);
+
+  const approvalPath = resolve(
+    repoRoot,
+    ROOT,
+    "rollout-approvals",
+    approval.rollout_approval_id + ".json",
+  );
+  const sessionPath = resolve(
+    repoRoot,
+    ROOT,
+    "sessions",
+    current.config.canary_session_id + ".json",
+  );
+
+  atomicJson(approvalPath, approval);
+  atomicJson(sessionPath, nextConfig);
+  atomicJson(activeConfigPath(repoRoot), nextConfig);
+
+  const event = appendEvent(
+    repoRoot,
+    current.config.canary_session_id,
+    "CANARY_STAGE_ADVANCED",
+    {
+      approval_id: approval.rollout_approval_id,
+      canary_report_id: report.report_id,
+      from_stage_index: currentStage.index,
+      from_traffic_percent: currentStage.traffic_percent,
+      to_stage_index: nextStage.index,
+      to_traffic_percent: nextStage.traffic_percent,
+      rollout_generation: nextGeneration,
+      approved_by: "HUMAN_EXPLICIT_CLI",
+    },
+  );
+
+  return {
+    advanced: true,
+    canary_session_id: current.config.canary_session_id,
+    from_stage: currentStage,
+    to_stage: nextStage,
+    config: nextConfig,
+    approval,
+    approval_path: approvalPath,
+    session_path: sessionPath,
+    event: event.event,
+  };
 }
 
 export function promoteCanary({
