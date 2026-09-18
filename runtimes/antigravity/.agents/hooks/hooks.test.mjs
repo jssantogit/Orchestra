@@ -28,6 +28,38 @@ function cleanState() {
   try { rmSync("scratch", { recursive: true, force: true }); } catch {}
 }
 
+function seedFactualWorkerIdentity(conversationId = "factual-worker-test", options = {}) {
+  mkdirSync(".agents/state", { recursive: true });
+  const parentConversationId = options.parentConversationId || "orchestrator-test";
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: parentConversationId,
+    bindings: {
+      [parentConversationId]: {
+        conversationId: parentConversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      [conversationId]: {
+        conversationId,
+        role: "WORKER",
+        profile: options.profile || "flash-worker",
+        parentConversationId,
+        delegationKind: options.delegationKind || "WORK",
+        originToolCallId: options.originToolCallId || "test-worker-origin",
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+        factualIdentityAt: new Date().toISOString(),
+        consumed: true,
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf8");
+  return conversationId;
+}
+
 test.after(() => {
   cleanState();
 });
@@ -95,6 +127,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("scope-worker");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       taskDomain: "UI",
       allowedPaths: ["apps/web/**"],
@@ -103,6 +136,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
 
     // Allowed
     const allowedInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("apps/web/src/components/Plot.tsx") }
@@ -112,6 +146,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
 
     // Forbidden path
     const forbiddenInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "replace_file_content",
         args: { TargetFile: resolve("packages/core/src/dsp.ts") }
@@ -123,6 +158,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
 
     // Outside allowed path
     const outsideInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("docs/specs/test.md") }
@@ -330,12 +366,14 @@ test("pre-tool hook: allows Flash worker to use shell write inside allowedPaths"
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-in");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["packages/core/src/**"],
       forbiddenPaths: ["apps/**"]
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "echo 'export const x = 1;' > packages/core/src/calc.ts" }
@@ -353,12 +391,14 @@ test("pre-tool hook: blocks Flash worker from using shell write outside allowedP
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-out");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["packages/core/src/**"],
       forbiddenPaths: []
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "echo 'export const x = 1;' > apps/web/src/calc.ts" }
@@ -377,12 +417,14 @@ test("pre-tool hook: blocks Flash worker from shell file removal in forbiddenPat
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-forbidden");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["packages/core/**"],
       forbiddenPaths: ["packages/core/src/dsp.ts"]
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "rm packages/core/src/dsp.ts" }
@@ -446,12 +488,19 @@ test("pre-tool hook: allows legitimate JS arrow functions and comparisons withou
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("parser-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }));
 
     // Arrow function
     const arrowInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
-        args: { CommandLine: 'node -e "const f = (a, b) => a + b; console.log(f(1, 2))"' }
+        args: { CommandLine: 'node --test --test-name-pattern="a => b"' }
       }
     });
     const arrowRes = JSON.parse(execFileSync("node", [preToolScript], { input: arrowInput }));
@@ -459,9 +508,10 @@ test("pre-tool hook: allows legitimate JS arrow functions and comparisons withou
 
     // Relational comparisons
     const compInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
-        args: { CommandLine: 'node -e "const elapsed = 10; if (elapsed >= 5 && elapsed <= 20) process.exit(0);"' }
+        args: { CommandLine: 'node --test --test-name-pattern="elapsed >= 5 && elapsed <= 20"' }
       }
     });
     const compRes = JSON.parse(execFileSync("node", [preToolScript], { input: compInput }));
@@ -506,12 +556,14 @@ test("pre-tool hook: anti-obfuscation blocks base64 decoding write to product co
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-obfuscation");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["scratch/**"],
       forbiddenPaths: ["packages/**"]
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "echo 'dmFyIHggPSAx' | base64 -d > packages/core/src/index.ts" }
@@ -2702,6 +2754,7 @@ test("governance: native write aliases are intercepted, scoped, and tracked", ()
       taskAction: "IMPLEMENT",
       mutationSeq: 1,
     }, null, 2), "utf8");
+    const workerConv = seedFactualWorkerIdentity("alias-worker");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["src/**"],
       forbiddenPaths: [".agents/**"],
@@ -2709,7 +2762,7 @@ test("governance: native write aliases are intercepted, scoped, and tracked", ()
 
     const createAllowed = JSON.parse(execFileSync("node", [preToolScript], {
       input: JSON.stringify({
-        conversationId: "alias-worker",
+        conversationId: workerConv,
         toolCall: {
           id: "alias-create",
           name: "create_file",
@@ -2722,7 +2775,7 @@ test("governance: native write aliases are intercepted, scoped, and tracked", ()
 
     const editDenied = JSON.parse(execFileSync("node", [preToolScript], {
       input: JSON.stringify({
-        conversationId: "alias-worker",
+        conversationId: workerConv,
         toolCall: {
           id: "alias-edit",
           name: "edit_file",
@@ -2736,7 +2789,7 @@ test("governance: native write aliases are intercepted, scoped, and tracked", ()
 
     execFileSync("node", [postToolScript], {
       input: JSON.stringify({
-        conversationId: "alias-worker",
+        conversationId: workerConv,
         toolName: "create_file",
         toolCall: {
           id: "alias-create",
