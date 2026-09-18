@@ -3159,3 +3159,92 @@ test("governance: normal worker child Stop binds from authoritative parent brain
     cleanState();
   }
 });
+
+
+test("governance: scope checks canonicalize dot-dot traversal before native writes", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("traversal-native-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [],
+    }));
+
+    const controlPlaneTraversal = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "src/../.agents/state/pwn.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(controlPlaneTraversal.decision, "deny");
+    assert.match(controlPlaneTraversal.reason, /SCOPE_VIOLATION/);
+
+    const outsideWorkspace = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "src/../../outside-workspace.js",
+            CodeContent: "bad",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(outsideWorkspace.decision, "deny");
+    assert.match(outsideWorkspace.reason, /WORKSPACE_ESCAPE/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: scope checks canonicalize dot-dot traversal in worker shell mutations", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("traversal-shell-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const controlPlaneTraversal = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch src/../.agents/state/pwn-shell.json" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(controlPlaneTraversal.decision, "deny");
+    assert.match(controlPlaneTraversal.reason, /forbidden path|Scope contract violation/i);
+
+    const outsideWorkspace = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch src/../../outside-shell.js" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(outsideWorkspace.decision, "deny");
+    assert.match(outsideWorkspace.reason, /WORKSPACE_ESCAPE/);
+  } finally {
+    cleanState();
+  }
+});
