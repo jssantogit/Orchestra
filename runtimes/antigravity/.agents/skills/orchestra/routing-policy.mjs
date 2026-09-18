@@ -3870,6 +3870,14 @@ export function verifyWorkerValidation(activeState = {}) {
             evidence: ev,
           };
         }
+        if (ev.delegationKind && ev.delegationKind !== "WORK") {
+          return {
+            verified: false,
+            fresh: false,
+            reason: `INVALID_DELEGATION: validation evidence came from ${ev.delegationKind}, expected WORK`,
+            evidence: ev,
+          };
+        }
         lastEvidence = ev;
       } else {
         // Descriptive requirement (e.g. "Run the focused formatter test suite to verify the fix with exitCode 0.")
@@ -3909,11 +3917,19 @@ export function verifyWorkerValidation(activeState = {}) {
             };
           }
 
-          if (ev.confidence === "LOW") {
+          if (ev.confidence !== "HIGH") {
             return {
               verified: false,
               fresh: false,
-              reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
+              reason: "IDENTITY_NOT_FACTUAL: validation evidence requires HIGH actor attribution confidence",
+              evidence: ev,
+            };
+          }
+          if (ev.delegationKind && ev.delegationKind !== "WORK") {
+            return {
+              verified: false,
+              fresh: false,
+              reason: `INVALID_DELEGATION: validation evidence came from ${ev.delegationKind}, expected WORK`,
               evidence: ev,
             };
           }
@@ -3967,11 +3983,19 @@ export function verifyWorkerValidation(activeState = {}) {
       };
     }
 
-    if (ev.confidence === "LOW") {
+    if (ev.confidence !== "HIGH") {
       return {
         verified: false,
         fresh: false,
-        reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
+        reason: "IDENTITY_NOT_FACTUAL: validation evidence requires HIGH actor attribution confidence",
+        evidence: ev,
+      };
+    }
+    if (ev.delegationKind && ev.delegationKind !== "WORK") {
+      return {
+        verified: false,
+        fresh: false,
+        reason: `INVALID_DELEGATION: validation evidence came from ${ev.delegationKind}, expected WORK`,
         evidence: ev,
       };
     }
