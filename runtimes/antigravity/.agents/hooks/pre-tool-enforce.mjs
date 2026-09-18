@@ -1648,7 +1648,8 @@ function main() {
             taskAction: activeState.taskAction || "IMPLEMENT",
             taskDomain: activeState.taskDomain || "CODE",
             criticality: activeState.criticality || "NORMAL",
-            complexity: activeState.complexity || "NORMAL",
+            complexity: activeState.complexity
+              || (String(activeState.taskAction || "").toUpperCase() === "MECHANICAL_FIX" ? "MECHANICAL" : "NORMAL"),
             retry: isRetry,
             attempt: activeState.attempt || 0,
             remainingAttempts: activeState.remainingAttempts ?? activeState.retry_remaining ?? 0,
