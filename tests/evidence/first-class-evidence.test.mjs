@@ -8,9 +8,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { dirname, fileURLToPath } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import {
   childOwnedMissingRequirements,
