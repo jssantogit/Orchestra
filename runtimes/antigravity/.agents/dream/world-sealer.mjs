@@ -510,6 +510,63 @@ export function validateWorld(world) {
     (ev) => ev?.type === "DECISION_OUTCOME" || ev?.schema === DREAM_SCHEMAS.OUTCOME
   );
 
+  // Revalidate semantic event integrity on every world load. Hashes prove
+  // content addressing, not that the addressed content still obeys Dream rules.
+  const decisionIds = new Set();
+  const outcomeDecisionIds = new Set();
+
+  for (const decision of eventDecisions) {
+    const validation = validateDreamRecord(DREAM_SCHEMAS.DECISION, decision);
+    if (!validation.valid) {
+      errors.push(...validation.errors.map((err) => `WORLD_DECISION_INVALID: ${err}`));
+    }
+    if (!isFactualActorIdentity(decision.actor_identity)) {
+      errors.push(`WORLD_DECISION_ACTOR_UNRESOLVED: ${decision.decision_id || "unknown"}`);
+    }
+    if (!decision.decision_id || decisionIds.has(decision.decision_id)) {
+      errors.push(`WORLD_DUPLICATE_DECISION_ID: ${decision.decision_id || "missing"}`);
+    } else {
+      decisionIds.add(decision.decision_id);
+    }
+  }
+
+  for (const outcome of eventOutcomes) {
+    const validation = validateDreamRecord(DREAM_SCHEMAS.OUTCOME, outcome);
+    if (!validation.valid) {
+      errors.push(...validation.errors.map((err) => `WORLD_OUTCOME_INVALID: ${err}`));
+    }
+    if (!outcome.decision_id || !decisionIds.has(outcome.decision_id)) {
+      errors.push(`WORLD_ORPHAN_OUTCOME: ${outcome.decision_id || "missing"}`);
+    }
+    if (outcomeDecisionIds.has(outcome.decision_id)) {
+      errors.push(`WORLD_DUPLICATE_OUTCOME_FOR_DECISION: ${outcome.decision_id}`);
+    } else if (outcome.decision_id) {
+      outcomeDecisionIds.add(outcome.decision_id);
+    }
+  }
+
+  for (const decisionId of decisionIds) {
+    if (!outcomeDecisionIds.has(decisionId)) {
+      errors.push(`WORLD_OPEN_DECISION_WITHOUT_OUTCOME: ${decisionId}`);
+    }
+  }
+
+  // sealWorld emits exact causal pairs. Preserve that order so replay cannot
+  // silently reinterpret a reordered event stream.
+  for (let i = 0; i < events.length; i += 2) {
+    const decision = events[i];
+    const outcome = events[i + 1];
+    if (
+      !decision ||
+      !(decision.type === "DECISION" || decision.schema === DREAM_SCHEMAS.DECISION) ||
+      !outcome ||
+      !(outcome.type === "DECISION_OUTCOME" || outcome.schema === DREAM_SCHEMAS.OUTCOME) ||
+      outcome.decision_id !== decision.decision_id
+    ) {
+      errors.push(`WORLD_CAUSAL_EVENT_ORDER_INVALID: pair_index=${Math.floor(i / 2)}`);
+    }
+  }
+
   const hasDecisionProjection = Object.prototype.hasOwnProperty.call(world, "decisions");
   const hasOutcomeProjection = Object.prototype.hasOwnProperty.call(world, "outcomes");
 
