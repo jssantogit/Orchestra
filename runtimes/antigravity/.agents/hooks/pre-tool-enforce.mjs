@@ -1130,17 +1130,17 @@ function extractScopeContractFromPrompt(promptText = "", sub = {}) {
 
   if (!hasRequiredEvidence && typeof promptText === "string") {
     const parsed = extractJsonArrayAfterKey(promptText, "requiredEvidence");
-    if (parsed.found) {
+    if (Array.isArray(parsed.value)) {
       hasRequiredEvidence = true;
-      requiredEvidence = Array.isArray(parsed.value) ? parsed.value : [];
+      requiredEvidence = parsed.value;
     }
   }
 
   if (!hasTestsRequired && typeof promptText === "string") {
     const parsedTests = extractJsonArrayAfterKey(promptText, "testsRequired");
-    if (parsedTests.found) {
+    if (Array.isArray(parsedTests.value)) {
       hasTestsRequired = true;
-      tests = Array.isArray(parsedTests.value) ? parsedTests.value : [];
+      tests = parsedTests.value;
     }
 
     if (!hasTestsRequired) {
