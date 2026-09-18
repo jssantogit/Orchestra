@@ -2369,3 +2369,80 @@ test("pre-tool hook: arbitrary orchestrator command is denied in normal mode and
     cleanState();
   }
 });
+
+
+test("v5: git-operation explicit files blocks unrelated pre-staged paths", () => {
+  cleanState();
+  const fixtureDir = resolve("scratch/git-fixture-prestaged-" + Date.now());
+  try {
+    mkdirSync(fixtureDir, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "init.txt"), "init\n");
+    execFileSync("git", ["add", "init.txt"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: fixtureDir });
+    const beforeHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+
+    writeFileSync(resolve(fixtureDir, "target.ts"), "export const target = true;\n");
+    writeFileSync(resolve(fixtureDir, "unrelated.ts"), "export const unrelated = true;\n");
+    execFileSync("git", ["add", "unrelated.ts"], { cwd: fixtureDir });
+
+    const res = executeGitOperation({
+      cwd: fixtureDir,
+      action: "commit",
+      files: ["target.ts"],
+      message: "feat: target only",
+    });
+
+    assert.equal(res.success, false);
+    assert.equal(res.blocked, true);
+    assert.equal(res.reason, "unexpected_staged_paths");
+    assert.deepEqual(res.unexpectedFiles, ["unrelated.ts"]);
+
+    const afterHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+    assert.equal(afterHead, beforeHead, "Blocked scoped commit must not create a commit");
+
+    const staged = execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+    assert.equal(staged, "unrelated.ts", "Existing staged work must remain untouched, not silently committed");
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+    cleanState();
+  }
+});
+
+test("v5: git-operation stages repo-relative explicit files from nested cwd", () => {
+  cleanState();
+  const fixtureDir = resolve("scratch/git-fixture-nested-stage-" + Date.now());
+  const nestedDir = resolve(fixtureDir, "src/nested");
+  try {
+    mkdirSync(nestedDir, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "init.txt"), "init\n");
+    execFileSync("git", ["add", "init.txt"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "src/target.ts"), "export const nested = true;\n");
+
+    const res = executeGitOperation({
+      cwd: nestedDir,
+      action: "commit",
+      files: ["src/target.ts"],
+      message: "feat: nested scoped commit",
+    });
+
+    assert.equal(res.success, true);
+    const changed = execFileSync("git", ["show", "--pretty=", "--name-only", "HEAD"], {
+      cwd: fixtureDir,
+      encoding: "utf-8",
+    }).trim();
+    assert.equal(changed, "src/target.ts");
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+    cleanState();
+  }
+});
