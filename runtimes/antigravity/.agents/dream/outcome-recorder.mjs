@@ -8,6 +8,7 @@ import {
   validatePendingDecisionArtifact,
 } from "./decision-recorder.mjs";
 import { sha256Canonical } from "./canonical.mjs";
+import { evaluateCanaryOutcome } from "./canary-mode.mjs";
 
 /**
  * Retrieves and parses a pending decision correlation record.
@@ -204,6 +205,13 @@ export function recordDecisionOutcome({
           };
         }
       }
+      try {
+        evaluateCanaryOutcome({
+          repoRoot,
+          decisionEvent: publishedDecision || pending.decision_event,
+          outcomeEvent: existingOutcome,
+        });
+      } catch {}
       return {
         recorded: false,
         reason: "OUTCOME_ALREADY_RECORDED",
@@ -266,6 +274,16 @@ export function recordDecisionOutcome({
       }
       throw consumeErr;
     }
+
+    // 3. Evaluate hard Canary rollback conditions only after the factual
+    // outcome is durable. Failures here never erase or replace the outcome.
+    try {
+      evaluateCanaryOutcome({
+        repoRoot,
+        decisionEvent: publishedDecision || pending.decision_event,
+        outcomeEvent: event,
+      });
+    } catch {}
 
     return {
       recorded: true,
