@@ -279,41 +279,6 @@ export function splitLineage(lineageIdentity) {
   };
 }
 
-function worldCost(world) {
-  const totals = {
-    model_calls: 0,
-    retries: 0,
-    tokens: 0,
-    latency_ms: 0,
-  };
-
-  for (const decision of world.decisions || []) {
-    if (decision?.decision_type === "RETRY_ACTION") totals.retries++;
-  }
-
-  for (const outcome of world.outcomes || []) {
-    const cost = outcome?.cost_metrics || {};
-    totals.model_calls += safeNumber(cost.model_calls);
-    totals.tokens += safeNumber(cost.input_tokens)
-      + safeNumber(cost.output_tokens)
-      + safeNumber(cost.reasoning_tokens);
-    totals.latency_ms += safeNumber(cost.latency_ms ?? cost.latency);
-  }
-
-  return totals;
-}
-
-function terminalState(world) {
-  const outcomes = Array.isArray(world?.outcomes) ? world.outcomes : [];
-  if (!outcomes.length) return "UNKNOWN";
-  return String(outcomes[outcomes.length - 1]?.terminal_state || "UNKNOWN");
-}
-
-function worldFirstPass(world) {
-  return terminalState(world) === "ACCEPTED"
-    && !(world.decisions || []).some((d) => d?.decision_type === "RETRY_ACTION");
-}
-
 function baselineAction(policy, ctx) {
   const fallback = ctx.availableActions?.[0] || "";
   const result = evaluatePolicy({
@@ -448,7 +413,7 @@ export function buildPolicyDevelopmentDataset({
   const support = new Map();
   const terminalOutcomes = {};
   const retryReasons = {};
-  const firstPass = { accepted: 0, total: validWorlds.length };
+  const firstPass = { accepted: 0, total: 0 };
   const costs = {
     model_calls: [],
     retries: [],
@@ -467,14 +432,27 @@ export function buildPolicyDevelopmentDataset({
     const source = sourceEntry(world, lineage);
     sources.push(source);
 
-    increment(terminalOutcomes, terminalState(world));
-    if (worldFirstPass(world)) firstPass.accepted++;
+    const baselineReplay = replayPolicy(world, currentPolicy, currentPolicy);
+    const baselineReport = createReplayReport({
+      world,
+      replay: baselineReplay,
+      candidatePolicyId: currentPolicy.policy_id,
+    });
 
-    const wc = worldCost(world);
-    costs.model_calls.push(wc.model_calls);
-    costs.retries.push(wc.retries);
-    costs.tokens.push(wc.tokens);
-    costs.latency_ms.push(wc.latency_ms);
+    firstPass.accepted += baselineReport.first_pass_count || 0;
+    firstPass.total += baselineReport.total_trajectories || 0;
+    for (const evaluated of baselineReport.evaluated_trajectories || []) {
+      increment(terminalOutcomes, String(evaluated?.terminal_state || "UNKNOWN"));
+      costs.retries.push(safeNumber(evaluated?.retries));
+      const cm = evaluated?.cost_metrics || {};
+      costs.model_calls.push(safeNumber(cm.model_calls));
+      costs.tokens.push(
+        safeNumber(cm.input_tokens)
+        + safeNumber(cm.output_tokens)
+        + safeNumber(cm.reasoning_tokens)
+      );
+      costs.latency_ms.push(safeNumber(cm.latency_ms ?? cm.latency));
+    }
 
     const outcomeByDecision = new Map(
       (world.outcomes || []).map((o) => [o.decision_id, o])
@@ -544,12 +522,6 @@ export function buildPolicyDevelopmentDataset({
       support.set(exactKey, branchSet);
     }
 
-    const baselineReplay = replayPolicy(world, currentPolicy, currentPolicy);
-    const baselineReport = createReplayReport({
-      world,
-      replay: baselineReplay,
-      candidatePolicyId: currentPolicy.policy_id,
-    });
     if (
       baselineReport.status === "NEEDS_EXPLORATION"
       || baselineReport.status === "INELIGIBLE"
