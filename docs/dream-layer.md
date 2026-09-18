@@ -685,7 +685,11 @@ STOPPING              -> CONTINUE_EXPLORATION | STOP_EXPLORATION
 
 The controller composes Milestone-E isolated siblings rather than allowing parallel writers in the primary workspace. Static non-learnable ceilings are 3 branches, 2 simultaneous siblings, 6 exploration model calls, and 15 minutes total. Each sibling retains E's own 2-call / 5-minute sandbox and external-side-effect firewall.
 
-Standalone Milestone E remains one-sibling by default. K may namespace additional E siblings only when `exploration-lab.mjs` verifies the persisted full-controller session, exact immutable K limits, deadline, and branch ordinal. Previously selected actions for the same factual source decision are excluded so a second K branch cannot merely repeat the first unknown alternative.
+Standalone Milestone E remains one-sibling by default. K may namespace additional E siblings only when `exploration-lab.mjs` verifies the persisted full-controller session, exact immutable K limits, deadline, fresh branch ordinal, and a per-slot capability token created atomically with `O_EXCL`. This makes the three-branch ceiling race-safe.
+
+Previously selected actions for the same factual source decision are excluded inside the current controller. Before selecting a K alternative, the lab also scans valid sealed worlds and excludes actions already observed at the exact same `snapshot_id + decision_type + state_hash`. A later controller therefore does not pay again for an already known branch; there is no similarity-based inference.
+
+Stopping is quiescence-aware. Explicit stop becomes `STOP_REQUESTED` while a branch or control-decision outcome remains pending. New branches are denied, existing branches may finish to close their factual outcomes, and a successor controller cannot start until the old controller reaches `STOPPED`. Static budget exhaustion is finalized under the same rule.
 
 The static baseline is conservative: exploration continues while budget remains, parallelism defaults to serial, and pruning requires factual invalid/falsified state. A promoted learned policy may choose a different action only when that action is already in the runtime's legal set.
 
