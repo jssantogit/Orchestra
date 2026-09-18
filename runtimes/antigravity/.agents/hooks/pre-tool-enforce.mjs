@@ -1843,6 +1843,13 @@ function main() {
 
   // Check 1a: schedule / timer policy during delegated execution
   if (toolName === "schedule") {
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "COORDINATION_AUTHORITY_REQUIRED: schedule is reserved for the HIGH-confidence main Orchestrator."
+      }));
+      return;
+    }
     if (isHealthyDelegatedExecution(activeState, activeRole)) {
       const reason = "Reactive Wakeup policy: Routine schedule/timer calls are prohibited for Orchestrator during healthy delegated execution. TERMINAL DELEGATION PROTOCOL: Yield immediately with ZERO tools. Do NOT call schedule, timers, or polls; Antigravity will automatically wake you upon child completion.";
       recordDeniedAttempt(activeState, statePath, "schedule", toolArgs, reason);
@@ -1858,6 +1865,13 @@ function main() {
 
   // Check 1b: manage_task polling budget and delegation lock
   if (toolName === "manage_task") {
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "COORDINATION_AUTHORITY_REQUIRED: manage_task is reserved for the HIGH-confidence main Orchestrator."
+      }));
+      return;
+    }
     const action = String(toolArgs.Action || toolArgs.action || "");
     const isCancellation = action === "kill";
     if (isCancellation) {
@@ -1901,6 +1915,13 @@ function main() {
 
   // Check 1c: manage_subagents polling policy
   if (toolName === "manage_subagents") {
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "COORDINATION_AUTHORITY_REQUIRED: manage_subagents is reserved for the HIGH-confidence main Orchestrator."
+      }));
+      return;
+    }
     const action = String(toolArgs.Action || toolArgs.action || "list").toLowerCase();
     const isCancellation = action === "kill" || action === "kill_all";
     const isDiagnosedStalled = Boolean(activeState.stalled || activeState.circuitBreakerType === "STALLED");
