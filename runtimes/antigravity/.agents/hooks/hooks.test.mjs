@@ -2075,7 +2075,7 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
       }),
     }));
     assert.equal(provisionalWrite.decision, "deny");
-    assert.match(provisionalWrite.reason, /ROLE_IDENTITY_PROVISIONAL/);
+    assert.match(provisionalWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL/);
 
     const provisionalShellWrite = JSON.parse(execFileSync("node", [preToolScript], {
       input: JSON.stringify({
@@ -2091,7 +2091,7 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
       }),
     }));
     assert.equal(provisionalShellWrite.decision, "deny");
-    assert.match(provisionalShellWrite.reason, /ROLE_IDENTITY_PROVISIONAL/);
+    assert.match(provisionalShellWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL/);
 
     // The factual Antigravity brain record for the exact child creates the
     // durable HIGH/RUNTIME_IDENTITY binding.
@@ -3083,6 +3083,78 @@ test("governance: post-tool telemetry does not attribute unbound child writes to
       m.actorRole === "UNKNOWN" &&
       m.confidence === "LOW"
     ));
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: normal worker child Stop binds from authoritative parent brain", () => {
+  cleanState();
+  const brainBaseDir = resolve("scratch/normal-child-stop-brain");
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "normal-stop-parent",
+      state: "DELEGATED",
+      taskAction: "IMPLEMENT",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "normal-stop-parent",
+      bindings: {
+        "normal-stop-parent": {
+          conversationId: "normal-stop-parent",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [{
+        seq: 1,
+        parentConversationId: "normal-stop-parent",
+        profile: "flash-low-worker",
+        role: "WORKER",
+        model: "gemini-3.8-flash-low",
+        originToolCallId: "normal-stop-dispatch",
+        originStepIdx: 4,
+        delegationKind: "WORK",
+        consumed: false,
+      }],
+    }, null, 2), "utf8");
+
+    const subagentsDir = resolve(brainBaseDir, "normal-stop-parent/.system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(resolve(subagentsDir, "normal-stop-child.json"), JSON.stringify({
+      conversationId: "normal-stop-child",
+      subagentDescriptor: {
+        typeName: "flash-low-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 4,
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "normal-stop-child",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }));
+    assert.equal(output.decision, "stop");
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    const child = bindings.bindings["normal-stop-child"];
+    assert.ok(child, "Child Stop must be able to bind from parent brain without an earlier child tool call");
+    assert.equal(child.role, "WORKER");
+    assert.equal(child.source, "RUNTIME_IDENTITY");
+    assert.equal(child.confidence, "HIGH");
+    assert.equal(child.parentConversationId, "normal-stop-parent");
+    assert.equal(bindings.pendingSubagents[0].consumed, true);
   } finally {
     cleanState();
   }
