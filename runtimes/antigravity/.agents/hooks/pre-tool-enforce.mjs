@@ -663,7 +663,25 @@ function isReadOnlyCommand(cmd) {
   const redir = extractRealShellRedirections(cmd);
   if (redir.targets.length > 0) return false;
 
+  // Prefix whitelisting is only sound for a single simple command. Shell
+  // composition/substitution can execute arbitrary side effects behind an
+  // otherwise read-only-looking prefix.
+  if (/[;|&`]/.test(trimmed) || /\$\(/.test(trimmed) || /[\r\n]/.test(trimmed)) {
+    return false;
+  }
+
   if (/\b(sed\s+-[a-zA-Z]*i|rm\s+|mv\s+|cp\s+|touch\s+|truncate\s+|tee\s+|writeFileSync|open\(.+["'][wa])\b/.test(cmd)) {
+    return false;
+  }
+
+  // Git read commands with --output write files; git branch is mutating for
+  // creation/deletion/rename and therefore is not generically read-only.
+  if (/^git\s+(?:diff|log|show|grep|status|rev-parse)\b.*(?:^|\s)--output(?:=|\s)/.test(trimmed)) {
+    return false;
+  }
+
+  // find becomes mutating as soon as action forms are present.
+  if (/^find\b/.test(trimmed) && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir)(?:\s|$)/.test(trimmed)) {
     return false;
   }
 
@@ -673,9 +691,8 @@ function isReadOnlyCommand(cmd) {
     trimmed.startsWith("git log") ||
     trimmed.startsWith("git show") ||
     trimmed.startsWith("git grep") ||
-    trimmed.startsWith("git branch") ||
     trimmed.startsWith("git rev-parse") ||
-    trimmed.startsWith("ls") ||
+    trimmed === "ls" || trimmed.startsWith("ls ") ||
     trimmed.startsWith("cat ") ||
     trimmed.startsWith("head ") ||
     trimmed.startsWith("tail ") ||
@@ -684,7 +701,7 @@ function isReadOnlyCommand(cmd) {
     trimmed.startsWith("find ") ||
     trimmed.startsWith("which ") ||
     trimmed.startsWith("whereis ") ||
-    trimmed.startsWith("pwd") ||
+    trimmed === "pwd" ||
     trimmed.startsWith("echo ") ||
     trimmed.startsWith("printf ") ||
     trimmed.startsWith("wc ") ||
@@ -692,17 +709,16 @@ function isReadOnlyCommand(cmd) {
     trimmed.startsWith("file ") ||
     trimmed.startsWith("du ") ||
     trimmed.startsWith("df ") ||
-    trimmed.startsWith("node -v") ||
-    trimmed.startsWith("node --version") ||
-    trimmed.startsWith("npm -v") ||
-    trimmed.startsWith("npm --version") ||
-    trimmed.startsWith("pnpm -v") ||
-    trimmed.startsWith("pnpm --version") ||
-    trimmed.startsWith("yarn -v") ||
-    trimmed.startsWith("yarn --version") ||
-    trimmed.startsWith("python3 --version") ||
-    trimmed.startsWith("python --version") ||
-    trimmed.startsWith("agy ")
+    trimmed === "node -v" ||
+    trimmed === "node --version" ||
+    trimmed === "npm -v" ||
+    trimmed === "npm --version" ||
+    trimmed === "pnpm -v" ||
+    trimmed === "pnpm --version" ||
+    trimmed === "yarn -v" ||
+    trimmed === "yarn --version" ||
+    trimmed === "python3 --version" ||
+    trimmed === "python --version"
   );
 }
 
