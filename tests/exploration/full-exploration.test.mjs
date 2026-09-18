@@ -24,6 +24,7 @@ import {
   evaluatePolicy,
   validatePolicy,
 } from "../../runtimes/antigravity/.agents/dream/policy-engine.mjs";
+import { evaluateTrajectory } from "../../runtimes/antigravity/.agents/dream/evaluator.mjs";
 import { buildSnapshot } from "../../runtimes/antigravity/.agents/dream/snapshot.mjs";
 import { createDreamEvent, DREAM_SCHEMAS } from "../../runtimes/antigravity/.agents/dream/records.mjs";
 import { sealWorld, validateWorld } from "../../runtimes/antigravity/.agents/dream/world-sealer.mjs";
@@ -267,6 +268,29 @@ test("K defers control outcomes until a factual branch consequence and seals one
   } finally {
     rmSync(fixture.repo, { recursive: true, force: true });
   }
+});
+
+test("unattributable K infrastructure outcomes become insufficient support, not negative evidence", () => {
+  const evaluated = evaluateTrajectory({
+    status: "EXACT_REPLAY_COMPLETE",
+    terminal_state: "UNKNOWN",
+    steps: [{
+      decision_type: "EXPLORATION_BRANCHING",
+      chosen_action: "OPEN_BRANCH",
+      result: {
+        factual: true,
+        attributable: false,
+        support_status: "INSUFFICIENT_SUPPORT",
+        reason: "EXPLORATION_ANTIGRAVITY_EXECUTABLE_NOT_FOUND",
+      },
+      terminal_state: "UNKNOWN",
+      cost_metrics: { model_calls: 0 },
+    }],
+  });
+  assert.equal(evaluated.eligible, true);
+  assert.equal(evaluated.has_unknown_branch, true);
+  assert.equal(evaluated.terminal_state, "UNKNOWN_BRANCH");
+  assert.equal(evaluated.accepted, false);
 });
 
 test("K action spaces fail closed at budget and criticality boundaries", () => {
