@@ -162,7 +162,7 @@ The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–K
 
 - **Attributable Feedback Plane (Milestone I)**: Compact worker hypotheses/experiments remain claims until exact factual Evidence Ledger executions create observations. Runtime-only inference can mark supported/falsified/causally verified; feedback never satisfies acceptance.
 - **Context & Side-Effect Trust Boundary (Milestone J)**: Every PreInvocation receives a bounded Runtime Continuation Capsule reconstructed from factual authority. Remote/public write capabilities default deny; handoff/summary text cannot rewrite scope, roles, evidence requirements, retries, or Human Gates.
-- **Full Exploration Policy (Milestone K)**: A separate isolated controller governs branching, bounded 2-way parallelism, pruning, and stopping across Milestone-E siblings under immutable 3-branch / 6-call / 15-minute ceilings. K decisions use the normal policy store, Shadow/Canary lifecycle, and explicit human promotion.
+- **Full Exploration Policy (Milestone K)**: A separate isolated controller governs branching, bounded 2-way parallelism, pruning, and stopping across Milestone-E siblings under immutable 3-branch / 6-call / 15-minute ceilings. Extra sibling slots require atomically reserved controller capability tokens, exact alternatives already present in sealed history are not re-explored, and stop/budget exhaustion waits for pending causal outcomes before a successor session can begin. K decisions use the normal policy store, Shadow/Canary lifecycle, and explicit human promotion.
 
 For architecture and specification details, see [docs/dream-layer.md](../../docs/dream-layer.md).
 
