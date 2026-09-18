@@ -165,5 +165,9 @@ K does **not** loosen ordinary workspace concurrency. It composes the existing p
 
 CRITICAL and HUMAN_GATE states fail closed before policy evaluation. A policy may choose only inside the runtime-computed legal action set; it cannot change ceilings, sandboxing, Scope Contracts, side-effect capabilities, or Human Gates.
 
-K decisions use the existing active-policy store, Exact Replay/Policy Lab, Shadow, progressive Canary 5→20→50→100, and explicit human promotion pipeline. Thus greater exploration autonomy is learned only inside pre-existing governance rather than becoming a new authority plane.
+K decisions use the existing active-policy store, Exact Replay/Policy Lab, Shadow, progressive Canary 5→20→50→100, and explicit human promotion pipeline. Standalone E still permits one sibling; extra siblings require a factual K controller artifact with the exact static limits and fresh ordinal, and previously selected alternatives for the same source decision are excluded.
+
+Branch-opening decisions are not rewarded merely because a workspace was created. Their outcomes are deferred until the branch yields a factual consequence. Controller/setup failures without a sealed branch trajectory are marked factual but non-attributable and become insufficient support. Each K decision/outcome pair is sealed as a separate one-decision world so Exact Replay never has to infer which of several decision types sharing a snapshot came first.
+
+Thus greater exploration autonomy is learned only inside pre-existing governance rather than becoming a new authority plane.
 
