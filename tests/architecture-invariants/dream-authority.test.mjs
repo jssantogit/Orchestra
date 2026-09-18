@@ -1591,3 +1591,134 @@ test("ARCH-023: Retry Budget Is Factual, Never Manufactured", () => {
     cleanTestState();
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// ARCH-024: Pending Uniqueness Is Not Factual Child Identity
+// A single pending delegation cannot become HIGH/RUNTIME_IDENTITY without
+// exact factual Antigravity child metadata.
+// ---------------------------------------------------------------------------
+test("ARCH-024: Pending Uniqueness Is Not Factual Child Identity", () => {
+  cleanTestState();
+  const brainBaseDir = resolve(repoRoot, "scratch/arch-024-brain");
+  try {
+    mkdirSync(resolve(repoRoot, ".agents/state"), { recursive: true });
+    writeFileSync(resolve(repoRoot, ".agents/state/active-state.json"), JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+      criticality: "NORMAL",
+    }, null, 2), "utf-8");
+    writeFileSync(resolve(repoRoot, ".agents/state/active-contract.json"), JSON.stringify({
+      contractId: "arch-024-contract",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }, null, 2), "utf-8");
+
+    const parent = "arch-024-parent";
+    const child = "arch-024-child";
+    const roleBindingsPath = resolve(repoRoot, ".agents/state/role-bindings.json");
+    writeFileSync(roleBindingsPath, JSON.stringify({
+      mainConversationId: parent,
+      bindings: {
+        [parent]: {
+          conversationId: parent,
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [{
+        seq: 24,
+        parentConversationId: parent,
+        role: "WORKER",
+        profile: "flash-medium-worker",
+        model: "gemini-3.8-flash-medium",
+        originToolCallId: "call-024-delegate",
+        originStepIdx: 9,
+        delegationKind: "WORK",
+        consumed: false,
+      }],
+    }, null, 2), "utf-8");
+
+    const childWrite = {
+      conversationId: child,
+      parentConversationId: parent,
+      toolCall: {
+        id: "call-024-write",
+        name: "write_to_file",
+        args: {
+          TargetFile: "src/arch024.ts",
+          CodeContent: "export const arch024 = true;",
+        },
+      },
+    };
+
+    // A. Exactly one pending candidate is still insufficient evidence.
+    let res = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify(childWrite),
+      encoding: "utf-8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }).trim());
+    assert.equal(res.decision, "deny");
+    assert.match(res.reason, /ROLE_IDENTITY_UNRESOLVED/);
+
+    let bindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    assert.equal(bindings.pendingSubagents[0].consumed, false);
+    assert.equal(bindings.bindings[child], undefined);
+
+    // B. A factual child record with conflicting spawn identity must also fail closed.
+    const subagentsDir = resolve(brainBaseDir, parent, ".system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    const childRecordPath = resolve(subagentsDir, child + ".json");
+    writeFileSync(childRecordPath, JSON.stringify({
+      conversationId: child,
+      subagentDescriptor: {
+        typeName: "flash-medium-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 99,
+    }, null, 2), "utf-8");
+
+    res = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify(childWrite),
+      encoding: "utf-8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }).trim());
+    assert.equal(res.decision, "deny");
+    assert.match(res.reason, /ROLE_IDENTITY_UNRESOLVED/);
+
+    bindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    assert.equal(bindings.pendingSubagents[0].consumed, false);
+
+    // C. Exact child conversation + descriptor + matching spawn step is factual.
+    writeFileSync(childRecordPath, JSON.stringify({
+      conversationId: child,
+      subagentDescriptor: {
+        typeName: "flash-medium-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 9,
+    }, null, 2), "utf-8");
+
+    res = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify(childWrite),
+      encoding: "utf-8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }).trim());
+    assert.equal(res.decision, "allow");
+
+    bindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    assert.equal(bindings.bindings[child].role, "WORKER");
+    assert.equal(bindings.bindings[child].confidence, "HIGH");
+    assert.equal(bindings.bindings[child].source, "RUNTIME_IDENTITY");
+    assert.equal(bindings.bindings[child].pendingSeq, 24);
+    assert.equal(bindings.pendingSubagents[0].consumed, true);
+  } finally {
+    try { rmSync(brainBaseDir, { recursive: true, force: true }); } catch {}
+    cleanTestState();
+  }
+});
