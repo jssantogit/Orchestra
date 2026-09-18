@@ -36,6 +36,24 @@ export async function rankCandidates({
   live = false,
 } = {}) {
   if (!client?.ask) throw new Error("JEV_CLIENT_REQUIRED");
+  if (!Array.isArray(projection?.candidates) || projection.candidates.length === 0) {
+    return {
+      schema: JEV_SCHEMAS.RANKING,
+      ranking_id: contentId("jev-ranking", {
+        projection_id: projection?.projection_id || null,
+        empty: true,
+      }),
+      authority: JEV_AUTHORITY,
+      projection_id: projection?.projection_id || null,
+      model: null,
+      skipped: true,
+      reason: "JEV_NO_CANDIDATES",
+      request_count: 0,
+      latency_ms: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      items: [],
+    };
+  }
   const allQuestions = buildRankingQuestions(projection);
   const entries = Object.entries(allQuestions);
   const batches = [];
