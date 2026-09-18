@@ -13,7 +13,7 @@
     "test:firewall": "node --test tests/cross-runtime/cross-runtime-firewall.test.mjs",
     "test:installers": "node --test tests/installers/installers.test.mjs tests/installers/project-runtime-manager.test.mjs",
     "test:turn-economy": "node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs",
-    "test:architecture-invariants": "node --test tests/architecture-invariants/dream-authority.test.mjs tests/architecture-invariants/policy-lab-authority.test.mjs tests/architecture-invariants/shadow-authority.test.mjs tests/architecture-invariants/canary-authority.test.mjs tests/architecture-invariants/evidence-authority.test.mjs tests/architecture-invariants/project-runtime-authority.test.mjs",
+    "test:architecture-invariants": "node --test tests/architecture-invariants/dream-authority.test.mjs tests/architecture-invariants/policy-lab-authority.test.mjs tests/architecture-invariants/shadow-authority.test.mjs tests/architecture-invariants/canary-authority.test.mjs tests/architecture-invariants/evidence-authority.test.mjs tests/architecture-invariants/project-runtime-authority.test.mjs tests/architecture-invariants/mechanical-fast-path-authority.test.mjs",
     "check:contamination": "node scripts/contamination-check.mjs",
     "doctor": "./scripts/doctor.sh",
     "dream:explore": "node runtimes/antigravity/.agents/dream/exploration-cli.mjs",
