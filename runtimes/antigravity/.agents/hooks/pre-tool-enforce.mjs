@@ -295,6 +295,16 @@ function isWorkspaceEscapePath(relPath) {
   return norm === ".." || norm.startsWith("../") || /^[A-Za-z]:\//.test(norm);
 }
 
+function isAgentControlPlanePath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === ".agents" || norm.startsWith(".agents/");
+}
+
+function isRepositoryConstitutionPath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === "AGENTS.md" || norm.endsWith("/AGENTS.md");
+}
+
 function pathMatchesPattern(filePath, pattern) {
   const normPath = normalizePath(filePath);
   const normPattern = normalizePath(pattern);
@@ -1817,6 +1827,14 @@ function main() {
     const nonControlRedir = redir.targets.filter(t => !isControlPlanePath(t));
     const hasWorkspaceMutationTargets = nonControlTargets.length > 0 || nonControlRedir.length > 0;
 
+    if (targets.some(isRepositoryConstitutionPath) || redir.targets.some(isRepositoryConstitutionPath)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "AGENTS.md is the provider-neutral repository constitution and is strictly read-only for all agents."
+      }));
+      return;
+    }
+
     // Investigator is a specialist read-only plane even though it reuses the
     // flash-worker profile/model. Delegation purpose, not profile, controls authority.
     if (isInvestigatorActor) {
@@ -2001,6 +2019,14 @@ function main() {
         return;
       }
 
+      if (effectiveTargets.some(isAgentControlPlanePath)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** regardless of Scope Contract."
+        }));
+        return;
+      }
+
       if (effectiveTargets.length === 0 || (mutation.unknownScope && !mutation.targetPath && targets.length === 0)) {
         console.log(JSON.stringify({
           decision: "deny",
@@ -2110,6 +2136,14 @@ function main() {
     }
 
     const isControlPlane = isControlPlanePath(relTarget);
+
+    if (isWorkerRole(activeRole) && isAgentControlPlanePath(relTarget)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** ("${relTarget}") regardless of Scope Contract.`
+      }));
+      return;
+    }
 
     // 3. Target is a non-control-plane workspace file: check DIRECT_ACTION
     if (!isControlPlane && isDirectAction) {
