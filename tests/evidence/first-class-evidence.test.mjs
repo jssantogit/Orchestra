@@ -26,6 +26,8 @@ import {
 import {
   RETRY_REASONS,
   STATE_NAMES,
+  classifyExecutionEvidence,
+  isValidationCommand,
   validateStateTransition,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs";
 
@@ -374,10 +376,24 @@ test("evidence: GitHub repository parser supports HTTPS and SSH origins", () => 
 test("evidence: CI_WAIT and remote validation retry are first-class state-machine concepts", () => {
   assert.ok(STATE_NAMES.includes("CI_WAIT"));
   assert.ok(RETRY_REASONS.includes("REMOTE_VALIDATION_FAILURE"));
+  assert.equal(validateStateTransition("DELEGATED", "CI_WAIT").valid, true);
   assert.equal(validateStateTransition("EXECUTING", "CI_WAIT").valid, true);
   assert.equal(validateStateTransition("CI_WAIT", "CI_WAIT").valid, true);
   assert.equal(validateStateTransition("CI_WAIT", "EVIDENCE_READY").valid, true);
   assert.equal(validateStateTransition("CI_WAIT", "PLANNED").valid, true);
+});
+
+test("evidence: optional local Gradle commands remain factual validation when declared", () => {
+  const unit = "./gradlew testDebugUnitTest --tests \"tachiyomi.domain.tsuzuki.catalog.model.CatalogModelTest\"";
+  const build = "./gradlew assembleDebug";
+  const lint = "./gradlew spotlessCheck";
+
+  assert.equal(isValidationCommand(unit), true);
+  assert.equal(isValidationCommand(build), true);
+  assert.equal(isValidationCommand(lint), true);
+  assert.equal(classifyExecutionEvidence(unit, 0).type, "TEST_RUN");
+  assert.equal(classifyExecutionEvidence(build, 0).type, "BUILD");
+  assert.equal(classifyExecutionEvidence(lint, 0).type, "LINT");
 });
 
 test("evidence: delegation may explicitly replace inherited local tests with CI-first evidence", () => {
