@@ -88,7 +88,7 @@ Active routing files MUST NOT contain a Jev model route. Runtime profiles MUST N
 
 A live Shadow call records a prediction first. It cannot know future use yet, so its relevance quality fields are deliberately absent from promotion evidence.
 
-Later, once factual task events exist, Orchestra appends exactly one `orchestra.jev-shadow-label.v1` for that `shadow_id`. Evaluation joins report+label pairs. The original prediction is never rewritten.
+Later, once factual task events exist, Orchestra appends exactly one `orchestra.jev-shadow-label.v1` for that `shadow_id`. For project promotion, the label is derived only from `.agents/telemetry/events.jsonl` events after the Shadow timestamp; the CLI does not accept arbitrary/model-supplied future-event files. Evaluation joins report+label pairs. The original prediction is never rewritten.
 
 This prevents “no ground truth” from being misread as perfect recall and preserves append-only observability.
 
