@@ -234,7 +234,7 @@ function makeObservation(experiment, ev) {
   return { ...body, observation_id: recordId("obs", body), observed_at: ev.timestamp || new Date().toISOString() };
 }
 
-function deriveHypothesisFeedback(hypothesis, experiments, observations) {
+function deriveHypothesisFeedback(hypothesis, experiments, observations, mutations = []) {
   const relevant = observations.filter((o) => o.hypothesis_id === hypothesis.hypothesis_id);
   const supported = relevant.filter((o) => o.interpretation === "SUPPORTS");
   const falsified = relevant.filter((o) => o.interpretation === "FALSIFIES");
@@ -256,14 +256,37 @@ function deriveHypothesisFeedback(hypothesis, experiments, observations) {
     for (let j = i + 1; j < ab.length; j += 1) {
       const before = ab[i];
       const after = ab[j];
+      const interventions = (Array.isArray(mutations) ? mutations : []).filter((mutation) => (
+        Number.isInteger(mutation?.mutationSeq)
+        && mutation.mutationSeq > before.mutation_seq
+        && mutation.mutationSeq <= after.mutation_seq
+      ));
+      const targetPaths = Array.isArray(hypothesis.target_paths) ? hypothesis.target_paths : [];
+      const intervention = interventions.length === 1 ? interventions[0] : null;
+      const interventionPaths = Array.isArray(intervention?.paths) ? intervention.paths : [];
+      const targetMatched = targetPaths.length > 0
+        && interventionPaths.some((path) => targetPaths.includes(path));
+      const interventionFactual = Boolean(
+        intervention
+        && String(intervention.confidence || "").toUpperCase() === "HIGH"
+        && String(intervention.evidenceSource || "").toUpperCase() === "RUNTIME_IDENTITY"
+      );
+
       if (
         before.command === after.command &&
         before.result === "FAIL" &&
         after.result === "PASS" &&
         after.mutation_seq > before.mutation_seq &&
-        (before.interpretation === "SUPPORTS" || after.interpretation === "SUPPORTS")
+        (before.interpretation === "SUPPORTS" || after.interpretation === "SUPPORTS") &&
+        interventionFactual &&
+        targetMatched
       ) {
-        causalPair = { before: before.observation_id, after: after.observation_id };
+        causalPair = {
+          before: before.observation_id,
+          after: after.observation_id,
+          intervention_mutation_seq: intervention.mutationSeq,
+          intervention_paths: [...interventionPaths].sort(),
+        };
         status = FEEDBACK_STATUS.CAUSALLY_VERIFIED;
         break;
       }
@@ -300,7 +323,12 @@ export function reconcileFeedbackPlane(activeState) {
 
   const unique = new Map(observations.map((o) => [o.observation_id, o]));
   plane.observations = [...unique.values()].sort((a, b) => a.observation_id.localeCompare(b.observation_id));
-  plane.feedback = plane.hypotheses.map((hyp) => deriveHypothesisFeedback(hyp, plane.experiments, plane.observations));
+  plane.feedback = plane.hypotheses.map((hyp) => deriveHypothesisFeedback(
+    hyp,
+    plane.experiments,
+    plane.observations,
+    activeState.mutations || [],
+  ));
   plane.last_reconciled_at = new Date().toISOString();
   return plane;
 }
