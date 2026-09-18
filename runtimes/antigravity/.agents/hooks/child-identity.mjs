@@ -47,14 +47,23 @@ export function factualSubagentMatchesPending(record, pending) {
   const pendingProfile = String(pending.profile || pending.typeName || "").trim();
   const pendingRole = normalizeRole(pending.role);
 
-  let descriptorMatches = false;
-  if (descTypeName && pendingProfile && descTypeName === pendingProfile) {
-    descriptorMatches = true;
+  let comparableDimensions = 0;
+
+  // Strong descriptor dimensions are conjunctive, not alternatives. A factual
+  // profile conflict cannot be forgiven merely because both delegations say "worker".
+  if (descTypeName && pendingProfile) {
+    comparableDimensions++;
+    if (descTypeName !== pendingProfile) return false;
   }
-  if (descRole && pendingRole && (descRole === pendingRole || descRole.includes(pendingRole))) {
-    descriptorMatches = true;
+
+  if (descRole && pendingRole) {
+    comparableDimensions++;
+    const roleMatches = descRole === pendingRole || descRole.includes(pendingRole);
+    if (!roleMatches) return false;
   }
-  if (!descriptorMatches) return false;
+
+  // At least one descriptor dimension must be comparable to the pending slot.
+  if (comparableDimensions === 0) return false;
 
   const spawnStepIndex = record.spawnStepIndex;
   const originStepIdx = pending.originStepIdx;
