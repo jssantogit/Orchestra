@@ -196,8 +196,10 @@ export async function runJevTurnEconomyEvaluation({
       future_use_precision_at_k: oracle.future_use_precision_at_k,
       critical_reference_recall: oracle.critical_reference_recall,
       false_low_relevance: oracle.false_low_relevance,
-      tool_reexecution_delta: 0,
-      acceptance_delta: 0,
+      comparative_outcome_verified: false,
+      comparison_source: null,
+      tool_reexecution_delta: null,
+      acceptance_delta: null,
       fallback_identity_failures: 0,
       selected_ids: selection.selected_ids,
     });
