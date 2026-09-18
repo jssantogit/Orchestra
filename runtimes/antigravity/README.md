@@ -44,14 +44,14 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
   - `flash-policy-designer.md`: Milestone F offline, tool-less candidate policy designer (Flash High).
 - `.agents/skills/orchestra/` — Pure deterministic routing policy and state machine governance.
 - `.agents/skills/{critical-review,evidence-validation,implementation-contract,integration,progressive-testing}/` — Specialized modular runbooks.
-- `.agents/dream/` — Dream Layer components (canonicalization, deterministic snapshots, decision/outcome instrumentation, world sealing, discovery trees, prefix-only exact replay, lexicographic evaluation, Milestone E exploration, and Milestone F offline policy development).
+- `.agents/dream/` — Dream Layer components (canonicalization, deterministic snapshots, decision/outcome instrumentation, world sealing, discovery trees, prefix-only exact replay, lexicographic evaluation, Milestone E exploration, Milestone F offline policy development, and Milestone G zero-impact Shadow observation).
 
 ### State & Telemetry Generated at Execution (DO NOT COMMIT / Ignored)
 - `.agents/state/` — Ephemeral run state (`active-state.json`, `active-contract.json`, execution records).
 - `.agents/state/dream/` — Ephemeral dream correlation files (`pending-decisions/`) and workspace hash cache (`workspace-hash-cache.json`).
 - `.agents/telemetry/` — Telemetry events (`events.jsonl`).
 - `.agents/artifacts/outputs/` — Truncated command outputs (`output-*.log`).
-- `.agents/dream-data/` — Durable offline Dream data: sealed worlds, Milestone E BranchSeeds/exploration index, and Milestone F datasets/cycles/candidates/evaluations.
+- `.agents/dream-data/` — Durable offline Dream data: sealed worlds, Milestone E BranchSeeds/exploration index, Milestone F datasets/cycles/candidates/evaluations, and Milestone G Shadow sessions/support/observations/reports.
 
 ---
 
@@ -91,9 +91,9 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 
 ---
 
-## 5. Dream Layer Foundation, Static Policy, Exploration & Policy Lab (Milestones A–F)
+## 5. Dream Layer Foundation, Static Policy, Exploration, Policy Lab & Shadow (Milestones A–G)
 
-The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–F) for factual history, deterministic replay, declarative policy execution, bounded unknown-branch exploration, and offline candidate policy development:
+The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–G) for factual history, deterministic replay, declarative policy execution, bounded unknown-branch exploration, offline candidate policy development, and zero-impact Shadow comparison:
 
 - **Real Online Policy Authority (Milestone D Corrective Closure)**: PreToolUse hook enforces `RECORDED_CHOSEN_ACTION == ACTUAL_EXECUTED_ACTION`. Invocations diverging from policy action are deterministically denied pre-execution without recording false DECISION events.
 - **Three Decision Points**: Strict policy governance over `WORKER_TIER`, `INVESTIGATION_STRATEGY` (enforced gate before implementation), and `RETRY_ACTION` (governs retry path and enforces retry budget monotonicity).
@@ -107,7 +107,8 @@ The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–F
 - **No Context Contamination**: Historical discovery trajectories never enter online prompt context.
 - **Explicit Exploration Lab (Milestone E)**: An opt-in CLI can capture a prospective BranchSeed and materialize exactly one physical sibling for a deterministic `UNKNOWN_BRANCH`. The lab is isolated from the primary workspace, caps execution at one sibling / two model calls / five minutes, excludes CRITICAL and Human Gate states, requires explicit approval for MAJOR, blocks external side effects, regenerates ephemeral runtime identity, and never auto-promotes policy. The committed A-D hook topology remains unchanged while exploration is OFF; E hook overlays exist only in the prepared sibling.
 - **Prospective Physical Seeds**: A-D historical snapshots remain valid for Exact Replay, but physical exploration requires a Milestone E BranchSeed because older DECISION records intentionally do not contain the complete workspace payload/Scope Contract.
-- **Offline Policy Lab (Milestone F)**: Builds a deterministic sanitized `PolicyDevelopmentDataset`, freezes root lineages into an 80/20 TRAIN/HOLDOUT split, accepts at most two tool-less designer calls with up to four candidate JSON policies per call, and evaluates baseline/candidates through zero-model-call Exact Replay. Unsupported divergence is `NEEDS_EXPLORATION`; candidate artifacts never modify the active policy or online hooks. Shadow Mode remains a later milestone.
+- **Offline Policy Lab (Milestone F)**: Builds a deterministic sanitized `PolicyDevelopmentDataset`, freezes root lineages into an 80/20 TRAIN/HOLDOUT split, accepts at most two tool-less designer calls with up to four candidate JSON policies per call, and evaluates baseline/candidates through zero-model-call Exact Replay. Unsupported divergence is `NEEDS_EXPLORATION`; candidate artifacts never modify the active policy or online hooks.
+- **Zero-Impact Shadow Mode (Milestone G)**: Explicitly selected F candidates compute a private action only after the factual DECISION is published. Baseline execution remains authoritative; candidate actions never enter telemetry/model context or Scope Contract. CRITICAL/HUMAN_GATE are excluded. Canary review requires >=50 eligible decisions and <=20% UNKNOWN divergences; G never executes the candidate.
 
 For architecture and specification details, see [docs/dream-layer.md](../../docs/dream-layer.md).
 
@@ -124,13 +125,16 @@ node --test runtimes/antigravity/tests/routing-policy.test.mjs
 # Deterministic hook lifecycle test (run with concurrency 1)
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
 
-# Dream Layer unit and integration tests, including Milestones E–F
+# Dream Layer unit and integration tests, including Milestones E–G
 npm run test:dream
 # or directly:
-node --test runtimes/antigravity/.agents/dream/dream.test.mjs runtimes/antigravity/.agents/dream/exploration.test.mjs runtimes/antigravity/.agents/dream/policy-lab.test.mjs
+node --test runtimes/antigravity/.agents/dream/dream.test.mjs runtimes/antigravity/.agents/dream/exploration.test.mjs runtimes/antigravity/.agents/dream/policy-lab.test.mjs runtimes/antigravity/.agents/dream/shadow-mode.test.mjs
 
 # Build/evaluate an offline Milestone F policy-development cycle
 npm run dream:policy-lab -- help
+
+# Enable/report zero-impact Milestone G Shadow observation
+npm run dream:shadow -- help
 ```
 
 ---
@@ -139,4 +143,4 @@ npm run dream:policy-lab -- help
 
 - Requires Google Antigravity environment with support for tool hooks (`PreToolUse`, `PostToolUse`, `PreInvocation`, `Stop`).
 - Does not permit external model fallbacks (Claude, GPT, or Sonnet).
-- Milestone F can propose and evaluate candidate policies but cannot activate them; Shadow Mode/Canary are intentionally out of scope.
+- Milestone G can observe candidate decisions but cannot execute them; Canary and promotion remain intentionally out of scope.
