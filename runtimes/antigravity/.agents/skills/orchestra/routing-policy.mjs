@@ -3802,9 +3802,19 @@ export function extractExecutableCommand(cmd) {
 export function verifyWorkerValidation(activeState = {}) {
   const ledger = Array.isArray(activeState.evidenceLedger) ? activeState.evidenceLedger : [];
   const currentSeq = typeof activeState.mutationSeq === "number" ? activeState.mutationSeq : 0;
+  const currentAttempt = Number.isInteger(activeState.attempt) && activeState.attempt >= 0 ? activeState.attempt : 0;
   const mutations = Array.isArray(activeState.mutations) ? activeState.mutations : [];
   const contract = activeState.scopeContract || {};
   const requiredTests = contract.testsRequired || activeState.testsRequired || [];
+
+  const evidenceMatchesAttempt = (ev) => {
+    if (!ev) return false;
+    if (currentAttempt === 0) {
+      return !Number.isInteger(ev.attempt) || ev.attempt === 0;
+    }
+    return Number.isInteger(ev.attempt) && ev.attempt === currentAttempt;
+  };
+  const attemptLedger = ledger.filter(evidenceMatchesAttempt);
 
   if (requiredTests.length > 0) {
     let lastEvidence = null;
@@ -3812,7 +3822,7 @@ export function verifyWorkerValidation(activeState = {}) {
       const execCmd = extractExecutableCommand(rawTestCmd);
 
       if (execCmd) {
-        const executed = ledger.slice().reverse().find((ev) => {
+        const executed = attemptLedger.slice().reverse().find((ev) => {
           if (!ev) return false;
           const evCmd = String(ev.command || "").trim();
           return evCmd.includes(execCmd) || execCmd.includes(evCmd);
@@ -3827,13 +3837,20 @@ export function verifyWorkerValidation(activeState = {}) {
           };
         }
 
-        const res = findReusableEvidence(ledger, execCmd, currentSeq, mutations);
+        const res = findReusableEvidence(attemptLedger, execCmd, currentSeq, mutations);
         if (!res.found) {
+          const crossAttemptEvidence = ledger.slice().reverse().find((ev) => {
+            if (!ev || evidenceMatchesAttempt(ev)) return false;
+            const evCmd = String(ev.command || "").trim();
+            return evCmd.includes(execCmd) || execCmd.includes(evCmd);
+          });
           return {
             verified: false,
             fresh: false,
-            reason: `MISSING: required test not executed: ${execCmd}`,
-            evidence: null,
+            reason: crossAttemptEvidence
+              ? `ATTEMPT_MISMATCH: validation for ${execCmd} belongs to a different retry attempt`
+              : `MISSING: required test not executed: ${execCmd}`,
+            evidence: crossAttemptEvidence || null,
           };
         }
         if (!res.reusable) {
@@ -3883,7 +3900,7 @@ export function verifyWorkerValidation(activeState = {}) {
         // Descriptive requirement (e.g. "Run the focused formatter test suite to verify the fix with exitCode 0.")
         // Satisfied by any fresh, passing worker test execution in ledger
         let foundTest = null;
-        for (const ev of ledger.slice().reverse()) {
+        for (const ev of attemptLedger.slice().reverse()) {
           if (!ev) continue;
           const isTest = ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest|go\s+test)\b/.test(String(ev.command || "").trim());
           if (!isTest) continue;
@@ -3939,11 +3956,18 @@ export function verifyWorkerValidation(activeState = {}) {
         }
 
         if (!foundTest) {
+          const crossAttemptTest = ledger.slice().reverse().find((ev) => {
+            if (!ev || evidenceMatchesAttempt(ev)) return false;
+            const cmd = String(ev.command || "").trim();
+            return ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest|go\s+test)\b/.test(cmd);
+          });
           return {
             verified: false,
             fresh: false,
-            reason: `MISSING: required test not executed: ${rawTestCmd}`,
-            evidence: null,
+            reason: crossAttemptTest
+              ? "ATTEMPT_MISMATCH: available validation evidence belongs to a different retry attempt"
+              : `MISSING: required test not executed: ${rawTestCmd}`,
+            evidence: crossAttemptTest || null,
           };
         }
         lastEvidence = foundTest;
@@ -3959,7 +3983,7 @@ export function verifyWorkerValidation(activeState = {}) {
   }
 
   // If no specific tests required by contract, look for ANY valid test run in ledger
-  for (const ev of ledger.slice().reverse()) {
+  for (const ev of attemptLedger.slice().reverse()) {
     if (!ev) continue;
     const isTest = ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(String(ev.command || "").trim());
     if (!isTest) continue;
@@ -4018,11 +4042,19 @@ export function verifyWorkerValidation(activeState = {}) {
     };
   }
 
+  const crossAttemptTest = ledger.slice().reverse().find((ev) => {
+    if (!ev || evidenceMatchesAttempt(ev)) return false;
+    const cmd = String(ev.command || "").trim();
+    return ev.type === "TEST_RUN" || /^(?:npm\s+(?:run\s+)?test|pnpm\s+test|node\s+--test|pytest|cargo\s+test|vitest|jest)\b/.test(cmd);
+  });
+
   return {
     verified: false,
     fresh: false,
-    reason: "NO_VERIFIED_WORKER_VALIDATION",
-    evidence: null,
+    reason: crossAttemptTest
+      ? "ATTEMPT_MISMATCH: available validation evidence belongs to a different retry attempt"
+      : "NO_VERIFIED_WORKER_VALIDATION",
+    evidence: crossAttemptTest || null,
   };
 }
 
