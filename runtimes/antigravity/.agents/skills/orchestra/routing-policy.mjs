@@ -875,7 +875,23 @@ function listValue(value) {
 }
 
 function normalizedPath(value) {
-  return String(value).trim().replaceAll("\\", "/").replace(/^\.\//, "");
+  const raw = String(value || "").trim().replaceAll("\\", "/");
+  const absolute = raw.startsWith("/") || /^[A-Za-z]:\//.test(raw);
+  const segments = [];
+  for (const segment of raw.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
+        segments.pop();
+      } else if (!absolute) {
+        segments.push("..");
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const normalized = segments.join("/");
+  return absolute ? `/${normalized}` : normalized;
 }
 
 function normalizePathList(value) {
@@ -961,7 +977,10 @@ export function validateScopeContract(contractOrFacts = {}, changedPaths = []) {
   const forbiddenPaths = normalizePathList(firstPresent(contract, ["forbiddenPaths", "forbiddenScope", "forbidden_paths"]) ?? []);
   const violations = [];
   for (const path of paths) {
-    if (forbiddenPaths.some((pattern) => pathMatchesPattern(path, pattern))) {
+    const workspaceEscape = path === ".." || path.startsWith("../") || path.startsWith("/") || /^[A-Za-z]:\//.test(path);
+    if (workspaceEscape) {
+      violations.push({ path, reason: "workspace-escape" });
+    } else if (forbiddenPaths.some((pattern) => pathMatchesPattern(path, pattern))) {
       violations.push({ path, reason: "forbidden-path" });
     } else if (allowedPaths.length > 0 && !allowedPaths.some((pattern) => pathMatchesPattern(path, pattern))) {
       violations.push({ path, reason: "outside-allowed-path" });
