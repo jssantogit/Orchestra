@@ -652,7 +652,7 @@ A worker may declare:
 - `OBSERVATION`: created only by the runtime when that experiment binds to factual Evidence Ledger execution;
 - `FEEDBACK`: deterministic inference over factual observations.
 
-The runtime states are `UNKNOWN`, `OBSERVED`, `SUPPORTED`, `FALSIFIED`, and `CAUSALLY_VERIFIED`. The last state requires an explicit `MUTATION_AB` design and the same exact factual command changing from FAIL before mutation to PASS after a later mutation. It cannot be asserted by the model.
+The runtime states are `UNKNOWN`, `OBSERVED`, `SUPPORTED`, `FALSIFIED`, and `CAUSALLY_VERIFIED`. The last state requires an explicit `MUTATION_AB` design, the same exact factual command changing from FAIL to PASS, and exactly one HIGH-confidence `RUNTIME_IDENTITY` mutation between the two observations. That mutation must overlap the hypothesis `target_paths`; multiple interventions are treated as confounded and remain at most `SUPPORTED`. Causal status cannot be asserted by the model.
 
 Feedback never satisfies an Evidence Contract and never grants routing, write, or acceptance authority.
 
