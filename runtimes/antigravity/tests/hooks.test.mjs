@@ -454,7 +454,8 @@ test("Task 5 pre-tool: Direct Action and CRITICAL review paths do NOT record DEC
         name: "invoke_subagent",
         args: {
           Subagents: [
-            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review normal patch" }
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review normal patch A" },
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review normal patch B" }
           ]
         }
       }
@@ -1621,7 +1622,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
     assert.ok(dec1, "Factual DECISION(REPLAN) must be recorded immediately pre-transition");
     assert.equal(dec1.baseline_action, "REPLAN");
 
-    // 2. Generic control plane write (write_to_file) is allowed as normal and does NOT trigger replan or change state
+    // 2. Generic scratch write (write_to_file) is allowed as normal and does NOT trigger replan or change state
     const inputPlanWrite = JSON.stringify({
       conversationId: "replan-causal-conv",
       stepIdx: 2,
@@ -1630,7 +1631,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
         id: "call_write_plan",
         name: "write_to_file",
         args: {
-          TargetFile: resolve(process.cwd(), ".agents/plans/test-replan.md"),
+          TargetFile: resolve(process.cwd(), "scratch/test-replan.md"),
           CodeContent: "# Corrected Replan",
           Overwrite: true,
         }
@@ -1645,7 +1646,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
     assert.equal(savedState2.state, "PLANNED", "State remains PLANNED without generic tool side effect");
 
     // Clean up created test plan file
-    try { unlinkSync(".agents/plans/test-replan.md"); } catch {}
+    try { unlinkSync("scratch/test-replan.md"); } catch {}
 
     // 3. Invalid state transition: if state cannot transition to PLANNED, do NOT record DECISION(REPLAN), fail closed to HUMAN_GATE
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
