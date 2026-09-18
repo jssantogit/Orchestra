@@ -296,8 +296,8 @@ test("recordDecision keeps baseline execution private from a divergent shadow ca
     assert.equal(observation.candidate_action, "FLASH_LOW");
     assert.equal(observation.divergence, true);
     assert.equal(observation.replay_support.status, "EXACT_SUPPORTED");
-    assert.equal(telemetry.includes("candidate_action"), false);
-    assert.equal(telemetry.includes("FLASH_LOW"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(published, "candidate_action"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(published, "divergence"), false);
   } finally {
     rmSync(f.repo, { recursive: true, force: true });
   }
