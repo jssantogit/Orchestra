@@ -72,6 +72,9 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/agents/flash-medium-worker.md"
   "runtimes/antigravity/.agents/agents/flash-worker.md"
   "runtimes/antigravity/.agents/agents/flash-reviewer.md"
+  "runtimes/antigravity/.agents/agents/flash-policy-designer.md"
+  "runtimes/antigravity/.agents/dream/policy-lab.mjs"
+  "runtimes/antigravity/.agents/dream/policy-lab-cli.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
   "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs"
   "runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs"
@@ -104,6 +107,8 @@ JS_FILES=(
   "runtimes/antigravity/.agents/hooks/output-gate-runner.mjs"
   "runtimes/antigravity/.agents/hooks/verify-batch.mjs"
   "runtimes/antigravity/.agents/hooks/git-operation.mjs"
+  "runtimes/antigravity/.agents/dream/policy-lab.mjs"
+  "runtimes/antigravity/.agents/dream/policy-lab-cli.mjs"
   "scripts/contamination-check.mjs"
 )
 
