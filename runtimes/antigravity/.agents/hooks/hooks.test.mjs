@@ -1507,7 +1507,7 @@ test("v5: git-operation resolves root transaction state from nested cwd", () => 
     execFileSync("git", ["add", "README.md"], { cwd: fixtureDir });
     execFileSync("git", ["commit", "-m", "initial fixture"], { cwd: fixtureDir });
 
-    const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
     const stateDir = resolve(fixtureDir, ".agents/state");
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(resolve(stateDir, "active-state.json"), JSON.stringify({
@@ -1516,6 +1516,8 @@ test("v5: git-operation resolves root transaction state from nested cwd", () => 
         commitCreated: true,
         commitHash: head,
         message: "candidate already committed",
+        files: null,
+        remote: "origin",
         branch: "main",
         pushSucceeded: false,
       },
@@ -1524,7 +1526,7 @@ test("v5: git-operation resolves root transaction state from nested cwd", () => 
     const res = executeGitOperation({
       cwd: nestedDir,
       action: "commit",
-      message: "different message that cannot match HEAD fallback",
+      message: "candidate already committed",
     });
 
     assert.equal(res.success, true);
@@ -2011,7 +2013,6 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
         parentConversationId: "parent-conv-1",
         agentRole: "WORKER",
         agentProfile: "flash-low-worker",
-        modelName: "gemini-3.8-flash-low",
         toolCall: {
           id: "call-child-provisional-write",
           name: "write_to_file",
@@ -2028,7 +2029,6 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
         parentConversationId: "parent-conv-1",
         agentRole: "WORKER",
         agentProfile: "flash-low-worker",
-        modelName: "gemini-3.8-flash-low",
         toolCall: {
           id: "call-child-provisional-shell",
           name: "run_command",
@@ -2691,7 +2691,7 @@ test("pre-tool hook: factual INVESTIGATION delegation is strictly read-only", ()
 test("governance: native write aliases are intercepted, scoped, and tracked", () => {
   cleanState();
   try {
-    const hooksConfig = JSON.parse(readFileSync(resolve(__testDir, "../hooks.json"), "utf8"));
+    const hooksConfig = JSON.parse(readFileSync(resolve(__dirname, "../hooks.json"), "utf8"));
     const matcher = hooksConfig["scope-enforcer"].PreToolUse[0].matcher;
     assert.match(matcher, /(?:^|\|)edit_file(?:\||$)/);
     assert.match(matcher, /(?:^|\|)create_file(?:\||$)/);
