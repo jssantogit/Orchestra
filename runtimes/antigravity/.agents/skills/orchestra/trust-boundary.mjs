@@ -60,6 +60,25 @@ export function classifyCommandCapability(commandLine) {
 
   const uploadHost = /transfer\.sh|0x0\.st|file\.io|pastebin\.|gist\.github|hastebin|temp\.sh|catbox\.moe/i.test(cmd);
   const uploadVerb = /(?:\bcurl\b[^\n]*(?:\s-X\s*(?:POST|PUT|PATCH|DELETE)\b|\s--upload-file\b|\s-T\s)|\bwget\b[^\n]*(?:--post-|--method=?(?:POST|PUT|PATCH|DELETE))|Invoke-WebRequest[^\n]*-Method\s+(?:POST|PUT|PATCH|DELETE))/i.test(cmd);
+
+  const publicPublisher = /\b(?:npm|pnpm)\s+publish\b|\byarn\s+npm\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bdocker\s+push\b|\b(?:vercel|netlify|firebase)\s+(?:deploy|publish)\b|\bpython\s+-m\s+http\.server\b/i.test(cmd);
+  if (publicPublisher) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.PUBLICATION, reason: "publication_command" };
+  }
+
+  const remoteWriteTool = /\b(?:scp|sftp|rsync)\b[^\n]*(?:\s|:)[^\n]*:|\bssh\b[^\n]+\s+[^\n]+|\b(?:nc|ncat|socat)\b|\brclone\s+(?:copy|copyto|move|moveto|sync)\b/i.test(cmd);
+  if (remoteWriteTool) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE, reason: "remote_process_write" };
+  }
+
+  const embeddedNetwork = /\b(?:node|python(?:3)?|ruby|perl)\b[^\n]*(?:-e|-c)[^\n]*(?:fetch\s*\(|axios\.|requests\.|urllib\.|http\.client|https?\.request|socket\.|Net::HTTP)/i.test(cmd);
+  const embeddedWrite = embeddedNetwork && /\b(?:post|put|patch|delete|upload|send|write)\b|method\s*[:=]\s*["']?(?:POST|PUT|PATCH|DELETE)/i.test(cmd);
+  if (embeddedWrite) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE, reason: "embedded_network_write" };
+  }
+  if (embeddedNetwork) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.NETWORK_READ, reason: "embedded_network_read" };
+  }
   if (uploadHost && uploadVerb) {
     return { capability: SIDE_EFFECT_CAPABILITIES.PUBLICATION, reason: "public_upload" };
   }
