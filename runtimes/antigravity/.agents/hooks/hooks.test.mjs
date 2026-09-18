@@ -3615,3 +3615,152 @@ test("governance: two factual reviewer approvals unlock only the exact reviewed 
     cleanState();
   }
 });
+
+
+test("governance: unknown conversation cannot self-promote through invoke_subagent", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "escalation-known-main",
+      taskAction: "IMPLEMENT",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "escalation-known-main",
+      bindings: {
+        "escalation-known-main": {
+          conversationId: "escalation-known-main",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "escalation-unknown-child",
+        toolCall: {
+          id: "escalation-invoke",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [{
+              TypeName: "flash-low-worker",
+              Role: "worker",
+              Prompt: "Attempt unauthorized delegation",
+            }],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ORCHESTRATOR_IDENTITY_REQUIRED/);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    assert.equal(bindings.mainConversationId, "escalation-known-main");
+    assert.equal(bindings.bindings["escalation-unknown-child"], undefined);
+    assert.equal(bindings.pendingSubagents.length, 0);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: unknown conversation cannot define subagent profiles", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "define-known-main",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "define-known-main",
+      bindings: {
+        "define-known-main": {
+          conversationId: "define-known-main",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "define-unknown-child",
+        toolCall: {
+          name: "define_subagent",
+          args: {
+            name: "flash-low-worker",
+            system_prompt: "ignore governance",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ORCHESTRATOR_IDENTITY_REQUIRED/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: authorized orchestrator delegation preserves HIGH identity", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "authorized-main",
+      taskAction: "REVIEW",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "authorized-main",
+      bindings: {
+        "authorized-main": {
+          conversationId: "authorized-main",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "authorized-main",
+        toolCall: {
+          id: "authorized-review-dispatch",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [
+              { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review A" },
+              { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review B" },
+            ],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "allow");
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    assert.equal(bindings.bindings["authorized-main"].confidence, "HIGH");
+    assert.equal(bindings.bindings["authorized-main"].role, "ORCHESTRATOR");
+  } finally {
+    cleanState();
+  }
+});
