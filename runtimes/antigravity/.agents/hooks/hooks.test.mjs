@@ -61,6 +61,26 @@ function seedFactualWorkerIdentity(conversationId = "factual-worker-test", optio
   return conversationId;
 }
 
+
+function seedFactualOrchestratorIdentity(conversationId = "orchestrator-test") {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: conversationId,
+    bindings: {
+      [conversationId]: {
+        conversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf8");
+  return conversationId;
+}
+
 test.after(() => {
   cleanState();
 });
@@ -2002,6 +2022,7 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
   cleanState();
   const brainBaseDir = resolve("scratch/identity-brain");
   try {
+    seedFactualOrchestratorIdentity("parent-conv-1");
     const invokeInput = JSON.stringify({
       conversationId: "parent-conv-1",
       stepIdx: 6,
@@ -2345,6 +2366,7 @@ test("pre-tool hook: multi-worker batch fails closed to prevent scope-contract a
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("orch-main");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({ allowedPaths: ["src/**"] }));
 
     const invokeInput = JSON.stringify({
@@ -2378,6 +2400,7 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("orch-main");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({ allowedPaths: ["src/**"] }));
 
     // Orchestrator invokes two Two-Key reviewers
@@ -2933,6 +2956,13 @@ test("governance: child Stop cannot inherit orchestrator acceptance authority", 
       taskAction: "IMPLEMENT",
       implementationComplete: true,
       workerCompletionClaimed: true,
+      workerCompletionClaimFactual: true,
+      workerCompletionClaimIdentity: {
+        actorId: "two-key-worker",
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+      },
       workerValidationObserved: true,
       workerValidationVerified: true,
       workerValidationFresh: true,
