@@ -33,6 +33,7 @@ export { FULL_EXPLORATION_LIMITS } from "./exploration-governance.mjs";
 
 const FULL_EXPLORATION_ROOT = ".agents/dream-data/full-exploration";
 const CONTROL_PATH = FULL_EXPLORATION_ROOT + "/control.json";
+const CONTROLLER_RESERVATIONS = FULL_EXPLORATION_ROOT + "/reservations";
 const BRANCH_SESSION_PATH = ".agents/state/dream/exploration-session.json";
 const ACTIVE_STATE_PATH = ".agents/state/active-state.json";
 const VALID_TERMINAL_STATES = new Set([
@@ -75,6 +76,41 @@ function controllerPaths(repoRoot, control) {
     telemetryPath: resolve(root, "events.jsonl"),
     pendingDir: resolve(root, "pending-decisions"),
   };
+}
+
+function reserveControllerBranchSlot(repoRoot, control, branchOrdinal) {
+  const dir = resolve(repoRoot, CONTROLLER_RESERVATIONS);
+  mkdirSync(dir, { recursive: true });
+  const token = randomUUID();
+  const path = resolve(dir, control.session_id + "-" + branchOrdinal + ".json");
+  const reservation = {
+    schema: "orchestra.full-exploration-branch-reservation.v1",
+    session_id: control.session_id,
+    branch_ordinal: branchOrdinal,
+    reservation_token: token,
+    limits: { ...FULL_EXPLORATION_LIMITS },
+    reserved_at: new Date().toISOString(),
+  };
+  try {
+    writeFileSync(path, JSON.stringify(reservation, null, 2), {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    return { reserved: true, token, path };
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      return {
+        reserved: false,
+        reason: "FULL_EXPLORATION_BRANCH_SLOT_RESERVED",
+        path,
+      };
+    }
+    return {
+      reserved: false,
+      reason: "FULL_EXPLORATION_BRANCH_SLOT_RESERVATION_FAILED",
+      error: String(error?.message || error),
+    };
+  }
 }
 
 function terminalBranchStatus(status) {
@@ -854,6 +890,17 @@ export function prepareFullExplorationBranch({
     };
   }
 
+  const slot = reserveControllerBranchSlot(repoRoot, control, branchOrdinal);
+  if (!slot.reserved) {
+    persist(repoRoot, control);
+    return {
+      prepared: false,
+      reason: slot.reason,
+      reservation_path: slot.path || null,
+      control,
+    };
+  }
+
   // These decisions become factual only because the runtime is about to apply
   // them. Their OUTCOMEs remain pending until the branch reaches a factual
   // terminal result (sealed world or factual runner/collection failure).
@@ -908,6 +955,28 @@ export function prepareFullExplorationBranch({
     for (const record of deferredRecords.filter((item) => item.recorded)) {
       completeControllerDecision({ repoRoot, control, decisionRecord: record, outcome: abortOutcome });
     }
+    const failedBranch = {
+      branch_id: "full-branch-" + randomUUID(),
+      ordinal: branchOrdinal,
+      seed_path: resolve(seedPath),
+      source_world_id: world.world_id || null,
+      source_decision_id: decisionId || null,
+      exploration_session_id: null,
+      branch_workspace: null,
+      selected_action: null,
+      policy_parallelism: parallelism.action,
+      controller_reservation_path: slot.path,
+      deferred_decision_ids: deferredRecords.map((record) => record.local_id),
+      decision_outcomes_finalized: false,
+      status: "BLOCKED",
+      model_calls: 0,
+      feedback_summary: null,
+      feedback_status: "UNKNOWN",
+      invalid: true,
+      pruned: false,
+      created_at: new Date().toISOString(),
+    };
+    control.branches.push(failedBranch);
     control.status = "BLOCKED";
     control.stop_reason = "CONTROLLER_DECISION_RECORDING_INCOMPLETE";
     control.stopped_at = new Date().toISOString();
@@ -915,6 +984,7 @@ export function prepareFullExplorationBranch({
     return {
       prepared: false,
       reason: "CONTROLLER_DECISION_RECORDING_INCOMPLETE",
+      branch: failedBranch,
       decisions: deferredRecords,
       control,
     };
@@ -928,6 +998,7 @@ export function prepareFullExplorationBranch({
     fullExplorationContext: {
       session_id: control.session_id,
       branch_ordinal: branchOrdinal,
+      reservation_token: slot.token,
     },
   });
 
@@ -941,6 +1012,7 @@ export function prepareFullExplorationBranch({
     branch_workspace: prepared.branch_workspace || null,
     selected_action: prepared.selection?.selected || null,
     policy_parallelism: parallelism.action,
+    controller_reservation_path: slot.path,
     deferred_decision_ids: deferredRecords.map((record) => record.local_id),
     decision_outcomes_finalized: false,
     status: prepared.prepared ? "PREPARED" : "FAILED_TO_START",
