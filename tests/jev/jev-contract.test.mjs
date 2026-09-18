@@ -250,6 +250,8 @@ test("malformed or post-approval shadow telemetry invalidates Retrieval Assist",
         critical_reference_recall: 1,
         false_low_relevance: 0,
         false_prune_risk: 0,
+        comparative_outcome_verified: true,
+        comparison_source: "CONTROLLED_A_B_FIXTURE",
         tool_reexecution_delta: 0,
         acceptance_delta: 0,
       }));
@@ -322,6 +324,10 @@ test("retrieval assist activates only with eligible report + matching human appr
         critical_reference_recall: 1,
         false_low_relevance: 0,
         false_prune_risk: 0,
+        comparative_outcome_verified: true,
+        comparison_source: "CONTROLLED_A_B_FIXTURE",
+        tool_reexecution_delta: 0,
+        acceptance_delta: 0,
       });
     }
     writeFileSync(join(telemetryDir, "jev-shadow.jsonl"), lines.map(JSON.stringify).join("\n")+"\n");
