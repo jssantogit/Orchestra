@@ -273,24 +273,30 @@ function evaluateRequirement(requirement, ledger, activeState) {
     };
   }
 
+  let localFallback = null;
   for (const ev of matching) {
     if (!attemptMatches(ev, activeState)) continue;
 
     if (requirement.kind === "LOCAL_COMMAND") {
       if (ev.evidenceSource === "CHILD_TRANSCRIPT" && (ev.mutationAfterValidation === true || ev.fresh === false)) {
-        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "CHILD_MUTATION_AFTER_VALIDATION", evidence: ev, requirement };
+        localFallback ||= { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "CHILD_MUTATION_AFTER_VALIDATION", evidence: ev, requirement };
+        continue;
       }
       if (!localEvidenceTaskMatches(ev, activeState)) {
-        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: ev.binding?.taskId ? "TASK_ID_MISMATCH" : "TASK_BINDING_MISSING", evidence: ev, requirement };
+        localFallback ||= { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: ev.binding?.taskId ? "TASK_ID_MISMATCH" : "TASK_BINDING_MISSING", evidence: ev, requirement };
+        continue;
       }
       if (!mutationMatches(ev, activeState)) {
-        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "MUTATION_SEQ_MISMATCH", evidence: ev, requirement };
+        localFallback ||= { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "MUTATION_SEQ_MISMATCH", evidence: ev, requirement };
+        continue;
       }
       if (!localEvidenceCommitMatches(ev, activeState)) {
-        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "COMMIT_SHA_MISMATCH", evidence: ev, requirement };
+        localFallback ||= { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "COMMIT_SHA_MISMATCH", evidence: ev, requirement };
+        continue;
       }
       if (!validLocalCommandProvenance(ev, activeState)) {
-        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "MISSING_ACTIONABLE", reason: "LOCAL_EVIDENCE_PRODUCER_NOT_AUTHORIZED", evidence: ev, requirement };
+        localFallback ||= { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "MISSING_ACTIONABLE", reason: "LOCAL_EVIDENCE_PRODUCER_NOT_AUTHORIZED", evidence: ev, requirement };
+        continue;
       }
       if (ev.exitCode !== 0 || (Number(ev.failed || 0) > 0)) {
         return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "FAILED", reason: "LOCAL_COMMAND_FAILED", evidence: ev, requirement };
@@ -320,6 +326,10 @@ function evaluateRequirement(requirement, ledger, activeState) {
     if (ev.result === "STALE") {
       return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: ev.reason || "EVIDENCE_STALE", evidence: ev, requirement };
     }
+  }
+
+  if (requirement.kind === "LOCAL_COMMAND" && localFallback) {
+    return localFallback;
   }
 
   const crossAttempt = matching[0] || null;
