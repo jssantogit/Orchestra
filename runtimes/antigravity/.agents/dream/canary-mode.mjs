@@ -413,24 +413,42 @@ export function loadCanaryConfig(repoRoot) {
   } catch {
     return { active: false, reason: "CANARY_CONFIG_INVALID" };
   }
+  const rolloutStage = currentCanaryRolloutStage(config);
   if (
     config?.schema !== CANARY_CONFIG_SCHEMA
     || config.status !== "ACTIVE"
     || typeof config.canary_session_id !== "string"
     || !config.canary_session_id.startsWith("canary-")
-    || config.traffic_percent !== CANARY_GATES.initial_traffic_percent
+    || !rolloutStage
     || config.config_hash !== configHash(config)
   ) {
     return { active: false, reason: "CANARY_CONFIG_INVALID" };
   }
   const approval = validateApproval(repoRoot, config);
   if (!approval.valid) return { active: false, reason: approval.reason };
-  return { active: true, config, approval: approval.approval, path };
+  const rolloutApproval = validateRolloutApproval(repoRoot, config);
+  if (!rolloutApproval.valid) return { active: false, reason: rolloutApproval.reason };
+  return {
+    active: true,
+    config,
+    approval: approval.approval,
+    rolloutApproval: rolloutApproval.approval,
+    rolloutStage,
+    path,
+  };
 }
 
-export function deterministicCanarySelection(taskId, candidatePolicyId) {
+export function deterministicCanarySelection(
+  taskId,
+  candidatePolicyId,
+  trafficPercent = CANARY_GATES.initial_traffic_percent,
+) {
   if (!taskId || !candidatePolicyId) {
     return { selected: false, bucket: null, reason: "TASK_ID_REQUIRED" };
+  }
+  const stage = getCanaryRolloutStageByTrafficSafe(trafficPercent);
+  if (!stage) {
+    return { selected: false, bucket: null, reason: "CANARY_TRAFFIC_PERCENT_INVALID" };
   }
   const hash = sha256Canonical({
     task_id: String(taskId),
@@ -438,10 +456,16 @@ export function deterministicCanarySelection(taskId, candidatePolicyId) {
   }).slice(7);
   const bucket = Number.parseInt(hash.slice(0, 8), 16) % 100;
   return {
-    selected: bucket < CANARY_GATES.initial_traffic_percent,
+    selected: bucket < stage.traffic_percent,
     bucket,
+    traffic_percent: stage.traffic_percent,
     reason: null,
   };
+}
+
+function getCanaryRolloutStageByTrafficSafe(trafficPercent) {
+  const traffic = Number(trafficPercent);
+  return CANARY_ROLLOUT_STAGES.find((stage) => stage.traffic_percent === traffic) || null;
 }
 
 function contractPaths(contract = {}) {
