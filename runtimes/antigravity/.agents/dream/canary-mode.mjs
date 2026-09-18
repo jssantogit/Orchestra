@@ -220,6 +220,21 @@ export function approveCanary({
   const support = loadSupport(repoRoot, shadow.report.support_index_id);
   if (!support.ok) return { approved: false, ...support };
 
+  const runtimeBaseline = loadRuntimePolicy(repoRoot);
+  if (
+    !runtimeBaseline.ok
+    || runtimeBaseline.diagnostic
+    || runtimeBaseline.policy?.policy_id !== shadow.report.baseline_policy_id
+  ) {
+    return {
+      approved: false,
+      reason: "CANARY_SHADOW_BASELINE_STALE",
+      expected_policy_id: shadow.report.baseline_policy_id,
+      observed_policy_id: runtimeBaseline.policy?.policy_id || null,
+      diagnostic: runtimeBaseline.diagnostic || runtimeBaseline.reason || null,
+    };
+  }
+
   const activePath = activeConfigPath(repoRoot);
   if (existsSync(activePath)) {
     const existing = loadCanaryConfig(repoRoot);
