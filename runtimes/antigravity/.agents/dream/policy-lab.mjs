@@ -10,7 +10,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { sha256Canonical } from "./canonical.mjs";
-import { buildDiscoveryTree, BRANCH_STATUS } from "./discovery-tree-builder.mjs";
 import { createReplayReport } from "./evaluator.mjs";
 import { computePolicyId, evaluatePolicy, POLICY_STATUS, validatePolicy } from "./policy-engine.mjs";
 import { replayExact } from "./replay-simulator.mjs";
@@ -45,6 +44,76 @@ const STATE_FIELDS = Object.freeze([
 
 const LAB_ROOT = ".agents/dream-data/policy-lab";
 const WORLDS_ROOT = ".agents/dream-data/worlds";
+
+function datasetHash(dataset) {
+  const { dataset_id: _id, ...rest } = dataset || {};
+  return "dataset-" + sha256Canonical(rest).slice(7);
+}
+
+function cycleHash(cycle) {
+  const { state_hash: _hash, ...rest } = cycle || {};
+  return sha256Canonical(rest);
+}
+
+function writeCycle(path, cycle) {
+  const value = structuredClone(cycle);
+  value.state_hash = cycleHash(value);
+  atomicJson(path, value);
+  return value;
+}
+
+function readCycle(repoRoot, cyclePath) {
+  if (!repoRoot || !cyclePath) return { ok: false, reason: "INVALID_CYCLE_PATH" };
+  const resolved = resolve(cyclePath);
+  const cyclesRoot = resolve(repoRoot, LAB_ROOT, "cycles");
+  let parsed;
+  try {
+    parsed = readJson(resolved);
+  } catch {
+    return { ok: false, reason: "CYCLE_READ_FAILED" };
+  }
+  if (
+    parsed?.schema !== POLICY_CYCLE_SCHEMA
+    || typeof parsed?.cycle_id !== "string"
+    || !/^cycle-[a-f0-9]{64}$/.test(parsed.cycle_id)
+    || typeof parsed?.dataset_id !== "string"
+    || !/^dataset-[a-f0-9]{64}$/.test(parsed.dataset_id)
+  ) {
+    return { ok: false, reason: "INVALID_CYCLE" };
+  }
+  const expectedPath = resolve(cyclesRoot, parsed.cycle_id + ".json");
+  if (resolved !== expectedPath) return { ok: false, reason: "CYCLE_PATH_ESCAPE" };
+  if (parsed.state_hash !== cycleHash(parsed)) {
+    return { ok: false, reason: "CYCLE_STATE_HASH_MISMATCH" };
+  }
+  if (
+    !Array.isArray(parsed.designer_calls)
+    || !Array.isArray(parsed.candidates)
+    || parsed.candidates[0]?.source !== "BASELINE"
+    || parsed.candidates[0]?.policy_id !== parsed.baseline_policy_id
+  ) {
+    return { ok: false, reason: "CYCLE_STATE_INVALID" };
+  }
+  return { ok: true, cycle: parsed, path: resolved };
+}
+
+function validateDatasetIntegrity(dataset) {
+  if (
+    dataset?.schema !== POLICY_DATASET_SCHEMA
+    || typeof dataset?.dataset_id !== "string"
+    || !/^dataset-[a-f0-9]{64}$/.test(dataset.dataset_id)
+  ) {
+    return { valid: false, reason: "INVALID_DATASET" };
+  }
+  if (datasetHash(dataset) !== dataset.dataset_id) {
+    return { valid: false, reason: "DATASET_ID_MISMATCH" };
+  }
+  const policyValidation = validatePolicy(dataset.current_policy);
+  if (!policyValidation.valid) {
+    return { valid: false, reason: "CURRENT_POLICY_INVALID", errors: policyValidation.errors };
+  }
+  return { valid: true };
+}
 
 function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true });
@@ -460,9 +529,9 @@ export function persistPolicyDevelopmentDataset(repoRoot, dataset) {
   if (!dataset || dataset.schema !== POLICY_DATASET_SCHEMA || !dataset.dataset_id) {
     return { written: false, reason: "INVALID_DATASET" };
   }
-  const expected = "dataset-" + sha256Canonical((({ dataset_id: _id, ...rest }) => rest)(dataset)).slice(7);
-  if (expected !== dataset.dataset_id) {
-    return { written: false, reason: "DATASET_ID_MISMATCH" };
+  const integrity = validateDatasetIntegrity(dataset);
+  if (!integrity.valid) {
+    return { written: false, reason: integrity.reason, errors: integrity.errors || [] };
   }
   const path = resolve(repoRoot, LAB_ROOT, "datasets", dataset.dataset_id + ".json");
   atomicJson(path, dataset);
@@ -495,6 +564,10 @@ export function openPolicyLabCycle({ repoRoot, dataset } = {}) {
   if (!repoRoot || !dataset?.dataset_id || dataset.schema !== POLICY_DATASET_SCHEMA) {
     return { opened: false, reason: "INVALID_CYCLE_INPUT" };
   }
+  const datasetIntegrity = validateDatasetIntegrity(dataset);
+  if (!datasetIntegrity.valid) {
+    return { opened: false, reason: datasetIntegrity.reason, errors: datasetIntegrity.errors || [] };
+  }
   const baseline = dataset.current_policy;
   const validation = validatePolicy(baseline);
   if (!validation.valid) {
@@ -508,11 +581,11 @@ export function openPolicyLabCycle({ repoRoot, dataset } = {}) {
   const path = resolve(repoRoot, LAB_ROOT, "cycles", cycleId + ".json");
 
   if (existsSync(path)) {
-    const existing = readJson(path);
-    if (existing?.schema === POLICY_CYCLE_SCHEMA && existing?.cycle_id === cycleId) {
-      return { opened: true, existing: true, cycle: existing, path };
+    const existing = readCycle(repoRoot, path);
+    if (existing.ok && existing.cycle?.cycle_id === cycleId) {
+      return { opened: true, existing: true, cycle: existing.cycle, path };
     }
-    return { opened: false, reason: "CYCLE_ARTIFACT_CONFLICT" };
+    return { opened: false, reason: existing.reason || "CYCLE_ARTIFACT_CONFLICT" };
   }
 
   const cycle = {
@@ -534,8 +607,8 @@ export function openPolicyLabCycle({ repoRoot, dataset } = {}) {
     status: "OPEN",
     activation_allowed: false,
   };
-  atomicJson(path, cycle);
-  return { opened: true, existing: false, cycle, path };
+  const stored = writeCycle(path, cycle);
+  return { opened: true, existing: false, cycle: stored, path };
 }
 
 function materializeCandidate(raw, baselinePolicyId) {
@@ -565,21 +638,32 @@ export function submitDesignerCandidates({
     return { accepted: false, reason: "INVALID_DESIGNER_SUBMISSION" };
   }
 
-  const cycle = readJson(cyclePath);
-  if (cycle?.schema !== POLICY_CYCLE_SCHEMA) {
-    return { accepted: false, reason: "INVALID_CYCLE" };
-  }
+  const loadedCycle = readCycle(repoRoot, cyclePath);
+  if (!loadedCycle.ok) return { accepted: false, reason: loadedCycle.reason };
+  const cycle = loadedCycle.cycle;
   if (cycle.status !== "OPEN") {
     return { accepted: false, reason: "CYCLE_NOT_OPEN" };
   }
   if (cycle.designer_calls.length >= POLICY_LAB_LIMITS.max_designer_calls) {
     return { accepted: false, reason: "DESIGNER_CALL_BUDGET_EXHAUSTED" };
   }
-  if (candidates.length > POLICY_LAB_LIMITS.max_candidates_per_call) {
-    return { accepted: false, reason: "TOO_MANY_CANDIDATES_IN_CALL" };
-  }
-
   const callIndex = cycle.designer_calls.length + 1;
+  if (candidates.length > POLICY_LAB_LIMITS.max_candidates_per_call) {
+    cycle.designer_calls.push({
+      call_index: callIndex,
+      submitted_count: candidates.length,
+      accepted_policy_ids: [],
+      rejected_count: candidates.length,
+      rejection_reason: "TOO_MANY_CANDIDATES_IN_CALL",
+    });
+    const stored = writeCycle(cyclePath, cycle);
+    return {
+      accepted: false,
+      reason: "TOO_MANY_CANDIDATES_IN_CALL",
+      call_index: callIndex,
+      cycle: stored,
+    };
+  }
   const accepted = [];
   const rejected = [];
 
@@ -607,12 +691,12 @@ export function submitDesignerCandidates({
     accepted_policy_ids: accepted.map((x) => x.policy_id).sort(),
     rejected_count: rejected.length,
   });
-  atomicJson(cyclePath, cycle);
+  const storedCycle = writeCycle(cyclePath, cycle);
 
   return {
     accepted: true,
     call_index: callIndex,
-    cycle,
+    cycle: storedCycle,
     accepted_candidates: accepted,
     rejected_candidates: rejected,
   };
@@ -622,11 +706,11 @@ function loadDatasetForCycle(repoRoot, cycle) {
   const path = resolve(repoRoot, LAB_ROOT, "datasets", cycle.dataset_id + ".json");
   if (!existsSync(path)) return { ok: false, reason: "CYCLE_DATASET_MISSING" };
   const dataset = readJson(path);
-  if (dataset?.schema !== POLICY_DATASET_SCHEMA || dataset?.dataset_id !== cycle.dataset_id) {
+  if (dataset?.dataset_id !== cycle.dataset_id) {
     return { ok: false, reason: "CYCLE_DATASET_INVALID" };
   }
-  const expected = "dataset-" + sha256Canonical((({ dataset_id: _id, ...rest }) => rest)(dataset)).slice(7);
-  if (expected !== dataset.dataset_id) return { ok: false, reason: "CYCLE_DATASET_TAMPERED" };
+  const integrity = validateDatasetIntegrity(dataset);
+  if (!integrity.valid) return { ok: false, reason: "CYCLE_DATASET_TAMPERED", errors: integrity.errors || [] };
   return { ok: true, dataset, path };
 }
 
@@ -792,8 +876,9 @@ function feedbackExamples(items) {
 
 export function buildPolicyDesignerPacket({ repoRoot, cyclePath } = {}) {
   if (!repoRoot || !cyclePath) return { ok: false, reason: "INVALID_DESIGNER_PACKET_INPUT" };
-  const cycle = readJson(cyclePath);
-  if (cycle?.schema !== POLICY_CYCLE_SCHEMA) return { ok: false, reason: "INVALID_CYCLE" };
+  const loadedCycle = readCycle(repoRoot, cyclePath);
+  if (!loadedCycle.ok) return { ok: false, reason: loadedCycle.reason };
+  const cycle = loadedCycle.cycle;
   if (cycle.designer_calls.length >= POLICY_LAB_LIMITS.max_designer_calls) {
     return { ok: false, reason: "DESIGNER_CALL_BUDGET_EXHAUSTED" };
   }
@@ -875,8 +960,9 @@ export function buildPolicyDesignerPacket({ repoRoot, cyclePath } = {}) {
 
 export function evaluatePolicyLabCycle({ repoRoot, cyclePath } = {}) {
   if (!repoRoot || !cyclePath) return { evaluated: false, reason: "INVALID_EVALUATION_INPUT" };
-  const cycle = readJson(cyclePath);
-  if (cycle?.schema !== POLICY_CYCLE_SCHEMA) return { evaluated: false, reason: "INVALID_CYCLE" };
+  const loadedCycle = readCycle(repoRoot, cyclePath);
+  if (!loadedCycle.ok) return { evaluated: false, reason: loadedCycle.reason };
+  const cycle = loadedCycle.cycle;
 
   const loadedDataset = loadDatasetForCycle(repoRoot, cycle);
   if (!loadedDataset.ok) return { evaluated: false, ...loadedDataset };
@@ -995,7 +1081,7 @@ export function evaluatePolicyLabCycle({ repoRoot, cyclePath } = {}) {
   cycle.last_evaluation_id = evaluationId;
   cycle.status = "EVALUATED";
   cycle.activation_allowed = false;
-  atomicJson(cyclePath, cycle);
+  const storedCycle = writeCycle(cyclePath, cycle);
 
-  return { evaluated: true, evaluation, path, cycle };
+  return { evaluated: true, evaluation, path, cycle: storedCycle };
 }
