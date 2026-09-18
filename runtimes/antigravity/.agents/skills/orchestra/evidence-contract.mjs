@@ -91,6 +91,19 @@ export function normalizeEvidenceRequirements(contract = {}, activeState = {}) {
       }
       requirements.push(requirement);
     }
+    const explicitLegacyTests = Array.isArray(contract.testsRequired)
+      ? contract.testsRequired
+      : [];
+    for (let index = 0; index < explicitLegacyTests.length; index++) {
+      const command = explicitLegacyTests[index];
+      requirements.push({
+        id: "legacy-test-" + (index + 1),
+        class: inferLegacyClass(command),
+        kind: "LOCAL_COMMAND",
+        command: String(command || "").trim(),
+        legacy: true,
+      });
+    }
     return { valid: true, source: "REQUIRED_EVIDENCE", requirements };
   }
 
