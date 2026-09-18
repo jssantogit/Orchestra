@@ -40,6 +40,10 @@ jobs:
         run: |
           npm run test:dream
 
+      - name: Run Evidence Contract Tests
+        run: |
+          npm run test:evidence
+
       - name: Run Turn Economy Tests
         run: |
           npm run test:turn-economy
