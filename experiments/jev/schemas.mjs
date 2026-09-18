@@ -6,6 +6,7 @@ export const JEV_SCHEMAS = Object.freeze({
   PROJECTION: "orchestra.jev-projection.v1",
   RANKING: "orchestra.jev-ranking.v1",
   SHADOW_REPORT: "orchestra.jev-shadow-report.v1",
+  SHADOW_LABEL: "orchestra.jev-shadow-label.v1",
   DREAM_ANNOTATION: "orchestra.jev-dream-annotation.v1",
   PACKET: "orchestra.jev-counterfactual-packet.v1",
   EVALUATION: "orchestra.jev-evaluation.v1",
