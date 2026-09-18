@@ -4763,3 +4763,125 @@ test("Policy structural contract parity and semantic invariants", () => {
   }
   assert.equal(passedSemantic, semanticFixtures.length);
 });
+
+
+test("recordDecisionOutcome recovers pending-first decision publication gap before writing outcome", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-outcome-decision-gap-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const correlationKey = "corr-decision-gap";
+
+  const decisionInput = {
+    snapshot_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    decision_type: "WORKER_TIER",
+    state: { task_action: "IMPLEMENT" },
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+    conversation_id: "decision-gap-parent",
+    step_idx: 1,
+    tool_call_id: "decision-gap-call",
+    branch_ordinal: 0,
+  };
+
+  const decision = recordDecision({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    decision: decisionInput,
+  });
+  assert.equal(decision.recorded, true);
+
+  // Simulate the narrow crash window: pending rename survived, DECISION append did not.
+  writeFileSync(telemetryPath, "", "utf8");
+  assert.equal(getPendingDecision({ pendingDir, correlationKey }).ok, true);
+
+  const outcome = recordDecisionOutcome({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    outcome: {
+      result: { status: "COMPLETED" },
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+      terminal_state: "UNKNOWN",
+    },
+  });
+
+  assert.equal(outcome.recorded, true);
+  const events = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(events.length, 2);
+  assert.equal(events[0].type, "DECISION");
+  assert.equal(events[0].decision_id, decision.decision_id);
+  assert.equal(events[1].type, "DECISION_OUTCOME");
+  assert.equal(events[1].decision_id, decision.decision_id);
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".json")), false);
+  assert.equal(existsSync(join(pendingDir, correlationKey + ".consumed")), true);
+});
+
+test("Dream recorders fail closed on tampered pending decision artifact", (t) => {
+  const tempDir = mkdtempSync(join(tmpdir(), "dream-pending-tamper-"));
+  t.after(() => rmSync(tempDir, { recursive: true, force: true }));
+
+  const telemetryPath = join(tempDir, "events.jsonl");
+  const pendingDir = join(tempDir, "pending");
+  const correlationKey = "corr-pending-tamper";
+  const decisionInput = {
+    snapshot_id: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    decision_type: "WORKER_TIER",
+    state: { task_action: "IMPLEMENT" },
+    available_actions: ["FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+    conversation_id: "tamper-parent",
+    step_idx: 2,
+    tool_call_id: "tamper-call",
+    branch_ordinal: 0,
+  };
+
+  const first = recordDecision({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    decision: decisionInput,
+  });
+  assert.equal(first.recorded, true);
+
+  const pendingPath = join(pendingDir, correlationKey + ".json");
+  const pending = JSON.parse(readFileSync(pendingPath, "utf8"));
+  pending.decision_event.actor_identity = "UNKNOWN";
+  writeFileSync(pendingPath, JSON.stringify(pending, null, 2), "utf8");
+
+  const retryDecision = recordDecision({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    decision: decisionInput,
+  });
+  assert.equal(retryDecision.recorded, false);
+  assert.equal(retryDecision.reason, "PENDING_DECISION_CORRUPT");
+
+  const outcome = recordDecisionOutcome({
+    telemetryPath,
+    pendingDir,
+    correlationKey,
+    outcome: {
+      result: "SHOULD_NOT_RECORD",
+      evidence_summary: {},
+      retry_state: {},
+      cost_metrics: {},
+      terminal_state: "UNKNOWN",
+    },
+  });
+  assert.equal(outcome.recorded, false);
+  assert.equal(outcome.reason, "PENDING_DECISION_CORRUPT");
+
+  const events = readFileSync(telemetryPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(events.filter((e) => e.type === "DECISION").length, 1);
+  assert.equal(events.filter((e) => e.type === "DECISION_OUTCOME").length, 0);
+});
