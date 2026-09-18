@@ -399,6 +399,8 @@ A content-addressed cycle always includes the current baseline. Cycle state is p
 
 - Maximum designer calls per cycle: **2**.
 - Maximum candidates per call: **4**.
+- Issuing a designer packet reserves that call and assigns a content-addressed `packet_id`; repeated reads of the pending packet are idempotent.
+- The designer response must echo the pending `packet_id`. Evaluation cannot skip a pending call.
 - Call 1 may propose up to four candidate JSON policies.
 - After deterministic replay feedback, call 2 may propose up to four revisions.
 - An oversized submission consumes its designer call instead of providing a free retry.
@@ -435,7 +437,7 @@ npm run dream:policy-lab -- open --repo /path/to/project
 # Produce the sanitized packet for the tool-less flash-policy-designer.
 npm run dream:policy-lab -- packet --repo /path/to/project --cycle <cycle.json>
 
-# Submit the designer's JSON output. Input may be an array or {"candidates":[...]}.
+# Submit the designer's JSON output: {"packet_id":"packet-...","candidates":[...]}.
 npm run dream:policy-lab -- submit --repo /path/to/project --cycle <cycle.json> --candidates <candidates.json>
 
 # Run zero-model-call Exact Replay across frozen TRAIN and HOLDOUT.
