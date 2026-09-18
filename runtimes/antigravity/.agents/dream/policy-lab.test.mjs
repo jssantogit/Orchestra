@@ -231,6 +231,36 @@ test("causally descendant worlds inherit the same frozen lineage split", () => {
   assert.equal(a.bucket, b.bucket);
 });
 
+test("lineage derivation fails closed when one descendant has two independent roots", () => {
+  const rootA = sha256Canonical({ root: "A" });
+  const rootB = sha256Canonical({ root: "B" });
+  const childRoot = sha256Canonical({ root: "shared-child" });
+  const parentA = {
+    world_manifest_hash: sha256Canonical({ world: "parent-A" }),
+    root_snapshot_id: rootA,
+    decisions: [{ snapshot_id: childRoot }],
+    outcomes: [],
+  };
+  const parentB = {
+    world_manifest_hash: sha256Canonical({ world: "parent-B" }),
+    root_snapshot_id: rootB,
+    decisions: [{ snapshot_id: childRoot }],
+    outcomes: [],
+  };
+  const child = {
+    world_manifest_hash: sha256Canonical({ world: "ambiguous-child" }),
+    root_snapshot_id: childRoot,
+    decisions: [{ snapshot_id: childRoot }],
+    outcomes: [],
+  };
+
+  const assignments = deriveLineageAssignments([parentA, child, parentB]);
+  const resolved = assignments.get(child.world_manifest_hash);
+  assert.equal(resolved.ambiguous, true);
+  assert.equal(resolved.lineage_root_snapshot_id, null);
+  assert.deepEqual(resolved.terminal_roots, [rootA, rootB].sort());
+});
+
 test("PolicyDevelopmentDataset is deterministic, aggregated, and excludes raw history", () => {
   const f = fixture();
   try {
