@@ -2987,3 +2987,102 @@ test("governance: factual child descriptor conflicts fail closed", () => {
     spawnStepIndex: 8,
   }, pending), false, "Spawn-step mismatch must remain fail-closed");
 });
+
+
+test("governance: binding loss cannot promote a child conversation to orchestrator", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "known-main-conversation",
+    }, null, 2), "utf8");
+
+    execFileSync("node", [preInvocationScript], {
+      input: JSON.stringify({
+        conversationId: "unexpected-child-conversation",
+        modelName: "gemini-3.8-flash-high",
+      }),
+      encoding: "utf8",
+    });
+
+    const stateAfterInvocation = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(stateAfterInvocation.conversationId, "known-main-conversation");
+    assert.equal(stateAfterInvocation.identityBootstrapRejected?.reason, "KNOWN_MAIN_MISMATCH");
+
+    const bindingsPath = ".agents/state/role-bindings.json";
+    if (existsSync(bindingsPath)) {
+      const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+      assert.notEqual(bindings.mainConversationId, "unexpected-child-conversation");
+      assert.equal(bindings.bindings?.["unexpected-child-conversation"], undefined);
+    }
+
+    const childControlPlaneWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unexpected-child-conversation",
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: ".agents/state/child-escalation.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(childControlPlaneWrite.decision, "deny");
+    assert.match(childControlPlaneWrite.reason, /ROLE_IDENTITY_UNRESOLVED/);
+
+    const mainControlPlaneWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "known-main-conversation",
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: ".agents/state/main-control-plane.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(mainControlPlaneWrite.decision, "allow");
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: post-tool telemetry does not attribute unbound child writes to orchestrator", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "telemetry-main",
+    }, null, 2), "utf8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "telemetry-unbound-child",
+        toolName: "write_to_file",
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: "src/unbound-child.js" },
+        },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.orchestratorWorkspaceWrites || 0, 0);
+    assert.equal(state.unknownWorkspaceWrites, 1);
+    assert.ok(state.mutations.some((m) =>
+      m.path === "src/unbound-child.js" &&
+      m.actorRole === "UNKNOWN" &&
+      m.confidence === "LOW"
+    ));
+  } finally {
+    cleanState();
+  }
+});
