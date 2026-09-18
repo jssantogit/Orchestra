@@ -119,8 +119,8 @@ export function classifyMechanicalFastPath({
       break;
     }
     const paths = requirementPaths(requirement);
-    if (paths.some(isSensitivePath)) {
-      reasons.push("SENSITIVE_EVIDENCE_PATH");
+    if (paths.some((path) => path.startsWith("../") || path.startsWith("/"))) {
+      reasons.push("EVIDENCE_PATH_OUTSIDE_WORKSPACE");
       break;
     }
   }
