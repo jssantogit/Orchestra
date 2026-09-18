@@ -148,6 +148,7 @@ JS_FILES=(
   "runtimes/antigravity/.agents/dream/canary-rollout.mjs"
   "runtimes/antigravity/.agents/dream/canary-cli.mjs"
   "runtimes/antigravity/.agents/dream/policy-store.mjs"
+  "runtimes/antigravity/.agents/dream/exploration-governance.mjs"
   "runtimes/antigravity/.agents/dream/full-exploration.mjs"
   "runtimes/antigravity/.agents/dream/full-exploration-cli.mjs"
   "scripts/contamination-check.mjs"
