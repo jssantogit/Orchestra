@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
+import { sha256Canonical } from "./canonical.mjs";
 
 /**
  * Builds a deterministic safe filesystem key string for correlating decisions with outcomes.
@@ -44,7 +45,7 @@ export function dreamCorrelationKey({
   return `dec-h-${digest}`;
 }
 
-function findRecordedDecision(telemetryPath, decisionId) {
+export function findRecordedDecision(telemetryPath, decisionId) {
   try {
     if (!telemetryPath || !decisionId || !existsSync(telemetryPath)) return null;
     const lines = readFileSync(telemetryPath, "utf8").split("\n");
@@ -72,6 +73,61 @@ function samePendingDecisionIntent(existing, next) {
     "branch_ordinal",
   ];
   return fields.every((field) => (existing[field] ?? null) === (next[field] ?? null));
+}
+
+export function validatePendingDecisionArtifact(pending) {
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) {
+    return { valid: false, errors: ["pending decision must be an object"] };
+  }
+
+  const event = pending.decision_event;
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return { valid: false, errors: ["pending decision_event missing"] };
+  }
+
+  const validation = validateDreamRecord(DREAM_SCHEMAS.DECISION, event);
+  const errors = [...validation.errors];
+
+  const { event_hash: eventHash, ...base } = event;
+  let recomputedHash = null;
+  try {
+    recomputedHash = sha256Canonical(base);
+  } catch (err) {
+    errors.push(`pending decision_event hash recomputation failed: ${err.message}`);
+  }
+
+  if (!eventHash || recomputedHash !== eventHash) {
+    errors.push("pending decision_event event_hash mismatch");
+  }
+  if (pending.event_hash !== eventHash) {
+    errors.push("pending event_hash does not match decision_event");
+  }
+
+  const mirroredFields = [
+    "decision_id",
+    "snapshot_id",
+    "decision_type",
+    "chosen_action",
+  ];
+  for (const field of mirroredFields) {
+    if ((pending[field] ?? null) !== (event[field] ?? null)) {
+      errors.push(`pending field "${field}" does not match decision_event`);
+    }
+  }
+
+  const optionalMirrors = [
+    "conversation_id",
+    "step_idx",
+    "tool_call_id",
+    "branch_ordinal",
+  ];
+  for (const field of optionalMirrors) {
+    if ((pending[field] ?? null) !== (event[field] ?? null)) {
+      errors.push(`pending correlation field "${field}" does not match decision_event`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors, event };
 }
 
 
@@ -214,6 +270,18 @@ export function recordDecision({
         let existingPending = null;
         try { existingPending = JSON.parse(readFileSync(targetFile, "utf8")); } catch {}
 
+        const existingIntegrity = validatePendingDecisionArtifact(existingPending);
+        if (!existingIntegrity.valid) {
+          return {
+            recorded: false,
+            reason: "PENDING_DECISION_CORRUPT",
+            error_code: "ERR_PENDING_DECISION_CORRUPT",
+            details: existingIntegrity.errors,
+            decision_id: existingPending?.decision_id || null,
+            correlationKey: effectiveCorrelationKey,
+          };
+        }
+
         if (!samePendingDecisionIntent(existingPending, pendingData)) {
           return {
             recorded: false,
@@ -226,6 +294,24 @@ export function recordDecision({
 
         const existingDecisionId = existingPending?.decision_id || null;
         const alreadyPublished = findRecordedDecision(resolvedTelemetryPath, existingDecisionId);
+        if (alreadyPublished) {
+          const publishedIntegrity = validatePendingDecisionArtifact({
+            ...existingPending,
+            event_hash: alreadyPublished.event_hash,
+            decision_event: alreadyPublished,
+          });
+          if (!publishedIntegrity.valid || alreadyPublished.event_hash !== existingPending.event_hash) {
+            return {
+              recorded: false,
+              reason: "PUBLISHED_DECISION_MISMATCH",
+              error_code: "ERR_PUBLISHED_DECISION_MISMATCH",
+              details: publishedIntegrity.errors,
+              decision_id: existingDecisionId,
+              correlationKey: effectiveCorrelationKey,
+            };
+          }
+        }
+
         if (!alreadyPublished && existingPending?.decision_event) {
           // Crash recovery for the only vulnerable interval in the pending-first protocol:
           // pending correlation became durable but the DECISION append did not complete.
