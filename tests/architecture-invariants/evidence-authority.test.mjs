@@ -14,6 +14,7 @@ function read(path) {
 const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs");
 const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
+const federation = read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
 const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
 
@@ -68,4 +69,30 @@ test("ARCH-EVIDENCE-06: structured requiredEvidence survives delegation and can 
   assert.match(preTool, /requiredEvidence:/);
   assert.match(preTool, /extracted\.hasTestsRequired\s*\?\s*extracted\.testsRequired\s*:\s*baseTestsRequired/);
   assert.match(preTool, /extracted\.hasRequiredEvidence\s*\?\s*extracted\.requiredEvidence\s*:\s*baseRequiredEvidence/);
+});
+
+
+test("ARCH-EVIDENCE-07: delegated evidence federation requires factual identity and task binding", () => {
+  assert.match(federation, /confidence !== "HIGH"/);
+  assert.match(federation, /source !== "RUNTIME_IDENTITY"/);
+  assert.match(federation, /bindingTaskMatches/);
+  assert.match(federation, /bindingAttemptMatches/);
+  assert.match(federation, /ORCHESTRA_PARENT_EVIDENCE_FEDERATION/);
+  assert.match(contract, /TASK_ID_MISMATCH/);
+  assert.match(contract, /COMMIT_SHA_MISMATCH/);
+});
+
+test("ARCH-EVIDENCE-08: local evidence producers are explicit and reviewer/model claims are excluded", () => {
+  assert.match(contract, /delegatedValidation/);
+  assert.match(contract, /parentValidation/);
+  assert.match(contract, /"VALIDATION"/);
+  assert.equal(/REVIEWER[^\n]*delegatedValidation/.test(contract), false);
+  assert.equal(/MODEL_CLAIM[^\n]*parentValidation/.test(contract), false);
+});
+
+test("ARCH-EVIDENCE-09: distinct command executions are merged by execution identity, not command text", () => {
+  assert.match(federation, /executionId/);
+  assert.match(federation, /transcriptEvidenceId/);
+  assert.match(federation, /exactEvidenceIdentity/);
+  assert.equal(federation.includes("command + type + scope"), false);
 });

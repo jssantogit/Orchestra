@@ -20,6 +20,6 @@
     "dream:policy-lab": "node runtimes/antigravity/.agents/dream/policy-lab-cli.mjs",
     "dream:shadow": "node runtimes/antigravity/.agents/dream/shadow-cli.mjs",
     "dream:canary": "node runtimes/antigravity/.agents/dream/canary-cli.mjs",
-    "test:evidence": "node --test tests/evidence/first-class-evidence.test.mjs"
+    "test:evidence": "node --test tests/evidence/first-class-evidence.test.mjs tests/evidence/cross-agent-evidence.test.mjs"
   }
 }

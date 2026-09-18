@@ -1521,8 +1521,11 @@ function main() {
         const roleStr = String(sub.Role || typeName).toLowerCase();
         const isReviewer = roleStr.includes("reviewer") || typeName === "flash-reviewer";
         const isInvestigator = roleStr === "investigator" || roleStr.includes("investig");
+        const isValidator = roleStr === "validator" || roleStr.includes("validation");
         const subRole = isReviewer ? "REVIEWER" : "WORKER";
-        const delegationKind = isInvestigator ? "INVESTIGATION" : (isReviewer ? "REVIEW" : "WORK");
+        const delegationKind = isInvestigator
+          ? "INVESTIGATION"
+          : (isReviewer ? "REVIEW" : (isValidator ? "VALIDATION" : "WORK"));
         let profile = typeName;
         if (!profile || profile.toLowerCase() === "worker") {
           const normModel = String(sub.Model || "").toLowerCase();

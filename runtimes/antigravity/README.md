@@ -86,7 +86,9 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
    - `REMOTE_CI` with provider `GITHUB_ACTIONS` is queried by Orchestra and must match the factual origin repository, workflow, current HEAD/ref, and every required job. A model saying "CI green" is never evidence.
    - Remote CI still running enters `CI_WAIT`; success advances to acceptance, failure enters bounded Delta Retry / `BLOCKED`, and stale runs are rejected.
    - Each mutation increments `mutationSeq`. Evidence bound to an older candidate is stale and cannot satisfy acceptance.
-   - A WORK child that owes a local command cannot terminate until the factual command result is present in the Ledger.
+   - A WORK/VALIDATION child that owes a local command cannot terminate until the factual command result is present in the Ledger.
+   - Delegated local evidence is promoted into parent acceptance only after factual `RUNTIME_IDENTITY` correlation. The federated record carries task, attempt, mutation, producer/role, parent conversation, and candidate-commit binding; reviewer claims and model text cannot satisfy this path.
+   - Distinct factual executions remain distinct Ledger records even when they run the same command; command text is not an evidence identity.
 
 4. **Two-Key Critical Review**:
    - High-risk changes (`criticality == CRITICAL`) require approval from two independent Flash High reviewers (`flash-reviewer` A and B). Any disagreement halts to `HUMAN_GATE`.

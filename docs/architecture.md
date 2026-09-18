@@ -89,7 +89,8 @@ INTAKE ──> CLASSIFIED ──> PLANNED ──> DELEGATED ──> EXECUTING �
 - **Typed Evidence Contracts**: Scope Contracts may declare `requiredEvidence` independently of `testsRequired`. Acceptance consumes typed factual proofs rather than assuming every task must execute a local test.
 - **Provider-Verified Remote CI**: GitHub Actions evidence is collected by Orchestra itself and bound to the factual origin repository, workflow, current HEAD/ref, required jobs, retry attempt, and mutation state. Model text or arbitrary URLs never satisfy the gate.
 - **Runtime Mechanical Facts**: Deterministic facts such as `FILE_EXISTS`, `GIT_IGNORED`, `GIT_CLEAN`, and `EXPECTED_FILE_MODIFIED` can be collected directly by the runtime instead of forcing shell-command ceremony on a worker.
-- **Child Evidence Lock**: A factual WORK child cannot terminate while it still owes an actionable local command from its Scope Contract. Runtime-owned facts and remote CI remain parent/runtime responsibilities.
+- **Child Evidence Lock**: A factual WORK/VALIDATION child cannot terminate while it still owes an actionable local command from its Scope Contract. Runtime-owned facts and remote CI remain parent/runtime responsibilities.
+- **Cross-Agent Evidence Federation**: Local evidence produced by a delegated child is provisional until the runtime proves that child's exact identity. Once factual, Orchestra federates the record into the parent task ledger while binding producer, task, retry attempt, mutation sequence, parent identity, and candidate commit. Evidence from another task/attempt/commit remains stale and cannot satisfy acceptance.
 
 ---
 
