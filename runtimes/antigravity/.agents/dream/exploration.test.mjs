@@ -42,6 +42,7 @@ function fixture() {
   }, null, 2), "utf8");
   writeFileSync(join(repo, ".agents", "hooks", "pre-tool-enforce.mjs"), "// fixture baseline hook\n", "utf8");
   writeFileSync(join(repo, ".agents", "hooks", "pre-tool-exploration-guard.mjs"), "// fixture exploration wrapper\n", "utf8");
+  writeFileSync(join(repo, ".agents", "hooks", "post-invocation-exploration-guard.mjs"), "// fixture exploration budget guard\n", "utf8");
   const state = {
     task_action: "IMPLEMENT",
     task_domain: "CODE",
@@ -263,6 +264,10 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     );
     assert.equal(prepared.session.hook_overlay.mode, "EXPLORATION_PRETOOL_WRAPPER");
     assert.match(prepared.session.hook_overlay.overlay_hash, /^sha256:/);
+    assert.equal(
+      siblingHooks["exploration-budget-guard"].PostInvocation[0].command,
+      "node hooks/post-invocation-exploration-guard.mjs",
+    );
 
     const overlay = resolveExplorationPolicyOverlay({
       repoRoot: branch,
