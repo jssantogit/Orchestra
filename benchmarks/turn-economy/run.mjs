@@ -1137,18 +1137,20 @@ export function extractChildTranscriptEvidence(childTranscriptFile, sub, targetD
 
 export function extractReviewerVerdict(text = "") {
   const norm = String(text || "");
-  const m = norm.match(/(?:VERDICT|DECISION|RECOMMENDATION)\s*[:=\-]?\s*[`*]*([A-Z_]+)[`*]*/i);
-  if (m) {
-    const raw = m[1].toUpperCase();
-    if (["ACCEPT", "ACCEPTED", "PASS", "PASSED"].includes(raw)) return "ACCEPT";
-    if (["ACCEPT_WITH_NOTES", "ACCEPT_NOTES", "PASS_WITH_NOTES"].includes(raw)) return "ACCEPT_WITH_NOTES";
-    if (["CHANGES_REQUIRED", "CHANGE_REQUIRED", "REWORK", "RETRY"].includes(raw)) return "CHANGES_REQUIRED";
-    if (["BLOCK", "BLOCKED", "REJECT", "REJECTED"].includes(raw)) return "BLOCK";
-  }
-  if (/\bACCEPT_WITH_NOTES\b/i.test(norm)) return "ACCEPT_WITH_NOTES";
-  if (/\bCHANGES_REQUIRED\b/i.test(norm)) return "CHANGES_REQUIRED";
-  if (/\b(?:VERDICT|DECISION)[\s\S]{0,40}\bACCEPT\b/i.test(norm) || /\bVERDICT\s*:\s*ACCEPT\b/i.test(norm)) return "ACCEPT";
-  if (/\bBLOCK\b/i.test(norm)) return "BLOCK";
+  const explicit = norm.match(/(?:^|\n)\s*(?:VERDICT|DECISION|RECOMMENDATION)\s*[:=\-]\s*([^\r\n]+)/im);
+  if (!explicit) return null;
+
+  const raw = explicit[1]
+    .replace(/[`*_]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (/^(?:ACCEPT_WITH_NOTES|ACCEPT_NOTES|PASS_WITH_NOTES)(?:_|$)/.test(raw)) return "ACCEPT_WITH_NOTES";
+  if (/^(?:CHANGES_REQUIRED|CHANGE_REQUIRED|REWORK|RETRY)(?:_|$)/.test(raw)) return "CHANGES_REQUIRED";
+  if (/^(?:BLOCK|BLOCKED|REJECT|REJECTED)(?:_|$)/.test(raw)) return "BLOCK";
+  if (/^(?:NOT_ACCEPT|DO_NOT_ACCEPT|NO_ACCEPT|NOT_APPROVED|DO_NOT_APPROVE)(?:_|$)/.test(raw)) return null;
+  if (/^(?:ACCEPT|ACCEPTED|PASS|PASSED)(?:_|$)/.test(raw)) return "ACCEPT";
   return null;
 }
 
