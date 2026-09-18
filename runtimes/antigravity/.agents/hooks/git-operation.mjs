@@ -138,7 +138,7 @@ export function executeGitOperation(options = {}) {
 
   // 1. STATUS
   if (action === "status") {
-    const res = runGit(["status", "--porcelain=v1"], { cwd: gitCwd });
+    const res = runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd: gitCwd });
     const parsed = parseGitStatus(res.stdout);
     const compactOutput = [
       "GIT_OPERATION_SUCCESS",
@@ -185,7 +185,7 @@ export function executeGitOperation(options = {}) {
   // 3. COMMIT or COMMIT_PUSH
   if (action === "commit" || action === "commit_push") {
     // Check compact git status first
-    const statusRes = runGit(["status", "--porcelain=v1"], { cwd: gitCwd });
+    const statusRes = runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd: gitCwd });
     const parsedStatus = parseGitStatus(statusRes.stdout);
 
     // Idempotency check: if transaction already committed and clean, or commitCreated: true
@@ -339,7 +339,7 @@ export function executeGitOperation(options = {}) {
       }
 
       // Check if anything is staged for commit
-      const postStageStatusRes = runGit(["status", "--porcelain=v1"], { cwd: gitCwd });
+      const postStageStatusRes = runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd: gitCwd });
       const postStageParsed = parseGitStatus(postStageStatusRes.stdout);
       if (postStageParsed.staged.length === 0) {
         return {
