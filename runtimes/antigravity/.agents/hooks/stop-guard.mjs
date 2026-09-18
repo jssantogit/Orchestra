@@ -960,11 +960,31 @@ function finalizeDelegatedDecisionFromStop(activeState, payload, repoRoot, roleB
 
 function main() {
   const rawInput = readStdin();
-  let payload = {};
-  if (rawInput.trim()) {
-    try {
-      payload = JSON.parse(rawInput);
-    } catch {}
+  if (!rawInput.trim()) {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "INVALID_STOP_PAYLOAD: Stop hook received no runtime payload."
+    }));
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawInput);
+  } catch {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "MALFORMED_STOP_PAYLOAD: Stop hook payload is not valid JSON."
+    }));
+    return;
+  }
+
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "INVALID_STOP_PAYLOAD: Stop hook payload must be a JSON object."
+    }));
+    return;
   }
 
   const { repoRoot, statePath, telemetryPath } = getWorkspacePaths(payload);
