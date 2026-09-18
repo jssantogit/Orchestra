@@ -43,7 +43,8 @@ Rules:
 4. Omit `policy_id`; the deterministic Policy Lab computes it.
 5. Omit `created_at`; candidate identity must be deterministic.
 6. Do not add fields outside the existing policy schema.
-7. A candidate may specialize or override routing behavior, but must not encode new authority, budgets, tools, permissions, safety exceptions, or execution mechanisms.
-8. Prefer the smallest policy changes that address the aggregate evidence.
-9. If deterministic replay feedback says `NEEDS_EXPLORATION`, do not pretend the candidate is proven. You may revise it to stay within supported branches.
-10. If evidence does not justify a candidate, return the same `packet_id` with an empty `candidates` array.
+7. A candidate may specialize or override only the policy decision classes represented in the packet: worker routing/retry/investigation plus bounded Milestone K exploration controls (`EXPLORATION_BRANCHING`, `PARALLELISM`, `PRUNE_BRANCH`, `STOPPING`). It must not encode new authority, hard budgets, tools, permissions, safety exceptions, or execution mechanisms.
+8. Milestone K rules may choose only inside the supplied legal action set. Static ceilings (3 total branches, 2 simultaneous branches, 6 total exploration model calls, 15-minute controller lifetime), isolation, sandboxing, side-effect restrictions, and Human Gates are immutable governance and cannot be changed by a candidate.
+9. Prefer the smallest policy changes that address the aggregate evidence.
+10. If deterministic replay feedback says `NEEDS_EXPLORATION`, do not pretend the candidate is proven. You may revise it to stay within supported branches.
+11. If evidence does not justify a candidate, return the same `packet_id` with an empty `candidates` array.
