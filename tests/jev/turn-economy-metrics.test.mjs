@@ -26,6 +26,7 @@ test("Turn Economy aggregates Jev shadow telemetry without claiming realized tok
     const events = [
       {
         schema: "orchestra.jev-shadow-report.v1",
+        shadow_id: "s1",
         jev_calls: 1,
         jev_latency_ms: 20,
         jev_input_tokens: 100,
@@ -36,6 +37,11 @@ test("Turn Economy aggregates Jev shadow telemetry without claiming realized tok
         potential_context_reduction: 0.6,
         redundant_tool_candidates: 1,
         rehydration_count: 0,
+        fallback_identity_failures: 0,
+      },
+      {
+        schema: "orchestra.jev-shadow-label.v1",
+        shadow_id: "s1",
         false_prune_risk: 0,
         future_use_recall_at_k: 1,
         future_use_precision_at_k: 0.75,
@@ -43,10 +49,10 @@ test("Turn Economy aggregates Jev shadow telemetry without claiming realized tok
         false_low_relevance: 0,
         tool_reexecution_delta: 0,
         acceptance_delta: 0,
-        fallback_identity_failures: 0,
       },
       {
         schema: "orchestra.jev-shadow-report.v1",
+        shadow_id: "s2",
         jev_calls: 1,
         jev_latency_ms: 30,
         jev_input_tokens: 120,
@@ -57,6 +63,11 @@ test("Turn Economy aggregates Jev shadow telemetry without claiming realized tok
         potential_context_reduction: 0.5,
         redundant_tool_candidates: 2,
         rehydration_count: 0,
+        fallback_identity_failures: 0,
+      },
+      {
+        schema: "orchestra.jev-shadow-label.v1",
+        shadow_id: "s2",
         false_prune_risk: 0.1,
         future_use_recall_at_k: 0.8,
         future_use_precision_at_k: 0.8,
@@ -64,7 +75,6 @@ test("Turn Economy aggregates Jev shadow telemetry without claiming realized tok
         false_low_relevance: 0.1,
         tool_reexecution_delta: 0,
         acceptance_delta: 0,
-        fallback_identity_failures: 0,
       },
     ];
     writeFileSync(resolve(dir, "jev-shadow.jsonl"), events.map(JSON.stringify).join("\n")+"\n");
