@@ -641,7 +641,7 @@ export function submitDesignerCandidates({
   const loadedCycle = readCycle(repoRoot, cyclePath);
   if (!loadedCycle.ok) return { accepted: false, reason: loadedCycle.reason };
   const cycle = loadedCycle.cycle;
-  if (cycle.status !== "OPEN") {
+  if (!["OPEN", "EVALUATED"].includes(cycle.status)) {
     return { accepted: false, reason: "CYCLE_NOT_OPEN" };
   }
   if (cycle.designer_calls.length >= POLICY_LAB_LIMITS.max_designer_calls) {
@@ -656,6 +656,7 @@ export function submitDesignerCandidates({
       rejected_count: candidates.length,
       rejection_reason: "TOO_MANY_CANDIDATES_IN_CALL",
     });
+    cycle.status = "OPEN";
     const stored = writeCycle(cyclePath, cycle);
     return {
       accepted: false,
@@ -691,6 +692,7 @@ export function submitDesignerCandidates({
     accepted_policy_ids: accepted.map((x) => x.policy_id).sort(),
     rejected_count: rejected.length,
   });
+  cycle.status = "OPEN";
   const storedCycle = writeCycle(cyclePath, cycle);
 
   return {
