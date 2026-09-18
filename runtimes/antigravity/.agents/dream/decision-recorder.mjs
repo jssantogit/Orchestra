@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
@@ -14,17 +14,34 @@ import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.
  * }} params
  * @returns {string}
  */
+const MAX_CORRELATION_KEY_BYTES = 220;
+const SAFE_CORRELATION_KEY_RE = /^[A-Za-z0-9._~%!'()*-]+$/;
+
+export function isSafeDreamCorrelationKey(value) {
+  if (typeof value !== "string" || value.length === 0) return false;
+  if (Buffer.byteLength(value, "utf8") > MAX_CORRELATION_KEY_BYTES) return false;
+  return SAFE_CORRELATION_KEY_RE.test(value);
+}
+
+function encodeCorrelationComponent(value) {
+  return encodeURIComponent(String(value ?? ""));
+}
+
 export function dreamCorrelationKey({
   conversationId = "",
   stepIdx = 0,
   toolCallId = "",
   branchOrdinal = 0,
 } = {}) {
-  const encConv = encodeURIComponent(String(conversationId ?? ""));
-  const sIdx = String(stepIdx ?? 0);
-  const encTool = encodeURIComponent(String(toolCallId ?? ""));
-  const bOrd = String(branchOrdinal ?? 0);
-  return `dec-${encConv}_${sIdx}_${encTool}_${bOrd}`;
+  const raw = `dec-${encodeCorrelationComponent(conversationId)}_${encodeCorrelationComponent(stepIdx)}_${encodeCorrelationComponent(toolCallId)}_${encodeCorrelationComponent(branchOrdinal)}`;
+  if (Buffer.byteLength(raw, "utf8") <= MAX_CORRELATION_KEY_BYTES) {
+    return raw;
+  }
+
+  // Keep the key filesystem-safe and deterministic even for unexpectedly large
+  // runtime identifiers without truncation collisions.
+  const digest = createHash("sha256").update(raw, "utf8").digest("hex");
+  return `dec-h-${digest}`;
 }
 
 function findRecordedDecision(telemetryPath, decisionId) {
@@ -42,6 +59,21 @@ function findRecordedDecision(telemetryPath, decisionId) {
   } catch {}
   return null;
 }
+
+function samePendingDecisionIntent(existing, next) {
+  if (!existing || !next) return false;
+  const fields = [
+    "snapshot_id",
+    "decision_type",
+    "chosen_action",
+    "conversation_id",
+    "step_idx",
+    "tool_call_id",
+    "branch_ordinal",
+  ];
+  return fields.every((field) => (existing[field] ?? null) === (next[field] ?? null));
+}
+
 
 /**
  * Records a pre-action DECISION event into telemetry and atomically persists a pending correlation file.
@@ -117,6 +149,15 @@ export function recordDecision({
           })
         : decision_id);
 
+    if (!isSafeDreamCorrelationKey(effectiveCorrelationKey)) {
+      return {
+        recorded: false,
+        reason: "VALIDATION_FAILED",
+        error_code: "ERR_UNSAFE_CORRELATION_KEY",
+        details: ["correlationKey must be a safe single filesystem segment <= 220 UTF-8 bytes"],
+      };
+    }
+
     const event = createDreamEvent("DECISION", decisionRecord);
 
     const resolvedTelemetryPath =
@@ -172,6 +213,17 @@ export function recordDecision({
       if (existsSync(targetFile)) {
         let existingPending = null;
         try { existingPending = JSON.parse(readFileSync(targetFile, "utf8")); } catch {}
+
+        if (!samePendingDecisionIntent(existingPending, pendingData)) {
+          return {
+            recorded: false,
+            reason: "CORRELATION_CONFLICT",
+            error_code: "ERR_CORRELATION_CONFLICT",
+            decision_id: existingPending?.decision_id || null,
+            correlationKey: effectiveCorrelationKey,
+          };
+        }
+
         const existingDecisionId = existingPending?.decision_id || null;
         const alreadyPublished = findRecordedDecision(resolvedTelemetryPath, existingDecisionId);
         if (!alreadyPublished && existingPending?.decision_event) {
@@ -187,10 +239,25 @@ export function recordDecision({
             correlationKey: effectiveCorrelationKey,
           };
         }
+
+        if (alreadyPublished) {
+          // Idempotent hook retry after the durable decision but before surrounding
+          // control-plane state was persisted. Reuse the exact pending decision
+          // without publishing a duplicate event.
+          return {
+            recorded: true,
+            reused: true,
+            decision_id: existingPending.decision_id,
+            event_hash: existingPending.event_hash,
+            correlationKey: effectiveCorrelationKey,
+          };
+        }
+
         return {
           recorded: false,
-          reason: "DECISION_ALREADY_PENDING",
-          error_code: "ERR_CORRELATION_ALREADY_PENDING",
+          reason: "PENDING_DECISION_CORRUPT",
+          error_code: "ERR_PENDING_DECISION_CORRUPT",
+          decision_id: existingPending?.decision_id || null,
           correlationKey: effectiveCorrelationKey,
         };
       }
