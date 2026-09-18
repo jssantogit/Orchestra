@@ -3655,6 +3655,41 @@ test("governance: two factual reviewer approvals unlock only the exact reviewed 
     assert.notEqual(state.state, "DONE");
     assert.equal(state.twoKeyReviewGate.satisfied, false);
     assert.equal(state.twoKeyReviewGate.reason, "TWO_KEY_REVIEW_STALE");
+
+    // A retry attempt invalidates the same approvals even when HEAD and mutationSeq did not change.
+    const retryState = {
+      ...baseState,
+      state: "EVIDENCE_READY",
+      acceptanceState: "PENDING",
+      attempt: 1,
+      mutationSeq: 0,
+      workerCompletionClaimIdentity: {
+        ...baseState.workerCompletionClaimIdentity,
+        attempt: 1,
+      },
+      evidenceLedger: [{
+        executionId: "two-key-worker-evidence-attempt-1",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        attempt: 1,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        timestamp: new Date().toISOString(),
+      }],
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(retryState, null, 2), "utf8");
+
+    const retryWithOldReviews = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "two-key-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(retryWithOldReviews.decision, "continue");
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.twoKeyReviewGate.satisfied, false);
+    assert.equal(state.twoKeyReviewGate.reason, "TWO_KEY_REVIEW_STALE");
+    assert.equal(state.twoKeyReviewGate.candidateAttempt, undefined);
   } finally {
     cleanState();
   }
