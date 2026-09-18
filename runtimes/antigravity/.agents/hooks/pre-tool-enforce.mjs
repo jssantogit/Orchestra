@@ -921,6 +921,7 @@ function main() {
   const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot, roleBindingsPath);
   const activeRole = actor.role;
   const actorDelegationKind = actor.delegationKind || null;
+  const actorIdentityIsProvisional = actor.source === "HOOK_PAYLOAD_CORRELATION";
   const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
@@ -1840,6 +1841,13 @@ function main() {
         return;
       }
 
+      if (actorIdentityIsProvisional) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "ROLE_IDENTITY_PROVISIONAL: Hook payload correlation may apply restrictive role policy but cannot grant workspace mutation authority. Wait for factual runtime child identity."
+        }));
+        return;
+      }
 
       if (activeContract) {
         const allowed = Array.isArray(activeContract.allowedPaths) ? activeContract.allowedPaths : [];
@@ -1945,6 +1953,15 @@ function main() {
       console.log(JSON.stringify({
         decision: "deny",
         reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Workspace mutations are prohibited for unresolved roles."
+      }));
+      return;
+    }
+
+    // Provisional hook metadata can restrict an actor, but must never grant write authority.
+    if (isWorkerRole(activeRole) && actorIdentityIsProvisional) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "ROLE_IDENTITY_PROVISIONAL: Worker mutation requires factual runtime child identity. Hook payload correlation is not authorization to write."
       }));
       return;
     }
