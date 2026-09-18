@@ -23,6 +23,35 @@ function cleanDreamTestState() {
   try { rmSync("scratch", { recursive: true, force: true }); } catch {}
 }
 
+function seedDreamFactualWorker(conversationId, parentConversationId = "dream-test-parent", profile = "flash-medium-worker") {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: parentConversationId,
+    bindings: {
+      [parentConversationId]: {
+        conversationId: parentConversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      [conversationId]: {
+        conversationId,
+        role: "WORKER",
+        profile,
+        parentConversationId,
+        delegationKind: "WORK",
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+        factualIdentityAt: new Date().toISOString(),
+        consumed: true,
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf-8");
+}
+
 test("Task 5 pre-tool: existing invoke_subagent allow fixtures return byte-compatible decision without unexpected fields", () => {
   cleanDreamTestState();
   try {
@@ -624,6 +653,7 @@ test("Task 3: INVESTIGATION_STRATEGY congruence (IMPLEMENT_DIRECT allows and rec
       mutationSeq: 0,
       postInvestigation: false,
     }, null, 2), "utf-8");
+    seedDreamFactualWorker("task3-inv-direct-conv");
 
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       contractId: "contract-inv-direct",
@@ -736,6 +766,7 @@ test("Task 3: INVESTIGATION_STRATEGY blocked mismatch (INVESTIGATE_FIRST blocks 
       mutationSeq: 0,
       postInvestigation: false,
     }, null, 2), "utf-8");
+    seedDreamFactualWorker("task3-inv-block-conv");
 
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       contractId: "contract-inv-gate",
