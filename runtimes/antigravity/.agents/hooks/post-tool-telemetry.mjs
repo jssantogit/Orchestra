@@ -484,7 +484,7 @@ function main() {
       }
     }
 
-    const nativeTools = ["view_file", "grep_search", "find_by_name", "replace_file_content", "write_to_file", "list_dir", "ask_question"];
+    const nativeTools = ["view_file", "grep_search", "find_by_name", "replace_file_content", "write_to_file", "edit_file", "create_file", "list_dir", "ask_question"];
     if (nativeTools.includes(toolName)) {
       activeState.native_tool_calls = (activeState.native_tool_calls || 0) + 1;
     }
@@ -515,11 +515,11 @@ function main() {
     } else if (toolName === "list_dir") {
       activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
-    } else if (toolName === "replace_file_content" || toolName === "write_to_file") {
+    } else if (["replace_file_content", "write_to_file", "edit_file", "create_file"].includes(toolName)) {
       activeState.write_tool_calls = (activeState.write_tool_calls || 0) + 1;
       activeState.toolMix.native_edit_calls = (activeState.toolMix.native_edit_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
-      const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || null;
+      const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.FilePath || toolArgs.filePath || toolArgs.path || null;
       if (rawTarget) {
         const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
         const isCP = isControlPlanePath(relTarget);
@@ -536,7 +536,7 @@ function main() {
         }
         recordMutation(activeState, {
           paths: [relTarget],
-          type: toolName === "write_to_file" ? "CREATE" : "EDIT",
+          type: (toolName === "write_to_file" || toolName === "create_file") ? "CREATE" : "EDIT",
           tool: toolName,
           actorRole: actor.role,
           actorId: actor.actorId || conversationId || null,
@@ -892,8 +892,7 @@ function main() {
     }
 
     // Sequence mutation tracking: before first mutation vs after last mutation
-    const isMutationStep = toolName === "write_to_file"
-      || toolName === "replace_file_content"
+    const isMutationStep = ["write_to_file", "replace_file_content", "edit_file", "create_file"].includes(toolName)
       || (shellMutation && shellMutation.isMutation);
 
     if (!activeState.first_mutation_occurred) {
