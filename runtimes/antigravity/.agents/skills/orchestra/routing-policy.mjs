@@ -3862,11 +3862,11 @@ export function verifyWorkerValidation(activeState = {}) {
             evidence: ev,
           };
         }
-        if (ev.confidence === "LOW") {
+        if (ev.confidence !== "HIGH") {
           return {
             verified: false,
             fresh: false,
-            reason: "LOW_CONFIDENCE: validation evidence has LOW actor attribution confidence",
+            reason: "IDENTITY_NOT_FACTUAL: validation evidence requires HIGH actor attribution confidence",
             evidence: ev,
           };
         }
