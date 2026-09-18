@@ -741,7 +741,19 @@ function main() {
     || activeState.investigationInFlight?.conversationId
     || activeState.investigationInFlight?.conversation_id
     || null;
-  syncChildEvidence(activeState, investigationParentConvId || convId, { repoRoot, roleBindings });
+  const factualParentConvId = investigationParentConvId
+    || payload.parentConversationId
+    || (
+      convId &&
+      roleBindings.mainConversationId &&
+      convId !== roleBindings.mainConversationId
+        ? roleBindings.mainConversationId
+        : null
+    )
+    || convId
+    || roleBindings.mainConversationId
+    || null;
+  syncChildEvidence(activeState, factualParentConvId, { repoRoot, roleBindings });
 
   const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
   const authoritativeMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
