@@ -454,6 +454,8 @@ export function validateWorld(world) {
     };
   }
 
+  const errors = [];
+
   const expectedManifestHash = sha256Canonical({
     schema: DREAM_SCHEMAS.WORLD,
     root_snapshot_id: world.root_snapshot_id,
@@ -462,15 +464,75 @@ export function validateWorld(world) {
   });
 
   if (world.world_manifest_hash !== expectedManifestHash) {
-    return {
-      valid: false,
-      errors: [
-        `WORLD_MANIFEST_HASH_MISMATCH: expected "${expectedManifestHash}", got "${world.world_manifest_hash}"`,
-      ],
-    };
+    errors.push(
+      `WORLD_MANIFEST_HASH_MISMATCH: expected "${expectedManifestHash}", got "${world.world_manifest_hash}"`
+    );
   }
 
-  return { valid: true, errors: [] };
+  const events = Array.isArray(world.events) ? world.events : [];
+  const decisions = Array.isArray(world.decisions) ? world.decisions : [];
+  const outcomes = Array.isArray(world.outcomes) ? world.outcomes : [];
+  const manifestEventHashes = Array.isArray(world.event_hashes) ? world.event_hashes : [];
+
+  if (events.length !== manifestEventHashes.length) {
+    errors.push(
+      `WORLD_EVENT_COUNT_MISMATCH: events=${events.length}, event_hashes=${manifestEventHashes.length}`
+    );
+  }
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    if (!verifyEventHash(event)) {
+      errors.push(`TAMPERED_WORLD_EVENT_HASH: index=${i}`);
+      continue;
+    }
+    if (manifestEventHashes[i] !== event.event_hash) {
+      errors.push(
+        `WORLD_EVENT_HASH_ORDER_MISMATCH: index=${i}, expected="${manifestEventHashes[i]}", got="${event.event_hash}"`
+      );
+    }
+  }
+
+  const eventDecisions = events.filter(
+    (ev) => ev?.type === "DECISION" || ev?.schema === DREAM_SCHEMAS.DECISION
+  );
+  const eventOutcomes = events.filter(
+    (ev) => ev?.type === "DECISION_OUTCOME" || ev?.schema === DREAM_SCHEMAS.OUTCOME
+  );
+
+  if (decisions.length !== eventDecisions.length) {
+    errors.push(
+      `WORLD_DECISION_PROJECTION_COUNT_MISMATCH: decisions=${decisions.length}, event_decisions=${eventDecisions.length}`
+    );
+  }
+  if (outcomes.length !== eventOutcomes.length) {
+    errors.push(
+      `WORLD_OUTCOME_PROJECTION_COUNT_MISMATCH: outcomes=${outcomes.length}, event_outcomes=${eventOutcomes.length}`
+    );
+  }
+
+  const compareProjection = (projection, projectedEvents, label) => {
+    const count = Math.min(projection.length, projectedEvents.length);
+    for (let i = 0; i < count; i++) {
+      const record = projection[i];
+      const event = projectedEvents[i];
+      if (!verifyEventHash(record)) {
+        errors.push(`TAMPERED_WORLD_${label}_HASH: index=${i}`);
+        continue;
+      }
+      if (
+        record.event_hash !== event.event_hash ||
+        sha256Canonical(record) !== sha256Canonical(event)
+      ) {
+        errors.push(`WORLD_${label}_PROJECTION_MISMATCH: index=${i}`);
+      }
+    }
+  };
+
+  compareProjection(decisions, eventDecisions, "DECISION");
+  compareProjection(outcomes, eventOutcomes, "OUTCOME");
+
+  return { valid: errors.length === 0, errors };
 }
 
 /**
