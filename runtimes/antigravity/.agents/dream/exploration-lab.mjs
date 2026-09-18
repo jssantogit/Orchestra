@@ -435,18 +435,66 @@ export function recordExplorationModelCall({ repoRoot, payload = {} } = {}) {
   };
 }
 
+export function buildSandboxedExplorationCommand(command, args = []) {
+  const raw = String(command || "").trim();
+  const executable = raw.split(/[\\/]/).pop()?.toLowerCase() || "";
+  if (!["agy", "agy.exe", "antigravity", "antigravity.exe"].includes(executable)) {
+    return { ok: false, reason: "EXPLORATION_RUNNER_REQUIRES_ANTIGRAVITY" };
+  }
+
+  const normalizedArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [];
+  const forbidden = normalizedArgs.find((arg) => {
+    const value = arg.trim().toLowerCase();
+    return value === "--dangerously-skip-permissions"
+      || value === "--no-sandbox"
+      || value === "--sandbox=false"
+      || value.startsWith("--sandbox=false")
+      || value.startsWith("--permission-mode")
+      || value.startsWith("--tool-permission=always-proceed");
+  });
+  if (forbidden) {
+    return {
+      ok: false,
+      reason: "EXPLORATION_SANDBOX_BYPASS_FORBIDDEN",
+      argument: forbidden,
+    };
+  }
+
+  const withoutSandbox = normalizedArgs.filter((arg) => arg.trim().toLowerCase() !== "--sandbox");
+  return {
+    ok: true,
+    command: raw,
+    args: ["--sandbox", ...withoutSandbox],
+  };
+}
+
 export function runExplorationCommand({ branchWorkspace, command, args = [] } = {}) {
   if (!branchWorkspace || !command) return { ran: false, reason: "MISSING_RUN_INPUT" };
   const session = loadExplorationSession(branchWorkspace);
   if (!session) return { ran: false, reason: "EXPLORATION_SESSION_MISSING" };
+
+  const launch = buildSandboxedExplorationCommand(command, args);
+  if (!launch.ok) return { ran: false, ...launch };
+
   const remaining = Math.max(1, Date.parse(session.deadline_at) - Date.now());
   session.status = "RUNNING";
+  session.runner = {
+    executable: launch.command,
+    sandbox_forced: true,
+    permission_bypass_allowed: false,
+  };
   atomicJson(resolve(branchWorkspace, SESSION), session);
-  const result = spawnSync(command, args, {
+
+  const result = spawnSync(launch.command, launch.args, {
     cwd: branchWorkspace,
     stdio: "inherit",
     timeout: Math.min(remaining, EXPLORATION_BUDGET.timeout_ms),
-    env: { ...process.env, ORCHESTRA_DREAM_EXPLORATION: "1", ORCHESTRA_DREAM_EXPLORATION_SESSION: session.session_id },
+    env: {
+      ...process.env,
+      ORCHESTRA_DREAM_EXPLORATION: "1",
+      ORCHESTRA_DREAM_EXPLORATION_SESSION: session.session_id,
+      ORCHESTRA_DREAM_SANDBOX_REQUIRED: "1",
+    },
   });
   const timedOut = result.error?.code === "ETIMEDOUT" || result.signal === "SIGTERM";
   const latest = loadExplorationSession(branchWorkspace) || session;
@@ -454,8 +502,16 @@ export function runExplorationCommand({ branchWorkspace, command, args = [] } = 
   latest.finished_at = new Date().toISOString();
   latest.exit_code = result.status;
   latest.signal = result.signal || null;
+  latest.spawn_error = result.error ? String(result.error.message || result.error) : null;
   atomicJson(resolve(branchWorkspace, SESSION), latest);
-  return { ran: true, timed_out: timedOut, exit_code: result.status, signal: result.signal || null };
+  return {
+    ran: true,
+    timed_out: timedOut,
+    exit_code: result.status,
+    signal: result.signal || null,
+    sandbox_forced: true,
+    spawn_error: latest.spawn_error,
+  };
 }
 
 export function collectExplorationResult({ primaryRepoRoot, branchWorkspace } = {}) {
