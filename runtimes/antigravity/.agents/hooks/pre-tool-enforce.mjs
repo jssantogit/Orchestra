@@ -301,6 +301,14 @@ function isAgentControlPlanePath(relPath) {
   return norm === ".agents" || norm.startsWith(".agents/");
 }
 
+function isOrchestratorScratchPath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === "scratch" ||
+    norm.startsWith("scratch/") ||
+    norm === ".scratch" ||
+    norm.startsWith(".scratch/");
+}
+
 function isRepositoryConstitutionPath(relPath) {
   const norm = normalizePath(relPath);
   return norm === "AGENTS.md" || norm.endsWith("/AGENTS.md");
@@ -1901,6 +1909,17 @@ function main() {
       return;
     }
 
+    if (
+      isOrchestratorRole(activeRole) &&
+      (targets.some(isAgentControlPlanePath) || redir.targets.some(isAgentControlPlanePath))
+    ) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "HOOK_OWNED_GOVERNANCE_STATE: .agents/** is runtime-hook-owned. Orchestrator may inspect it but cannot mutate governance state directly."
+      }));
+      return;
+    }
+
     // Investigator is a specialist read-only plane even though it reuses the
     // flash-worker profile/model. Delegation purpose, not profile, controls authority.
     if (isInvestigatorActor) {
@@ -2000,9 +2019,9 @@ function main() {
         return;
       }
 
-      const allControlPlane = (targets.length > 0 || redir.targets.length > 0) &&
-        targets.every(isControlPlanePath) && redir.targets.every(isControlPlanePath);
-      if (allControlPlane) {
+      const allScratchTargets = (targets.length > 0 || redir.targets.length > 0) &&
+        targets.every(isOrchestratorScratchPath) && redir.targets.every(isOrchestratorScratchPath);
+      if (allScratchTargets) {
         allowCommand(cmd);
         return;
       }
@@ -2223,15 +2242,23 @@ function main() {
       return;
     }
 
-    // 4. Orchestrator: only control-plane allowed; product code / workspace writes prohibited
+    // 4. Orchestrator: runtime governance state is hook-owned. The only writable
+    // workspace surface for the orchestrator is scratch/ for ephemeral analysis.
     if (isOrchestratorRole(activeRole)) {
-      if (isControlPlane) {
+      if (isOrchestratorScratchPath(relTarget)) {
         console.log(JSON.stringify({ decision: "allow" }));
+        return;
+      }
+      if (isAgentControlPlanePath(relTarget)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `HOOK_OWNED_GOVERNANCE_STATE: .agents/** ("${relTarget}") is runtime-hook-owned. Orchestrator may inspect governance state but cannot write it directly.`
+        }));
         return;
       }
       console.log(JSON.stringify({
         decision: "deny",
-        reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from directly writing product code or workspace files ("${relTarget}"). Orchestrator writes are denied by default except for control-plane paths. Delegate implementation to Gemini Flash.`
+        reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from directly writing product code or workspace files ("${relTarget}"). Delegate implementation to Gemini Flash.`
       }));
       return;
     }
