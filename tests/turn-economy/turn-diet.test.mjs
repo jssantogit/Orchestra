@@ -29,9 +29,14 @@ import {
   extractParentDelegatedSidequestAttempts,
   evaluateInvestigationEconomy,
   evaluateBoundedFactualCorrection,
+  extractReviewerVerdict as extractBenchmarkReviewerVerdict,
 } from "../../benchmarks/turn-economy/run.mjs";
 import { isValidAgentName } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
-import { syncChildEvidence } from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
+import {
+  syncChildEvidence,
+  parseReviewerVerdictText,
+  extractReviewerVerdict as extractRuntimeReviewerVerdict,
+} from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
 
 function cleanState() {
   process.chdir(runtimeRoot);
@@ -3306,4 +3311,42 @@ test("task5-v1.4: 1. Policy B & Bounded Factual Correction (Cases A through J)",
   assert.equal(caseJ_econ.stretch_gate, "MISS", "Case J: worker 9 / total 12 must MISS stretch target without failing hard gate");
   assert.equal(caseJ_econ.hard_pass, true, "Case J: hard_pass must remain true");
   assert.equal(caseJ_econ.stretch_pass, false, "Case J: stretch_pass must be false");
+});
+
+
+test("two-key verdict parser: negative or unknown explicit verdicts fail closed", () => {
+  assert.deepEqual(
+    parseReviewerVerdictText("VERDICT: NOT ACCEPT"),
+    { present: true, verdict: null }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("Decision: do not accept"),
+    { present: true, verdict: null }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("RECOMMENDATION: maybe"),
+    { present: true, verdict: null }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("VERDICT: ACCEPT WITH NOTES"),
+    { present: true, verdict: "ACCEPT_WITH_NOTES" }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("VERDICT: CHANGES REQUIRED"),
+    { present: true, verdict: "CHANGES_REQUIRED" }
+  );
+
+  const steps = [
+    { content: "VERDICT: ACCEPT" },
+    { content: "After further review\nVERDICT: NOT ACCEPT" },
+  ];
+  assert.equal(
+    extractRuntimeReviewerVerdict(steps),
+    null,
+    "Latest explicit invalid/negative verdict must not fall back to an older ACCEPT"
+  );
+
+  assert.equal(extractBenchmarkReviewerVerdict("VERDICT: NOT ACCEPT"), null);
+  assert.equal(extractBenchmarkReviewerVerdict("DECISION: ACCEPT WITH NOTES"), "ACCEPT_WITH_NOTES");
+  assert.equal(extractBenchmarkReviewerVerdict("No explicit verdict here; ACCEPT appears in prose."), null);
 });
