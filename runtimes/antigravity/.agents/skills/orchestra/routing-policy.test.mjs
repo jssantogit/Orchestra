@@ -1430,3 +1430,21 @@ test("dream routing parity matrix: preserves 100% routing parity across comprehe
     }
   }
 });
+
+
+test("scope validator canonicalizes dot-dot traversal before authorization", () => {
+  const contract = {
+    allowedPaths: ["src/**"],
+    forbiddenPaths: [".agents/**"],
+  };
+
+  const intoControlPlane = validateScopeContract(contract, ["src/../.agents/state/pwn.json"]);
+  assert.equal(intoControlPlane.valid, false);
+  assert.ok(intoControlPlane.violations.some((v) =>
+    v.path === ".agents/state/pwn.json" && v.reason === "forbidden-path"
+  ));
+
+  const outsideWorkspace = validateScopeContract(contract, ["src/../../outside.js"]);
+  assert.equal(outsideWorkspace.valid, false);
+  assert.ok(outsideWorkspace.violations.some((v) => v.reason === "workspace-escape"));
+});
