@@ -4226,3 +4226,57 @@ test("governance: send_message enforces factual parent-child isolation", () => {
     cleanState();
   }
 });
+
+
+test("governance: WORK delegation preserves contract criticality for later Two-Key acceptance", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("criticality-parent");
+
+    const originalContract = {
+      contractId: "criticality-contract",
+      taskId: "criticality-task",
+      targetAgent: null,
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["npm test"],
+      criticality: "CRITICAL",
+      createdAt: "2026-09-18T00:00:00.000Z",
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "criticality-parent",
+      taskAction: "IMPLEMENT",
+      taskId: "criticality-task",
+      mutationSeq: 0,
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify(originalContract, null, 2), "utf8");
+
+    const delegated = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "criticality-parent",
+        toolCall: {
+          id: "criticality-worker-dispatch",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [{
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Implement within allowedPaths: [src/**] testsRequired: [\"npm test\"]",
+            }],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(delegated.decision, "allow");
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    const contract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf8"));
+    assert.equal(state.scopeContract.criticality, "CRITICAL");
+    assert.equal(contract.criticality, "CRITICAL");
+  } finally {
+    cleanState();
+  }
+});
