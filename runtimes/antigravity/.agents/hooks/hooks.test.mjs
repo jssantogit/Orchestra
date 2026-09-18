@@ -2810,7 +2810,8 @@ test("governance: native write aliases are intercepted, scoped, and tracked", ()
     assert.equal(state.write_tool_calls, 1);
     assert.equal(state.workerWorkspaceWrites, 1);
     assert.ok(Array.isArray(state.mutations));
-    assert.ok(state.mutations.some((m) => Array.isArray(m.paths) && m.paths.includes("src/alias-created.js") && m.tool === "create_file"));
+    assert.ok(state.mutations.some((m) => Array.isArray(m.paths) && m.paths.includes("src/alias-created.js")));
+    assert.ok(state.mutationEvents.some((m) => m.path === "src/alias-created.js" && m.tool === "create_file"));
   } finally {
     cleanState();
   }
@@ -3190,7 +3191,7 @@ test("governance: scope checks canonicalize dot-dot traversal before native writ
       encoding: "utf8",
     }));
     assert.equal(controlPlaneTraversal.decision, "deny");
-    assert.match(controlPlaneTraversal.reason, /SCOPE_VIOLATION/);
+    assert.match(controlPlaneTraversal.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
 
     const outsideWorkspace = JSON.parse(execFileSync("node", [preToolScript], {
       input: JSON.stringify({
@@ -3234,7 +3235,7 @@ test("governance: scope checks canonicalize dot-dot traversal in worker shell mu
       encoding: "utf8",
     }));
     assert.equal(controlPlaneTraversal.decision, "deny");
-    assert.match(controlPlaneTraversal.reason, /forbidden path|Scope contract violation/i);
+    assert.match(controlPlaneTraversal.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
 
     const outsideWorkspace = JSON.parse(execFileSync("node", [preToolScript], {
       input: JSON.stringify({
@@ -3283,7 +3284,7 @@ test("governance: worker scope follows physical symlink destination", () => {
     }));
 
     assert.equal(output.decision, "deny");
-    assert.match(output.reason, /SCOPE_VIOLATION/);
+    assert.match(output.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
     assert.equal(existsSync(".agents/state/pwn.json"), false);
   } finally {
     cleanState();
