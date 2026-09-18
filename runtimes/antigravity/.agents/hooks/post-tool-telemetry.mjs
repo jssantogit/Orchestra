@@ -142,6 +142,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         actorId: convId,
         agentProfile: existing.profile || null,
         model: existing.model || payload.modelName || null,
+        delegationKind: existing.delegationKind || null,
       };
     }
 
@@ -202,7 +203,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           const reqRole = (payload.agentRole || payload.role || "").toUpperCase();
           const reqProfile = payload.agentProfile || payload.typeName || payload.profile || "";
           const reqModel = payload.modelName || "";
-          const hasRuntimeDiscriminator = Boolean(reqRole || reqProfile || reqModel);
+          const hasRuntimeDiscriminator = Boolean(reqRole || reqProfile);
 
           if (hasRuntimeDiscriminator) {
             let candidates = unconsumed;
@@ -237,6 +238,20 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
               confidence = "MEDIUM";
             }
           }
+        }
+
+        if (matched && source === "HOOK_PAYLOAD_CORRELATION") {
+          // Hook payload is useful for applying a conservative role policy, but is
+          // not durable child identity. Do not consume/reserve the pending slot.
+          return {
+            role: matched.role || "UNKNOWN",
+            source,
+            confidence,
+            actorId: convId,
+            agentProfile: matched.profile || matched.typeName || null,
+            model: matched.model || payload.modelName || null,
+            delegationKind: matched.delegationKind || null,
+          };
         }
 
         if (matched) {
@@ -284,6 +299,7 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             actorId: convId,
             agentProfile: childProfile,
             model: childModel,
+            delegationKind: matched.delegationKind || null,
           };
         }
       }
