@@ -34,7 +34,6 @@ import {
 } from "../dream/policy-engine.mjs";
 import {
   captureBranchSeedIfArmed,
-  enforceExplorationToolBoundary,
   resolveExplorationPolicyOverlay,
 } from "../dream/exploration-lab.mjs";
 import {
@@ -1185,16 +1184,6 @@ function main() {
   const actorHasOrchestratorAuthority = isOrchestratorRole(actor.role) && actor.confidence === "HIGH";
   const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
-
-  // Milestone E confinement runs only after factual governance/identity loading.
-  const explorationBoundary = enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs });
-  if (explorationBoundary.active && !explorationBoundary.allowed) {
-    console.log(JSON.stringify({
-      decision: "deny",
-      reason: explorationBoundary.reason || "EXPLORATION_BOUNDARY_DENIED",
-    }));
-    return;
-  }
 
   // Check 1: Worker or Reviewer spawning subagents, OR any subagent during DIRECT_ACTION
   if (toolName === "invoke_subagent" || toolName === "define_subagent") {
