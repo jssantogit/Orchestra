@@ -89,6 +89,32 @@ export function normalizeEvidenceRequirements(contract = {}, activeState = {}) {
       if (!requirement.class || !requirement.kind) {
         return { valid: false, reason: "INVALID_EVIDENCE_REQUIREMENT", index: i, requirements: [] };
       }
+      if (requirements.some((item) => item.id === requirement.id)) {
+        return { valid: false, reason: "DUPLICATE_EVIDENCE_REQUIREMENT_ID", index: i, requirements: [] };
+      }
+      if (requirement.kind === "LOCAL_COMMAND" && !String(requirement.command || "").trim()) {
+        return { valid: false, reason: "LOCAL_COMMAND_REQUIRED", index: i, requirements: [] };
+      }
+      if (requirement.kind === "LOCAL_FACT" && !requirement.class) {
+        return { valid: false, reason: "LOCAL_FACT_CLASS_REQUIRED", index: i, requirements: [] };
+      }
+      if (requirement.kind === "REMOTE_CI") {
+        if (String(requirement.provider || "").toUpperCase() !== "GITHUB_ACTIONS") {
+          return { valid: false, reason: "REMOTE_CI_PROVIDER_UNSUPPORTED", index: i, requirements: [] };
+        }
+        const workflow = requirement.workflow && typeof requirement.workflow === "object"
+          ? requirement.workflow
+          : null;
+        if (!workflow || (workflow.id === undefined && !workflow.path && !workflow.name)) {
+          return { valid: false, reason: "REMOTE_CI_WORKFLOW_REQUIRED", index: i, requirements: [] };
+        }
+        if (!Array.isArray(requirement.requiredJobs) || requirement.requiredJobs.length === 0) {
+          return { valid: false, reason: "REMOTE_CI_REQUIRED_JOBS_REQUIRED", index: i, requirements: [] };
+        }
+      }
+      if (!["LOCAL_COMMAND", "LOCAL_FACT", "REMOTE_CI"].includes(requirement.kind)) {
+        return { valid: false, reason: "EVIDENCE_KIND_UNSUPPORTED", index: i, requirements: [] };
+      }
       requirements.push(requirement);
     }
     const explicitLegacyTests = Array.isArray(contract.testsRequired)
