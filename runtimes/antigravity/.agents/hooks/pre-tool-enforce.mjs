@@ -1226,6 +1226,9 @@ function main() {
       const reviewCandidateMutationSeq = isTwoKeyBatch
         ? (activeState.mutationSeq || activeState.mutation_seq || 0)
         : null;
+      const reviewCandidateAttempt = isTwoKeyBatch
+        ? (Number.isInteger(activeState.attempt) ? activeState.attempt : 0)
+        : null;
       const reviewOriginToolCallId = isTwoKeyBatch ? (toolCall.id || payload.toolCallId || null) : null;
 
       if (isTwoKeyBatch && !reviewCandidateHead) {
@@ -1360,6 +1363,7 @@ function main() {
           reviewBatchId: isReviewer ? reviewOriginToolCallId : null,
           reviewCandidateHead: isReviewer ? reviewCandidateHead : null,
           reviewCandidateMutationSeq: isReviewer ? reviewCandidateMutationSeq : null,
+          reviewCandidateAttempt: isReviewer ? reviewCandidateAttempt : null,
           creationOrder: idx,
           timestamp: new Date().toISOString(),
           consumed: false,
@@ -1713,6 +1717,7 @@ function main() {
           reviewBatchId: reviewOriginToolCallId,
           candidateHead: reviewCandidateHead,
           candidateMutationSeq: reviewCandidateMutationSeq,
+          candidateAttempt: reviewCandidateAttempt,
           expectedReviewerCount: 2,
           reviewerConversationIds: [],
           reviews: {},
