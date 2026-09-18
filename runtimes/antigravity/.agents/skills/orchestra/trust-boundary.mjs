@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { SIDE_EFFECT_CAPABILITIES as SCOPE_SIDE_EFFECT_CAPABILITIES } from "./routing-policy.mjs";
+
 export const TRUST_SCHEMA = "orchestra.context-trust.v1";
 
 export const TRUST_CLASSES = Object.freeze({
@@ -9,17 +11,9 @@ export const TRUST_CLASSES = Object.freeze({
   FACTUAL_EVIDENCE_REF: "FACTUAL_EVIDENCE_REF",
 });
 
-export const SIDE_EFFECT_CAPABILITIES = Object.freeze({
-  LOCAL_READ: "LOCAL_READ",
-  LOCAL_WRITE: "LOCAL_WRITE",
-  PROCESS_EXEC: "PROCESS_EXEC",
-  NETWORK_READ: "NETWORK_READ",
-  NETWORK_WRITE: "NETWORK_WRITE",
-  REMOTE_REPO_WRITE: "REMOTE_REPO_WRITE",
-  VCS_REMOTE_WRITE: "VCS_REMOTE_WRITE",
-  CROSS_AGENT_MESSAGE: "CROSS_AGENT_MESSAGE",
-  PUBLICATION: "PUBLICATION",
-});
+export const SIDE_EFFECT_CAPABILITIES = Object.freeze(
+  Object.fromEntries(SCOPE_SIDE_EFFECT_CAPABILITIES.map((capability) => [capability, capability])),
+);
 
 const REMOTE_SENSITIVE = new Set([
   SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE,
