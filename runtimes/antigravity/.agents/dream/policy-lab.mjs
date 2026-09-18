@@ -1188,6 +1188,9 @@ export function evaluatePolicyLabCycle({ repoRoot, cyclePath } = {}) {
   const loadedCycle = readCycle(repoRoot, cyclePath);
   if (!loadedCycle.ok) return { evaluated: false, reason: loadedCycle.reason };
   const cycle = loadedCycle.cycle;
+  if (cycle.status === "DESIGNER_PENDING") {
+    return { evaluated: false, reason: "DESIGNER_CALL_PENDING" };
+  }
 
   const loadedDataset = loadDatasetForCycle(repoRoot, cycle);
   if (!loadedDataset.ok) return { evaluated: false, ...loadedDataset };
@@ -1249,7 +1252,10 @@ export function evaluatePolicyLabCycle({ repoRoot, cyclePath } = {}) {
       status = "INELIGIBLE";
     } else if (train.unknown_branch_count > 0 || holdout.unknown_branch_count > 0) {
       status = "NEEDS_EXPLORATION";
-    } else if (holdoutComparison.relation === "INFERIOR") {
+    } else if (
+      trainComparison.relation === "INFERIOR"
+      || holdoutComparison.relation === "INFERIOR"
+    ) {
       status = "REGRESSION";
     } else if (holdoutComparison.relation === "SUPERIOR" && materiality.material) {
       status = "RECOMMENDATION_CANDIDATE";
