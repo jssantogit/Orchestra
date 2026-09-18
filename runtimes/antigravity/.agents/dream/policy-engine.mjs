@@ -5,6 +5,10 @@ import {
   WORKER_TIER_ACTIONS,
   INVESTIGATION_STRATEGY_ACTIONS,
   RETRY_ACTIONS,
+  EXPLORATION_BRANCHING_ACTIONS,
+  PARALLELISM_ACTIONS,
+  PRUNE_BRANCH_ACTIONS,
+  STOPPING_ACTIONS,
 } from "./action-space.mjs";
 
 export const POLICY_STATUS = Object.freeze({
@@ -24,6 +28,10 @@ const VALID_ACTIONS_BY_DECISION_TYPE = Object.freeze({
   [DECISION_TYPES.WORKER_TIER]: new Set(WORKER_TIER_ACTIONS),
   [DECISION_TYPES.INVESTIGATION_STRATEGY]: new Set(INVESTIGATION_STRATEGY_ACTIONS),
   [DECISION_TYPES.RETRY_ACTION]: new Set(RETRY_ACTIONS),
+  [DECISION_TYPES.EXPLORATION_BRANCHING]: new Set(EXPLORATION_BRANCHING_ACTIONS),
+  [DECISION_TYPES.PARALLELISM]: new Set(PARALLELISM_ACTIONS),
+  [DECISION_TYPES.PRUNE_BRANCH]: new Set(PRUNE_BRANCH_ACTIONS),
+  [DECISION_TYPES.STOPPING]: new Set(STOPPING_ACTIONS),
 });
 
 const ALLOWED_WHEN_FIELDS = new Set([
@@ -37,6 +45,16 @@ const ALLOWED_WHEN_FIELDS = new Set([
   "retry_reason",
   "post_investigation",
   "evidence",
+  "exploration_branches_started",
+  "exploration_branches_active",
+  "exploration_branches_remaining",
+  "feedback_unknown",
+  "feedback_observed",
+  "feedback_supported",
+  "feedback_falsified",
+  "feedback_causal",
+  "branch_feedback_status",
+  "branch_invalid",
 ]);
 
 const ALLOWED_TOP_LEVEL_PROPERTIES = new Set([
@@ -121,6 +139,7 @@ const VALID_ENUMS = Object.freeze({
   ]),
   evidence_status: new Set(["PASS", "FAIL", "UNKNOWN"]),
   evidence_extended_status: new Set(["PASS", "FAIL", "UNKNOWN", "NOT_REQUIRED"]),
+  branch_feedback_status: new Set(["UNKNOWN", "OBSERVED", "SUPPORTED", "FALSIFIED", "CAUSALLY_VERIFIED"]),
 });
 
 const ALLOWED_EVIDENCE_FIELDS = new Set([
@@ -309,7 +328,18 @@ export function validatePolicy(policy) {
         if (typeof cond !== "boolean") {
           errors.push(`${prefix}: post_investigation must be a boolean`);
         }
-      } else if (key === "attempt" || key === "retry_remaining") {
+      } else if ([
+        "attempt",
+        "retry_remaining",
+        "exploration_branches_started",
+        "exploration_branches_active",
+        "exploration_branches_remaining",
+        "feedback_unknown",
+        "feedback_observed",
+        "feedback_supported",
+        "feedback_falsified",
+        "feedback_causal",
+      ].includes(key)) {
         if (typeof cond === "number") {
           if (!Number.isInteger(cond) || cond < 0) {
             errors.push(`${prefix}: numeric condition "${key}" must be a non-negative integer`);
@@ -339,6 +369,16 @@ export function validatePolicy(policy) {
           }
         } else {
           errors.push(`${prefix}: numeric condition "${key}" must be an integer, array of integers, or { min, max } range`);
+        }
+      } else if (key === "branch_invalid") {
+        if (typeof cond !== "boolean") {
+          errors.push(`${prefix}: branch_invalid must be a boolean`);
+        }
+      } else if (key === "branch_feedback_status") {
+        if (!Array.isArray(cond) || cond.length === 0) {
+          errors.push(`${prefix}: branch_feedback_status must be a non-empty array`);
+        } else if (cond.some((item) => typeof item !== "string" || !VALID_ENUMS.branch_feedback_status.has(item))) {
+          errors.push(`${prefix}: branch_feedback_status elements must be valid feedback statuses`);
         }
       } else if (key === "evidence") {
         if (typeof cond !== "object" || cond === null || Array.isArray(cond)) {
@@ -428,8 +468,8 @@ function matchesRuleCondition(when = {}, state = {}) {
       continue;
     }
 
-    if (field === "post_investigation") {
-      const stateVal = state.post_investigation;
+    if (field === "post_investigation" || field === "branch_invalid") {
+      const stateVal = state[field];
       if (typeof stateVal !== "boolean") return false;
       if (typeof condition === "boolean") {
         if (stateVal !== condition) return false;
@@ -441,7 +481,18 @@ function matchesRuleCondition(when = {}, state = {}) {
 
     const stateVal = state[field];
 
-    if (field === "attempt" || field === "retry_remaining") {
+    if ([
+      "attempt",
+      "retry_remaining",
+      "exploration_branches_started",
+      "exploration_branches_active",
+      "exploration_branches_remaining",
+      "feedback_unknown",
+      "feedback_observed",
+      "feedback_supported",
+      "feedback_falsified",
+      "feedback_causal",
+    ].includes(field)) {
       if (stateVal === undefined || stateVal === null || typeof stateVal !== "number") {
         return false;
       }
