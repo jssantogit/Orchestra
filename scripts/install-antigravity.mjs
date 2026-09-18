@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, cpSync, rmSync, writeFileSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  installProjectRuntime,
+} from "../runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs";
 
 const args = process.argv.slice(2);
 if (args.length < 1) {
@@ -12,63 +15,37 @@ if (args.length < 1) {
 const targetDir = resolve(args[0]);
 const scriptDir = fileURLToPath(new URL(".", import.meta.url));
 const orchestraRoot = resolve(scriptDir, "..");
-const sourceAgents = join(orchestraRoot, "runtimes/antigravity/.agents");
-const sourceGemini = join(orchestraRoot, "runtimes/antigravity/GEMINI.md");
+const sourceRuntimeRoot = resolve(orchestraRoot, "runtimes", "antigravity");
 
-if (!existsSync(targetDir)) {
-  console.error(`Error: Target directory '${targetDir}' does not exist.`);
+try {
+  console.log("Installing Orchestra Antigravity runtime into '" + targetDir + "'...");
+  const result = installProjectRuntime({
+    sourceRuntimeRoot,
+    targetDir,
+  });
+
+  console.log("Antigravity runtime successfully installed to '" + resolve(targetDir, ".agents") + "'.");
+  console.log("Runtime metadata: " + resolve(targetDir, ".agents", "orchestra-runtime.json"));
+  console.log("Source commit: " + (result.metadata?.sourceCommit || "unknown"));
+  console.log(
+    "Verify installation by running: node --test "
+    + resolve(targetDir, ".agents", "skills", "orchestra", "routing-policy.test.mjs")
+  );
+} catch (error) {
+  if (error?.code === "INSTALL_CONFLICT") {
+    console.error(
+      "Conflict detected: '" + resolve(targetDir, ".agents")
+      + "' or '" + resolve(targetDir, "GEMINI.md")
+      + "' already exists in target project."
+    );
+    console.error("Aborting installation to prevent destructive overwriting.");
+    console.error(
+      "Use the updater instead: node scripts/orchestra-project.mjs update "
+      + JSON.stringify(targetDir)
+    );
+    process.exit(2);
+  }
+
+  console.error(String(error?.message || error));
   process.exit(1);
 }
-
-const targetAgents = join(targetDir, ".agents");
-const targetGemini = join(targetDir, "GEMINI.md");
-
-// Conflict check: Do not overwrite existing configuration silently
-if (existsSync(targetAgents) || existsSync(targetGemini)) {
-  console.error(`Conflict detected: '${targetAgents}' or '${targetGemini}' already exists in target project.`);
-  console.error("Aborting installation to prevent destructive overwriting.");
-  console.error(`To install manually, review and merge components under '${targetAgents}'.`);
-  process.exit(2);
-}
-
-console.log(`Installing Orchestra Antigravity runtime into '${targetDir}'...`);
-mkdirSync(targetAgents, { recursive: true });
-
-const subdirs = ["agents", "hooks", "skills", "dream", "state", "telemetry", "artifacts/outputs"];
-for (const sub of subdirs) {
-  mkdirSync(join(targetAgents, sub), { recursive: true });
-}
-
-cpSync(join(sourceAgents, "agents"), join(targetAgents, "agents"), { recursive: true });
-cpSync(join(sourceAgents, "hooks"), join(targetAgents, "hooks"), { recursive: true });
-cpSync(join(sourceAgents, "skills"), join(targetAgents, "skills"), { recursive: true });
-if (existsSync(join(sourceAgents, "dream"))) {
-  cpSync(join(sourceAgents, "dream"), join(targetAgents, "dream"), { recursive: true });
-}
-cpSync(join(sourceAgents, "hooks.json"), join(targetAgents, "hooks.json"));
-if (existsSync(sourceGemini)) {
-  cpSync(sourceGemini, targetGemini);
-}
-
-// Ensure runtime state and logs are never copied
-try { rmSync(join(targetAgents, "state/active-state.json"), { force: true }); } catch {}
-try { rmSync(join(targetAgents, "state/active-contract.json"), { force: true }); } catch {}
-try { rmSync(join(targetAgents, "telemetry/events.jsonl"), { force: true }); } catch {}
-
-// Ensure dream historical data and state are never copied
-try { rmSync(join(targetAgents, "dream/dream-data"), { recursive: true, force: true }); } catch {}
-try { rmSync(join(targetAgents, "dream-data"), { recursive: true, force: true }); } catch {}
-try { rmSync(join(targetDir, ".agents/dream-data"), { recursive: true, force: true }); } catch {}
-try { rmSync(join(targetDir, "dream-data"), { recursive: true, force: true }); } catch {}
-try { rmSync(join(targetAgents, "state/dream"), { recursive: true, force: true }); } catch {}
-
-writeFileSync(join(targetAgents, "state/.gitkeep"), "");
-writeFileSync(join(targetAgents, "telemetry/.gitkeep"), "");
-writeFileSync(join(targetAgents, "artifacts/outputs/.gitkeep"), "");
-
-// Ensure destination .agents/state/dream/ has only .gitkeep
-mkdirSync(join(targetAgents, "state/dream"), { recursive: true });
-writeFileSync(join(targetAgents, "state/dream/.gitkeep"), "");
-
-console.log(`Antigravity runtime successfully installed to '${targetAgents}'.`);
-console.log(`Verify installation by running: node --test ${join(targetAgents, "skills/orchestra/routing-policy.test.mjs")}`);
