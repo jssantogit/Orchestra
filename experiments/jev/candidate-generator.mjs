@@ -51,6 +51,9 @@ export function generateCandidates({
   );
 
   const pinned = ranked.filter((item) => item.pinned);
+  if (pinned.length > maxCandidates) {
+    throw new Error("JEV_PINNED_CANDIDATE_OVERFLOW");
+  }
   const rest = ranked.filter((item) => !item.pinned);
   const selected = [...pinned, ...rest.slice(0, Math.max(0, maxCandidates - pinned.length))];
 
