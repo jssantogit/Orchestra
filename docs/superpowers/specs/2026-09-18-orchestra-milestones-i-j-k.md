@@ -71,6 +71,15 @@ New decision points:
 
 Hard ceilings remain static governance, not learned policy. Learned policy may choose a value only inside the legal action set computed by runtime authority.
 
+K preserves standalone Milestone-E semantics. Additional siblings are legal only when `prepareExploration` can verify an active `orchestra.full-exploration.v1` controller with the exact static limits and a fresh branch ordinal. The controller namespaces E reservations and excludes alternatives already selected for the same factual source decision, so repeated exploration cannot silently rerun the same unknown action.
+
+K control decisions use **deferred causal outcomes**:
+- `CONTINUE_EXPLORATION`, `OPEN_BRANCH`, and `PARALLELISM` are recorded before execution but remain outcome-pending;
+- they close only when the corresponding branch yields a sealed factual world, or when a factual infrastructure failure proves the branch consequence unavailable;
+- infrastructure/setup failures are factual but `attributable: false` and therefore become `INSUFFICIENT_SUPPORT`, never negative policy evidence;
+- each K decision/outcome pair is sealed into its own one-decision world, preventing multiple decision types at one snapshot from becoming ambiguous in Exact Replay;
+- failed materialization still consumes a K branch attempt so repeated setup failure cannot create an unbounded retry loophole.
+
 K inherits Exact Replay, UNKNOWN_BRANCH semantics, holdout evaluation, Shadow, progressive Canary, human promotion, and all Milestone J capability restrictions.
 
 ## Delivery
