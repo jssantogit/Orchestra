@@ -287,6 +287,11 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
      - `ARCH-021`: IMPLEMENT_DIRECT Decision Completes With Its Worker
      - `ARCH-022`: Retry Escalation Requires Factual Previous Worker Identity
      - `ARCH-023`: Retry Budget Is Factual, Never Manufactured
+     - `ARCH-024`: Pending Uniqueness Is Not Factual Child Identity
+     - `ARCH-025`: Investigation Authority Is Read-Only
+     - `ARCH-026`: Sealed World Material Integrity
+     - `ARCH-027`: Explicit Exploration Authority Is Non-Escalating
+     - `ARCH-028`: Exploration Budget Is Hard Across Stop Boundary
 
 ---
 
@@ -300,9 +305,10 @@ Milestone E adds a deliberately **opt-in, local/offline** mechanism for observin
 - Exploration is never executed in the primary workspace. `prepare` materializes a physical sibling under the OS temporary directory from a captured `BranchSeed`.
 - The immutable budget is: **1 sibling branch**, **2 model calls**, **5 minutes**.
 - `NORMAL` decisions are eligible by default. `MAJOR` requires explicit approval at capture time (`--approve-major`). `CRITICAL` and `HUMAN_GATE` states are ineligible.
-- External or irreversible effects are blocked by a dedicated `PreToolUse` exploration firewall. Shell commands are fail-closed to a small local/read-only validation allowlist.
-- The exploration runner accepts only Antigravity CLI executables (`agy` / `antigravity`), forces the CLI `--sandbox` override, and rejects explicit permission/sandbox bypass flags.
-- `PostInvocation` terminates the exploration loop when the second model call completes or the deadline is exhausted; the Stop Guard independently refuses to reopen an exhausted exploration loop.
+- The committed runtime keeps the normal A-D hook topology unchanged while exploration is OFF. During `prepare`, only the isolated sibling's `.agents/hooks.json` is overlaid: its existing `PreToolUse` becomes an E wrapper and a sibling-only `PostInvocation` budget guard is added.
+- The E `PreToolUse` wrapper blocks external/irreversible effects first, then delegates every allowed tool to the original A-D `pre-tool-enforce.mjs`; E can reduce authority but never grant authority the baseline firewall would deny.
+- Shell commands are fail-closed to a small local/read-only validation allowlist. The exploration runner accepts only Antigravity CLI executables (`agy` / `antigravity`), forces the CLI `--sandbox` override, and rejects explicit permission/sandbox bypass flags.
+- The sibling-only `PostInvocation` guard terminates the exploration loop when the second model call completes or the deadline is exhausted; the Stop Guard independently refuses to reopen an exhausted exploration loop.
 - Conversation IDs, execution IDs, correlations, role bindings, locks, telemetry identity, PIDs, ports, and timestamps are not cloned from the factual run.
 - The first explored decision remains causally attached to the factual source `snapshot_id`; regenerated ephemeral runtime identity does not redefine the historical root.
 - The primary workspace manifest is checked again before collection. Any drift rejects collection.
