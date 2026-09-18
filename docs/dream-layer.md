@@ -524,3 +524,94 @@ npm run dream:shadow -- report --repo /path/to/project
 # Stop future Shadow observations. Historical session artifacts remain local.
 npm run dream:shadow -- disable --repo /path/to/project
 ```
+---
+
+## 14. Milestone H: Human-approved Canary and Promotion
+
+Milestone H is the first Dream stage allowed to execute a learned candidate policy, and only under two separate explicit human approvals.
+
+### Gate 1: approve a 5% Canary
+
+A Canary can start only from a content-addressed Milestone G report with status `READY_FOR_HUMAN_CANARY_REVIEW`. The CLI requires `--confirm`; there is no API path that interprets a ready Shadow report as automatic approval.
+
+The initial rollout is permanently fixed at **5%** for this milestone. Selection is deterministic by `SHA-256(task_id + candidate_policy_id) mod 100`. If a factual task ID is unavailable, the task is not canaried. Every decision in a selected task therefore stays in the same rollout group.
+
+Runtime eligibility fails closed unless all conditions hold:
+
+- criticality is exactly `NORMAL`;
+- task action is local implementation/test/mechanical work;
+- task domain is in the conservative local-code allowlist;
+- an explicit bounded Scope Contract exists;
+- no broad `*`/`**`, control-plane, workflow, remote, or nonlocal scope is present;
+- no security/auth/credentials/release/deploy/publish/migration/database/payment/production critical path is detected;
+- no Two-Key or independent review requirement exists;
+- state is neither `HUMAN_GATE` nor `CRITICAL_REVIEW`.
+
+The current baseline policy is evaluated first. Canary may overlay only a healthy baseline result. A no-match candidate inherits the baseline action; an illegal/conflicting/corrupt candidate rolls the Canary session back and the same decision remains on baseline routing.
+
+### Hard rollback gates
+
+A live Canary is immediately removed from future routing when any of the following is observed:
+
+- candidate policy/schema corruption or interpreter exception;
+- illegal candidate action or policy conflict;
+- external-side-effect attempt from a task that actually entered Canary;
+- governance/control-plane modification attempt;
+- required-evidence bypass attempt blocked by Stop Guard;
+- exact factual regression: the candidate does not accept a snapshot where the frozen support index proves the baseline action accepted that same snapshot/state.
+
+Canary failures never rewrite factual DECISION/OUTCOME records. Rollback affects only future decisions and normal static/current routing continues.
+
+### Canary report
+
+A report is `COLLECT_CANARY_OUTCOMES` until every executed Canary decision has a factual outcome. Any hard rollback yields `ROLLED_BACK`. A complete live session with no rollback yields only `READY_FOR_HUMAN_PROMOTION_REVIEW`.
+
+There is no automatic promotion flag or score threshold that can activate the candidate.
+
+### Gate 2: explicit human promotion
+
+Promotion requires a second CLI `--confirm` against a `READY_FOR_HUMAN_PROMOTION_REVIEW` report. The candidate and baseline are revalidated and the current runtime baseline must still match the Canary baseline.
+
+Promoted policies are stored content-addressed under:
+
+```text
+.agents/dream-data/policies/versions/<policy-id>.json
+```
+
+`active.json` contains only the policy ID, policy schema/runtime compatibility, content hash, and human promotion metadata. Writes use `temp + fsync + rename`. Missing/corrupt/incompatible pointers or versions fall back to `static-policy-v1` with diagnostics rather than blocking the task.
+
+The Policy Lab reads this same active-policy store, so the next improvement cycle uses the promoted policy as its baseline.
+
+### CLI flow
+
+```bash
+# First human approval: start fixed 5% Canary from a ready Shadow report.
+npm run dream:canary -- approve \
+  --repo /path/to/project \
+  --shadow-report <shadow-report-id> \
+  --confirm
+
+# Inspect active Canary.
+npm run dream:canary -- status --repo /path/to/project
+
+# Build Canary report after factual outcomes arrive.
+npm run dream:canary -- report --repo /path/to/project
+
+# Optional immediate human rollback.
+npm run dream:canary -- rollback --repo /path/to/project --confirm
+
+# Second human approval: activate only a healthy complete Canary report.
+npm run dream:canary -- promote \
+  --repo /path/to/project \
+  --canary-report <canary-report-id> \
+  --confirm
+```
+
+Promoted-policy rollback is also explicit and human-gated. `rollback-policy --confirm` restores the exact previous policy recorded in activation metadata (or removes `active.json` when that previous baseline is `static-policy-v1`) and appends a `POLICY_ROLLBACK` history event. Promoted versions are retained.
+
+```bash
+# Explicitly roll back the currently promoted policy to its recorded predecessor.
+npm run dream:canary -- rollback-policy --repo /path/to/project --confirm
+```
+
+Automatic ramping to 20/50/100% and `auto_promote` remain out of scope and require a separate architectural review.

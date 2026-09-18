@@ -32,11 +32,17 @@ import {
   computePolicyId,
   validatePolicy,
 } from "../dream/policy-engine.mjs";
+import { loadRuntimePolicy } from "../dream/policy-store.mjs";
 import {
   captureBranchSeedIfArmed,
   consumeExplorationTarget,
   resolveExplorationPolicyOverlay,
 } from "../dream/exploration-lab.mjs";
+import {
+  evaluateCanaryPolicyOverlay,
+  isCanaryExternalSideEffect,
+  rollbackSelectedCanaryTask,
+} from "../dream/canary-mode.mjs";
 import {
   factualSubagentMatchesPending,
   filterFactualPendingCandidates,
@@ -56,42 +62,32 @@ const PROFILE_TO_WORKER_ACTION = Object.freeze({
   "flash-worker": "FLASH_HIGH",
 });
 
-function loadActivePolicy() {
-  const activePolicyPath = resolve(dirname(fileURLToPath(import.meta.url)), "../dream/policies/static-policy-v1.json");
-  if (!existsSync(activePolicyPath)) {
-    return { policy: null, diagnostic: "MISSING_POLICY" };
+function loadActivePolicy(repoRoot) {
+  const loaded = loadRuntimePolicy(repoRoot);
+  if (!loaded.ok) {
+    return {
+      policy: null,
+      diagnostic: loaded.reason || "INVALID_POLICY",
+      source: "STATIC_ROUTING_FALLBACK",
+    };
   }
-  let raw = "";
-  try {
-    raw = readFileSync(activePolicyPath, "utf-8");
-  } catch {
-    return { policy: null, diagnostic: "MISSING_POLICY" };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { policy: null, diagnostic: "MALFORMED_JSON" };
-  }
-  if (!parsed || typeof parsed !== "object" || parsed.schema !== DREAM_SCHEMAS.POLICY) {
-    return { policy: parsed, diagnostic: "UNSUPPORTED_SCHEMA" };
-  }
-  try {
-    const computedId = computePolicyId(parsed);
-    if (parsed.policy_id !== computedId) {
-      return { policy: parsed, diagnostic: "POLICY_HASH_MISMATCH" };
-    }
-  } catch {
-    return { policy: parsed, diagnostic: "INVALID_POLICY" };
-  }
-  const val = validatePolicy(parsed);
-  if (!val.valid) {
-    return { policy: parsed, diagnostic: "INVALID_POLICY" };
-  }
-  return { policy: parsed, diagnostic: null };
+  return {
+    policy: loaded.policy,
+    diagnostic: loaded.diagnostic || null,
+    source: loaded.source || "STATIC_POLICY_V1",
+  };
 }
 
-function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableActions, baselineAction }) {
+function evaluatePolicyWithFallback({
+  repoRoot,
+  decisionType,
+  state,
+  availableActions,
+  baselineAction,
+  activeState = {},
+  activeContract = {},
+  taskId = null,
+}) {
   const safeBaseline = typeof baselineAction === "string" ? baselineAction : "";
   const exploration = resolveExplorationPolicyOverlay({
     repoRoot,
@@ -114,7 +110,8 @@ function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableAc
     }
     return exploration;
   }
-  const loaded = loadActivePolicy();
+
+  const loaded = loadActivePolicy(repoRoot);
   if (loaded.diagnostic) {
     return {
       ok: false,
@@ -125,6 +122,7 @@ function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableAc
       policy_diagnostic: loaded.diagnostic,
     };
   }
+
   try {
     const evalRes = evaluatePolicy({
       policy: loaded.policy,
@@ -133,29 +131,62 @@ function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableAc
       availableActions,
       baselineAction: safeBaseline,
     });
+
+    let staticResult;
     if (evalRes.ok) {
-      return {
+      staticResult = {
         ok: true,
         action: evalRes.action,
-        source: "STATIC_POLICY_V1",
+        source: loaded.source === "ACTIVE_POLICY" ? "ACTIVE_POLICY" : "STATIC_POLICY_V1",
         policy_id: evalRes.policy_id,
         baseline_action: safeBaseline,
         policy_diagnostic: null,
       };
+    } else {
+      let diag = "INTERPRETER_EXCEPTION";
+      if (evalRes.diagnostic?.includes("POLICY_CONFLICT")) diag = "POLICY_CONFLICT";
+      else if (evalRes.diagnostic?.includes("POLICY_INVALID_ACTION")) diag = "POLICY_INVALID_ACTION";
+      else if (evalRes.diagnostic?.includes("NO_MATCHING_RULE")) diag = "NO_MATCHING_RULE";
+      else if (evalRes.diagnostic?.includes("INVALID_POLICY")) diag = "INVALID_POLICY";
+      staticResult = {
+        ok: false,
+        action: evalRes.action || safeBaseline,
+        source: "STATIC_ROUTING_FALLBACK",
+        policy_id: evalRes.policy_id || loaded.policy?.policy_id || null,
+        baseline_action: safeBaseline,
+        policy_diagnostic: diag,
+      };
     }
-    let diag = "INTERPRETER_EXCEPTION";
-    if (evalRes.diagnostic?.includes("POLICY_CONFLICT")) diag = "POLICY_CONFLICT";
-    else if (evalRes.diagnostic?.includes("POLICY_INVALID_ACTION")) diag = "POLICY_INVALID_ACTION";
-    else if (evalRes.diagnostic?.includes("NO_MATCHING_RULE")) diag = "NO_MATCHING_RULE";
-    else if (evalRes.diagnostic?.includes("INVALID_POLICY")) diag = "INVALID_POLICY";
-    return {
-      ok: false,
-      action: evalRes.action || safeBaseline,
-      source: "STATIC_ROUTING_FALLBACK",
-      policy_id: evalRes.policy_id || loaded.policy?.policy_id || null,
-      baseline_action: safeBaseline,
-      policy_diagnostic: diag,
-    };
+
+    // Canary may only overlay a healthy current baseline. Any Canary failure
+    // rolls the session back internally and this exact decision remains static.
+    if (staticResult.ok) {
+      const canary = evaluateCanaryPolicyOverlay({
+        repoRoot,
+        taskId,
+        decisionType,
+        state,
+        availableActions,
+        baselineAction: staticResult.action,
+        baselinePolicyId: loaded.policy.policy_id,
+        activeState,
+        activeContract,
+      });
+      if (canary?.active) {
+        return {
+          ok: true,
+          action: canary.action,
+          source: canary.source,
+          policy_id: canary.policy_id,
+          baseline_action: staticResult.action,
+          policy_diagnostic: canary.policy_diagnostic || null,
+          canary_session_id: canary.canary_session_id,
+          canary_bucket: canary.canary_bucket,
+        };
+      }
+    }
+
+    return staticResult;
   } catch {
     return {
       ok: false,
@@ -1189,6 +1220,33 @@ function main() {
     activeContract = activeState.scopeContract;
   }
 
+  const canaryTaskId =
+    payload.taskId
+    || payload.taskIdentifier
+    || activeState.taskId
+    || activeState.taskKey
+    || process.env.BENCHMARK_TASK_ID
+    || null;
+
+  // A task that already entered live Canary may never cross into an external
+  // side effect. Roll back first, deny this one tool call, then the task can
+  // continue under the static policy on its next turn.
+  if (isCanaryExternalSideEffect({ toolName, toolArgs })) {
+    const rollback = rollbackSelectedCanaryTask({
+      repoRoot,
+      taskId: canaryTaskId,
+      trigger: "EXTERNAL_SIDE_EFFECT_ATTEMPT",
+      details: { tool_name: toolName },
+    });
+    if (rollback.rolled_back) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "CANARY_ROLLBACK: External side effects are ineligible during Canary. Session rolled back; retry/replan under static policy.",
+      }));
+      return;
+    }
+  }
+
   const roleBindings = loadRoleBindings(roleBindingsPath);
   if (roleBindings.__governanceLoadError) {
     console.log(JSON.stringify({
@@ -1630,6 +1688,9 @@ function main() {
                 state: decisionState,
                 availableActions: invAvailable,
                 baselineAction: invBaseline,
+                activeState,
+                activeContract: contractObj,
+                taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
               });
               if (invEval.block_execution) {
                 console.log(JSON.stringify({
@@ -1674,6 +1735,9 @@ function main() {
             state: decisionState,
             availableActions,
             baselineAction,
+            activeState,
+            activeContract: contractObj,
+            taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
           });
           if (evalResult.block_execution) {
             console.log(JSON.stringify({
@@ -2456,6 +2520,12 @@ function main() {
       }
 
       if (effectiveTargets.some(isAgentControlPlanePath)) {
+        rollbackSelectedCanaryTask({
+          repoRoot,
+          taskId: canaryTaskId,
+          trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+          details: { tool_name: toolName, targets: effectiveTargets },
+        });
         console.log(JSON.stringify({
           decision: "deny",
           reason: "CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** regardless of Scope Contract."
@@ -2526,6 +2596,12 @@ function main() {
 
     // 0. Constitution protection: AGENTS.md is strictly immutable across all agents
     if (relTarget === "AGENTS.md" || relTarget.endsWith("/AGENTS.md")) {
+      rollbackSelectedCanaryTask({
+        repoRoot,
+        taskId: canaryTaskId,
+        trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+        details: { tool_name: toolName, target: relTarget },
+      });
       console.log(JSON.stringify({
         decision: "deny",
         reason: "AGENTS.md is the provider-neutral repository constitution and is strictly read-only for all agents."
@@ -2574,6 +2650,12 @@ function main() {
     const isControlPlane = isControlPlanePath(relTarget);
 
     if (isWorkerRole(activeRole) && isAgentControlPlanePath(relTarget)) {
+      rollbackSelectedCanaryTask({
+        repoRoot,
+        taskId: canaryTaskId,
+        trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+        details: { tool_name: toolName, target: relTarget },
+      });
       console.log(JSON.stringify({
         decision: "deny",
         reason: `CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** ("${relTarget}") regardless of Scope Contract.`
@@ -2601,6 +2683,12 @@ function main() {
         return;
       }
       if (isAgentControlPlanePath(relTarget)) {
+        rollbackSelectedCanaryTask({
+          repoRoot,
+          taskId: canaryTaskId,
+          trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+          details: { tool_name: toolName, target: relTarget },
+        });
         console.log(JSON.stringify({
           decision: "deny",
           reason: `HOOK_OWNED_GOVERNANCE_STATE: .agents/** ("${relTarget}") is runtime-hook-owned. Orchestrator may inspect governance state but cannot write it directly.`
@@ -2684,6 +2772,9 @@ function main() {
             state: invState,
             availableActions: invAvailable,
             baselineAction: invBaseline,
+            activeState,
+            activeContract,
+            taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
           });
           if (invRes.block_execution) {
             console.log(JSON.stringify({

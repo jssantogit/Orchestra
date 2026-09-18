@@ -7,6 +7,7 @@ import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, is
 import { evaluateTwoKeyReview } from "../skills/orchestra/routing-policy.mjs";
 import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
 import { getExplorationBudgetState } from "../dream/exploration-lab.mjs";
+import { rollbackSelectedCanaryTask } from "../dream/canary-mode.mjs";
 import {
   factualSubagentMatchesPending,
   filterFactualPendingCandidates,
@@ -1280,6 +1281,12 @@ function main() {
     if (!valEval.verified) {
       reasonKey = "EVIDENCE_MISSING";
       reasonMsg = `STOP_BLOCKED: Completion claimed by worker, but required fresh validation evidence is not satisfied (${valEval.reason || "EVIDENCE_MISSING"}). MODEL CLAIM IS NOT EVIDENCE.`;
+      rollbackSelectedCanaryTask({
+        repoRoot,
+        taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
+        trigger: "REQUIRED_EVIDENCE_BYPASS_ATTEMPT",
+        details: { reason: valEval.reason || "EVIDENCE_MISSING" },
+      });
     } else if (twoKeyGate.required && !twoKeyGate.satisfied) {
       reasonKey = twoKeyGate.reason || "TWO_KEY_REVIEW_REQUIRED";
       reasonMsg = `STOP_BLOCKED: CRITICAL acceptance requires two factual independent reviewer approvals bound to the current candidate (${reasonKey}).`;
@@ -1336,6 +1343,12 @@ function main() {
     });
 
     if (missingTests.length > 0) {
+      rollbackSelectedCanaryTask({
+        repoRoot,
+        taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
+        trigger: "REQUIRED_EVIDENCE_BYPASS_ATTEMPT",
+        details: { missing_tests: missingTests.slice().sort() },
+      });
       activeState.forced_stop_continuations = (activeState.forced_stop_continuations || 0) + 1;
       activeState.forced_continuations_by_reason["EVIDENCE_MISSING"] =
         (activeState.forced_continuations_by_reason["EVIDENCE_MISSING"] || 0) + 1;

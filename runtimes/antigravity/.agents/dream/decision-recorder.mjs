@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
 import { sha256Canonical } from "./canonical.mjs";
 import { recordShadowObservationBestEffort } from "./shadow-mode.mjs";
+import { registerCanaryDecision } from "./canary-mode.mjs";
 
 /**
  * Builds a deterministic safe filesystem key string for correlating decisions with outcomes.
@@ -322,6 +323,7 @@ export function recordDecision({
             repoRoot,
             decisionEvent: existingPending.decision_event,
           });
+          try { registerCanaryDecision({ repoRoot, decisionEvent: existingPending.decision_event }); } catch {}
           return {
             recorded: true,
             recovered: true,
@@ -340,6 +342,7 @@ export function recordDecision({
             repoRoot,
             decisionEvent: alreadyPublished,
           });
+          try { registerCanaryDecision({ repoRoot, decisionEvent: alreadyPublished }); } catch {}
           return {
             recorded: true,
             reused: true,
@@ -369,6 +372,7 @@ export function recordDecision({
         repoRoot,
         decisionEvent: event,
       });
+      try { registerCanaryDecision({ repoRoot, decisionEvent: event }); } catch {}
     } catch (writeErr) {
       try { unlinkSync(tempFile); } catch {}
       if (pendingCommitted) {
