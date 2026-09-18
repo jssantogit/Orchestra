@@ -32,3 +32,18 @@ To permanently prevent accidental provider mixing, Orchestra maintains automated
 - Operational runtime state (`.agents/state/`, `.agents/telemetry/`, `.agents/artifacts/`) is excluded from version control via `.gitignore`.
 - Raw session JSONL transcripts, token traces, and private user credentials must never be committed.
 - Pre-commit scanning verifies that local absolute paths (`/root/`, `/home/`, Android storage paths) and sensitive tokens are absent from the repository.
+
+---
+
+## 4. External Semantic Services
+
+Optional semantic services such as TypeSafe AI Jev are **not runtimes** and are not eligible model routes.
+
+- Codex remains OpenAI-only.
+- Antigravity remains Gemini-only.
+- Jev may exist only in provider-neutral experiment/benchmark code unless a later human-gated retrieval-assist activation is explicitly approved.
+- Active routing, worker/reviewer profiles, hooks, Evidence Ledger, Stop Guard and Dream execution source must not import or select Jev.
+- Cross-runtime tests and the contamination checker reject `jev-latest`, TypeSafe endpoint/key references, and imports from `experiments/jev` inside active runtime files.
+
+This preserves the distinction between a control-plane model provider and a zero-authority semantic ranking service.
+
