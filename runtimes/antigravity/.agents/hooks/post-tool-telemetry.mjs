@@ -26,6 +26,10 @@ import {
   findFactualSubagentRecord,
   isSymmetricReviewerSet,
 } from "./child-identity.mjs";
+import {
+  bindLocalEvidence,
+  mergeFederatedEvidence,
+} from "../skills/orchestra/evidence-federation.mjs";
 
 function readStdin() {
   try {
@@ -722,26 +726,25 @@ function main() {
           if (!Array.isArray(activeState.evidenceLedger)) {
             activeState.evidenceLedger = [];
           }
-          const ev = {
-            executionId: resolvedExecutionId || null,
-            command: rawCmd,
-            exitCode,
-            mutationSeq: activeState.mutationSeq || 0,
-            actorRole: actor.role,
-            actorId: actor.actorId || conversationId || null,
-            conversationId: conversationId || null,
-            confidence: actor.confidence || "MEDIUM",
-            evidenceSource: actor.source || "TOOL_RESULT",
-            timestamp: new Date().toISOString(),
-          };
-          const existingIdx = activeState.evidenceLedger.findIndex(
-            (e) => e && resolvedExecutionId && e.executionId === resolvedExecutionId
-          );
-          if (existingIdx >= 0) {
-            activeState.evidenceLedger[existingIdx] = ev;
-          } else {
-            activeState.evidenceLedger.push(ev);
-          }
+          const actorBinding = (roleBindings.bindings && roleBindings.bindings[conversationId])
+            || (roleBindings.conversations && roleBindings.conversations[conversationId])
+            || null;
+          const ev = bindLocalEvidence({
+            evidence: {
+              evidenceId: "posttool:" + conversationId + ":" + String(stepIdx ?? "na") + ":" + String(payload.toolCall?.id || rawCmd),
+              executionId: resolvedExecutionId || null,
+              command: rawCmd,
+              exitCode,
+              mutationSeq: activeState.mutationSeq || 0,
+              timestamp: new Date().toISOString(),
+            },
+            activeState,
+            actor,
+            repoRoot,
+            conversationId,
+            parentConversationId: actorBinding?.parentConversationId || payload.parentConversationId || roleBindings.mainConversationId || null,
+          });
+          mergeFederatedEvidence(activeState, ev);
         }
       }
 
@@ -1038,22 +1041,21 @@ function main() {
           executionRecord.executionId,
           activeState.mutationSeq || 0
         );
-        recordedEvidence.actorRole = actor.role;
-        recordedEvidence.actorId = actor.actorId || conversationId || null;
-        recordedEvidence.conversationId = conversationId || null;
-        recordedEvidence.confidence = actor.confidence || "LOW";
-        recordedEvidence.evidenceSource = actor.source || "EXECUTION_HOOK";
-        recordedEvidence.delegationKind = actor.delegationKind || null;
-        recordedEvidence.attempt = Number.isInteger(actor.attempt) ? actor.attempt : null;
-
-        const existingIdx = activeState.evidenceLedger.findIndex(
-          (e) => e && e.command === recordedEvidence.command && e.type === recordedEvidence.type && e.scope === recordedEvidence.scope
-        );
-        if (existingIdx >= 0) {
-          activeState.evidenceLedger[existingIdx] = recordedEvidence;
-        } else {
-          activeState.evidenceLedger.push(recordedEvidence);
-        }
+        const actorBinding = (roleBindings.bindings && roleBindings.bindings[conversationId])
+          || (roleBindings.conversations && roleBindings.conversations[conversationId])
+          || null;
+        recordedEvidence = bindLocalEvidence({
+          evidence: {
+            ...recordedEvidence,
+            evidenceId: "execution:" + executionRecord.executionId,
+          },
+          activeState,
+          actor,
+          repoRoot,
+          conversationId,
+          parentConversationId: actorBinding?.parentConversationId || payload.parentConversationId || roleBindings.mainConversationId || null,
+        });
+        mergeFederatedEvidence(activeState, recordedEvidence);
 
         const bytes = executionRecord.totalBytes || 0;
         activeState.totalToolOutputBytes = (activeState.totalToolOutputBytes || 0) + bytes;
