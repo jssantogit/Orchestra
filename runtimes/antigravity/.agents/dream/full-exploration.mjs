@@ -240,14 +240,18 @@ function persist(repoRoot, control) {
 export function startFullExploration({ repoRoot } = {}) {
   if (!repoRoot) return { started: false, reason: "MISSING_REPO_ROOT" };
   const existing = loadFullExploration(repoRoot);
-  if (existing && ["ACTIVE", "STOP_REQUESTED"].includes(existing.status)) {
-    return {
-      started: false,
-      reason: existing.status === "STOP_REQUESTED"
-        ? "FULL_EXPLORATION_STOP_PENDING"
-        : "FULL_EXPLORATION_ALREADY_ACTIVE",
-      control: refreshControl(repoRoot, existing),
-    };
+  if (existing) {
+    refreshControl(repoRoot, existing);
+    if (["ACTIVE", "STOP_REQUESTED"].includes(existing.status)) {
+      persist(repoRoot, existing);
+      return {
+        started: false,
+        reason: existing.status === "STOP_REQUESTED"
+          ? "FULL_EXPLORATION_STOP_PENDING"
+          : "FULL_EXPLORATION_ALREADY_ACTIVE",
+        control: existing,
+      };
+    }
   }
 
   const now = Date.now();
