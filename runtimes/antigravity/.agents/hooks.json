@@ -42,14 +42,5 @@
         "timeout": 10
       }
     ]
-  },
-  "exploration-budget-guard": {
-    "PostInvocation": [
-      {
-        "type": "command",
-        "command": "node hooks/post-invocation-exploration-guard.mjs",
-        "timeout": 10
-      }
-    ]
   }
 }
