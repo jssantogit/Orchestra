@@ -6,6 +6,12 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation, verifyTaskEvidence, classifyExecutionEvidence, classifyShellMutation, isWorkerRole, createRetryBudget, consumeRetryBudget } from "../skills/agy-orchestra/routing-policy.mjs";
 import { childOwnedMissingRequirements } from "../skills/agy-orchestra/evidence-contract.mjs";
 import { collectRuntimeEvidenceSync } from "../skills/agy-orchestra/evidence-collectors.mjs";
+import {
+  bindLocalEvidence,
+  mergeFederatedEvidence,
+  federateDelegatedEvidence,
+  finalizeActiveTaskEvidenceBindings,
+} from "../skills/orchestra/evidence-federation.mjs";
 import { evaluateTwoKeyReview } from "../skills/orchestra/routing-policy.mjs";
 import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
 import { getExplorationBudgetState } from "../dream/exploration-lab.mjs";
@@ -527,38 +533,38 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 null,
                 activeState.mutationSeq || 0,
               );
-              const ev = {
-                ...classified,
-                executionId: null,
-                transcriptEvidenceId,
-                command: cmd,
-                exitCode,
-                actorRole: childRole,
-                actorId: childConvId,
+              const ev = bindLocalEvidence({
+                evidence: {
+                  ...classified,
+                  evidenceId: "transcript:" + transcriptEvidenceId,
+                  executionId: null,
+                  transcriptEvidenceId,
+                  command: cmd,
+                  exitCode,
+                  mutationSeq: activeState.mutationSeq || 0,
+                  transcriptStepIndex: stepIdx,
+                  latestMutationStepBeforeValidation,
+                  mutationAfterValidation,
+                  fresh,
+                  timestamp: step.created_at || new Date().toISOString(),
+                },
+                activeState,
+                actor: {
+                  role: childRole,
+                  actorId: childConvId,
+                  confidence: childConfidence,
+                  source: childConfidence === "HIGH" && binding?.source === "RUNTIME_IDENTITY"
+                    ? "RUNTIME_IDENTITY"
+                    : "CHILD_TRANSCRIPT",
+                  delegationKind: binding?.delegationKind || null,
+                  attempt: Number.isInteger(binding?.attempt) ? binding.attempt : 0,
+                },
+                repoRoot,
                 conversationId: childConvId,
-                confidence: childConfidence,
-                evidenceSource: "CHILD_TRANSCRIPT",
-                delegationKind: binding?.delegationKind || null,
-                attempt: Number.isInteger(binding?.attempt) ? binding.attempt : 0,
-                transcriptStepIndex: stepIdx,
-                latestMutationStepBeforeValidation,
-                mutationAfterValidation,
-                fresh,
-                timestamp: step.created_at || new Date().toISOString(),
-              };
-
-              const existingIdx = activeState.evidenceLedger.findIndex((e) => {
-                if (!e) return false;
-                if (e.transcriptEvidenceId && e.transcriptEvidenceId === transcriptEvidenceId) return true;
-                if (e.executionId && ev.executionId && e.executionId === ev.executionId) return true;
-                return false;
+                parentConversationId: binding?.parentConversationId || parentConvId || null,
               });
 
-              if (existingIdx >= 0) {
-                activeState.evidenceLedger[existingIdx] = ev;
-              } else {
-                activeState.evidenceLedger.push(ev);
-              }
+              mergeFederatedEvidence(activeState, ev);
 
               if (isWorkerRole(childRole) && (
                 ev.type !== "GENERIC_COMMAND_RESULT"
@@ -1124,6 +1130,23 @@ function main() {
     || (isMainConversation ? "ORCHESTRATOR" : (!payload.conversationId ? activeState.activeRole : "UNKNOWN"))
     || "UNKNOWN";
 
+  if (payload.conversationId && !isMainConversation && bound) {
+    const federation = federateDelegatedEvidence({
+      activeState,
+      factualBinding: bound,
+      childConversationId: convId,
+      parentConversationId: authoritativeMainConversationId,
+      repoRoot,
+    });
+    activeState.lastEvidenceFederation = {
+      childConversationId: convId,
+      promoted: federation.promoted || 0,
+      reason: federation.reason || null,
+      commitSha: federation.commitSha || null,
+      observedAt: new Date().toISOString(),
+    };
+  }
+
   // Acceptance authority belongs to the factual/main orchestrator conversation,
   // never merely to a stale global activeRole inherited by a child Stop.
   const isOrchestrator = Boolean(
@@ -1228,6 +1251,18 @@ function main() {
     console.log(JSON.stringify({ decision: "stop" }));
     return;
   }
+
+  // Finalize factual local evidence against the current candidate commit before
+  // parent acceptance. Already-bound old commits are never rewritten.
+  const finalizedEvidence = finalizeActiveTaskEvidenceBindings({
+    activeState,
+    repoRoot,
+  });
+  activeState.lastEvidenceBindingFinalization = {
+    promoted: finalizedEvidence.promoted || 0,
+    headSha: finalizedEvidence.headSha || null,
+    observedAt: new Date().toISOString(),
+  };
 
   // Collect runtime-owned facts (LOCAL_FACT and REMOTE_CI) before acceptance.
   // Model text never enters this path as evidence.
