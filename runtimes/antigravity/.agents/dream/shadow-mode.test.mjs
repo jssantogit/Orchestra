@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -288,7 +289,7 @@ test("recordDecision keeps baseline execution private from a divergent shadow ca
       "observations",
       enabled.config.shadow_session_id,
     );
-    const files = readdirSyncCompat(obsDir);
+    const files = readdirSync(obsDir).filter((x) => x.endsWith(".json")).sort();
     assert.equal(files.length, 1);
     const observation = JSON.parse(readFileSync(join(obsDir, files[0]), "utf8"));
     assert.equal(observation.baseline_action, "FLASH_MEDIUM");
@@ -302,22 +303,7 @@ test("recordDecision keeps baseline execution private from a divergent shadow ca
   }
 });
 
-function readdirSyncCompat(dir) {
-  if (!existsSync(dir)) return [];
-  return Object.keys(
-    Object.fromEntries(
-      readFileNames(dir).map((name) => [name, true])
-    )
-  ).sort();
-}
-
-function readFileNames(dir) {
-  // Kept behind a tiny helper so tests never depend on directory traversal order.
-  return import.meta.dirname ? [] : [];
-}
-
-test("Shadow reaches canary-review readiness only after 50 eligible exact-supported decisions", async () => {
-  const { readdirSync } = await import("node:fs");
+test("Shadow reaches canary-review readiness only after 50 eligible exact-supported decisions", () => {
   const f = fixture();
   try {
     const enabled = enableShadowMode({
