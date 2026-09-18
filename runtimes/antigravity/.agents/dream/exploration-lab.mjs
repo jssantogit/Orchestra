@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
   chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync,
-  readlinkSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync,
-  writeFileSync,
+  readlinkSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync,
+  unlinkSync, writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
@@ -474,8 +474,12 @@ export function recordExplorationModelCall({ repoRoot, payload = {} } = {}) {
 
 export function buildSandboxedExplorationCommand(command, args = []) {
   const raw = String(command || "").trim();
-  const executable = raw.split(/[\\/]/).pop()?.toLowerCase() || "";
-  if (!["agy", "agy.exe", "antigravity", "antigravity.exe"].includes(executable)) {
+  const executable = raw.toLowerCase();
+  if (
+    raw.includes("/") ||
+    raw.includes("\\") ||
+    !["agy", "agy.exe", "antigravity", "antigravity.exe"].includes(executable)
+  ) {
     return { ok: false, reason: "EXPLORATION_RUNNER_REQUIRES_ANTIGRAVITY" };
   }
 
@@ -505,24 +509,63 @@ export function buildSandboxedExplorationCommand(command, args = []) {
   };
 }
 
+function resolveAntigravityExecutable(command, branchWorkspace, env = process.env) {
+  const raw = String(command || "").trim().toLowerCase();
+  const pathEntries = String(env.PATH || "").split(delimiter).filter(Boolean);
+  const names = process.platform === "win32"
+    ? (
+      raw.endsWith(".exe")
+        ? [raw]
+        : [raw + ".exe", raw + ".cmd", raw + ".bat"]
+    )
+    : [raw];
+
+  for (const entry of pathEntries) {
+    if (!isAbsolute(entry)) continue;
+    for (const name of names) {
+      const candidate = resolve(entry, name);
+      if (!existsSync(candidate)) continue;
+      let physical = candidate;
+      try { physical = realpathSync(candidate); } catch {}
+      if (inside(branchWorkspace, physical)) continue;
+      return physical;
+    }
+  }
+  return null;
+}
+
 export function runExplorationCommand({ branchWorkspace, command, args = [] } = {}) {
   if (!branchWorkspace || !command) return { ran: false, reason: "MISSING_RUN_INPUT" };
   const session = loadExplorationSession(branchWorkspace);
   if (!session) return { ran: false, reason: "EXPLORATION_SESSION_MISSING" };
+  if (session.status !== "PREPARED") {
+    return { ran: false, reason: "EXPLORATION_SESSION_NOT_RUNNABLE", status: session.status };
+  }
+  if (Date.now() >= Date.parse(session.deadline_at)) {
+    session.status = "TIMEOUT";
+    session.finished_at = new Date().toISOString();
+    atomicJson(resolve(branchWorkspace, SESSION), session);
+    return { ran: false, reason: "EXPLORATION_TIMEOUT", timed_out: true };
+  }
 
   const launch = buildSandboxedExplorationCommand(command, args);
   if (!launch.ok) return { ran: false, ...launch };
 
-  const remaining = Math.max(1, Date.parse(session.deadline_at) - Date.now());
+  const executablePath = resolveAntigravityExecutable(launch.command, branchWorkspace);
+  if (!executablePath) {
+    return { ran: false, reason: "EXPLORATION_ANTIGRAVITY_EXECUTABLE_NOT_FOUND" };
+  }
+
+  const remaining = Date.parse(session.deadline_at) - Date.now();
   session.status = "RUNNING";
   session.runner = {
-    executable: launch.command,
+    executable: executablePath,
     sandbox_forced: true,
     permission_bypass_allowed: false,
   };
   atomicJson(resolve(branchWorkspace, SESSION), session);
 
-  const result = spawnSync(launch.command, launch.args, {
+  const result = spawnSync(executablePath, launch.args, {
     cwd: branchWorkspace,
     stdio: "inherit",
     timeout: Math.min(remaining, EXPLORATION_BUDGET.timeout_ms),
@@ -534,20 +577,22 @@ export function runExplorationCommand({ branchWorkspace, command, args = [] } = 
     },
   });
   const timedOut = result.error?.code === "ETIMEDOUT" || result.signal === "SIGTERM";
+  const spawnError = result.error ? String(result.error.message || result.error) : null;
   const latest = loadExplorationSession(branchWorkspace) || session;
-  latest.status = timedOut ? "TIMEOUT" : "FINISHED";
+  latest.status = timedOut ? "TIMEOUT" : spawnError ? "FAILED_TO_START" : "FINISHED";
   latest.finished_at = new Date().toISOString();
   latest.exit_code = result.status;
   latest.signal = result.signal || null;
-  latest.spawn_error = result.error ? String(result.error.message || result.error) : null;
+  latest.spawn_error = spawnError;
   atomicJson(resolve(branchWorkspace, SESSION), latest);
   return {
-    ran: true,
+    ran: !spawnError,
+    reason: spawnError ? "EXPLORATION_SPAWN_FAILED" : null,
     timed_out: timedOut,
     exit_code: result.status,
     signal: result.signal || null,
     sandbox_forced: true,
-    spawn_error: latest.spawn_error,
+    spawn_error: spawnError,
   };
 }
 
