@@ -1930,13 +1930,15 @@ test("pre-tool hook: blocks orchestrator shell mutations but permits read-only c
   }
 });
 
-test("pre-tool hook: tracks subagent invocations and binds child conversation ID to worker role", () => {
+test("pre-tool hook: pending uniqueness is not factual identity; brain record upgrades provisional child", () => {
   cleanState();
+  const brainBaseDir = resolve("scratch/identity-brain");
   try {
-    // 1. invoke_subagent call records pending subagent
     const invokeInput = JSON.stringify({
       conversationId: "parent-conv-1",
+      stepIdx: 6,
       toolCall: {
+        id: "call-worker-identity",
         name: "invoke_subagent",
         args: {
           Subagents: [
@@ -1953,33 +1955,80 @@ test("pre-tool hook: tracks subagent invocations and binds child conversation ID
     const invokeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: invokeInput }));
     assert.equal(invokeOutput.decision, "allow");
 
-    // Verify role-bindings.json has pending binding
     const bindingsPath = resolve(".agents/state/role-bindings.json");
-    assert.ok(existsSync(bindingsPath), "role-bindings.json must exist after invoke_subagent");
-    const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.ok(bindings.pendingSubagents.length > 0, "pendingSubagents must be populated");
+    let bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.pendingSubagents.length, 1);
     assert.equal(bindings.pendingSubagents[0].role, "WORKER");
+    assert.equal(bindings.pendingSubagents[0].originStepIdx, 6);
 
-    // 2. Authorize scope contract for worker
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       taskDomain: "CODE",
       allowedPaths: ["src/**"],
     }));
 
-    // 3. Child conversation calls tool -> automatically bound to WORKER and allowed within scope
-    const childInput = JSON.stringify({
+    // A single pending delegation is not proof of child identity.
+    const noProofInput = JSON.stringify({
       conversationId: "child-conv-42",
+      parentConversationId: "parent-conv-1",
       toolCall: {
+        id: "call-child-no-proof",
         name: "write_to_file",
         args: { TargetFile: resolve("src/formatter.js") },
       },
     });
-    const childOutput = JSON.parse(execFileSync("node", [preToolScript], { input: childInput }));
-    assert.equal(childOutput.decision, "allow", "Bound worker must be allowed to write product file");
+    const noProofOutput = JSON.parse(execFileSync("node", [preToolScript], { input: noProofInput }));
+    assert.equal(noProofOutput.decision, "deny");
+    assert.match(noProofOutput.reason, /ROLE_IDENTITY_UNRESOLVED/);
 
-    // Verify bindings now map child-conv-42 to WORKER
-    const updatedBindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(updatedBindings.conversations["child-conv-42"].role, "WORKER");
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.pendingSubagents[0].consumed, false);
+    assert.equal(bindings.bindings["child-conv-42"], undefined);
+
+    // Runtime hook metadata may provisionally correlate the child for authorization,
+    // but it must remain MEDIUM and must not claim factual runtime identity.
+    const provisionalInput = JSON.stringify({
+      conversationId: "child-conv-42",
+      parentConversationId: "parent-conv-1",
+      agentRole: "WORKER",
+      agentProfile: "flash-low-worker",
+      modelName: "gemini-3.8-flash-low",
+      toolCall: {
+        id: "call-child-provisional",
+        name: "write_to_file",
+        args: { TargetFile: resolve("src/formatter.js") },
+      },
+    });
+    const provisionalOutput = JSON.parse(execFileSync("node", [preToolScript], { input: provisionalInput }));
+    assert.equal(provisionalOutput.decision, "allow");
+
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.bindings["child-conv-42"].role, "WORKER");
+    assert.equal(bindings.bindings["child-conv-42"].confidence, "MEDIUM");
+    assert.equal(bindings.bindings["child-conv-42"].source, "HOOK_PAYLOAD_CORRELATION");
+
+    // The factual Antigravity brain record for the exact child upgrades the same
+    // binding to HIGH/RUNTIME_IDENTITY.
+    const subagentsDir = resolve(brainBaseDir, "parent-conv-1/.system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(resolve(subagentsDir, "child-conv-42.json"), JSON.stringify({
+      conversationId: "child-conv-42",
+      subagentDescriptor: {
+        typeName: "flash-low-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 6,
+    }, null, 2), "utf-8");
+
+    const factualOutput = JSON.parse(execFileSync("node", [preToolScript], {
+      input: noProofInput,
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }));
+    assert.equal(factualOutput.decision, "allow");
+
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.bindings["child-conv-42"].confidence, "HIGH");
+    assert.equal(bindings.bindings["child-conv-42"].source, "RUNTIME_IDENTITY");
+    assert.ok(bindings.bindings["child-conv-42"].factualIdentityAt);
   } finally {
     cleanState();
   }
@@ -2224,6 +2273,10 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
     // Reviewer A calls write_to_file -> must be DENIED as Reviewer
     const revAInput = JSON.stringify({
       conversationId: "rev-conv-a",
+      parentConversationId: "orch-main",
+      agentRole: "REVIEWER",
+      agentProfile: "flash-reviewer",
+      modelName: "gemini-3.8-flash-high",
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("src/formatter.js") },
@@ -2236,6 +2289,10 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
     // Reviewer B calls run_command -> must be DENIED as Reviewer
     const revBInput = JSON.stringify({
       conversationId: "rev-conv-b",
+      parentConversationId: "orch-main",
+      agentRole: "REVIEWER",
+      agentProfile: "flash-reviewer",
+      modelName: "gemini-3.8-flash-high",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "node --test test/formatter.test.js" },
@@ -2250,6 +2307,11 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
     const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
     assert.equal(bindings.bindings["rev-conv-a"].role, "REVIEWER");
     assert.equal(bindings.bindings["rev-conv-b"].role, "REVIEWER");
+    assert.equal(bindings.bindings["rev-conv-a"].confidence, "MEDIUM");
+    assert.equal(bindings.bindings["rev-conv-b"].confidence, "MEDIUM");
+    assert.equal(bindings.bindings["rev-conv-a"].source, "HOOK_PAYLOAD_CORRELATION");
+    assert.equal(bindings.bindings["rev-conv-b"].source, "HOOK_PAYLOAD_CORRELATION");
+    assert.equal(bindings.bindings["rev-conv-a"].slotAssignment, "SYMMETRIC_REVIEW_SLOT");
   } finally {
     cleanState();
   }
