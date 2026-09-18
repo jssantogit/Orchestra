@@ -6,6 +6,8 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation, verifyTaskEvidence, classifyExecutionEvidence, classifyShellMutation, isWorkerRole, createRetryBudget, consumeRetryBudget } from "../skills/agy-orchestra/routing-policy.mjs";
 import { childOwnedMissingRequirements } from "../skills/agy-orchestra/evidence-contract.mjs";
 import { collectRuntimeEvidenceSync } from "../skills/agy-orchestra/evidence-collectors.mjs";
+import { summarizeEvidenceWatches } from "../skills/orchestra/evidence-watch.mjs";
+import { launchEvidenceWatchRunner } from "../skills/orchestra/evidence-watch-runner.mjs";
 import {
   bindLocalEvidence,
   mergeFederatedEvidence,
@@ -66,6 +68,7 @@ function getWorkspacePaths(payload = {}) {
   return {
     repoRoot,
     statePath: resolve(repoRoot, ".agents/state/active-state.json"),
+    contractPath: resolve(repoRoot, ".agents/state/active-contract.json"),
     telemetryPath: resolve(repoRoot, ".agents/telemetry/events.jsonl"),
   };
 }
@@ -1006,7 +1009,7 @@ function main() {
     return;
   }
 
-  const { repoRoot, statePath, telemetryPath } = getWorkspacePaths(payload);
+  const { repoRoot, statePath, contractPath, telemetryPath } = getWorkspacePaths(payload);
 
   // Milestone E budget is a hard upper bound. If PostInvocation exhausted the
   // exploration allowance, Stop must not reopen the execution loop even when
@@ -1266,17 +1269,19 @@ function main() {
 
   // Collect runtime-owned facts (LOCAL_FACT and REMOTE_CI) before acceptance.
   // Model text never enters this path as evidence.
+  let runtimeEvidenceCollection = null;
   if (Array.isArray(activeState.scopeContract?.requiredEvidence)) {
-    const collection = collectRuntimeEvidenceSync({
+    runtimeEvidenceCollection = collectRuntimeEvidenceSync({
       repoRoot,
       activeState,
       contract: activeState.scopeContract,
     });
     activeState.lastEvidenceCollection = {
-      collected: collection.collected === true,
-      reason: collection.reason || null,
-      records: Array.isArray(collection.records)
-        ? collection.records.map((record) => ({
+      collected: runtimeEvidenceCollection.collected === true,
+      reason: runtimeEvidenceCollection.reason || null,
+      remotePollPerformed: runtimeEvidenceCollection.remotePollPerformed === true,
+      records: Array.isArray(runtimeEvidenceCollection.records)
+        ? runtimeEvidenceCollection.records.map((record) => ({
             evidenceId: record.evidenceId,
             requirementId: record.requirementId,
             class: record.class,
@@ -1284,6 +1289,9 @@ function main() {
             result: record.result,
             reason: record.reason || null,
           }))
+        : [],
+      skipped: Array.isArray(runtimeEvidenceCollection.skipped)
+        ? runtimeEvidenceCollection.skipped
         : [],
       observedAt: new Date().toISOString(),
     };
@@ -1307,21 +1315,50 @@ function main() {
   }
 
   // Asynchronous verified providers are a factual wait state, not missing evidence.
+  // Stop the model turn: persistent provider watches control the next poll.
   if (valEval.status === "PENDING") {
+    const watchSummary = summarizeEvidenceWatches(activeState);
     activeState.state = "CI_WAIT";
     activeState.acceptanceState = "PENDING";
     activeState.ciWait = {
       requirementIds: (valEval.results || []).filter((r) => r.status === "PENDING").map((r) => r.id),
-      pollCount: (activeState.ciWait?.pollCount || 0) + 1,
+      watchSummary,
+      nextPollAt: watchSummary.watches
+        .map((watch) => watch.nextPollAt)
+        .filter(Boolean)
+        .sort()[0] || null,
+      deadlineAt: watchSummary.watches
+        .map((watch) => watch.deadlineAt)
+        .filter(Boolean)
+        .sort()[0] || null,
       observedAt: new Date().toISOString(),
     };
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-    recordStopTelemetry(telemetryPath, activeState, payload, "continue", "CI_WAIT");
+
+    let watchRunner = null;
+    try {
+      watchRunner = launchEvidenceWatchRunner({
+        repoRoot,
+        statePath,
+        contractPath,
+        activeState,
+      });
+      activeState.ciWait.runner = watchRunner;
+      writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+    } catch (error) {
+      activeState.ciWait.runner = {
+        launched: false,
+        error: String(error?.message || error),
+      };
+      try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    }
+
+    recordStopTelemetry(telemetryPath, activeState, payload, "stop", "CI_WAIT");
     console.log(JSON.stringify({
-      decision: "continue",
-      reason: "CI_WAIT: Authoritative remote validation is still pending. Do not treat this as EVIDENCE_MISSING; wait and re-check the declared provider evidence.",
+      decision: "stop",
+      reason: "CI_WAIT: Authoritative remote validation is pending. Persistent watch state controls provider backoff; no model-turn polling is required.",
     }));
     return;
   }
@@ -1404,7 +1441,15 @@ function main() {
   }
 
   if (valEval.status === "SOURCE_UNAVAILABLE") {
-    const count = (activeState.evidenceSourceUnavailableCount || 0) + 1;
+    const observedUnavailableNow = Boolean(
+      runtimeEvidenceCollection?.remotePollPerformed
+      && (runtimeEvidenceCollection.records || []).some((record) => (
+        record.kind === "REMOTE_CI"
+        && record.result === "UNAVAILABLE"
+      ))
+    );
+    const previousCount = activeState.evidenceSourceUnavailableCount || 0;
+    const count = observedUnavailableNow ? previousCount + 1 : previousCount;
     activeState.evidenceSourceUnavailableCount = count;
     activeState.acceptanceState = "PENDING";
     activeState.state = count >= 3 ? "HUMAN_GATE" : "CI_WAIT";
@@ -1419,12 +1464,44 @@ function main() {
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-    recordStopTelemetry(telemetryPath, activeState, payload, "continue", "EVIDENCE_SOURCE_UNAVAILABLE");
+
+    if (count < 3) {
+      try {
+        const watchRunner = launchEvidenceWatchRunner({
+          repoRoot,
+          statePath,
+          contractPath,
+          activeState,
+        });
+        activeState.ciWait = {
+          ...(activeState.ciWait || {}),
+          watchSummary: summarizeEvidenceWatches(activeState),
+          runner: watchRunner,
+          observedAt: new Date().toISOString(),
+        };
+        writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+      } catch (error) {
+        activeState.ciWait = {
+          ...(activeState.ciWait || {}),
+          runner: { launched: false, error: String(error?.message || error) },
+          observedAt: new Date().toISOString(),
+        };
+        try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+      }
+    }
+
+    recordStopTelemetry(
+      telemetryPath,
+      activeState,
+      payload,
+      count >= 3 ? "continue" : "stop",
+      "EVIDENCE_SOURCE_UNAVAILABLE"
+    );
     console.log(JSON.stringify({
-      decision: "continue",
+      decision: count >= 3 ? "continue" : "stop",
       reason: count >= 3
-        ? "EVIDENCE_SOURCE_UNAVAILABLE: Authoritative evidence source remained unavailable after bounded retries. Halting to HUMAN_GATE."
-        : "EVIDENCE_SOURCE_UNAVAILABLE: Authoritative evidence source is temporarily unavailable. Fail-closed and retry collection without accepting.",
+        ? "EVIDENCE_SOURCE_UNAVAILABLE: Authoritative evidence source remained unavailable after bounded factual polls. Halting to HUMAN_GATE."
+        : "EVIDENCE_SOURCE_UNAVAILABLE: Provider is temporarily unavailable. Persistent watch/backoff remains fail-closed without model-turn polling.",
     }));
     return;
   }

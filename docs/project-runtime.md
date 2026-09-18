@@ -40,6 +40,7 @@ node scripts/orchestra-project.mjs diff-runtime /path/to/project
 node scripts/orchestra-project.mjs doctor /path/to/project
 node scripts/orchestra-project.mjs version /path/to/project
 node scripts/orchestra-project.mjs backups /path/to/project
+node scripts/orchestra-project.mjs evidence /path/to/project
 node scripts/orchestra-project.mjs rollback-runtime /path/to/project --backup latest --dry-run
 node scripts/orchestra-project.mjs rollback-runtime /path/to/project --backup latest
 ```
@@ -54,6 +55,7 @@ A managed project can inspect itself without the Orchestra checkout:
 node .agents/skills/orchestra/project-runtime-cli.mjs doctor
 node .agents/skills/orchestra/project-runtime-cli.mjs version
 node .agents/skills/orchestra/project-runtime-cli.mjs backups
+node .agents/skills/orchestra/project-runtime-cli.mjs evidence
 ```
 
 Update/diff from the installed CLI require an explicit source runtime:

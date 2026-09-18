@@ -259,7 +259,14 @@ function main() {
   }
 
   if (state.state === "CI_WAIT") {
-    recordAdvisory("CI_WAIT", "CI_WAIT ACTIVE: Authoritative remote evidence is pending. Do not substitute local tests, inspect unrelated files, spawn subagents, or claim completion from memory. Yield with zero work; Stop Guard will re-query the declared provider evidence.");
+    const nextPollAt = state.ciWait?.nextPollAt || state.ciWait?.watchSummary?.watches?.[0]?.nextPollAt || "pending";
+    const runner = state.ciWait?.runner?.pid
+      ? "background runner pid=" + state.ciWait.runner.pid
+      : (state.ciWait?.runner?.disabled ? "background runner disabled" : "watch persisted");
+    recordAdvisory(
+      "CI_WAIT",
+      "CI_WAIT ACTIVE: authoritative remote evidence is pending; " + runner + ", nextPollAt=" + nextPollAt + ". Do not substitute local tests, inspect unrelated files, spawn subagents, or model-poll CI. Yield with zero work."
+    );
   }
 
   if (state.mechanicalFastPath?.active === true) {

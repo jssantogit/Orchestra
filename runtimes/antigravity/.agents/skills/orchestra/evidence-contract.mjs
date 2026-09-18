@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { getEvidenceProvider, validateRemoteEvidenceRequirement } from "./evidence-provider-registry.mjs";
 
 export const EVIDENCE_SCHEMA = "orchestra.evidence.v1";
 
@@ -12,8 +13,7 @@ export const EVIDENCE_STATUS = Object.freeze({
   INVALID_CONTRACT: "INVALID_CONTRACT",
 });
 
-const RUNTIME_PROVENANCE = new Set([
-  "ORCHESTRA_GITHUB_COLLECTOR",
+const LOCAL_RUNTIME_PROVENANCE = new Set([
   "ORCHESTRA_LOCAL_FACT_COLLECTOR",
 ]);
 
@@ -99,18 +99,11 @@ export function normalizeEvidenceRequirements(contract = {}, activeState = {}) {
         return { valid: false, reason: "LOCAL_FACT_CLASS_REQUIRED", index: i, requirements: [] };
       }
       if (requirement.kind === "REMOTE_CI") {
-        if (String(requirement.provider || "").toUpperCase() !== "GITHUB_ACTIONS") {
-          return { valid: false, reason: "REMOTE_CI_PROVIDER_UNSUPPORTED", index: i, requirements: [] };
+        const providerValidation = validateRemoteEvidenceRequirement(requirement);
+        if (!providerValidation.valid) {
+          return { valid: false, reason: providerValidation.reason, index: i, requirements: [] };
         }
-        const workflow = requirement.workflow && typeof requirement.workflow === "object"
-          ? requirement.workflow
-          : null;
-        if (!workflow || (workflow.id === undefined && !workflow.path && !workflow.name)) {
-          return { valid: false, reason: "REMOTE_CI_WORKFLOW_REQUIRED", index: i, requirements: [] };
-        }
-        if (!Array.isArray(requirement.requiredJobs) || requirement.requiredJobs.length === 0) {
-          return { valid: false, reason: "REMOTE_CI_REQUIRED_JOBS_REQUIRED", index: i, requirements: [] };
-        }
+        requirement.provider = providerValidation.provider;
       }
       if (!["LOCAL_COMMAND", "LOCAL_FACT", "REMOTE_CI"].includes(requirement.kind)) {
         return { valid: false, reason: "EVIDENCE_KIND_UNSUPPORTED", index: i, requirements: [] };
@@ -243,7 +236,10 @@ function validLocalCommandProvenance(ev, activeState) {
 function validRuntimeProvenance(ev) {
   const validation = validateEvidenceRecord(ev);
   if (!validation.valid) return false;
-  return RUNTIME_PROVENANCE.has(ev.provenance?.source);
+  const source = ev.provenance?.source;
+  if (LOCAL_RUNTIME_PROVENANCE.has(source)) return true;
+  const provider = getEvidenceProvider(ev.provider);
+  return Boolean(provider && provider.provenanceSource === source);
 }
 
 function evaluateRequirement(requirement, ledger, activeState) {

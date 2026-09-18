@@ -16,6 +16,7 @@ const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-co
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
 const federation = read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs");
 const inspector = read("runtimes/antigravity/.agents/skills/orchestra/evidence-inspector.mjs");
+const providerRegistry = read("runtimes/antigravity/.agents/skills/orchestra/evidence-provider-registry.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
 const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
 
@@ -27,8 +28,11 @@ test("ARCH-EVIDENCE-01: CI_WAIT and remote validation failure are first-class co
 });
 
 test("ARCH-EVIDENCE-02: model claims cannot become runtime/provider evidence", () => {
-  assert.match(contract, /ORCHESTRA_GITHUB_COLLECTOR/);
   assert.match(contract, /ORCHESTRA_LOCAL_FACT_COLLECTOR/);
+  assert.match(contract, /getEvidenceProvider/);
+  assert.match(contract, /provider\.provenanceSource/);
+  assert.match(providerRegistry, /ORCHESTRA_GITHUB_COLLECTOR/);
+  assert.match(providerRegistry, /validateRemoteEvidenceRequirement/);
   assert.match(contract, /validateEvidenceRecord/);
   assert.equal(contract.includes('"MODEL_CLAIM"'), false);
   assert.equal(stop.includes("skipEvidenceCheck"), false);
