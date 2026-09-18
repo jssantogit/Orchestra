@@ -1743,8 +1743,9 @@ function main() {
         const baseTestsRequired = activeContract?.testsRequired || [];
 
         const delegationContract = {
+          ...(activeContract && typeof activeContract === "object" ? activeContract : {}),
           contractId: `delegation-contract-${toolCall.id || payload.toolCallId || "unknown"}-${subIdx}`,
-          taskId: activeState.taskId || activeState.taskKey || null,
+          taskId: activeState.taskId || activeState.taskKey || activeContract?.taskId || null,
           targetAgent: sub.TypeName || (pending?.role === "REVIEWER" ? "flash-reviewer" : "flash-low-worker"),
           delegationKind: pending?.delegationKind || null,
           criticality: String(activeState.criticality || activeContract?.criticality || "NORMAL").toUpperCase(),
