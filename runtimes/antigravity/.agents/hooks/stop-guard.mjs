@@ -1,8 +1,10 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
+import { evaluateTwoKeyReview } from "../skills/orchestra/routing-policy.mjs";
 import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
 import {
   factualSubagentMatchesPending,
@@ -81,6 +83,129 @@ function recordStopTelemetry(telemetryPath, activeState, payload, decision, cont
     };
     appendFileSync(telemetryPath, JSON.stringify(stopEvent) + "\n", "utf-8");
   } catch {}
+}
+
+function readGitHead(repoRoot) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function extractReviewerVerdict(steps = []) {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const text = String(steps[i]?.content || "");
+    if (!text) continue;
+    const explicit = text.match(/(?:VERDICT|DECISION|RECOMMENDATION)\s*[:=\-]?\s*[\`*]*([A-Z_]+)[\`*]*/i);
+    const raw = explicit?.[1]?.toUpperCase() || null;
+    if (raw) {
+      if (["ACCEPT", "ACCEPTED", "PASS", "PASSED"].includes(raw)) return "ACCEPT";
+      if (["ACCEPT_WITH_NOTES", "ACCEPT_NOTES", "PASS_WITH_NOTES"].includes(raw)) return "ACCEPT_WITH_NOTES";
+      if (["CHANGES_REQUIRED", "CHANGE_REQUIRED", "REWORK", "RETRY"].includes(raw)) return "CHANGES_REQUIRED";
+      if (["BLOCK", "BLOCKED", "REJECT", "REJECTED"].includes(raw)) return "BLOCK";
+    }
+    if (/\bACCEPT_WITH_NOTES\b/i.test(text)) return "ACCEPT_WITH_NOTES";
+    if (/\bCHANGES_REQUIRED\b/i.test(text)) return "CHANGES_REQUIRED";
+    if (/\b(?:VERDICT|DECISION)[\s\S]{0,40}\bACCEPT\b/i.test(text)) return "ACCEPT";
+    if (/\bBLOCK\b/i.test(text)) return "BLOCK";
+  }
+  return null;
+}
+
+function evaluateTwoKeyRuntimeGate(activeState, roleBindings, repoRoot) {
+  const criticality = String(
+    activeState.criticality || activeState.scopeContract?.criticality || ""
+  ).toUpperCase();
+  const required = criticality === "CRITICAL" || activeState.independentReviewRequired === true;
+  if (!required) return { required: false, satisfied: true, reason: null };
+
+  const review = activeState.twoKeyReview;
+  if (!review || review.expectedReviewerCount !== 2) {
+    return { required: true, satisfied: false, reason: "TWO_KEY_REVIEW_MISSING" };
+  }
+
+  const currentHead = readGitHead(repoRoot);
+  const currentMutationSeq = activeState.mutationSeq || activeState.mutation_seq || 0;
+  if (
+    !review.candidateHead ||
+    !currentHead ||
+    review.candidateHead !== currentHead ||
+    review.candidateMutationSeq !== currentMutationSeq
+  ) {
+    return {
+      required: true,
+      satisfied: false,
+      reason: "TWO_KEY_REVIEW_STALE",
+      candidateHead: review.candidateHead || null,
+      currentHead,
+      candidateMutationSeq: review.candidateMutationSeq ?? null,
+      currentMutationSeq,
+    };
+  }
+
+  const entries = Object.entries(review.reviews || {});
+  if (entries.length !== 2) {
+    return {
+      required: true,
+      satisfied: false,
+      reason: "TWO_KEY_REVIEW_INCOMPLETE",
+      observedReviewerCount: entries.length,
+    };
+  }
+
+  const seen = new Set();
+  const verdicts = [];
+  for (const [conversationId, result] of entries) {
+    if (seen.has(conversationId)) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEWER_IDENTITY_REUSED" };
+    }
+    seen.add(conversationId);
+
+    const binding = roleBindings.bindings?.[conversationId]
+      || roleBindings.conversations?.[conversationId]
+      || null;
+    if (
+      !binding ||
+      binding.role !== "REVIEWER" ||
+      binding.profile !== "flash-reviewer" ||
+      binding.source !== "RUNTIME_IDENTITY" ||
+      binding.confidence !== "HIGH" ||
+      binding.delegationKind !== "REVIEW"
+    ) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEWER_IDENTITY_NOT_FACTUAL" };
+    }
+
+    if (
+      result.reviewBatchId !== review.reviewBatchId ||
+      result.candidateHead !== review.candidateHead ||
+      result.candidateMutationSeq !== review.candidateMutationSeq ||
+      result.completionHead !== review.candidateHead ||
+      result.completionMutationSeq !== review.candidateMutationSeq
+    ) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEW_RESULT_STALE" };
+    }
+    if (result.readOnlyViolation === true) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEWER_WRITE_DETECTED" };
+    }
+    if (!result.verdict) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEW_VERDICT_MISSING" };
+    }
+    verdicts.push(result.verdict);
+  }
+
+  const consensus = evaluateTwoKeyReview(review, verdicts[0], verdicts[1]);
+  return {
+    required: true,
+    satisfied: consensus.acceptable === true,
+    reason: consensus.acceptable ? null : "TWO_KEY_CONSENSUS_NOT_ACCEPTED",
+    consensus,
+  };
 }
 
 function isStepMutation(step) {
@@ -382,8 +507,61 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         }
       }
 
-      if (lastWorkerValidationEv) {
-        activeState.workerValidationObserved = true;
+      const isTerminalReviewerStop = Boolean(
+        childRole === "REVIEWER" &&
+        childConfidence === "HIGH" &&
+        binding?.source === "RUNTIME_IDENTITY" &&
+        binding?.delegationKind === "REVIEW" &&
+        options.terminalFullyIdle === true &&
+        options.terminalChildConversationId === childConvId
+      );
+
+      if (isTerminalReviewerStop) {
+        const pending = Array.isArray(roleBindings.pendingSubagents)
+          ? roleBindings.pendingSubagents.find((p) => p.seq === binding.pendingSeq)
+          : null;
+        const review = activeState.twoKeyReview;
+        const verdict = extractReviewerVerdict(steps);
+        const candidateHead = pending?.reviewCandidateHead || review?.candidateHead || null;
+        const candidateMutationSeq = pending?.reviewCandidateMutationSeq ?? review?.candidateMutationSeq ?? null;
+        const reviewBatchId = pending?.reviewBatchId || review?.reviewBatchId || binding.originToolCallId || null;
+        const completionHead = readGitHead(repoRoot);
+        const completionMutationSeq = activeState.mutationSeq || activeState.mutation_seq || 0;
+
+        if (
+          review &&
+          reviewBatchId &&
+          review.reviewBatchId === reviewBatchId &&
+          candidateHead === review.candidateHead &&
+          candidateMutationSeq === review.candidateMutationSeq
+        ) {
+          if (!review.reviews || typeof review.reviews !== "object") review.reviews = {};
+          review.reviews[childConvId] = {
+            conversationId: childConvId,
+            verdict,
+            reviewBatchId,
+            candidateHead,
+            candidateMutationSeq,
+            completionHead,
+            completionMutationSeq,
+            readOnlyViolation: mutationStepIndices.length > 0,
+            completedAt: new Date().toISOString(),
+          };
+          review.reviewerConversationIds = Object.keys(review.reviews);
+          review.status = review.reviewerConversationIds.length === 2 ? "EVIDENCE_READY" : "IN_FLIGHT";
+        } else {
+          activeState.twoKeyReviewViolation = {
+            reason: "TWO_KEY_REVIEW_CANDIDATE_CORRELATION_MISMATCH",
+            conversationId: childConvId,
+            reviewBatchId,
+            candidateHead,
+            candidateMutationSeq,
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
+
+      if (lastWorkerValidationEv) {        activeState.workerValidationObserved = true;
         activeState.workerValidationCommand = lastWorkerValidationEv.command;
         activeState.workerValidationExitCode = lastWorkerValidationEv.exitCode;
         activeState.workerValidationActor = "WORKER";
@@ -753,7 +931,13 @@ function main() {
     || convId
     || roleBindings.mainConversationId
     || null;
-  syncChildEvidence(activeState, factualParentConvId, { repoRoot, roleBindings });
+  syncChildEvidence(activeState, factualParentConvId, {
+    repoRoot,
+    roleBindings,
+    terminalChildConversationId:
+      payload.fullyIdle === true && convId && convId !== factualParentConvId ? convId : null,
+    terminalFullyIdle: payload.fullyIdle === true,
+  });
 
   const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
   const authoritativeMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
@@ -789,6 +973,19 @@ function main() {
     } catch {}
   }
 
+  // Terminal child Stop closes the child only. Parent acceptance is evaluated
+  // exclusively when the factual main conversation reaches Stop.
+  if (payload.conversationId && !isMainConversation) {
+    try {
+      mkdirSync(dirname(statePath), { recursive: true });
+      writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+    } catch {}
+    activeState.clean_stops = (activeState.clean_stops || 0) + 1;
+    recordStopTelemetry(telemetryPath, activeState, payload, "stop");
+    console.log(JSON.stringify({ decision: "stop" }));
+    return;
+  }
+
   // Re-evaluate worker validation verification against authoritative Evidence Ledger
   const valEval = verifyWorkerValidation(activeState);
   activeState.workerValidationVerified = valEval.verified;
@@ -810,6 +1007,35 @@ function main() {
   const noUnresolvedWrites = (activeState.orchestratorWorkspaceWrites || 0) === 0
     && (activeState.unknownWorkspaceWrites || 0) === 0;
 
+  const twoKeyGate = evaluateTwoKeyRuntimeGate(activeState, roleBindings, repoRoot);
+  activeState.twoKeyReviewGate = {
+    required: twoKeyGate.required,
+    satisfied: twoKeyGate.satisfied,
+    reason: twoKeyGate.reason || null,
+    checkedAt: new Date().toISOString(),
+  };
+
+  if (twoKeyGate.required && !twoKeyGate.satisfied) {
+    if (twoKeyGate.consensus?.humanGateRequired === true) {
+      activeState.state = "HUMAN_GATE";
+      activeState.humanGateReason = twoKeyGate.consensus.reason || "TWO_KEY_DISAGREEMENT";
+    } else if (twoKeyGate.consensus?.nextState === "PLANNED") {
+      activeState.state = "PLANNED";
+      activeState.retryReason = twoKeyGate.consensus.retryReason || "TWO_KEY_REJECTION";
+    } else if (activeState.state === "DONE" || activeState.acceptanceState === "ACCEPTED") {
+      activeState.state = "ACCEPTANCE";
+    }
+
+    if (activeState.acceptanceState === "ACCEPTED") {
+      activeState.acceptanceState = "PENDING";
+      delete activeState.acceptanceActor;
+      activeState.acceptanceRevokedReason = twoKeyGate.reason || "TWO_KEY_REVIEW_REQUIRED";
+    }
+  } else if (twoKeyGate.required && twoKeyGate.satisfied) {
+    activeState.twoKeyReview.status = "ACCEPTED";
+    activeState.twoKeyReviewConsensus = twoKeyGate.consensus?.decision || "ACCEPT";
+  }
+
   // Hardened Turn Diet acceptance: Orchestrator automatically accepts if and only if
   // 1. Worker claimed completion
   // 2. Required fresh validation evidence from WORKER (exitCode 0) is verified in ledger
@@ -820,7 +1046,8 @@ function main() {
     && completionClaimed
     && valEval.verified
     && noScopeViolation
-    && noUnresolvedWrites;
+    && noUnresolvedWrites
+    && twoKeyGate.satisfied;
 
   if (canAccept) {
     if (!activeState.acceptanceState || activeState.acceptanceState !== "ACCEPTED") {
@@ -864,6 +1091,9 @@ function main() {
     if (!valEval.verified) {
       reasonKey = "EVIDENCE_MISSING";
       reasonMsg = `STOP_BLOCKED: Completion claimed by worker, but required fresh validation evidence is not satisfied (${valEval.reason || "EVIDENCE_MISSING"}). MODEL CLAIM IS NOT EVIDENCE.`;
+    } else if (twoKeyGate.required && !twoKeyGate.satisfied) {
+      reasonKey = twoKeyGate.reason || "TWO_KEY_REVIEW_REQUIRED";
+      reasonMsg = `STOP_BLOCKED: CRITICAL acceptance requires two factual independent reviewer approvals bound to the current candidate (${reasonKey}).`;
     } else if (!noUnresolvedWrites) {
       reasonKey = "UNRESOLVED_WRITES";
       reasonMsg = "STOP_BLOCKED: Workspace writes by orchestrator or unknown actors detected. Separation of duties violated.";
