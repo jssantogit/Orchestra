@@ -94,6 +94,40 @@ export function classifyCommandCapability(commandLine) {
   return { capability: SIDE_EFFECT_CAPABILITIES.PROCESS_EXEC, reason: "local_process" };
 }
 
+function externalToolSemantics(toolName, toolArgs = {}) {
+  const name = clean(toolName);
+  const lower = name.toLowerCase();
+  const argsText = JSON.stringify(toolArgs || {}).toLowerCase();
+  const externalish = /(?:^|[_:.\/-])(?:mcp|plugin|connector|browser|web|http|network|cloud|remote|github|gitlab|bitbucket|repo|slack|discord|teams|gmail|email|mail|sms|database|db)(?:[_:.\/-]|$)/i.test(name)
+    || /(?:browser|github|gitlab|bitbucket|slack|discord|gmail|email|database|connector|plugin|mcp)/i.test(name);
+  if (!externalish) return null;
+
+  const mutationSignal = /(?:^|[_:.\/-])(?:create|update|edit|delete|remove|send|post|put|patch|write|upload|merge|close|comment|reply|invite|add|set|execute|run|trigger|dispatch|cancel|approve|reject)(?:[_:.\/-]|$)/i.test(name)
+    || /"(?:(?:action|method|operation|verb))"\s*:\s*"?(?:create|update|edit|delete|remove|send|post|put|patch|write|upload|merge|close|comment|reply|dispatch|approve|reject)/i.test(argsText);
+  const publicationSignal = /(?:publish|deploy|release|public|social|post_public)/i.test(name)
+    || /"(?:(?:action|operation))"\s*:\s*"?(?:publish|deploy|release)/i.test(argsText);
+  const repoish = /github|gitlab|bitbucket|pull[_-]?request|issue|repository|repo/i.test(name);
+  const readSignal = /(?:^|[_:.\/-])(?:get|list|search|read|fetch|find|query|lookup|status|view|inspect|resolve|describe|download|open)(?:[_:.\/-]|$)/i.test(name);
+
+  if (publicationSignal) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.PUBLICATION, reason: "external_publication_tool" };
+  }
+  if (repoish && mutationSignal) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.REMOTE_REPO_WRITE, reason: "external_repo_write_tool" };
+  }
+  if (mutationSignal) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE, reason: "external_network_write_tool" };
+  }
+  if (readSignal) {
+    return { capability: SIDE_EFFECT_CAPABILITIES.NETWORK_READ, reason: "external_network_read_tool" };
+  }
+
+  // Unknown connector/plugin semantics fail toward write authority. This is
+  // intentionally conservative: a new external tool cannot acquire remote
+  // side-effect authority merely because its verb is unfamiliar.
+  return { capability: SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE, reason: "external_tool_unknown_semantics" };
+}
+
 export function classifyToolCapability(toolName, toolArgs = {}) {
   const name = clean(toolName);
   if (["view_file", "grep_search", "find_by_name"].includes(name)) {
@@ -108,6 +142,8 @@ export function classifyToolCapability(toolName, toolArgs = {}) {
   if (name === "run_command") {
     return classifyCommandCapability(toolArgs.CommandLine || toolArgs.command || toolArgs.cmd || "");
   }
+  const external = externalToolSemantics(name, toolArgs);
+  if (external) return external;
   return { capability: SIDE_EFFECT_CAPABILITIES.PROCESS_EXEC, reason: "tool_execution" };
 }
 
