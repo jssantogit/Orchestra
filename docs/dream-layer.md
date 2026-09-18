@@ -685,9 +685,15 @@ STOPPING              -> CONTINUE_EXPLORATION | STOP_EXPLORATION
 
 The controller composes Milestone-E isolated siblings rather than allowing parallel writers in the primary workspace. Static non-learnable ceilings are 3 branches, 2 simultaneous siblings, 6 exploration model calls, and 15 minutes total. Each sibling retains E's own 2-call / 5-minute sandbox and external-side-effect firewall.
 
+Standalone Milestone E remains one-sibling by default. K may namespace additional E siblings only when `exploration-lab.mjs` verifies the persisted full-controller session, exact immutable K limits, deadline, and branch ordinal. Previously selected actions for the same factual source decision are excluded so a second K branch cannot merely repeat the first unknown alternative.
+
 The static baseline is conservative: exploration continues while budget remains, parallelism defaults to serial, and pruning requires factual invalid/falsified state. A promoted learned policy may choose a different action only when that action is already in the runtime's legal set.
 
-K records its decisions/outcomes through the standard Dream records and applies the existing Canary overlay. Therefore K policy changes still require the same offline dataset/replay, Shadow support, human-approved progressive Canary, and human promotion lifecycle.
+K uses deferred causal observation. `CONTINUE_EXPLORATION`, `OPEN_BRANCH`, and `PARALLELISM` are published before the branch action, but their outcomes remain pending until that branch reaches a factual terminal consequence. A sealed branch world yields attributable policy evidence. Setup/runner/collection failures without a sealed branch world are recorded as factual `attributable: false` observations; the evaluator maps them to `UNKNOWN_BRANCH / INSUFFICIENT_SUPPORT` rather than treating infrastructure trouble as a policy regression.
+
+Each K decision/outcome pair is sealed into an independent replay-eligible one-decision world. This avoids conflating `STOPPING`, `EXPLORATION_BRANCHING`, `PARALLELISM`, and `PRUNE_BRANCH` at one source snapshot. Failed branch materialization still consumes a controller branch slot, closing the retry-budget loophole.
+
+K applies the existing active policy and Canary overlay before execution. Therefore K policy changes still require the same offline dataset/replay, Shadow support, human-approved progressive Canary, and human promotion lifecycle.
 
 ### Full-exploration CLI
 
