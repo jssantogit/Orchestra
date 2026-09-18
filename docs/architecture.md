@@ -165,7 +165,9 @@ K does **not** loosen ordinary workspace concurrency. It composes the existing p
 
 CRITICAL and HUMAN_GATE states fail closed before policy evaluation. A policy may choose only inside the runtime-computed legal action set; it cannot change ceilings, sandboxing, Scope Contracts, side-effect capabilities, or Human Gates.
 
-K decisions use the existing active-policy store, Exact Replay/Policy Lab, Shadow, progressive Canary 5→20→50→100, and explicit human promotion pipeline. Standalone E still permits one sibling; extra siblings require a factual K controller artifact with the exact static limits and fresh ordinal, and previously selected alternatives for the same source decision are excluded.
+K decisions use the existing active-policy store, Exact Replay/Policy Lab, Shadow, progressive Canary 5→20→50→100, and explicit human promotion pipeline. Standalone E still permits one sibling; extra siblings require a factual K controller artifact, exact static limits, a fresh ordinal, and an atomically reserved per-slot capability token. Exact historical support is deduplicated across sessions by `snapshot_id + decision_type + state_hash`, so already observed actions are not explored again.
+
+Controller termination is quiescent: stop/budget exhaustion cannot orphan pending causal outcomes or permit a successor session to overwrite active control state.
 
 Branch-opening decisions are not rewarded merely because a workspace was created. Their outcomes are deferred until the branch yields a factual consequence. Controller/setup failures without a sealed branch trajectory are marked factual but non-attributable and become insufficient support. Each K decision/outcome pair is sealed as a separate one-decision world so Exact Replay never has to infer which of several decision types sharing a snapshot came first.
 
