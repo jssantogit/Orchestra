@@ -4088,3 +4088,92 @@ test("governance: only factual main orchestrator can control scheduler and task 
     cleanState();
   }
 });
+
+
+test("governance: send_message enforces factual parent-child isolation", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "message-parent",
+      state: "PLANNED",
+    }, null, 2), "utf8");
+    seedFactualWorkerIdentity("message-worker", {
+      parentConversationId: "message-parent",
+      profile: "flash-medium-worker",
+      delegationKind: "WORK",
+    });
+
+    const toParent = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-worker",
+        toolCall: {
+          name: "send_message",
+          args: {
+            Recipient: "message-parent",
+            Message: "STATUS: IMPLEMENTATION_COMPLETE",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(toParent.decision, "allow");
+
+    const crossTalk = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-worker",
+        toolCall: {
+          name: "send_message",
+          args: {
+            Recipient: "another-child",
+            Message: "share hidden context",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(crossTalk.decision, "deny");
+    assert.match(crossTalk.reason, /CROSS_AGENT_MESSAGE_PROHIBITED/);
+
+    const unknown = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-unknown",
+        toolCall: {
+          name: "send_message",
+          args: { Recipient: "message-parent", Message: "spoof" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(unknown.decision, "deny");
+    assert.match(unknown.reason, /MESSAGE_IDENTITY_REQUIRED/);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    bindings.bindings["message-reviewer"] = {
+      conversationId: "message-reviewer",
+      role: "REVIEWER",
+      profile: "flash-reviewer",
+      parentConversationId: "message-parent",
+      delegationKind: "REVIEW",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+    };
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(bindings, null, 2), "utf8");
+
+    const reviewerMessage = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-reviewer",
+        toolCall: {
+          name: "send_message",
+          args: { Recipient: "message-parent", Message: "VERDICT: ACCEPT" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(reviewerMessage.decision, "deny");
+    assert.match(reviewerMessage.reason, /REVIEWER_MESSAGE_PROHIBITED/);
+  } finally {
+    cleanState();
+  }
+});
