@@ -52,7 +52,7 @@ function configHash(config) {
 }
 
 function supportId(index) {
-  const { support_index_id: _id, created_at: _created, ...rest } = index || {};
+  const { support_index_id: _id, ...rest } = index || {};
   return "support-" + sha256Canonical(rest).slice(7);
 }
 
@@ -64,11 +64,6 @@ function evaluationId(evaluation) {
 function observationHash(observation) {
   const { observation_hash: _hash, ...rest } = observation || {};
   return sha256Canonical(rest);
-}
-
-function reportId(report) {
-  const { report_id: _id, created_at: _created, ...rest } = report || {};
-  return "shadow-report-" + sha256Canonical(rest).slice(7);
 }
 
 function decisionStateHash(decision) {
@@ -176,7 +171,6 @@ export function buildShadowSupportIndex(repoRoot) {
   const index = {
     support_index_id: "support-" + sha256Canonical(body).slice(7),
     ...body,
-    created_at: new Date().toISOString(),
   };
   const path = resolve(repoRoot, ROOT, "support", index.support_index_id + ".json");
   atomicJson(path, index);
@@ -726,7 +720,6 @@ export function summarizeShadowSession({ repoRoot, shadowSessionId = null } = {}
   const report = {
     report_id: "shadow-report-" + sha256Canonical(body).slice(7),
     ...body,
-    created_at: new Date().toISOString(),
   };
   const path = resolve(repoRoot, ROOT, "reports", report.report_id + ".json");
   atomicJson(path, report);
