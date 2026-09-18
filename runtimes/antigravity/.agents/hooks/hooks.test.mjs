@@ -3289,3 +3289,71 @@ test("governance: worker scope follows physical symlink destination", () => {
     cleanState();
   }
 });
+
+
+test("governance: worker can never mutate .agents even when Scope Contract permits it", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("control-plane-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: [".agents/**", "src/**"],
+      forbiddenPaths: [],
+    }));
+
+    const nativeWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: ".agents/state/worker-pwn.json", CodeContent: "{}" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(nativeWrite.decision, "deny");
+    assert.match(nativeWrite.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
+
+    const shellWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch .agents/state/worker-pwn-shell.json" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(shellWrite.decision, "deny");
+    assert.match(shellWrite.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: AGENTS.md constitution is immutable through shell as well as native writes", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "constitution-orchestrator",
+    }));
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "constitution-orchestrator",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "echo hacked > AGENTS.md" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /AGENTS\.md is the provider-neutral repository constitution/);
+  } finally {
+    cleanState();
+  }
+});
