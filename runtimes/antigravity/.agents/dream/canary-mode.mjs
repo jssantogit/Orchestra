@@ -315,6 +315,8 @@ export function approveCanary({
     approval_id: approval.approval_id,
     shadow_report_id: shadow.report.report_id,
     traffic_percent: CANARY_GATES.initial_traffic_percent,
+    rollout_stage_index: 0,
+    rollout_generation: 0,
   });
 
   return {
