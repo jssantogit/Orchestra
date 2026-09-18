@@ -138,6 +138,12 @@ function activateExplorationPreToolWrapper(branchRoot) {
   if (!entry || !handler || typeof handler.command !== "string") {
     return { ok: false, reason: "EXPLORATION_HOOK_TOPOLOGY_INVALID" };
   }
+  if (
+    !existsSync(resolve(branchRoot, ".agents/hooks/pre-tool-enforce.mjs")) ||
+    !existsSync(resolve(branchRoot, ".agents/hooks/pre-tool-exploration-guard.mjs"))
+  ) {
+    return { ok: false, reason: "EXPLORATION_HOOK_IMPLEMENTATION_MISSING" };
+  }
 
   const original = {
     matcher: entry.matcher || null,
@@ -665,6 +671,13 @@ export function collectExplorationResult({ primaryRepoRoot, branchWorkspace } = 
   if (!primaryRepoRoot || !branchWorkspace) return { collected: false, reason: "MISSING_COLLECT_INPUT" };
   const session = loadExplorationSession(branchWorkspace);
   if (!session) return { collected: false, reason: "EXPLORATION_SESSION_MISSING" };
+  if (session.status !== "FINISHED") {
+    return {
+      collected: false,
+      reason: "EXPLORATION_SESSION_NOT_COLLECTABLE",
+      status: session.status,
+    };
+  }
   const callDir = resolve(branchWorkspace, CALLS);
   const calls = existsSync(callDir) ? readdirSync(callDir).filter((n) => n.endsWith(".json")).length : 0;
   if (calls > EXPLORATION_BUDGET.max_model_calls) return { collected: false, reason: "EXPLORATION_MODEL_CALL_BUDGET_EXCEEDED", model_calls: calls };
