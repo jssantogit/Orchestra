@@ -1255,10 +1255,17 @@ test("v3: stop guard blocks stop when required test evidence is STALE due to sub
     // Should block stop because evidence is STALE
     const blockedRes = JSON.parse(execFileSync("node", [stopScript], { input: "{}" }));
     assert.equal(blockedRes.decision, "continue");
-    assert(blockedRes.reason.includes("EVIDENCE_MISSING"));
+    assert(blockedRes.reason.includes("EVIDENCE_STALE"));
+
+    // STALE is a replan condition, not a failed attempt: do not consume or
+    // fabricate Delta Retry budget merely because old evidence no longer binds.
+    const staleState = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(staleState.state, "PLANNED");
+    assert.equal(staleState.retry, undefined);
+    assert.equal(staleState.retryReason, undefined);
 
     // Now update evidence with fresh execution at mutationSeq 2
-    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    const state = staleState;
     state.evidenceLedger[0].mutationSeq = 2;
     writeFileSync(".agents/state/active-state.json", JSON.stringify(state, null, 2));
 
