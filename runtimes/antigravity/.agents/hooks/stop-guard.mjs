@@ -60,6 +60,39 @@ function getWorkspacePaths(payload = {}) {
   };
 }
 
+function readGovernanceObject(path, label) {
+  if (!existsSync(path)) return { ok: true, exists: false, value: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return { ok: false, exists: true, value: null, reason: `${label}_MALFORMED_JSON` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, exists: true, value: null, reason: `${label}_INVALID_SHAPE` };
+  }
+  return { ok: true, exists: true, value: parsed };
+}
+
+function validRoleBindingsShape(roleBindings) {
+  if (!roleBindings || typeof roleBindings !== "object" || Array.isArray(roleBindings)) return false;
+  if (
+    roleBindings.mainConversationId !== undefined &&
+    roleBindings.mainConversationId !== null &&
+    typeof roleBindings.mainConversationId !== "string"
+  ) return false;
+  if (
+    roleBindings.bindings !== undefined &&
+    (!roleBindings.bindings || typeof roleBindings.bindings !== "object" || Array.isArray(roleBindings.bindings))
+  ) return false;
+  if (
+    roleBindings.conversations !== undefined &&
+    (!roleBindings.conversations || typeof roleBindings.conversations !== "object" || Array.isArray(roleBindings.conversations))
+  ) return false;
+  if (roleBindings.pendingSubagents !== undefined && !Array.isArray(roleBindings.pendingSubagents)) return false;
+  return true;
+}
+
 function recordStopTelemetry(telemetryPath, activeState, payload, decision, continuationReason = null) {
   try {
     mkdirSync(dirname(telemetryPath), { recursive: true });
@@ -937,11 +970,15 @@ function main() {
   const { repoRoot, statePath, telemetryPath } = getWorkspacePaths(payload);
 
   let activeState = {};
-  if (existsSync(statePath)) {
-    try {
-      activeState = JSON.parse(readFileSync(statePath, "utf-8"));
-    } catch {}
+  const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");
+  if (!stateLoad.ok) {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: `GOVERNANCE_STATE_INVALID: ${stateLoad.reason}. Stop cannot be accepted while authority state is corrupted.`
+    }));
+    return;
   }
+  if (stateLoad.exists) activeState = stateLoad.value;
 
   const benchmarkRunId = process.env.BENCHMARK_RUN_ID || payload.benchmarkRunId || activeState.benchmarkRunId || null;
   const taskId = process.env.BENCHMARK_TASK_ID || payload.taskId || activeState.taskId || null;
@@ -969,10 +1006,18 @@ function main() {
   // Turn Diet: If worker completed and validation was observed,
   // Orchestrator concluding turn automatically accepts work deterministically
   const roleBindingsPath = resolve(repoRoot, ".agents/state/role-bindings.json");
-  let roleBindings = { mainConversationId: null, bindings: {} };
-  if (existsSync(roleBindingsPath)) {
-    try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
+  let roleBindings = { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  const roleBindingsLoad = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
+  if (!roleBindingsLoad.ok || (roleBindingsLoad.exists && !validRoleBindingsShape(roleBindingsLoad.value))) {
+    const reason = roleBindingsLoad.ok ? "ROLE_BINDINGS_INVALID_SHAPE" : roleBindingsLoad.reason;
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", reason);
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: `GOVERNANCE_STATE_INVALID: ${reason}. Stop cannot be accepted while role identity state is corrupted.`
+    }));
+    return;
   }
+  if (roleBindingsLoad.exists) roleBindings = roleBindingsLoad.value;
   const convId = payload.conversationId || activeState.conversationId || roleBindings.mainConversationId || null;
 
   // Sync factual child identity/evidence before resolving the Stop actor. A child
