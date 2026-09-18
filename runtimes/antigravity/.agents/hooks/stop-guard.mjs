@@ -7,6 +7,7 @@ import { findReusableEvidence, verifyWorkerValidation, verifyTaskEvidence, class
 import { childOwnedMissingRequirements } from "../skills/agy-orchestra/evidence-contract.mjs";
 import { collectRuntimeEvidenceSync } from "../skills/agy-orchestra/evidence-collectors.mjs";
 import { summarizeEvidenceWatches } from "../skills/orchestra/evidence-watch.mjs";
+import { launchEvidenceWatchRunner } from "../skills/orchestra/evidence-watch-runner.mjs";
 import {
   bindLocalEvidence,
   mergeFederatedEvidence,
@@ -1334,6 +1335,25 @@ function main() {
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+
+    let watchRunner = null;
+    try {
+      watchRunner = launchEvidenceWatchRunner({
+        repoRoot,
+        statePath,
+        contractPath,
+        activeState,
+      });
+      activeState.ciWait.runner = watchRunner;
+      writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+    } catch (error) {
+      activeState.ciWait.runner = {
+        launched: false,
+        error: String(error?.message || error),
+      };
+      try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    }
+
     recordStopTelemetry(telemetryPath, activeState, payload, "stop", "CI_WAIT");
     console.log(JSON.stringify({
       decision: "stop",
@@ -1443,6 +1463,32 @@ function main() {
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+
+    if (count < 3) {
+      try {
+        const watchRunner = launchEvidenceWatchRunner({
+          repoRoot,
+          statePath,
+          contractPath,
+          activeState,
+        });
+        activeState.ciWait = {
+          ...(activeState.ciWait || {}),
+          watchSummary: summarizeEvidenceWatches(activeState),
+          runner: watchRunner,
+          observedAt: new Date().toISOString(),
+        };
+        writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+      } catch (error) {
+        activeState.ciWait = {
+          ...(activeState.ciWait || {}),
+          runner: { launched: false, error: String(error?.message || error) },
+          observedAt: new Date().toISOString(),
+        };
+        try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+      }
+    }
+
     recordStopTelemetry(
       telemetryPath,
       activeState,
