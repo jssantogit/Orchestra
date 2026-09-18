@@ -89,6 +89,10 @@ export function createShadowLabel({
     critical_reference_recall: oracle.critical_reference_recall,
     false_low_relevance: oracle.false_low_relevance,
     false_prune_risk: oracle.false_low_relevance,
+    comparative_outcome_verified: false,
+    comparison_source: null,
+    tool_reexecution_delta: null,
+    acceptance_delta: null,
   };
 }
 
