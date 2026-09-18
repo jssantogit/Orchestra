@@ -647,10 +647,15 @@ test("pre-tool hook: enforces polling budget and backoff on manage_task status",
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
-    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "polling-orchestrator",
+    }));
+    seedFactualOrchestratorIdentity("polling-orchestrator");
 
     // 1st poll -> allowed
     const poll1 = JSON.stringify({
+      conversationId: "polling-orchestrator",
       toolCall: {
         name: "manage_task",
         args: { Action: "status", TaskId: "task-100" }
@@ -666,7 +671,8 @@ test("pre-tool hook: enforces polling budget and backoff on manage_task status",
 
     // Over budget (> 3 polls)
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
-      activeRole: "WORKER",
+      activeRole: "ORCHESTRATOR",
+      conversationId: "polling-orchestrator",
       pollingTracker: {
         taskId: "task-100",
         pollCount: 3,
@@ -3530,6 +3536,14 @@ test("governance: two factual reviewer approvals unlock only the exact reviewed 
       mutationSeq: 0,
       implementationComplete: true,
       workerCompletionClaimed: true,
+      workerCompletionClaimFactual: true,
+      workerCompletionClaimIdentity: {
+        actorId: "two-key-worker",
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
+      },
       workerValidationObserved: true,
       workerValidationVerified: true,
       workerValidationFresh: true,
