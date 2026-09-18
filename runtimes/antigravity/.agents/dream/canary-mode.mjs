@@ -16,15 +16,27 @@ import { dirname, resolve } from "node:path";
 import { sha256Canonical } from "./canonical.mjs";
 import { evaluatePolicy, POLICY_STATUS, validatePolicy, computePolicyId } from "./policy-engine.mjs";
 import { activatePolicy, loadRuntimePolicy } from "./policy-store.mjs";
+import {
+  CANARY_ROLLOUT_STAGES,
+  canAdvanceCanaryRollout,
+  canPromoteFinalCanaryStage,
+  currentCanaryRolloutStage,
+  getCanaryRolloutStage,
+  isFinalCanaryRolloutStage,
+  nextCanaryRolloutStage,
+  rolloutGeneration,
+} from "./canary-rollout.mjs";
 
 export const CANARY_CONFIG_SCHEMA = "orchestra.canary-config.v1";
 export const CANARY_APPROVAL_SCHEMA = "orchestra.canary-approval.v1";
 export const CANARY_EVENT_SCHEMA = "orchestra.canary-event.v1";
 export const CANARY_REPORT_SCHEMA = "orchestra.canary-report.v1";
+export const CANARY_ROLLOUT_APPROVAL_SCHEMA = "orchestra.canary-rollout-approval.v1";
 
 export const CANARY_GATES = Object.freeze({
   initial_traffic_percent: 5,
   allowed_criticality: "NORMAL",
+  rollout_traffic_percents: CANARY_ROLLOUT_STAGES.map((stage) => stage.traffic_percent),
 });
 
 const ROOT = ".agents/dream-data/canary";
@@ -75,6 +87,10 @@ function hashWithout(value, fields) {
 
 function approvalHash(approval) {
   return hashWithout(approval, ["approval_hash"]);
+}
+
+function rolloutApprovalHash(approval) {
+  return hashWithout(approval, ["rollout_approval_hash"]);
 }
 
 function configHash(config) {
