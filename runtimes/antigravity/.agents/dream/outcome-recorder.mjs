@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
+import { isSafeDreamCorrelationKey } from "./decision-recorder.mjs";
 
 /**
  * Retrieves and parses a pending decision correlation record.
@@ -17,6 +18,9 @@ export function getPendingDecision({ repoRoot, pendingDir, correlationKey } = {}
   try {
     if (!correlationKey) {
       return { ok: false, reason: "PENDING_NOT_FOUND" };
+    }
+    if (!isSafeDreamCorrelationKey(correlationKey)) {
+      return { ok: false, reason: "UNSAFE_CORRELATION_KEY", error_code: "ERR_UNSAFE_CORRELATION_KEY" };
     }
 
     const resolvedPendingDir =
@@ -89,6 +93,14 @@ export function recordDecisionOutcome({
     const key = correlationKey || outcome?.correlationKey;
     if (!key) {
       return { recorded: false, reason: "PENDING_DECISION_NOT_FOUND" };
+    }
+    if (!isSafeDreamCorrelationKey(key)) {
+      return {
+        recorded: false,
+        reason: "VALIDATION_FAILED",
+        error_code: "ERR_UNSAFE_CORRELATION_KEY",
+        details: ["correlationKey must be a safe single filesystem segment <= 220 UTF-8 bytes"],
+      };
     }
 
     const resolvedPendingDir =
