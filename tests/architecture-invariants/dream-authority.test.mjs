@@ -1995,6 +1995,18 @@ test("ARCH-026: Sealed World Material Integrity", () => {
 // acquire external side-effect authority or CRITICAL eligibility.
 // ---------------------------------------------------------------------------
 test("ARCH-027: Explicit Exploration Authority Is Non-Escalating", () => {
+  const sourceHooks = JSON.parse(readFileSync(
+    resolve(repoRoot, "runtimes/antigravity/.agents/hooks.json"),
+    "utf8",
+  ));
+  assert.equal(sourceHooks["exploration-confinement"], undefined);
+  assert.equal(sourceHooks["exploration-budget-guard"], undefined);
+  assert.notEqual(sourceHooks["scope-enforcer"].PreToolUse[0].matcher, "*");
+  assert.equal(
+    sourceHooks["scope-enforcer"].PreToolUse[0].hooks[0].command,
+    "node hooks/pre-tool-enforce.mjs",
+  );
+
   assert.deepEqual(EXPLORATION_BUDGET, {
     max_sibling_branches: 1,
     max_model_calls: 2,
@@ -2049,6 +2061,14 @@ test("ARCH-027: Explicit Exploration Authority Is Non-Escalating", () => {
         toolArgs: { CommandLine: "git status" },
       }).allowed,
       true,
+    );
+    assert.equal(
+      enforceExplorationToolBoundary({
+        repoRoot: root,
+        toolName: "view_file",
+        toolArgs: { AbsolutePath: resolve(root, "..", "outside.txt") },
+      }).allowed,
+      false,
     );
     assert.equal(
       enforceExplorationToolBoundary({
