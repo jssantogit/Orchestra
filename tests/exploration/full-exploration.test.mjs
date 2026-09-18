@@ -31,6 +31,7 @@ import { sealWorld, validateWorld } from "../../runtimes/antigravity/.agents/dre
 import {
   armExplorationCapture,
   captureBranchSeedIfArmed,
+  prepareExploration,
 } from "../../runtimes/antigravity/.agents/dream/exploration-lab.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const staticPolicy = JSON.parse(readFileSync(resolve(__dirname, "../../runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"), "utf8"));
@@ -218,6 +219,20 @@ test("K defers control outcomes until a factual branch consequence and seals one
   try {
     const started = startFullExploration({ repoRoot: fixture.repo });
     assert.equal(started.started, true);
+
+    const unauthorized = prepareExploration({
+      repoRoot: fixture.repo,
+      seedPath: fixture.seedPath,
+      world: fixture.world,
+      decisionId: "decision-k-source",
+      fullExplorationContext: {
+        session_id: started.control.session_id,
+        branch_ordinal: 0,
+        reservation_token: "forged-token",
+      },
+    });
+    assert.equal(unauthorized.prepared, false);
+    assert.equal(unauthorized.reason, "FULL_EXPLORATION_BRANCH_RESERVATION_MISSING");
 
     const prepared = prepareFullExplorationBranch({
       repoRoot: fixture.repo,
