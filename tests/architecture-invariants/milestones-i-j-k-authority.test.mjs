@@ -76,11 +76,18 @@ test("ARCH-J02: Continuation Capsule excludes narrative/model-owned authority cl
   assert.deepEqual(capsule.scope.allowed_paths, ["src/a.js"]);
 });
 
-test("ARCH-J03: runtime hooks enforce capabilities and inject authoritative capsule", () => {
+test("ARCH-J03: runtime hooks enforce capabilities globally and inject authoritative capsule", () => {
+  const hooks = JSON.parse(read("runtimes/antigravity/.agents/hooks.json"));
   const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
+  const sideEffectGuard = read("runtimes/antigravity/.agents/hooks/pre-tool-side-effect-guard.mjs");
   const preInvocation = read("runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs");
+
   assert.match(preTool, /authorizeToolCapability/);
   assert.match(preTool, /SIDE_EFFECT_CAPABILITY_DENIED/);
+  assert.equal(hooks["side-effect-boundary"].PreToolUse[0].matcher, "*");
+  assert.match(sideEffectGuard, /authorizeToolCapability/);
+  assert.match(sideEffectGuard, /SIDE_EFFECT_CAPABILITY_DENIED/);
+  assert.match(sideEffectGuard, /isCanaryExternalSideEffect/);
   assert.match(preInvocation, /createContinuationCapsule/);
   assert.match(preInvocation, /formatContinuationCapsule/);
 });
