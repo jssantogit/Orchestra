@@ -14,6 +14,7 @@ import { generateCandidates } from "../../experiments/jev/candidate-generator.mj
 import { rankCandidates } from "../../experiments/jev/artifact-ranker.mjs";
 import { buildCounterfactualPacket, assertMandatoryCoreIdentity } from "../../experiments/jev/packet-builder.mjs";
 import { buildRetrievalAssistedPacket } from "../../experiments/jev/retrieval-assist.mjs";
+import { evaluateLiveEgress } from "../../experiments/jev/egress-policy.mjs";
 import {
   createProjectEvaluationReport,
   createLocalApproval,
@@ -66,6 +67,24 @@ test("secret redaction covers common credential forms", () => {
   const out = redactSecrets("Authorization: Bearer abcdefghijklmnopqrstuvwxyz token=supersecretvalue");
   assert.equal(out.includes("abcdefghijklmnopqrstuvwxyz"), false);
   assert.equal(out.includes("supersecretvalue"), false);
+});
+
+test("live project egress is denied by default and requires explicit opt-in", () => {
+  const denied = evaluateLiveEgress({
+    projectRoot: "/tmp/private-project",
+    live: true,
+    env: {},
+  });
+  assert.equal(denied.allowed, false);
+  assert.equal(denied.reason, "JEV_PROJECT_EGRESS_REQUIRES_EXPLICIT_OPT_IN");
+
+  const allowed = evaluateLiveEgress({
+    projectRoot: "/tmp/private-project",
+    live: true,
+    env: { ORCHESTRA_JEV_ALLOW_PROJECT_EGRESS: "1" },
+  });
+  assert.equal(allowed.allowed, true);
+  assert.equal(allowed.mode, "EXPLICIT_PROJECT_EGRESS");
 });
 
 test("candidate generation is deterministic, bounded and preserves pins", () => {
