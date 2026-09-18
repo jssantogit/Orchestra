@@ -8,6 +8,10 @@ import {
   finalizeEvidenceRecord,
   normalizeEvidenceRequirements,
 } from "./evidence-contract.mjs";
+import {
+  getEvidenceProvider,
+  normalizeEvidenceProviderId,
+} from "./evidence-provider-registry.mjs";
 
 function digest(value) {
   return createHash("sha256").update(String(value)).digest("hex");
@@ -483,39 +487,55 @@ function mergeEvidenceRecord(activeState, record) {
   else activeState.evidenceLedger.push(record);
 }
 
-function runRemoteCollectorSync(repoRoot, activeState, requirement) {
+export function runRemoteCollectorSync(repoRoot, activeState, requirement) {
+  const providerId = normalizeEvidenceProviderId(requirement.provider);
+  const provider = getEvidenceProvider(providerId);
+  const factual = readFactualGitIdentity(repoRoot);
+
+  if (!provider) {
+    return runtimeRecord({
+      requirement,
+      result: "UNAVAILABLE",
+      reason: "REMOTE_PROVIDER_UNSUPPORTED",
+      activeState,
+      factual: factual.ok ? factual : null,
+      provider: providerId || null,
+      source: "ORCHESTRA_REMOTE_PROVIDER_DISPATCH",
+    });
+  }
+
   const payload = Buffer.from(JSON.stringify({ repoRoot, activeState, requirement }), "utf8").toString("base64url");
   const selfPath = fileURLToPath(import.meta.url);
-  const child = spawnSync(process.execPath, [selfPath, "--github-actions-probe", payload], {
+  const child = spawnSync(process.execPath, [selfPath, "--provider-probe", provider.id, payload], {
     encoding: "utf8",
     timeout: Number(requirement.timeoutMs || 30000),
     env: process.env,
   });
+
   if (child.error || child.status !== 0) {
-    const factual = readFactualGitIdentity(repoRoot);
     return runtimeRecord({
       requirement,
       result: "UNAVAILABLE",
-      reason: child.error?.code === "ETIMEDOUT" ? "GITHUB_COLLECTOR_TIMEOUT" : "GITHUB_COLLECTOR_FAILED",
+      reason: child.error?.code === "ETIMEDOUT" ? "REMOTE_PROVIDER_TIMEOUT" : "REMOTE_PROVIDER_FAILED",
       activeState,
       factual: factual.ok ? factual : null,
-      provider: "GITHUB_ACTIONS",
-      source: "ORCHESTRA_GITHUB_COLLECTOR",
+      provider: provider.id,
+      source: provider.provenanceSource,
       details: { collectorDetails: { stderr: String(child.stderr || child.error?.message || "").slice(0, 1000) } },
     });
   }
+
   try {
     return JSON.parse(String(child.stdout || "").trim());
   } catch {
-    const factual = readFactualGitIdentity(repoRoot);
     return runtimeRecord({
       requirement,
       result: "UNAVAILABLE",
-      reason: "GITHUB_COLLECTOR_INVALID_OUTPUT",
+      reason: "REMOTE_PROVIDER_INVALID_OUTPUT",
       activeState,
       factual: factual.ok ? factual : null,
-      provider: "GITHUB_ACTIONS",
-      source: "ORCHESTRA_GITHUB_COLLECTOR",
+      provider: provider.id,
+      source: provider.provenanceSource,
     });
   }
 }
@@ -537,10 +557,7 @@ export function collectRuntimeEvidenceSync({ repoRoot, activeState = {}, contrac
         requirement,
         factualGit: factual,
       }));
-    } else if (
-      requirement.kind === "REMOTE_CI"
-      && String(requirement.provider || "").toUpperCase() === "GITHUB_ACTIONS"
-    ) {
+    } else if (requirement.kind === "REMOTE_CI") {
       records.push(runRemoteCollectorSync(repoRoot, activeState, requirement));
     }
   }
@@ -550,11 +567,19 @@ export function collectRuntimeEvidenceSync({ repoRoot, activeState = {}, contrac
 }
 
 async function cliMain() {
-  if (process.argv[2] !== "--github-actions-probe") return false;
+  if (process.argv[2] !== "--provider-probe") return false;
   try {
-    const decoded = Buffer.from(String(process.argv[3] || ""), "base64url").toString("utf8");
+    const providerId = normalizeEvidenceProviderId(process.argv[3]);
+    const decoded = Buffer.from(String(process.argv[4] || ""), "base64url").toString("utf8");
     const input = JSON.parse(decoded);
-    const record = await collectGitHubActionsRequirement(input);
+    let record;
+
+    if (providerId === "GITHUB_ACTIONS") {
+      record = await collectGitHubActionsRequirement(input);
+    } else {
+      throw new Error("REMOTE_PROVIDER_UNSUPPORTED:" + providerId);
+    }
+
     process.stdout.write(JSON.stringify(record));
     process.exitCode = 0;
   } catch (error) {
