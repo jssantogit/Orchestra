@@ -55,6 +55,7 @@ test("ARCH-H04: human approval is required separately for Canary and final promo
   assert.match(canary, /approved_by:\s*"HUMAN_EXPLICIT_CLI"/);
   assert.match(cli, /--confirm is required for human Canary approval/);
   assert.match(cli, /--confirm is required for human policy promotion/);
+  assert.match(cli, /--confirm is required for human active-policy rollback/);
   assert.equal(canary.includes("auto_promote"), false);
 });
 
@@ -67,4 +68,8 @@ test("ARCH-H05: promoted policy pointer is versioned and atomically fsynced befo
   assert.match(store, /ACTIVE_POLICY_POINTER_INVALID/);
   assert.match(store, /STATIC_ROUTING_FALLBACK/);
   assert.match(store, /HUMAN_EXPLICIT_CLI/);
+  assert.match(store, /POLICY_PROMOTED/);
+  assert.match(store, /POLICY_ROLLBACK/);
+  assert.match(store, /previous_policy_id/);
+  assert.match(store, /EXPLICIT_HUMAN_POLICY_ROLLBACK_REQUIRED/);
 });
