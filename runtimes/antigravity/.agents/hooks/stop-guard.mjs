@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { findReusableEvidence, verifyWorkerValidation, verifyTaskEvidence, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
+import { findReusableEvidence, verifyWorkerValidation, verifyTaskEvidence, classifyShellMutation, isWorkerRole, createRetryBudget, consumeRetryBudget } from "../skills/agy-orchestra/routing-policy.mjs";
 import { childOwnedMissingRequirements } from "../skills/agy-orchestra/evidence-contract.mjs";
 import { collectRuntimeEvidenceSync } from "../skills/agy-orchestra/evidence-collectors.mjs";
 import { evaluateTwoKeyReview } from "../skills/orchestra/routing-policy.mjs";
@@ -1293,7 +1293,8 @@ function main() {
 
   if (valEval.status === "FAILED") {
     const remoteFailure = (valEval.results || []).some((r) => r.status === "FAILED" && r.kind === "REMOTE_CI");
-    const remaining = activeState.retry_remaining ?? activeState.remainingAttempts ?? 0;
+    const currentBudget = createRetryBudget(activeState);
+    const nextBudget = consumeRetryBudget(currentBudget);
     activeState.evidenceFailure = {
       reason: valEval.reason || "EVIDENCE_FAILED",
       requirementIds: (valEval.results || []).filter((r) => r.status === "FAILED").map((r) => r.id),
@@ -1302,18 +1303,25 @@ function main() {
     activeState.acceptanceState = "PENDING";
     activeState.retryReason = remoteFailure ? "REMOTE_VALIDATION_FAILURE" : "INCOMPLETE_IMPLEMENTATION";
     activeState.retry_reason = activeState.retryReason;
+    activeState.retry = nextBudget.remainingAttempts > 0;
+    activeState.prevRemainingAttempts = currentBudget.remainingAttempts;
+    activeState.maxAttempts = nextBudget.maxAttempts;
+    activeState.attempt = nextBudget.attempt;
+    activeState.remainingAttempts = nextBudget.remainingAttempts;
+    activeState.retry_remaining = nextBudget.remainingAttempts;
+    activeState.retriesUsed = nextBudget.attempt;
     activeState.workerCompletionClaimed = false;
     activeState.workerCompletionClaimFactual = false;
     activeState.implementationComplete = false;
-    activeState.state = Number(remaining) > 0 ? "PLANNED" : "BLOCKED";
+    activeState.state = nextBudget.remainingAttempts > 0 ? "PLANNED" : "BLOCKED";
     activeState.lastStopBlockedReason = null;
     activeState.stopBlockedCount = 0;
     try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
     recordStopTelemetry(telemetryPath, activeState, payload, "continue", activeState.retryReason);
     console.log(JSON.stringify({
       decision: "continue",
-      reason: Number(remaining) > 0
-        ? "EVIDENCE_FAILED: Verified acceptance evidence failed. Route through Delta Retry with reason " + activeState.retryReason + "."
+      reason: nextBudget.remainingAttempts > 0
+        ? "EVIDENCE_FAILED: Verified acceptance evidence failed. Delta Retry prepared with attempt " + nextBudget.attempt + ", remaining " + nextBudget.remainingAttempts + ", reason " + activeState.retryReason + "."
         : "EVIDENCE_FAILED: Verified acceptance evidence failed and retry budget is exhausted. Task is BLOCKED.",
     }));
     return;
