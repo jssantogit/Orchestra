@@ -49,6 +49,13 @@ import {
   findFactualSubagentRecord,
   isSymmetricReviewerSet,
 } from "./child-identity.mjs";
+import {
+  classifyMechanicalFastPath,
+  isMechanicalFastPathActive,
+  mechanicalFastPathAllowsRead,
+  mechanicalFastPathAllowsRunCommand,
+  mechanicalFastPathMutationBudget,
+} from "../skills/orchestra/mechanical-fast-path.mjs";
 
 const WORKER_ACTION_TO_PROFILE = Object.freeze({
   FLASH_LOW: "flash-low-worker",
@@ -1322,6 +1329,17 @@ function main() {
 
   // Check 1: Worker or Reviewer spawning subagents, OR any subagent during DIRECT_ACTION
   if (toolName === "invoke_subagent" || toolName === "define_subagent") {
+    const fastPathState = String(activeState.state || "").toUpperCase();
+    if (
+      isMechanicalFastPathActive(activeState)
+      && ["DELEGATED", "EXECUTING", "EVIDENCE_READY", "ACCEPTANCE"].includes(fastPathState)
+    ) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "MECHANICAL_FAST_PATH_SIDE_QUEST: A bounded mechanical task already has its single implementation worker. Additional subagents, investigation, validation workers, and review are prohibited unless the task exits the fast path."
+      }));
+      return;
+    }
     if (isDirectAction) {
       if (!activeState.toolMix) activeState.toolMix = {};
       activeState.toolMix.direct_action_side_quests_prevented = (activeState.toolMix.direct_action_side_quests_prevented || 0) + 1;
@@ -2056,6 +2074,34 @@ function main() {
           };
           activeContract = implementationContract;
           activeState.scopeContract = implementationContract;
+
+          if (String(activeState.taskAction || "").toUpperCase() === "MECHANICAL_FIX") {
+            const fastPathDecision = classifyMechanicalFastPath({
+              taskAction: activeState.taskAction,
+              criticality: activeState.criticality || implementationContract.criticality,
+              scopeContract: implementationContract,
+              requestedProfile: pending?.profile || sub.TypeName || null,
+              attempt: activeState.attempt || 0,
+              retry: Boolean(activeState.retry || activeState.retryReason || activeState.retry_reason),
+            });
+            activeState.mechanicalFastPath = {
+              ...fastPathDecision,
+              active: fastPathDecision.eligible,
+              status: fastPathDecision.eligible ? "ACTIVE" : "INELIGIBLE",
+              workerWritesAtStart: activeState.workerWorkspaceWrites || 0,
+              delegationToolCallId: toolCall.id || payload.toolCallId || null,
+              activatedAt: fastPathDecision.eligible ? new Date().toISOString() : null,
+              evaluatedAt: new Date().toISOString(),
+            };
+          } else if (activeState.mechanicalFastPath) {
+            activeState.mechanicalFastPath = {
+              ...activeState.mechanicalFastPath,
+              active: false,
+              status: "NOT_MECHANICAL_FIX",
+              evaluatedAt: new Date().toISOString(),
+            };
+          }
+
           try {
             mkdirSync(dirname(contractPath), { recursive: true });
             writeFileSync(contractPath, JSON.stringify(implementationContract, null, 2), "utf-8");
@@ -2334,6 +2380,29 @@ function main() {
   // Check 1d: view_file, grep_search, find_by_name inspection lock during delegation
   if (toolName === "view_file" || toolName === "grep_search" || toolName === "find_by_name") {
     const currentState = String(activeState.state || "").toUpperCase();
+
+    if (isMechanicalFastPathActive(activeState) && isWorkerRole(activeRole)) {
+      if (toolName === "grep_search" || toolName === "find_by_name") {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "MECHANICAL_FAST_PATH_SEARCH_PROHIBITED: Fast-path scope is already concrete. Search is a side quest; read only the declared target file(s), mutate them, then hand off."
+        }));
+        return;
+      }
+
+      const rawReadTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.FilePath || toolArgs.filePath || toolArgs.path || "";
+      const readTarget = canonicalizeWorkspaceTarget(rawReadTarget, repoRoot);
+      if (
+        readTarget.outsideWorkspace
+        || !mechanicalFastPathAllowsRead(activeState, readTarget.path)
+      ) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `MECHANICAL_FAST_PATH_READ_SCOPE: view_file target "${readTarget.path || rawReadTarget}" is outside the concrete mechanical scope [${(activeState.mechanicalFastPath.allowedPaths || []).join(", ")}].`
+        }));
+        return;
+      }
+    }
     if (isOrchestratorRole(activeRole) && currentState === "DELEGATED") {
       const reason = `Reactive Wakeup policy: Orchestrator exploration/inspection (${toolName}) is prohibited during delegated execution. Workers own implementation discovery and exploration; Orchestrator must yield and await child completion.`;
       recordDeniedAttempt(activeState, statePath, toolName, toolArgs, reason);
@@ -2510,6 +2579,17 @@ function main() {
 
     // 2c. Worker (Flash): shell authority requires factual child identity.
     if (isWorkerRole(activeRole)) {
+      if (
+        isMechanicalFastPathActive(activeState)
+        && !mechanicalFastPathAllowsRunCommand(activeState, cmd)
+      ) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "MECHANICAL_FAST_PATH_SHELL_PROHIBITED: This mechanical task is accepted by runtime-owned LOCAL_FACT evidence. Shell/read-only/status/test commands are side quests unless explicitly declared as LOCAL_COMMAND evidence."
+        }));
+        return;
+      }
+
       if (isReadOnly) {
         allowCommand(cmd);
         return;
@@ -2764,6 +2844,17 @@ function main() {
 
     // Worker validation against Scope Contract
     if (isWorkerRole(activeRole)) {
+      if (isMechanicalFastPathActive(activeState)) {
+        const budget = mechanicalFastPathMutationBudget(activeState);
+        if (!budget.allowed) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: `MECHANICAL_FAST_PATH_MUTATION_BUDGET: Bounded mechanical edit exceeded mutation budget (${budget.used}/${budget.max}). Return BLOCKED/CROSS_DOMAIN_REQUEST instead of expanding the task.`
+          }));
+          return;
+        }
+      }
+
       if (!activeContract) {
         console.log(JSON.stringify({
           decision: "deny",
