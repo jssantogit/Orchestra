@@ -141,7 +141,9 @@ function readRuntimeTelemetryAfter(projectRoot, timestamp) {
     try {
       const event = JSON.parse(line);
       const eventTime = Date.parse(event.timestamp || event.created_at || event.observedAt || "");
-      if (Number.isFinite(threshold) && Number.isFinite(eventTime) && eventTime <= threshold) continue;
+      if (Number.isFinite(threshold)) {
+        if (!Number.isFinite(eventTime) || eventTime <= threshold) continue;
+      }
       events.push(event);
     } catch {
       malformed++;
