@@ -88,11 +88,34 @@ function readCycle(repoRoot, cyclePath) {
   }
   if (
     !Array.isArray(parsed.designer_calls)
+    || parsed.designer_calls.length > POLICY_LAB_LIMITS.max_designer_calls
     || !Array.isArray(parsed.candidates)
     || parsed.candidates[0]?.source !== "BASELINE"
     || parsed.candidates[0]?.policy_id !== parsed.baseline_policy_id
+    || parsed.activation_allowed !== false
+    || parsed.limits?.max_designer_calls !== POLICY_LAB_LIMITS.max_designer_calls
+    || parsed.limits?.max_candidates_per_call !== POLICY_LAB_LIMITS.max_candidates_per_call
+    || !["OPEN", "DESIGNER_PENDING", "EVALUATED"].includes(parsed.status)
   ) {
     return { ok: false, reason: "CYCLE_STATE_INVALID" };
+  }
+  for (let i = 0; i < parsed.designer_calls.length; i++) {
+    const call = parsed.designer_calls[i];
+    if (
+      call?.call_index !== i + 1
+      || typeof call?.packet_id !== "string"
+      || !/^packet-[a-f0-9]{64}$/.test(call.packet_id)
+      || !["PACKET_ISSUED", "SUBMITTED", "REJECTED"].includes(call.status)
+    ) {
+      return { ok: false, reason: "CYCLE_DESIGNER_CALL_INVALID" };
+    }
+    if (call.status === "PACKET_ISSUED" && i !== parsed.designer_calls.length - 1) {
+      return { ok: false, reason: "CYCLE_DESIGNER_CALL_INVALID" };
+    }
+  }
+  const pending = parsed.designer_calls.at(-1)?.status === "PACKET_ISSUED";
+  if ((parsed.status === "DESIGNER_PENDING") !== pending) {
+    return { ok: false, reason: "CYCLE_DESIGNER_PENDING_STATE_MISMATCH" };
   }
   return { ok: true, cycle: parsed, path: resolved };
 }
