@@ -1,4 +1,11 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { buildCatalog } from "./catalog-builder.mjs";
@@ -7,16 +14,129 @@ import { projectForJev } from "./outbound-projector.mjs";
 import { rankCandidates, selectRankedReferences } from "./artifact-ranker.mjs";
 import { evaluateRankingAgainstFutureUse } from "./future-use-oracle.mjs";
 import { buildCounterfactualPacket } from "./packet-builder.mjs";
-import { JEV_AUTHORITY, JEV_SCHEMAS, contentId } from "./schemas.mjs";
+import { JEV_AUTHORITY, JEV_SCHEMAS } from "./schemas.mjs";
 import { assertLiveEgressAllowed } from "./egress-policy.mjs";
 
 export const SHADOW_TELEMETRY_PATH = ".agents/telemetry/jev-shadow.jsonl";
+export const SHADOW_STATE_ROOT = ".agents/semantic/jev-shadow";
 
 function appendEvent(projectRoot, event) {
   const path = resolve(projectRoot, SHADOW_TELEMETRY_PATH);
   mkdirSync(dirname(path), { recursive: true });
   appendFileSync(path, JSON.stringify(event) + "\n", "utf8");
   return path;
+}
+
+function statePath(projectRoot, shadowId) {
+  return resolve(projectRoot, SHADOW_STATE_ROOT, `${shadowId}.json`);
+}
+
+function writeShadowState(projectRoot, state) {
+  const path = statePath(projectRoot, state.shadow_id);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(state, null, 2), { encoding: "utf8", flag: "wx" });
+  return path;
+}
+
+function readShadowState(projectRoot, shadowId) {
+  try { return JSON.parse(readFileSync(statePath(projectRoot, shadowId), "utf8")); }
+  catch { return null; }
+}
+
+export function readShadowTelemetry(projectRoot) {
+  const path = resolve(projectRoot, SHADOW_TELEMETRY_PATH);
+  try {
+    return readFileSync(path, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map(JSON.parse);
+  } catch {
+    return [];
+  }
+}
+
+export function createShadowLabel({
+  shadowId,
+  candidates,
+  ranking,
+  selectedIds,
+  futureEvents,
+  criticalIds = [],
+} = {}) {
+  if (!shadowId) throw new Error("JEV_SHADOW_ID_REQUIRED");
+  if (!Array.isArray(futureEvents) || futureEvents.length === 0) {
+    throw new Error("JEV_FUTURE_EVENTS_REQUIRED");
+  }
+  const oracle = evaluateRankingAgainstFutureUse({
+    candidates,
+    ranking,
+    selectedIds,
+    futureEvents,
+    criticalIds,
+  });
+  return {
+    schema: JEV_SCHEMAS.SHADOW_LABEL,
+    shadow_id: shadowId,
+    authority: JEV_AUTHORITY,
+    label_source: "FACTUAL_FUTURE_EVENTS",
+    timestamp: new Date().toISOString(),
+    future_event_count: oracle.future_event_count,
+    future_used_total: oracle.future_used_total,
+    critical_reference_total: oracle.critical_reference_total,
+    future_use_recall_at_k: oracle.future_use_recall_at_k,
+    future_use_precision_at_k: oracle.future_use_precision_at_k,
+    critical_reference_recall: oracle.critical_reference_recall,
+    false_low_relevance: oracle.false_low_relevance,
+    false_prune_risk: oracle.false_low_relevance,
+  };
+}
+
+export function labelShadowRun({
+  projectRoot,
+  shadowId,
+  futureEvents,
+  criticalIds = [],
+} = {}) {
+  const prior = readShadowTelemetry(projectRoot);
+  if (prior.some((event) => event?.schema === JEV_SCHEMAS.SHADOW_LABEL && event?.shadow_id === shadowId)) {
+    throw new Error("JEV_SHADOW_ALREADY_LABELED");
+  }
+  const state = readShadowState(projectRoot, shadowId);
+  if (!state) throw new Error("JEV_SHADOW_STATE_NOT_FOUND");
+  const label = createShadowLabel({
+    shadowId,
+    candidates: state.candidates,
+    ranking: state.ranking,
+    selectedIds: state.selected_ids,
+    futureEvents,
+    criticalIds,
+  });
+  appendEvent(projectRoot, label);
+  return label;
+}
+
+export function readLabeledShadowRuns(projectRoot) {
+  const events = readShadowTelemetry(projectRoot);
+  const reports = new Map();
+  const labels = new Map();
+  for (const event of events) {
+    if (event?.schema === JEV_SCHEMAS.SHADOW_REPORT) reports.set(event.shadow_id, event);
+    if (event?.schema === JEV_SCHEMAS.SHADOW_LABEL) labels.set(event.shadow_id, event);
+  }
+  const runs = [];
+  for (const [shadowId, report] of reports) {
+    const label = labels.get(shadowId);
+    if (!label) continue;
+    runs.push({
+      ...report,
+      ...label,
+      schema: JEV_SCHEMAS.SHADOW_REPORT,
+      shadow_id: shadowId,
+      labeled: true,
+    });
+  }
+  return runs.sort((a, b) => String(a.timestamp || "").localeCompare(String(b.timestamp || "")));
 }
 
 export async function runArtifactRankingShadow({
@@ -58,14 +178,6 @@ export async function runArtifactRankingShadow({
       }
     : selectRankedReferences({ candidates: generated.selected, ranking });
 
-  const oracle = evaluateRankingAgainstFutureUse({
-    candidates: generated.selected,
-    ranking,
-    selectedIds: selected.selected_ids,
-    futureEvents,
-    criticalIds,
-  });
-
   const packet = buildCounterfactualPacket({
     mandatoryCore,
     candidates: generated.selected,
@@ -74,13 +186,10 @@ export async function runArtifactRankingShadow({
 
   const candidateBytes = selected.candidate_bytes || 0;
   const selectedBytes = selected.selected_bytes || 0;
+  const shadowId = "jev-shadow-" + randomUUID();
   const event = {
     schema: JEV_SCHEMAS.SHADOW_REPORT,
-    shadow_id: contentId("jev-shadow", {
-      projection_id: projection.projection_id,
-      ranking_id: ranking.ranking_id,
-      task_id: task.task_id || null,
-    }),
+    shadow_id: shadowId,
     authority: JEV_AUTHORITY,
     mode: live ? "LIVE_SHADOW" : "OFFLINE_SHADOW",
     egress_mode: egress.mode,
@@ -101,11 +210,6 @@ export async function runArtifactRankingShadow({
       : 0,
     redundant_tool_candidates: 0,
     rehydration_count: 0,
-    false_prune_risk: oracle.false_low_relevance,
-    future_use_recall_at_k: oracle.future_use_recall_at_k,
-    future_use_precision_at_k: oracle.future_use_precision_at_k,
-    critical_reference_recall: oracle.critical_reference_recall,
-    false_low_relevance: oracle.false_low_relevance,
     fallback_identity_failures: 0,
     tool_reexecution_delta: 0,
     acceptance_delta: 0,
@@ -114,25 +218,42 @@ export async function runArtifactRankingShadow({
     ranking_id: ranking.ranking_id,
     projection_id: projection.projection_id,
     counterfactual_packet_id: packet.packet_id,
+    labeled: false,
   };
   const telemetryPath = appendEvent(projectRoot, event);
+  const shadowStatePath = writeShadowState(projectRoot, {
+    schema: "orchestra.jev-shadow-state.v1",
+    shadow_id: shadowId,
+    authority: JEV_AUTHORITY,
+    projection,
+    candidates: generated.selected,
+    ranking,
+    selected_ids: selected.selected_ids,
+    created_at: event.timestamp,
+  });
+
+  let label = null;
+  if (Array.isArray(futureEvents) && futureEvents.length > 0) {
+    label = createShadowLabel({
+      shadowId,
+      candidates: generated.selected,
+      ranking,
+      selectedIds: selected.selected_ids,
+      futureEvents,
+      criticalIds,
+    });
+    appendEvent(projectRoot, label);
+  }
+
   return {
     event,
+    label,
     catalog,
     candidates: generated,
     projection,
     ranking,
-    oracle,
     counterfactualPacket: packet,
     telemetryPath,
+    shadowStatePath,
   };
-}
-
-export function readShadowTelemetry(projectRoot) {
-  const path = resolve(projectRoot, SHADOW_TELEMETRY_PATH);
-  try {
-    return readFileSync(path, "utf8").split("\n").map((line) => line.trim()).filter(Boolean).map(JSON.parse);
-  } catch {
-    return [];
-  }
 }
