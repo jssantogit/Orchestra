@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 const canaryPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-mode.mjs");
+const rolloutPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-rollout.mjs");
 const policyStorePath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/policy-store.mjs");
 const preToolPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
 const stopPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/stop-guard.mjs");
@@ -72,4 +73,35 @@ test("ARCH-H05: promoted policy pointer is versioned and atomically fsynced befo
   assert.match(store, /POLICY_ROLLBACK/);
   assert.match(store, /previous_policy_id/);
   assert.match(store, /EXPLICIT_HUMAN_POLICY_ROLLBACK_REQUIRED/);
+});
+
+
+test("ARCH-H06: progressive Canary expands only through explicit 5 -> 20 -> 50 -> 100 human gates", () => {
+  const canary = readFileSync(canaryPath, "utf8");
+  const rollout = readFileSync(rolloutPath, "utf8");
+  const cli = readFileSync(cliPath, "utf8");
+
+  assert.match(rollout, /traffic_percent:\s*5/);
+  assert.match(rollout, /traffic_percent:\s*20/);
+  assert.match(rollout, /traffic_percent:\s*50/);
+  assert.match(rollout, /traffic_percent:\s*100/);
+  assert.match(rollout, /CANARY_ROLLOUT_OUTCOMES_INCOMPLETE/);
+  assert.match(rollout, /CANARY_ROLLOUT_MINIMUM_OUTCOMES_NOT_MET/);
+  assert.match(canary, /EXPLICIT_HUMAN_STAGE_APPROVAL_REQUIRED/);
+  assert.match(canary, /CANARY_STAGE_REPORT_STALE/);
+  assert.match(canary, /previous_rollout_approval_id/);
+  assert.match(cli, /advance\s+--repo <path> --canary-report <id> --confirm/);
+  assert.match(cli, /--confirm is required for human rollout-stage approval/);
+  assert.equal(canary.includes("auto_advance"), false);
+});
+
+test("ARCH-H07: final promotion is impossible before the human-approved 100 percent stage", () => {
+  const canary = readFileSync(canaryPath, "utf8");
+  const rollout = readFileSync(rolloutPath, "utf8");
+
+  assert.match(rollout, /CANARY_ROLLOUT_NOT_FINAL_STAGE/);
+  assert.match(canary, /READY_FOR_HUMAN_PROMOTION_REVIEW/);
+  assert.match(canary, /isFinalCanaryRolloutStage\(current\.config\)/);
+  assert.match(canary, /EXPLICIT_HUMAN_PROMOTION_REQUIRED/);
+  assert.match(canary, /automatic_promotion_allowed:\s*false/);
 });
