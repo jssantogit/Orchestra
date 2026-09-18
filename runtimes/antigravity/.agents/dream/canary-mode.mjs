@@ -562,11 +562,15 @@ function canaryTaskMarkerPath(repoRoot, taskId) {
 
 function markCanaryTaskActive(repoRoot, config, taskId, bucket) {
   const path = canaryTaskMarkerPath(repoRoot, taskId);
+  const stage = currentCanaryRolloutStage(config);
   const marker = {
     canary_session_id: config.canary_session_id,
     candidate_policy_id: config.candidate_policy_id,
     task_id: String(taskId),
     bucket,
+    traffic_percent: config.traffic_percent,
+    rollout_stage_index: stage?.index ?? 0,
+    rollout_generation: rolloutGeneration(config),
   };
   if (existsSync(path)) {
     try {
@@ -790,6 +794,7 @@ export function registerCanaryDecision({ repoRoot, decisionEvent } = {}) {
     return { registered: false, reason: "CANARY_DECISION_POLICY_MISMATCH" };
   }
 
+  const stage = currentCanaryRolloutStage(current.config);
   const marker = {
     canary_session_id: current.config.canary_session_id,
     decision_id: decisionEvent.decision_id,
@@ -799,6 +804,9 @@ export function registerCanaryDecision({ repoRoot, decisionEvent } = {}) {
     baseline_action: decisionEvent.baseline_action,
     candidate_action: decisionEvent.chosen_action,
     policy_id: decisionEvent.policy_id,
+    traffic_percent: current.config.traffic_percent,
+    rollout_stage_index: stage?.index ?? 0,
+    rollout_generation: rolloutGeneration(current.config),
     created_at: new Date().toISOString(),
   };
   const path = resolve(
@@ -826,6 +834,9 @@ export function registerCanaryDecision({ repoRoot, decisionEvent } = {}) {
     decision_type: marker.decision_type,
     baseline_action: marker.baseline_action,
     candidate_action: marker.candidate_action,
+    traffic_percent: marker.traffic_percent,
+    rollout_stage_index: marker.rollout_stage_index,
+    rollout_generation: marker.rollout_generation,
   });
   return { registered: true, reused: false, marker, path };
 }
@@ -903,6 +914,9 @@ export function evaluateCanaryOutcome({
     decision_id: decisionEvent.decision_id,
     terminal_state: outcomeEvent.terminal_state || "UNKNOWN",
     baseline_exact_accepted: baselineExactAccepted,
+    traffic_percent: marker.traffic_percent ?? session.traffic_percent,
+    rollout_stage_index: marker.rollout_stage_index ?? currentCanaryRolloutStage(session)?.index ?? 0,
+    rollout_generation: marker.rollout_generation ?? rolloutGeneration(session),
   });
 
   try { rmSync(markerPath, { force: true }); } catch {}
