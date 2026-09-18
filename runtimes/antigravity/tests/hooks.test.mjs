@@ -239,29 +239,34 @@ test("Task 5 delegated worker: ACK stays pending and factual child Stop records 
     assert.equal(readdirSync(pendingDir).filter(f => f.endsWith(".json")).length, 1, "Pending decision remains open after ACK");
 
     const roleBindingsPath = resolve(".agents/state/role-bindings.json");
-    const roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    let roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
     const pending = roleBindings.pendingSubagents.find(p => !p.consumed);
     assert.ok(pending?.decisionCorrelationKey);
-    roleBindings.bindings = roleBindings.bindings || {};
-    roleBindings.conversations = roleBindings.conversations || {};
-    const childBinding = {
-      conversationId: "task5-worker-child",
-      role: "WORKER",
-      profile: pending.profile,
-      model: pending.model,
-      parentConversationId: "task5-orch-conv-post",
-      originToolCallId: pending.originToolCallId,
-      delegationKind: "WORK",
-      decisionCorrelationKey: pending.decisionCorrelationKey,
-      decisionType: pending.decisionType,
-      decisionBranchOrdinal: pending.decisionBranchOrdinal,
-      confidence: "HIGH",
-      source: "RUNTIME_IDENTITY",
-      consumed: true,
-    };
-    roleBindings.bindings["task5-worker-child"] = childBinding;
-    roleBindings.conversations["task5-worker-child"] = childBinding;
-    writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
+
+    // Let the real PreTool identity resolver bind the child from the pending delegation.
+    const childRead = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "task5-worker-child",
+        parentConversationId: "task5-orch-conv-post",
+        toolCall: {
+          id: "call-worker-read",
+          name: "view_file",
+          args: { AbsolutePath: resolve("package.json") },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(childRead.decision, "allow");
+
+    roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    const childBinding = roleBindings.bindings["task5-worker-child"];
+    assert.ok(childBinding, "PreTool must create factual child binding");
+    assert.equal(childBinding.delegationKind, "WORK");
+    assert.equal(childBinding.originToolCallId, "call_invoke_post_1");
+    assert.equal(childBinding.decisionCorrelationKey, pending.decisionCorrelationKey);
+    assert.equal(childBinding.decisionType, "WORKER_TIER");
+    assert.equal(childBinding.confidence, "HIGH");
+    assert.equal(childBinding.source, "RUNTIME_IDENTITY");
 
     execFileSync("node", [stopToolScript], {
       input: JSON.stringify({
