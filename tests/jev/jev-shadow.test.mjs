@@ -71,7 +71,10 @@ test("artifact ranking shadow writes telemetry and never changes packet behavior
     assert.equal(result.event.blocks_tool, false);
     assert.equal(result.event.changes_packet, false);
     assert.equal(result.counterfactualPacket.mode, "COUNTERFACTUAL");
-    assert.equal(readShadowTelemetry(root).length, 1);
+    const telemetry = readShadowTelemetry(root);
+    assert.equal(telemetry.length, 2);
+    assert.equal(telemetry[0].schema, "orchestra.jev-shadow-report.v1");
+    assert.equal(telemetry[1].schema, "orchestra.jev-shadow-label.v1");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
