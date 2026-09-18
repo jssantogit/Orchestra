@@ -125,6 +125,7 @@ export function deriveAvailableActions(decisionType, state = {}) {
 
     switch (retryReason) {
       case "FAILED_TEST":
+      case "REMOTE_VALIDATION_FAILURE":
         return ["RETRY_SAME", "ESCALATE_WORKER", "INVESTIGATE_FIRST"];
       case "INCOMPLETE_IMPLEMENTATION":
         return ["RETRY_SAME", "ESCALATE_WORKER"];
