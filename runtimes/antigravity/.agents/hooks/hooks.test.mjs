@@ -1886,6 +1886,27 @@ test("pre-tool hook: blocks orchestrator shell mutations but permits read-only c
       assert(output.reason.includes("ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED"));
     }
 
+    // Commands that look read-only by prefix but have side effects or shell escape surfaces.
+    const deceptiveReadOnlyCommands = [
+      "git branch audit-bypass",
+      "git branch -D audit-bypass",
+      "git diff --output=audit.patch",
+      "find src -delete",
+      "git status $(python -c \"from pathlib import Path; Path('pwned').write_text('x')\")",
+    ];
+
+    for (const cmd of deceptiveReadOnlyCommands) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: cmd },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "deny", `Deceptive read-only command '${cmd}' must fail closed`);
+      assert.match(output.reason, /ORCHESTRATOR_UNVERIFIED_COMMAND_PROHIBITED|ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED/);
+    }
+
     // Read-only shell commands
     const readOnlyCommands = [
       "git status",
