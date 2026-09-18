@@ -87,6 +87,8 @@ Target Economy: `parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`.
    - `testsRequired` is only for worker-owned local command validation. For local-test workflows, specify focused deterministic execution and avoid stress loops.
    - `requiredEvidence` is the preferred typed acceptance contract. Runtime-owned evidence such as `REMOTE_CI`, `FILE_EXISTS`, `GIT_CLEAN`, or `GIT_IGNORED` MUST NOT be delegated to the worker as shell ceremony.
    - For CI-first projects, explicitly set `testsRequired: []` and declare provider evidence, for example `{ class: "FAST_CI", kind: "REMOTE_CI", provider: "GITHUB_ACTIONS", workflow: { path: ".github/workflows/ci.yml" }, requiredJobs: [...] }`. Natural-language claims such as "CI green" are never evidence.
+   - For deterministic mechanical facts, prefer runtime-owned `LOCAL_FACT` instead of forcing shell ceremony on the worker: `FILE_EXISTS` for a required file, `GIT_IGNORED` for ignored runtime paths, `EXPECTED_FILE_MODIFIED` for a bounded expected edit, and `GIT_CLEAN` when cleanliness itself is the contract.
+   - A mechanical task with only runtime-owned evidence should follow the short path: delegate once -> bounded edit -> worker handoff -> runtime evidence collection -> acceptance. Do not add investigation, review, or a local test merely to create evidence.
    - Instruct worker: EXISTING EXTENSION POINT FIRST. Preserve existing function signatures; use existing options/config objects; do not invent positional parameters, overloads, or wrapper APIs.
    - The runtime automatically records delegation state and persists `active-contract.json`.
 
