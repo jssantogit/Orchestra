@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { buildSnapshot } from "./snapshot.mjs";
@@ -13,12 +15,16 @@ import {
   buildSandboxedExplorationCommand,
   captureBranchSeedIfArmed,
   enforceExplorationToolBoundary,
+  getExplorationBudgetState,
   isSafeExplorationCommand,
   prepareExploration,
   recordExplorationModelCall,
   resolveExplorationPolicyOverlay,
   selectLeastObservedLegalAction,
 } from "./exploration-lab.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const stopGuardScript = resolve(__dirname, "../hooks/stop-guard.mjs");
 
 function fixture() {
   const repo = mkdtempSync(join(tmpdir(), "orchestra-e-test-"));
@@ -241,6 +247,24 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     assert.equal(repeatedFirst.model_calls, 1, "PostInvocation retries must be idempotent");
     assert.equal(second.terminate, true);
     assert.equal(second.model_calls, 2);
+    const budgetState = getExplorationBudgetState(branch);
+    assert.equal(budgetState.active, true);
+    assert.equal(budgetState.exhausted, true);
+    assert.equal(budgetState.model_calls, 2);
+
+    const stopOutput = JSON.parse(execFileSync("node", [stopGuardScript], {
+      input: JSON.stringify({
+        invocationNum: 1,
+        fullyIdle: true,
+        terminationReason: "model_stop",
+        conversationId: "fresh-a",
+        workspacePaths: [branch],
+        modelName: "test",
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(stopOutput.decision, "stop");
+    assert.match(stopOutput.reason, /EXPLORATION_MODEL_CALL_BUDGET_EXHAUSTED/);
 
     const duplicate = prepareExploration({ repoRoot: f.repo, seedPath: captured.seed_path, world });
     assert.equal(duplicate.prepared, false);
