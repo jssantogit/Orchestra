@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   DECISION_TYPES,
@@ -15,7 +18,8 @@ import {
   evaluatePolicy,
   validatePolicy,
 } from "../../runtimes/antigravity/.agents/dream/policy-engine.mjs";
-import staticPolicy from "../../runtimes/antigravity/.agents/dream/policies/static-policy-v1.json" with { type: "json" };
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const staticPolicy = JSON.parse(readFileSync(resolve(__dirname, "../../runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"), "utf8"));
 
 test("full exploration hard ceilings are static and bounded", () => {
   assert.deepEqual(FULL_EXPLORATION_LIMITS, {
