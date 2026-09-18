@@ -790,6 +790,89 @@ function feedbackExamples(items) {
     .slice(0, POLICY_LAB_LIMITS.max_structured_examples);
 }
 
+export function buildPolicyDesignerPacket({ repoRoot, cyclePath } = {}) {
+  if (!repoRoot || !cyclePath) return { ok: false, reason: "INVALID_DESIGNER_PACKET_INPUT" };
+  const cycle = readJson(cyclePath);
+  if (cycle?.schema !== POLICY_CYCLE_SCHEMA) return { ok: false, reason: "INVALID_CYCLE" };
+  if (cycle.designer_calls.length >= POLICY_LAB_LIMITS.max_designer_calls) {
+    return { ok: false, reason: "DESIGNER_CALL_BUDGET_EXHAUSTED" };
+  }
+
+  const loadedDataset = loadDatasetForCycle(repoRoot, cycle);
+  if (!loadedDataset.ok) return loadedDataset;
+  const dataset = loadedDataset.dataset;
+
+  let replayFeedback = null;
+  if (cycle.last_evaluation_id) {
+    const evaluationPath = resolve(
+      repoRoot,
+      LAB_ROOT,
+      "evaluations",
+      cycle.last_evaluation_id + ".json",
+    );
+    if (existsSync(evaluationPath)) {
+      const evaluation = readJson(evaluationPath);
+      if (
+        evaluation?.schema === POLICY_EVALUATION_SCHEMA
+        && evaluation?.evaluation_id === cycle.last_evaluation_id
+      ) {
+        replayFeedback = {
+          evaluation_id: evaluation.evaluation_id,
+          candidates: (evaluation.candidates || []).map((item) => ({
+            policy_id: item.policy_id,
+            source: item.source,
+            status: item.status,
+            train_comparison: item.train_comparison || null,
+            holdout_comparison: item.holdout_comparison || null,
+            materiality: item.materiality || null,
+            feedback_examples: (item.feedback_examples || [])
+              .slice(0, POLICY_LAB_LIMITS.max_structured_examples),
+          })),
+        };
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    packet: {
+      schema: "orchestra.policy-designer-packet.v1",
+      cycle_id: cycle.cycle_id,
+      dataset_id: dataset.dataset_id,
+      designer_call_index: cycle.designer_calls.length + 1,
+      limits: {
+        max_candidates_this_call: POLICY_LAB_LIMITS.max_candidates_per_call,
+        max_total_designer_calls: POLICY_LAB_LIMITS.max_designer_calls,
+      },
+      dataset: {
+        split_counts: dataset.split_counts,
+        state_buckets: dataset.state_buckets,
+        action_support: dataset.action_support,
+        terminal_outcomes: dataset.terminal_outcomes,
+        first_pass: dataset.first_pass,
+        retry_reasons: dataset.retry_reasons,
+        cost_quantiles: dataset.cost_quantiles,
+        replay_counterexamples: dataset.replay_counterexamples,
+        current_policy: dataset.current_policy,
+      },
+      replay_feedback: replayFeedback,
+      output_contract: {
+        format: "JSON_ONLY",
+        shape: { candidates: "array<orchestra.exploration-policy.v1>" },
+        max_candidates: POLICY_LAB_LIMITS.max_candidates_per_call,
+        forbidden: [
+          "raw history",
+          "user prompts",
+          "terminal logs",
+          "web/file content",
+          "policy activation",
+          "governance edits",
+        ],
+      },
+    },
+  };
+}
+
 export function evaluatePolicyLabCycle({ repoRoot, cyclePath } = {}) {
   if (!repoRoot || !cyclePath) return { evaluated: false, reason: "INVALID_EVALUATION_INPUT" };
   const cycle = readJson(cyclePath);
