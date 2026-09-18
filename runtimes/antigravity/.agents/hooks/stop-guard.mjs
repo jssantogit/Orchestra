@@ -1165,7 +1165,7 @@ function main() {
     && bound.role === "WORKER"
     && bound.confidence === "HIGH"
     && bound.source === "RUNTIME_IDENTITY"
-    && bound.delegationKind === "WORK"
+    && ["WORK", "VALIDATION"].includes(bound.delegationKind)
   );
   if (factualWorkChild) {
     const explicitEvidenceContract = Array.isArray(activeState.scopeContract?.requiredEvidence);
