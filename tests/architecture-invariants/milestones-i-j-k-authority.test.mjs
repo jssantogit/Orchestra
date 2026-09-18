@@ -165,6 +165,8 @@ test("ARCH-K07: branch attempts consume controller budget even when materializat
 test("ARCH-K08: repeated K exploration of one source decision cannot repeat a prior selected action", () => {
   const lab = read("runtimes/antigravity/.agents/dream/exploration-lab.mjs");
   assert.match(lab, /priorControlledActions/);
-  assert.match(lab, /excludedActions: priorControlledActions/);
+  assert.match(lab, /historicallyObservedActions/);
+  assert.match(lab, /const excludedActions = \[\.\.\.new Set\(\[\.\.\.priorControlledActions, \.\.\.historicalActions\]\)\]/);
+  assert.match(lab, /excludedActions,/);
   assert.match(lab, /full_exploration_branch_ordinal/);
 });
