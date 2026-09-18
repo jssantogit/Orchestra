@@ -242,7 +242,7 @@ governance -> decision state -> available_actions -> declarative policy -> autho
 
 ## 10. Milestone D Integration Hotfix & Architecture Invariant Gate
 
-The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime against edge cases discovered during full-lifecycle testing and formalize the 21 Architecture Invariants:
+The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime against edge cases discovered during full-lifecycle testing and formalize the 23 Architecture Invariants:
 
 1. **Exact Investigation Correlation Lifecycle (ACK != COMPLETION)**:
    - `pre-tool-enforce.mjs` creates `investigationInFlight` and persists immutable causal identity for the dispatch, including `correlationKey`, `toolCallId`, parent conversation, expected investigator profile/role, and `delegationKind = INVESTIGATION`.
@@ -262,8 +262,8 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
 3. **Structural Policy Contract Parity & Truthfulness**:
    - Strict structural alignment between JSON Schema Draft 2020-12 and pure JavaScript `validatePolicy()` across all properties (`base_policy`, `description`, `created_at`, `rule.description`).
    - Truthfulness is enforced: structural representable constraints (schema) and normative semantic invariants (`validatePolicy()`) are explicitly partitioned and verified.
-4. **Architecture Invariant Gate (ARCH-001 to ARCH-021)**:
-   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 21 architectural boundaries:
+4. **Architecture Invariant Gate (ARCH-001 to ARCH-023)**:
+   - Executed via `npm run test:architecture-invariants` (`tests/architecture-invariants/dream-authority.test.mjs`), validating both normative and adversarial conditions across all 23 architectural boundaries:
      - `ARCH-001`: Immutable Governance Over Dream
      - `ARCH-002`: Zero Online Context Overhead & No Raw History In Context
      - `ARCH-003`: Exact Replay Epistemic Invariant
@@ -285,3 +285,5 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
      - `ARCH-019`: Factual Investigator Completion Boundary
      - `ARCH-020`: Delegated Worker ACK Is Not Decision Outcome
      - `ARCH-021`: IMPLEMENT_DIRECT Decision Completes With Its Worker
+     - `ARCH-022`: Retry Escalation Requires Factual Previous Worker Identity
+     - `ARCH-023`: Retry Budget Is Factual, Never Manufactured
