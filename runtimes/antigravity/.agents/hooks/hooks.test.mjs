@@ -1494,6 +1494,52 @@ test("v5: post-tool telemetry preserves mutationSeq for git status, add, commit,
   }
 });
 
+test("v5: git-operation resolves root transaction state from nested cwd", () => {
+  const fixtureDir = resolve("scratch/git-fixture-root-state-" + Date.now());
+  const nestedDir = resolve(fixtureDir, "src/nested");
+  try {
+    mkdirSync(nestedDir, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "README.md"), "# Fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "initial fixture"], { cwd: fixtureDir });
+
+    const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+    const stateDir = resolve(fixtureDir, ".agents/state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(resolve(stateDir, "active-state.json"), JSON.stringify({
+      gitTransaction: {
+        action: "commit",
+        commitCreated: true,
+        commitHash: head,
+        message: "candidate already committed",
+        branch: "main",
+        pushSucceeded: false,
+      },
+    }, null, 2), "utf-8");
+
+    const res = executeGitOperation({
+      cwd: nestedDir,
+      action: "commit",
+      message: "different message that cannot match HEAD fallback",
+    });
+
+    assert.equal(res.success, true);
+    assert.equal(res.action, "commit");
+    assert.equal(res.commit, head, "Nested invocation must reuse transaction state from repository root");
+    assert.equal(
+      existsSync(resolve(nestedDir, ".git/active-state.json")),
+      false,
+      "Nested cwd must never create or depend on a local .git/active-state.json"
+    );
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
 test("v5: git-operation runner executes status and diff_summary", () => {
   const fixtureDir = resolve("scratch/git-fixture-status-" + Date.now());
   try {
