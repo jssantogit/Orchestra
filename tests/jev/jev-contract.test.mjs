@@ -11,7 +11,10 @@ import {
 import { projectForJev, redactSecrets } from "../../experiments/jev/outbound-projector.mjs";
 import { JevClient, createFakeJevClient } from "../../experiments/jev/client.mjs";
 import { generateCandidates } from "../../experiments/jev/candidate-generator.mjs";
-import { rankCandidates } from "../../experiments/jev/artifact-ranker.mjs";
+import {
+  rankCandidates,
+  selectRankedReferences,
+} from "../../experiments/jev/artifact-ranker.mjs";
 import { buildCounterfactualPacket, assertMandatoryCoreIdentity } from "../../experiments/jev/packet-builder.mjs";
 import { buildRetrievalAssistedPacket } from "../../experiments/jev/retrieval-assist.mjs";
 import { evaluateLiveEgress } from "../../experiments/jev/egress-policy.mjs";
@@ -127,6 +130,45 @@ test("client accepts projection only and validates live response", async () => {
   await assert.rejects(
     () => client.ask({ activeState: { secret: true } }, {}, { live: true }),
     /JEV_INVALID_PROJECTION/,
+  );
+});
+
+test("semantic ranking batches 64 candidates and preserves all pinned references beyond soft budgets", async () => {
+  const candidates = Array.from({ length: 64 }, (_, i) => c(`batch-${i}`, {
+    pinned: i < 10,
+    bytes: 100,
+    summary: `candidate ${i}`,
+  }));
+  const projection = projectForJev({ goal: "large candidate set", candidates });
+  let calls = 0;
+  const client = {
+    async ask(_projection, questions) {
+      calls++;
+      const answers = {};
+      for (const name of Object.keys(questions)) answers[name] = { noul: 0.5 };
+      return {
+        model: "jev-fake",
+        answers,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        latency_ms: 1,
+      };
+    },
+  };
+  const ranking = await rankCandidates({ client, projection, live: true });
+  assert.equal(ranking.request_count, 2);
+  assert.equal(calls, 2);
+  assert.equal(ranking.items.length, 64);
+
+  const selected = selectRankedReferences({
+    candidates,
+    ranking,
+    maxItems: 3,
+    maxBytes: 250,
+  });
+  assert.equal(selected.selected.length, 10);
+  assert.deepEqual(
+    selected.selected.map((item) => item.id),
+    candidates.slice(0, 10).map((item) => item.id),
   );
 });
 
