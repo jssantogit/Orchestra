@@ -16,6 +16,11 @@ import {
   classifyMechanicalFastPath,
   isMechanicalFastPathActive,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs";
+import {
+  DECISION_TYPES,
+  deriveAvailableActions,
+  deriveDecisionState,
+} from "../../runtimes/antigravity/.agents/dream/action-space.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -216,6 +221,26 @@ function writeAcceptanceState(root) {
   );
   writeRoleBindings(root, { includeChild: true });
 }
+
+test("mechanical fast path: Dream worker-tier authority stays aligned with low-worker router", () => {
+  const derived = deriveDecisionState({
+    taskAction: "MECHANICAL_FIX",
+    taskDomain: "GENERAL",
+    criticality: "NORMAL",
+  });
+  assert.equal(derived.task_action, "MECHANICAL_FIX");
+  assert.equal(derived.complexity, "MECHANICAL");
+
+  assert.deepEqual(
+    deriveAvailableActions(DECISION_TYPES.WORKER_TIER, {
+      task_action: "MECHANICAL_FIX",
+      task_domain: "GENERAL",
+      criticality: "NORMAL",
+      complexity: "NORMAL",
+    }),
+    ["FLASH_LOW"],
+  );
+});
 
 test("mechanical fast path: .gitignore + runtime-owned GIT_IGNORED is eligible", () => {
   const result = classifyMechanicalFastPath({
