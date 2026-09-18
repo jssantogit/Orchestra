@@ -383,7 +383,12 @@ test("federation: real absence still escalates Stop Guard to HUMAN_GATE", () => 
     });
     const first = JSON.parse(execFileSync(process.execPath, [stopScript], { input, encoding: "utf8" }));
     assert.equal(first.decision, "continue");
-    assert.match(first.reason, /EVIDENCE_MISSING/);
+    assert.match(first.reason, /STOP_BLOCKED/);
+    assert.match(first.reason, /LOCAL_COMMAND_NOT_EXECUTED/);
+
+    const firstState = JSON.parse(readFileSync(join(repo, ".agents", "state", "active-state.json"), "utf8"));
+    assert.equal(firstState.lastStopBlockedReason, "EVIDENCE_MISSING");
+    assert.equal(firstState.stopBlockedCount, 1);
 
     const second = JSON.parse(execFileSync(process.execPath, [stopScript], { input, encoding: "utf8" }));
     assert.equal(second.decision, "continue");
