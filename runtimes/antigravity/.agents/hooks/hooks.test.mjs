@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, readdirSync } from "node:fs";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, readdirSync, symlinkSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 
 import { executeGitOperation } from "./git-operation.mjs";
@@ -3244,6 +3244,43 @@ test("governance: scope checks canonicalize dot-dot traversal in worker shell mu
     }));
     assert.equal(outsideWorkspace.decision, "deny");
     assert.match(outsideWorkspace.reason, /WORKSPACE_ESCAPE/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: worker scope follows physical symlink destination", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    mkdirSync("scratch/allowed", { recursive: true });
+    symlinkSync(resolve(".agents/state"), resolve("scratch/allowed/control-plane-link"), "dir");
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("symlink-scope-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["scratch/allowed/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "scratch/allowed/control-plane-link/pwn.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /SCOPE_VIOLATION/);
+    assert.equal(existsSync(".agents/state/pwn.json"), false);
   } finally {
     cleanState();
   }
