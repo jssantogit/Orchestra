@@ -788,38 +788,53 @@ export function submitDesignerCandidates({
   repoRoot,
   cyclePath,
   candidates,
+  packetId,
 } = {}) {
-  if (!repoRoot || !cyclePath || !Array.isArray(candidates)) {
+  if (!repoRoot || !cyclePath) {
     return { accepted: false, reason: "INVALID_DESIGNER_SUBMISSION" };
   }
 
   const loadedCycle = readCycle(repoRoot, cyclePath);
   if (!loadedCycle.ok) return { accepted: false, reason: loadedCycle.reason };
   const cycle = loadedCycle.cycle;
-  if (!["OPEN", "EVALUATED"].includes(cycle.status)) {
-    return { accepted: false, reason: "CYCLE_NOT_OPEN" };
+  const pendingCall = cycle.designer_calls.at(-1);
+
+  if (
+    cycle.status !== "DESIGNER_PENDING"
+    || !pendingCall
+    || pendingCall.status !== "PACKET_ISSUED"
+  ) {
+    return { accepted: false, reason: "DESIGNER_PACKET_REQUIRED" };
   }
-  if (cycle.designer_calls.length >= POLICY_LAB_LIMITS.max_designer_calls) {
-    return { accepted: false, reason: "DESIGNER_CALL_BUDGET_EXHAUSTED" };
-  }
-  const callIndex = cycle.designer_calls.length + 1;
-  if (candidates.length > POLICY_LAB_LIMITS.max_candidates_per_call) {
-    cycle.designer_calls.push({
-      call_index: callIndex,
-      submitted_count: candidates.length,
-      accepted_policy_ids: [],
-      rejected_count: candidates.length,
-      rejection_reason: "TOO_MANY_CANDIDATES_IN_CALL",
-    });
+
+  const callIndex = pendingCall.call_index;
+
+  function rejectCall(reason) {
+    pendingCall.status = "REJECTED";
+    pendingCall.submitted_count = Array.isArray(candidates) ? candidates.length : null;
+    pendingCall.accepted_policy_ids = [];
+    pendingCall.rejected_count = Array.isArray(candidates) ? candidates.length : null;
+    pendingCall.rejection_reason = reason;
     cycle.status = "OPEN";
     const stored = writeCycle(cyclePath, cycle);
     return {
       accepted: false,
-      reason: "TOO_MANY_CANDIDATES_IN_CALL",
+      reason,
       call_index: callIndex,
       cycle: stored,
     };
   }
+
+  if (typeof packetId !== "string" || packetId !== pendingCall.packet_id) {
+    return rejectCall("DESIGNER_PACKET_ID_MISMATCH");
+  }
+  if (!Array.isArray(candidates)) {
+    return rejectCall("INVALID_DESIGNER_SUBMISSION");
+  }
+  if (candidates.length > POLICY_LAB_LIMITS.max_candidates_per_call) {
+    return rejectCall("TOO_MANY_CANDIDATES_IN_CALL");
+  }
+
   const accepted = [];
   const rejected = [];
 
@@ -830,23 +845,21 @@ export function submitDesignerCandidates({
       continue;
     }
     const policy = materialized.policy;
-    const path = resolve(repoRoot, LAB_ROOT, "candidates", policy.policy_id + ".json");
-    atomicJson(path, policy);
+    const candidatePath = resolve(repoRoot, LAB_ROOT, "candidates", policy.policy_id + ".json");
+    atomicJson(candidatePath, policy);
     if (!cycle.candidates.some((entry) => entry.policy_id === policy.policy_id)) {
       cycle.candidates.push({
         policy_id: policy.policy_id,
         source: callIndex === 1 ? "DESIGNER_CALL_1" : "DESIGNER_CALL_2",
       });
     }
-    accepted.push({ policy_id: policy.policy_id, path });
+    accepted.push({ policy_id: policy.policy_id, path: candidatePath });
   }
 
-  cycle.designer_calls.push({
-    call_index: callIndex,
-    submitted_count: candidates.length,
-    accepted_policy_ids: accepted.map((x) => x.policy_id).sort(),
-    rejected_count: rejected.length,
-  });
+  pendingCall.status = "SUBMITTED";
+  pendingCall.submitted_count = candidates.length;
+  pendingCall.accepted_policy_ids = accepted.map((x) => x.policy_id).sort();
+  pendingCall.rejected_count = rejected.length;
   cycle.status = "OPEN";
   const storedCycle = writeCycle(cyclePath, cycle);
 
