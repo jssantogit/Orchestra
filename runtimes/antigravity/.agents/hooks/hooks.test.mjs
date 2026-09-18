@@ -5,6 +5,7 @@ import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync,
 import { resolve, dirname } from "node:path";
 
 import { executeGitOperation } from "./git-operation.mjs";
+import { factualSubagentMatchesPending } from "./child-identity.mjs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2956,4 +2957,33 @@ test("governance: child Stop cannot inherit orchestrator acceptance authority", 
   } finally {
     cleanState();
   }
+});
+
+
+test("governance: factual child descriptor conflicts fail closed", () => {
+  const pending = {
+    profile: "flash-low-worker",
+    role: "WORKER",
+    originStepIdx: 7,
+  };
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-low-worker", role: "worker" },
+    spawnStepIndex: 7,
+  }, pending), true);
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-worker", role: "worker" },
+    spawnStepIndex: 7,
+  }, pending), false, "Matching role must not override a conflicting factual profile");
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-low-worker", role: "reviewer" },
+    spawnStepIndex: 7,
+  }, pending), false, "Matching profile must not override a conflicting factual role");
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-low-worker", role: "worker" },
+    spawnStepIndex: 8,
+  }, pending), false, "Spawn-step mismatch must remain fail-closed");
 });
