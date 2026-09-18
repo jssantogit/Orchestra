@@ -635,76 +635,120 @@ test("Exact baseline-accepted candidate failure rolls Canary back after factual 
   }
 });
 
-test("Healthy completed Canary requires second human approval before atomic promotion", () => {
+test("Progressive Canary requires human approval at 5 -> 20 -> 50 -> 100 before promotion", () => {
   const f = fixture();
   try {
     const approval = approveFixture(f);
-    const selected = taskForSelection(f.candidateId, true, 200000);
-    const runtime = safeRuntime(selected.taskId);
-    const overlay = evaluateCanaryPolicyOverlay({
-      repoRoot: f.repo,
-      taskId: selected.taskId,
-      decisionType: "WORKER_TIER",
-      state: policyState(),
-      availableActions: ACTIONS,
-      baselineAction: "FLASH_MEDIUM",
-      baselinePolicyId: f.baselinePolicyId,
-      activeState: runtime.activeState,
-      activeContract: runtime.activeContract,
-    });
-    assert.equal(overlay.active, true);
+    assert.equal(approval.config.traffic_percent, 5);
+    assert.equal(approval.config.rollout_stage_index, 0);
+    assert.equal(approval.config.rollout_generation, 0);
 
-    const correlationKey = "canary-success";
-    const recorded = recordDecision({
-      repoRoot: f.repo,
-      snapshot: f.trainRoot,
-      correlationKey,
-      decision: {
-        decision_id: "dec-h-canary-success",
-        snapshot_id: f.trainRoot,
-        decision_type: "WORKER_TIER",
-        state: policyState(),
-        available_actions: ACTIONS,
-        chosen_action: overlay.action,
-        policy_source: overlay.source,
-        policy_id: overlay.policy_id,
-        baseline_action: overlay.baseline_action,
-        policy_diagnostic: null,
-        actor_identity: "ORCHESTRATOR",
-        conversation_id: "canary-success",
-        step_idx: 1,
-        tool_call_id: "tool-canary-success",
-        branch_ordinal: 0,
-      },
-    });
-    assert.equal(recorded.recorded, true);
+    const emptyReport = summarizeCanarySession({ repoRoot: f.repo });
+    assert.equal(emptyReport.summarized, true);
+    assert.equal(emptyReport.report.status, "COLLECT_CANARY_OUTCOMES");
+    assert.equal(emptyReport.report.stage_gate_reason, "CANARY_ROLLOUT_NO_LIVE_DECISIONS");
 
-    const outcome = recordDecisionOutcome({
-      repoRoot: f.repo,
-      correlationKey,
-      outcome: {
-        result: { status: "SUCCESS" },
-        evidence_summary: {
-          tests: "NOT_REQUIRED",
-          typecheck: "NOT_REQUIRED",
-          build: "NOT_REQUIRED",
-          scope_check: "PASS",
-          validation_fresh: false,
-        },
-        retry_state: { retry_remaining: 1 },
-        cost_metrics: { model_calls: 1, input_tokens: 10, output_tokens: 5, latency_ms: 5 },
-        terminal_state: "ACCEPTED",
-        resulting_snapshot_id: null,
-      },
+    const stageCases = [
+      { traffic: 5, outcomes: 1, next: 20, index: 0, start: 200000, label: "5" },
+      { traffic: 20, outcomes: 3, next: 50, index: 1, start: 300000, label: "20" },
+      { traffic: 50, outcomes: 5, next: 100, index: 2, start: 400000, label: "50" },
+    ];
+
+    let cumulative = 0;
+    for (const stageCase of stageCases) {
+      recordAcceptedCanaryOutcomes(f, {
+        count: stageCase.outcomes,
+        trafficPercent: stageCase.traffic,
+        start: stageCase.start,
+        label: stageCase.label,
+      });
+      cumulative += stageCase.outcomes;
+
+      const report = summarizeCanarySession({ repoRoot: f.repo });
+      assert.equal(report.summarized, true, JSON.stringify(report));
+      assert.equal(report.report.status, "READY_FOR_HUMAN_STAGE_ADVANCE");
+      assert.equal(report.report.traffic_percent, stageCase.traffic);
+      assert.equal(report.report.rollout_stage_index, stageCase.index);
+      assert.equal(report.report.executed_canary_decisions, stageCase.outcomes);
+      assert.equal(report.report.completed_canary_outcomes, stageCase.outcomes);
+      assert.equal(report.report.cumulative_completed_canary_outcomes, cumulative);
+      assert.equal(report.report.next_traffic_percent, stageCase.next);
+      assert.equal(report.report.human_stage_advance_required, true);
+      assert.equal(report.report.human_promotion_required, false);
+      assert.equal(report.report.automatic_stage_advance_allowed, false);
+      assert.equal(report.report.automatic_promotion_allowed, false);
+
+      const earlyPromotion = promoteCanary({
+        repoRoot: f.repo,
+        canaryReportId: report.report.report_id,
+        humanApproval: true,
+      });
+      assert.equal(earlyPromotion.promoted, false);
+      assert.equal(earlyPromotion.reason, "CANARY_REPORT_NOT_PROMOTABLE");
+
+      if (stageCase.index === 0) {
+        const deniedAdvance = advanceCanaryStage({
+          repoRoot: f.repo,
+          canaryReportId: report.report.report_id,
+          humanApproval: false,
+        });
+        assert.equal(deniedAdvance.advanced, false);
+        assert.equal(deniedAdvance.reason, "EXPLICIT_HUMAN_STAGE_APPROVAL_REQUIRED");
+      }
+
+      const advanced = advanceCanaryStage({
+        repoRoot: f.repo,
+        canaryReportId: report.report.report_id,
+        humanApproval: true,
+      });
+      assert.equal(advanced.advanced, true, JSON.stringify(advanced));
+      assert.equal(advanced.from_stage.traffic_percent, stageCase.traffic);
+      assert.equal(advanced.to_stage.traffic_percent, stageCase.next);
+      assert.equal(advanced.config.rollout_generation, stageCase.index + 1);
+
+      const active = loadCanaryConfig(f.repo);
+      assert.equal(active.active, true, JSON.stringify(active));
+      assert.equal(active.config.traffic_percent, stageCase.next);
+      assert.equal(active.rolloutStage.index, stageCase.index + 1);
+      assert.equal(active.rolloutApproval.approved_by, "HUMAN_EXPLICIT_CLI");
+      assert.equal(active.rolloutApproval.canary_report_id, report.report.report_id);
+
+      const replayAdvance = advanceCanaryStage({
+        repoRoot: f.repo,
+        canaryReportId: report.report.report_id,
+        humanApproval: true,
+      });
+      assert.equal(replayAdvance.advanced, false);
+      assert.equal(replayAdvance.reason, "CANARY_STAGE_REPORT_STALE");
+    }
+
+    recordAcceptedCanaryOutcomes(f, {
+      count: 10,
+      trafficPercent: 100,
+      start: 500000,
+      label: "100",
     });
-    assert.equal(outcome.recorded, true);
+    cumulative += 10;
 
     const report = summarizeCanarySession({ repoRoot: f.repo });
     assert.equal(report.summarized, true, JSON.stringify(report));
     assert.equal(report.report.status, "READY_FOR_HUMAN_PROMOTION_REVIEW");
-    assert.equal(report.report.executed_canary_decisions, 1);
-    assert.equal(report.report.completed_canary_outcomes, 1);
+    assert.equal(report.report.traffic_percent, 100);
+    assert.equal(report.report.rollout_stage_index, 3);
+    assert.equal(report.report.executed_canary_decisions, 10);
+    assert.equal(report.report.completed_canary_outcomes, 10);
+    assert.equal(report.report.cumulative_completed_canary_outcomes, cumulative);
+    assert.equal(report.report.next_traffic_percent, null);
+    assert.equal(report.report.human_stage_advance_required, false);
     assert.equal(report.report.human_promotion_required, true);
+
+    const cannotAdvanceFinal = advanceCanaryStage({
+      repoRoot: f.repo,
+      canaryReportId: report.report.report_id,
+      humanApproval: true,
+    });
+    assert.equal(cannotAdvanceFinal.advanced, false);
+    assert.equal(cannotAdvanceFinal.reason, "CANARY_REPORT_NOT_STAGE_ADVANCEABLE");
 
     const denied = promoteCanary({
       repoRoot: f.repo,
