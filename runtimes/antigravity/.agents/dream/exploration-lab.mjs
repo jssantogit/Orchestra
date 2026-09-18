@@ -140,7 +140,8 @@ function activateExplorationPreToolWrapper(branchRoot) {
   }
   if (
     !existsSync(resolve(branchRoot, ".agents/hooks/pre-tool-enforce.mjs")) ||
-    !existsSync(resolve(branchRoot, ".agents/hooks/pre-tool-exploration-guard.mjs"))
+    !existsSync(resolve(branchRoot, ".agents/hooks/pre-tool-exploration-guard.mjs")) ||
+    !existsSync(resolve(branchRoot, ".agents/hooks/post-invocation-exploration-guard.mjs"))
   ) {
     return { ok: false, reason: "EXPLORATION_HOOK_IMPLEMENTATION_MISSING" };
   }
@@ -151,13 +152,21 @@ function activateExplorationPreToolWrapper(branchRoot) {
   };
   entry.matcher = "*";
   handler.command = "node hooks/pre-tool-exploration-guard.mjs";
+  config["exploration-budget-guard"] = {
+    PostInvocation: [{
+      type: "command",
+      command: "node hooks/post-invocation-exploration-guard.mjs",
+      timeout: 10,
+    }],
+  };
   atomicJson(hooksPath, config);
   return {
     ok: true,
     original,
     overlay_hash: sha256Canonical({
-      matcher: entry.matcher,
-      command: handler.command,
+      pre_tool_matcher: entry.matcher,
+      pre_tool_command: handler.command,
+      post_invocation_command: config["exploration-budget-guard"].PostInvocation[0].command,
       original,
     }),
   };
