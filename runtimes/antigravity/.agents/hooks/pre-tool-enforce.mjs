@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, relative, dirname, basename, sep } from "node:path";
+import { resolve, relative, dirname, basename, sep, isAbsolute } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   extractRealShellRedirections,
@@ -247,6 +247,27 @@ function normalizePath(p) {
     .replace(/^\/+/, "")
     .replace(/^(\.\/)+/, "")
     .replace(/\/+$/, "");
+}
+
+function canonicalizeWorkspaceTarget(rawTarget, repoRoot) {
+  const raw = String(rawTarget || "").trim().replace(/^["']|["']$/g, "");
+  const absolutePath = resolve(repoRoot, raw);
+  const rel = relative(repoRoot, absolutePath);
+  const outsideWorkspace = Boolean(
+    rel === ".." ||
+    rel.startsWith(`..${sep}`) ||
+    isAbsolute(rel)
+  );
+  return {
+    path: normalizePath(rel),
+    absolutePath,
+    outsideWorkspace,
+  };
+}
+
+function isWorkspaceEscapePath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === ".." || norm.startsWith("../") || /^[A-Za-z]:\//.test(norm);
 }
 
 function pathMatchesPattern(filePath, pattern) {
@@ -745,14 +766,15 @@ function extractTargetPaths(commandLine, repoRoot) {
     targets.add(match[1]);
   }
 
-  // Normalize targets relative to repoRoot
+  // Canonicalize lexical targets relative to repoRoot before scope checks.
+  // This collapses "." / ".." so "src/../.agents/x" cannot masquerade as src/**.
   const result = [];
   for (const t of targets) {
-    let p = t;
-    if (p.startsWith(repoRoot)) {
-      p = relative(repoRoot, p);
-    }
-    result.push(normalizePath(p));
+    const canonical = canonicalizeWorkspaceTarget(t, repoRoot);
+    const normalized = canonical.outsideWorkspace
+      ? normalizePath(relative(repoRoot, canonical.absolutePath))
+      : canonical.path;
+    result.push(normalized);
   }
   return result;
 }
@@ -1946,6 +1968,14 @@ function main() {
         }
       }
 
+      if (effectiveTargets.some(isWorkspaceEscapePath)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "WORKSPACE_ESCAPE: Mutating worker shell command resolves a target outside the repository workspace."
+        }));
+        return;
+      }
+
       if (effectiveTargets.length === 0 || (mutation.unknownScope && !mutation.targetPath && targets.length === 0)) {
         console.log(JSON.stringify({
           decision: "deny",
@@ -1996,7 +2026,16 @@ function main() {
   // Check 3: native file mutation tools
   if (["write_to_file", "replace_file_content", "edit_file", "create_file"].includes(toolName)) {
     const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.FilePath || toolArgs.filePath || toolArgs.path || "";
-    const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
+    const canonicalTarget = canonicalizeWorkspaceTarget(rawTarget, repoRoot);
+    const relTarget = canonicalTarget.path;
+
+    if (canonicalTarget.outsideWorkspace) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `WORKSPACE_ESCAPE: File mutation target "${rawTarget}" resolves outside the repository workspace.`
+      }));
+      return;
+    }
 
     // 0. Constitution protection: AGENTS.md is strictly immutable across all agents
     if (relTarget === "AGENTS.md" || relTarget.endsWith("/AGENTS.md")) {
