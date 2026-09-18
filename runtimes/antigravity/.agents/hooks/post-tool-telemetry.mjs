@@ -96,13 +96,59 @@ function getWorkspacePaths(payload = {}) {
   };
 }
 
-function loadRoleBindings(roleBindingsPath) {
-  if (roleBindingsPath && existsSync(roleBindingsPath)) {
-    try {
-      return JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
-    } catch {}
+function readGovernanceObject(path, label) {
+  if (!path || !existsSync(path)) return { ok: true, exists: false, value: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return { ok: false, exists: true, value: null, reason: `${label}_MALFORMED_JSON` };
   }
-  return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, exists: true, value: null, reason: `${label}_INVALID_SHAPE` };
+  }
+  return { ok: true, exists: true, value: parsed };
+}
+
+function validRoleBindingsShape(roleBindings) {
+  if (!roleBindings || typeof roleBindings !== "object" || Array.isArray(roleBindings)) return false;
+  if (
+    roleBindings.mainConversationId !== undefined &&
+    roleBindings.mainConversationId !== null &&
+    typeof roleBindings.mainConversationId !== "string"
+  ) return false;
+  if (
+    roleBindings.bindings !== undefined &&
+    (!roleBindings.bindings || typeof roleBindings.bindings !== "object" || Array.isArray(roleBindings.bindings))
+  ) return false;
+  if (
+    roleBindings.conversations !== undefined &&
+    (!roleBindings.conversations || typeof roleBindings.conversations !== "object" || Array.isArray(roleBindings.conversations))
+  ) return false;
+  if (roleBindings.pendingSubagents !== undefined && !Array.isArray(roleBindings.pendingSubagents)) return false;
+  return true;
+}
+
+function loadRoleBindings(roleBindingsPath) {
+  const loaded = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
+  if (!loaded.ok) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: loaded.reason,
+    };
+  }
+  if (!loaded.exists) return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  if (!validRoleBindingsShape(loaded.value)) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: "ROLE_BINDINGS_INVALID_SHAPE",
+    };
+  }
+  return loaded.value;
 }
 
 function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "", roleBindingsPath = "") {
@@ -411,11 +457,22 @@ function main() {
     mkdirSync(dirname(telemetryPath), { recursive: true });
 
     let activeState = {};
-    if (existsSync(statePath)) {
+    const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");
+    if (!stateLoad.ok) {
       try {
-        activeState = JSON.parse(readFileSync(statePath, "utf-8"));
+        appendFileSync(telemetryPath, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "GOVERNANCE_STATE_CORRUPT",
+          phase: "POST_TOOL",
+          reason: stateLoad.reason,
+          conversationId: payload.conversationId || null,
+          toolName: payload.toolName ?? payload.toolCall?.name ?? null,
+        }) + "\n", "utf-8");
       } catch {}
+      console.log(JSON.stringify({}));
+      return;
     }
+    if (stateLoad.exists) activeState = stateLoad.value;
 
     if (!activeState.toolMix) {
       activeState.toolMix = createInitialToolMix();
@@ -477,6 +534,20 @@ function main() {
 
     // Track tool mix and mutations
     const roleBindings = loadRoleBindings(roleBindingsPath);
+    if (roleBindings.__governanceLoadError) {
+      try {
+        appendFileSync(telemetryPath, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "GOVERNANCE_STATE_CORRUPT",
+          phase: "POST_TOOL",
+          reason: roleBindings.__governanceLoadError,
+          conversationId: payload.conversationId || null,
+          toolName: payload.toolName ?? payload.toolCall?.name ?? null,
+        }) + "\n", "utf-8");
+      } catch {}
+      console.log(JSON.stringify({}));
+      return;
+    }
     const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot);
 
     const toolName = payload.toolName ?? payload.toolCall?.name ?? null;
