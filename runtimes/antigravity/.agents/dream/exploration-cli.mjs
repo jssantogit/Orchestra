@@ -29,7 +29,7 @@ function usage() {
   console.log("Orchestra Dream Layer — Milestone E Explicit Exploration Lab\\n\\n"
     + "arm     --repo <path> [--decision-type TYPE] [--approve-major]\\n"
     + "prepare --repo <path> --world <world.json> --seed <branch-seed.json> [--decision-id ID]\\n"
-    + "run     --workspace <isolated-path> -- <agy-or-command> [args...]\\n"
+    + "run     --workspace <isolated-path> -- agy [args...]  # --sandbox is forced\\n"
     + "collect --repo <primary-path> --workspace <isolated-path>");
 }
 const { flags, pass, positional } = parse(process.argv.slice(2));
