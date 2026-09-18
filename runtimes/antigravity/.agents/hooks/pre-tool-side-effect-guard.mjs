@@ -99,12 +99,28 @@ function main() {
     || activeState.taskKey
     || null;
 
-  if (isCanaryExternalSideEffect({ toolName, toolArgs })) {
+  const auth = authorizeToolCapability({
+    toolName,
+    toolArgs,
+    activeState,
+    activeContract,
+  });
+
+  const canarySensitiveCapabilities = new Set([
+    "NETWORK_WRITE",
+    "REMOTE_REPO_WRITE",
+    "VCS_REMOTE_WRITE",
+    "PUBLICATION",
+  ]);
+  if (
+    canarySensitiveCapabilities.has(auth.capability)
+    && isCanaryExternalSideEffect({ toolName, toolArgs })
+  ) {
     const rollback = rollbackSelectedCanaryTask({
       repoRoot,
       taskId,
       trigger: "EXTERNAL_SIDE_EFFECT_ATTEMPT",
-      details: { tool_name: toolName },
+      details: { tool_name: toolName, capability: auth.capability },
     });
     if (rollback.rolled_back) {
       console.log(JSON.stringify({
@@ -114,13 +130,6 @@ function main() {
       return;
     }
   }
-
-  const auth = authorizeToolCapability({
-    toolName,
-    toolArgs,
-    activeState,
-    activeContract,
-  });
 
   if (!auth.allowed) {
     if (stateLoad.exists) {
