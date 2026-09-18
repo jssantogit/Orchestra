@@ -604,10 +604,12 @@ test("pre-tool hook: large file guard blocks dumping large files into context", 
   const testLargeFile = resolve("scratch/test-large.json");
   try {
     mkdirSync("scratch", { recursive: true });
+    seedFactualOrchestratorIdentity("large-file-orch");
     writeFileSync(testLargeFile, "x".repeat(250000), "utf-8"); // 250 KB
 
     // cat large file -> blocked
     const catInput = JSON.stringify({
+      conversationId: "large-file-orch",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "cat scratch/test-large.json" }
@@ -619,6 +621,7 @@ test("pre-tool hook: large file guard blocks dumping large files into context", 
 
     // jq '.' large file -> blocked
     const jqInput = JSON.stringify({
+      conversationId: "large-file-orch",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "jq '.' scratch/test-large.json" }
@@ -630,6 +633,7 @@ test("pre-tool hook: large file guard blocks dumping large files into context", 
 
     // head large file -> allowed (filtered inspection)
     const headInput = JSON.stringify({
+      conversationId: "large-file-orch",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "head -n 20 scratch/test-large.json" }
