@@ -31,6 +31,7 @@ const EXPLORATIONS = ".agents/dream-data/explorations";
 const INDEX = ".agents/dream-data/explorations/index.json";
 const FULL_EXPLORATION_CONTROL = ".agents/dream-data/full-exploration/control.json";
 const FULL_EXPLORATION_RESERVATIONS = ".agents/dream-data/full-exploration/reservations";
+const SEALED_WORLDS = ".agents/dream-data/worlds";
 
 const EPHEMERAL_KEY = /(conversation(?:_?id)?|execution(?:_?id)?|correlation|role_?bindings?|pending|lock|\bpid\b|\bport\b|telemetry|timestamp|created_?at|updated_?at|started_?at|finished_?at)$/i;
 const SENSITIVE_PATH = [
@@ -197,6 +198,42 @@ function loadIndex(repoRoot) {
     if (value?.schema === "orchestra.exploration-index.v1" && value.entries) return value;
   } catch {}
   return { schema: "orchestra.exploration-index.v1", entries: {} };
+}
+
+function historicallyObservedActions(repoRoot, {
+  snapshotId,
+  decisionType: type,
+  stateHash,
+} = {}) {
+  const observed = new Set();
+  if (!repoRoot || !snapshotId || !type || !stateHash) return observed;
+
+  const dir = resolve(repoRoot, SEALED_WORLDS);
+  if (!existsSync(dir)) return observed;
+
+  const files = readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+  for (const name of files) {
+    let world;
+    try {
+      world = readJson(resolve(dir, name));
+    } catch {
+      continue;
+    }
+    if (!validateWorld(world).valid) continue;
+
+    for (const decision of worldDecisions(world)) {
+      if (
+        decision?.snapshot_id !== snapshotId
+        || decisionType(decision?.decision_type) !== decisionType(type)
+        || sha256Canonical(stripEphemeral(decision?.state || {})) !== stateHash
+        || typeof decision?.chosen_action !== "string"
+      ) {
+        continue;
+      }
+      observed.add(decision.chosen_action);
+    }
+  }
+  return observed;
 }
 
 function validateFullExplorationContext(repoRoot, context) {
@@ -514,11 +551,19 @@ export function prepareExploration({
       ))
       .map((branch) => branch.selected_action)
     : [];
+  const historicalActions = fullControl.controlled
+    ? [...historicallyObservedActions(repoRoot, {
+        snapshotId: source.snapshot_id,
+        decisionType: source.decision_type,
+        stateHash: seed.decision.state_hash,
+      })]
+    : [];
+  const excludedActions = [...new Set([...priorControlledActions, ...historicalActions])];
   const selection = selectLeastObservedLegalAction({
     tree,
     snapshotId: source.snapshot_id,
     availableActions: source.available_actions,
-    excludedActions: priorControlledActions,
+    excludedActions,
   });
   if (!selection.selected) return { prepared: false, reason: selection.reason, ranked: selection.ranked };
 
