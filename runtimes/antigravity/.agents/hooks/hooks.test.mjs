@@ -4490,3 +4490,42 @@ test("governance: pre-invocation preserves corrupted authority state and injects
     cleanState();
   }
 });
+
+
+test("governance: unresolved actor never receives shell authority", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "UNKNOWN",
+      state: "PLANNED",
+    }), "utf8");
+
+    const readonlyShell = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unknown-shell-actor",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "git status" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(readonlyShell.decision, "deny");
+    assert.match(readonlyShell.reason, /ROLE_IDENTITY_UNRESOLVED.*Shell execution is prohibited/);
+
+    const nativeRead = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unknown-shell-actor",
+        toolCall: {
+          name: "view_file",
+          args: { AbsolutePath: resolve("README.md") },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(nativeRead.decision, "allow", "Native read-only inspection remains available without shell authority");
+  } finally {
+    cleanState();
+  }
+});
