@@ -563,7 +563,17 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
     if (isOrchestratorRole(stateRole)) {
-      if (roleBindings.mainConversationId && convId && convId !== roleBindings.mainConversationId) {
+      const expectedMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+      const hasPendingDelegations = Array.isArray(roleBindings.pendingSubagents)
+        && roleBindings.pendingSubagents.some((p) => !p?.consumed);
+
+      if (
+        convId &&
+        (
+          (expectedMainConversationId && convId !== expectedMainConversationId) ||
+          (!expectedMainConversationId && hasPendingDelegations)
+        )
+      ) {
         return {
           role: "UNKNOWN",
           source: "UNRESOLVED",
@@ -571,10 +581,37 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           actorId: convId,
         };
       }
+
+      if (convId && !roleBindings.mainConversationId && !hasPendingDelegations) {
+        roleBindings.mainConversationId = convId;
+        if (!roleBindings.bindings) roleBindings.bindings = {};
+        if (!roleBindings.conversations) roleBindings.conversations = {};
+        const orchRecord = {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          model: payload.modelName || "gemini-3.8-flash-medium",
+          source: "RUNTIME_BOOTSTRAP",
+          confidence: "HIGH",
+        };
+        roleBindings.bindings[convId] = orchRecord;
+        roleBindings.conversations[convId] = orchRecord;
+        if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
+        return {
+          role: "ORCHESTRATOR",
+          source: "RUNTIME_BOOTSTRAP",
+          confidence: "HIGH",
+          actorId: convId,
+          agentProfile: "flash-orchestrator",
+          model: orchRecord.model,
+        };
+      }
+
       return {
         role: "ORCHESTRATOR",
-        source: "STATE_DERIVED",
-        confidence: "MEDIUM",
+        source: expectedMainConversationId && convId === expectedMainConversationId
+          ? "CONVERSATION_BOUND_IDENTITY"
+          : "STATE_DERIVED",
+        confidence: expectedMainConversationId && convId === expectedMainConversationId ? "HIGH" : "MEDIUM",
         actorId: convId,
         agentProfile: "flash-orchestrator",
         model: payload.modelName || "gemini-3.8-flash-medium",
