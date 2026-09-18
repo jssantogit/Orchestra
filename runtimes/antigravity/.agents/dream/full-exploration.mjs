@@ -923,7 +923,7 @@ export function prepareFullExplorationBranch({
     ordinal: branchOrdinal,
     seed_path: resolve(seedPath),
     source_world_id: world.world_id || null,
-    source_decision_id: decisionId || null,
+    source_decision_id: prepared.session?.source?.decision_id || decisionId || null,
     exploration_session_id: prepared.session?.session_id || null,
     branch_workspace: prepared.branch_workspace || null,
     selected_action: prepared.selection?.selected || null,
