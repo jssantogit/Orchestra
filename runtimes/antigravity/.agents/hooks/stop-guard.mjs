@@ -733,20 +733,33 @@ function main() {
     try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
   }
   const convId = payload.conversationId || activeState.conversationId || roleBindings.mainConversationId || null;
-  const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
-  const activeRole = (bound && bound.role) || activeState.activeRole || "ORCHESTRATOR";
 
-  const isOrchestrator = (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR");
-
-  // Sync child execution evidence from the authoritative parent brain. During a
-  // child Stop hook, payload.conversationId is the child, so use the in-flight
-  // investigation's parent identity to resolve the parent's subagent metadata.
+  // Sync factual child identity/evidence before resolving the Stop actor. A child
+  // may be unbound when Stop fires and become bound by this synchronization.
   const investigationParentConvId = activeState.investigationInFlight?.parentConversationId
     || activeState.investigationInFlight?.parent_conversation_id
     || activeState.investigationInFlight?.conversationId
     || activeState.investigationInFlight?.conversation_id
     || null;
   syncChildEvidence(activeState, investigationParentConvId || convId, { repoRoot, roleBindings });
+
+  const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
+  const authoritativeMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+  const isMainConversation = Boolean(
+    convId &&
+    authoritativeMainConversationId &&
+    convId === authoritativeMainConversationId
+  );
+  const activeRole = bound?.role
+    || (isMainConversation ? "ORCHESTRATOR" : (!payload.conversationId ? activeState.activeRole : "UNKNOWN"))
+    || "UNKNOWN";
+
+  // Acceptance authority belongs to the factual/main orchestrator conversation,
+  // never merely to a stale global activeRole inherited by a child Stop.
+  const isOrchestrator = Boolean(
+    isMainConversation &&
+    (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR")
+  );
 
   // Factual investigation completion boundary: terminal Stop of the exact bound
   // investigator child. Dispatch ACKs and manage_subagents observations cannot reach here.
