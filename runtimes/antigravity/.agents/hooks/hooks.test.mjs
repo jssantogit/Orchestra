@@ -3993,3 +3993,98 @@ test("governance: retry acceptance requires completion claim from current attemp
     cleanState();
   }
 });
+
+
+test("governance: only factual main orchestrator can control scheduler and task lifecycle", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "coord-parent",
+      state: "PLANNED",
+    }, null, 2), "utf8");
+    seedFactualWorkerIdentity("coord-worker", {
+      parentConversationId: "coord-parent",
+      profile: "flash-medium-worker",
+      delegationKind: "WORK",
+    });
+
+    const workerKill = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-worker",
+        toolCall: {
+          name: "manage_task",
+          args: { Action: "kill", TaskId: "task-1" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(workerKill.decision, "deny");
+    assert.match(workerKill.reason, /COORDINATION_AUTHORITY_REQUIRED/);
+
+    const unknownKillAll = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-unknown",
+        toolCall: {
+          name: "manage_subagents",
+          args: { Action: "kill_all" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(unknownKillAll.decision, "deny");
+    assert.match(unknownKillAll.reason, /COORDINATION_AUTHORITY_REQUIRED/);
+
+    const workerSchedule = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-worker",
+        toolCall: {
+          name: "schedule",
+          args: { DurationSeconds: 30, Prompt: "side quest" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(workerSchedule.decision, "deny");
+    assert.match(workerSchedule.reason, /COORDINATION_AUTHORITY_REQUIRED/);
+
+    const orchestratorKill = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-parent",
+        toolCall: {
+          name: "manage_task",
+          args: { Action: "kill", TaskId: "task-1" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(orchestratorKill.decision, "allow");
+
+    const orchestratorKillAll = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-parent",
+        toolCall: {
+          name: "manage_subagents",
+          args: { Action: "kill_all" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(orchestratorKillAll.decision, "allow");
+
+    const orchestratorSchedule = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-parent",
+        toolCall: {
+          name: "schedule",
+          args: { DurationSeconds: 30, Prompt: "authorized recovery timer" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(orchestratorSchedule.decision, "allow");
+  } finally {
+    cleanState();
+  }
+});
