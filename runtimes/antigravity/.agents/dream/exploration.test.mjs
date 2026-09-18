@@ -25,6 +25,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const stopGuardScript = resolve(__dirname, "../hooks/stop-guard.mjs");
+const explorationGuardScript = resolve(__dirname, "../hooks/pre-tool-exploration-guard.mjs");
 
 function fixture() {
   const repo = mkdtempSync(join(tmpdir(), "orchestra-e-test-"));
@@ -162,6 +163,30 @@ test("exploration runner accepts only Antigravity and forces sandbox without byp
     buildSandboxedExplorationCommand("agy", ["--no-sandbox"]).reason,
     "EXPLORATION_SANDBOX_BYPASS_FORBIDDEN",
   );
+});
+
+test("exploration PreToolUse wrapper always returns an explicit decision", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchestra-e-wrapper-"));
+  try {
+    const noSession = JSON.parse(execFileSync("node", [explorationGuardScript], {
+      input: JSON.stringify({
+        workspacePaths: [root],
+        toolCall: { name: "view_file", args: { AbsolutePath: join(root, "x.txt") } },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(noSession.decision, "deny");
+    assert.match(noSession.reason, /EXPLORATION_SESSION_REQUIRED/);
+
+    const malformed = JSON.parse(execFileSync("node", [explorationGuardScript], {
+      input: "{",
+      encoding: "utf8",
+    }));
+    assert.equal(malformed.decision, "deny");
+    assert.match(malformed.reason, /MALFORMED_HOOK_PAYLOAD/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("armed capture creates one sanitized physical BranchSeed and refuses CRITICAL", () => {
