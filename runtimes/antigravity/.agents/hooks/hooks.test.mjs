@@ -2005,6 +2005,40 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
     assert.equal(bindings.bindings["child-conv-42"], undefined, "Provisional hook metadata must not create durable child identity");
     assert.equal(bindings.pendingSubagents[0].consumed, false, "Provisional authorization must not consume the pending factual identity slot");
 
+    const provisionalWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        agentRole: "WORKER",
+        agentProfile: "flash-low-worker",
+        modelName: "gemini-3.8-flash-low",
+        toolCall: {
+          id: "call-child-provisional-write",
+          name: "write_to_file",
+          args: { TargetFile: resolve("src/formatter.js"), CodeContent: "export const provisional = true;" },
+        },
+      }),
+    }));
+    assert.equal(provisionalWrite.decision, "deny");
+    assert.match(provisionalWrite.reason, /ROLE_IDENTITY_PROVISIONAL/);
+
+    const provisionalShellWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        agentRole: "WORKER",
+        agentProfile: "flash-low-worker",
+        modelName: "gemini-3.8-flash-low",
+        toolCall: {
+          id: "call-child-provisional-shell",
+          name: "run_command",
+          args: { CommandLine: "touch src/provisional-created.js" },
+        },
+      }),
+    }));
+    assert.equal(provisionalShellWrite.decision, "deny");
+    assert.match(provisionalShellWrite.reason, /ROLE_IDENTITY_PROVISIONAL/);
+
     // The factual Antigravity brain record for the exact child creates the
     // durable HIGH/RUNTIME_IDENTITY binding.
     const subagentsDir = resolve(brainBaseDir, "parent-conv-1/.system_generated/subagents");
@@ -2036,6 +2070,20 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
     assert.equal(bindings.bindings["child-conv-42"].confidence, "HIGH");
     assert.equal(bindings.bindings["child-conv-42"].source, "RUNTIME_IDENTITY");
     assert.ok(bindings.bindings["child-conv-42"].factualIdentityAt);
+
+    const factualWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        toolCall: {
+          id: "call-child-factual-write",
+          name: "write_to_file",
+          args: { TargetFile: resolve("src/formatter.js"), CodeContent: "export const factual = true;" },
+        },
+      }),
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }));
+    assert.equal(factualWrite.decision, "allow", "Factual runtime identity restores worker mutation authority within Scope Contract");
   } finally {
     cleanState();
   }
