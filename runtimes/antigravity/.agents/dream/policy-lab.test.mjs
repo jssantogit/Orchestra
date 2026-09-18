@@ -78,11 +78,11 @@ function makeWorld({ rootSnapshotId, worldId, runtimeFingerprint, sentinel = RAW
     observation_id: worldId + "-medium-obs",
     result: { status: "SUCCESS", private_note: sentinel },
     evidence_summary: {
-      tests: "PASS",
+      tests: "NOT_REQUIRED",
       typecheck: "NOT_REQUIRED",
       build: "NOT_REQUIRED",
       scope_check: "PASS",
-      validation_fresh: true,
+      validation_fresh: false,
     },
     retry_state: { retry_remaining: 1 },
     cost_metrics: {
@@ -116,11 +116,11 @@ function makeWorld({ rootSnapshotId, worldId, runtimeFingerprint, sentinel = RAW
     observation_id: worldId + "-low-obs",
     result: { status: "SUCCESS", private_note: sentinel },
     evidence_summary: {
-      tests: "PASS",
+      tests: "NOT_REQUIRED",
       typecheck: "NOT_REQUIRED",
       build: "NOT_REQUIRED",
       scope_check: "PASS",
-      validation_fresh: true,
+      validation_fresh: false,
     },
     retry_state: { retry_remaining: 1 },
     cost_metrics: {
