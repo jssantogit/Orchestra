@@ -168,7 +168,10 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           const firstRole = candidates[0].role;
           const firstProfile = candidates[0].profile;
           const allSameRoleAndProfile = candidates.every((c) => c.role === firstRole && c.profile === firstProfile);
-          if (allSameRoleAndProfile) {
+          const homogeneousReviewerPair = allSameRoleAndProfile
+            && firstRole === "REVIEWER"
+            && candidates.every((c) => c.delegationKind === "REVIEW");
+          if (homogeneousReviewerPair) {
             matched = candidates[0];
           } else {
             // Ambiguous candidates with different roles/profiles fail closed
