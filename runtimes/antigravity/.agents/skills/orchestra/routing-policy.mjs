@@ -1267,13 +1267,14 @@ export function evaluateTwoKeyReview(packet = {}, reviewerAVerdict, reviewerBVer
   const isRejectB = normB === "CHANGES_REQUIRED" || normB === "BLOCK";
 
   if (isRejectA && isRejectB) {
+    const hasBlock = normA === "BLOCK" || normB === "BLOCK";
     return {
       acceptable: false,
-      decision: normA === "BLOCK" || normB === "BLOCK" ? "REPLAN_REQUIRED" : "RETRY_REQUIRED",
-      nextState: "PLANNED",
+      decision: hasBlock ? "BLOCK" : "RETRY_REQUIRED",
+      nextState: hasBlock ? "BLOCKED" : "PLANNED",
       reviewerA: normA,
       reviewerB: normB,
-      retryReason: "TWO_KEY_REJECTION",
+      ...(hasBlock ? { blockReason: "TWO_KEY_BLOCK" } : { retryReason: "TWO_KEY_REJECTION" }),
     };
   }
 
