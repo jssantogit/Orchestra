@@ -3899,3 +3899,97 @@ test("governance: reviewer scope contracts cannot overwrite implementation accep
     cleanState();
   }
 });
+
+
+test("governance: retry acceptance requires completion claim from current attempt", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    const parent = "retry-accept-parent";
+    const worker = "retry-accept-worker";
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: parent,
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      attempt: 1,
+      mutationSeq: 0,
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerCompletionClaimFactual: true,
+      workerCompletionClaimIdentity: {
+        actorId: worker,
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
+      },
+      scopeContract: {
+        allowedPaths: ["src/**"],
+        forbiddenPaths: [".agents/**"],
+        testsRequired: ["npm test"],
+      },
+      evidenceLedger: [{
+        executionId: "retry-attempt-1-test",
+        type: "TEST_RUN",
+        command: "npm test",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 1,
+        timestamp: new Date().toISOString(),
+      }],
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: parent,
+      bindings: {
+        [parent]: {
+          conversationId: parent,
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+        [worker]: {
+          conversationId: worker,
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          parentConversationId: parent,
+          delegationKind: "WORK",
+          attempt: 1,
+          source: "RUNTIME_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const staleClaim = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: parent, fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(staleClaim.decision, "continue");
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.notEqual(state.acceptanceState, "ACCEPTED");
+    assert.equal(state.completionClaimRejectedReason, "ATTEMPT_MISMATCH");
+    assert.equal(state.workerValidationVerified, true);
+
+    state.workerCompletionClaimIdentity.attempt = 1;
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(state, null, 2), "utf8");
+
+    const currentClaim = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: parent, fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(currentClaim.decision, "stop");
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.state, "DONE");
+    assert.equal(state.acceptanceState, "ACCEPTED");
+  } finally {
+    cleanState();
+  }
+});
