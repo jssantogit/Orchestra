@@ -29,7 +29,7 @@ Evidence answers whether work is acceptable. Feedback answers what an observatio
 
 `OBSERVED -> SUPPORTED | FALSIFIED -> CAUSALLY_VERIFIED`
 
-`CAUSALLY_VERIFIED` requires a bounded before/after intervention pattern: the same exact factual validation command must fail before a mutation and pass after a later mutation, and the experiment must explicitly opt into `MUTATION_AB`. A textual root-cause claim can never satisfy this state.
+`CAUSALLY_VERIFIED` requires a bounded before/after intervention pattern: the same exact factual validation command must fail before and pass after, the experiment must explicitly opt into `MUTATION_AB`, and exactly one HIGH-confidence `RUNTIME_IDENTITY` mutation may occur between those observations. That intervention must touch at least one hypothesis `target_paths` entry. Multiple/intervening mutations are confounded and remain at most `SUPPORTED`. A textual root-cause claim can never satisfy this state.
 
 ### Authority
 
