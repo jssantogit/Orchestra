@@ -439,95 +439,33 @@ function loadRuntimeMaterial(repoRoot, config) {
   return { ok: true, policy: candidate.policy, support: support.support };
 }
 
-export function resolveCanaryPolicyOverlay({
-  repoRoot,
-  taskId,
-  state = {},
-  availableActions = [],
-  baselineAction,
-  baselinePolicyId,
-  activeState = {},
-  activeContract = {},
-} = {}) {
-  const current = loadCanaryConfig(repoRoot);
-  if (!current.active) return { active: false, reason: current.reason };
+function canaryTaskMarkerPath(repoRoot, taskId) {
+  const key = sha256Canonical({ task_id: String(taskId || "") }).slice(7);
+  return resolve(repoRoot, ".agents/state/dream/canary-tasks", key + ".json");
+}
 
-  const config = current.config;
-  if (baselinePolicyId !== config.baseline_policy_id) {
-    rollbackCanary({
-      repoRoot,
-      trigger: "BASELINE_POLICY_CHANGED",
-      details: {
-        expected: config.baseline_policy_id,
-        observed: baselinePolicyId || null,
-      },
-    });
-    return { active: false, reason: "BASELINE_POLICY_CHANGED" };
-  }
-
-  const eligibility = classifyCanaryEligibility({
-    taskId,
-    state,
-    activeState,
-    activeContract,
-  });
-  if (!eligibility.eligible) {
-    return { active: false, reason: eligibility.reason };
-  }
-
-  const selection = deterministicCanarySelection(taskId, config.candidate_policy_id);
-  if (!selection.selected) {
-    return {
-      active: false,
-      reason: "CANARY_TASK_NOT_SELECTED",
-      bucket: selection.bucket,
-    };
-  }
-
-  const material = loadRuntimeMaterial(repoRoot, config);
-  if (!material.ok) {
-    rollbackCanary({
-      repoRoot,
-      trigger: material.reason || "CANARY_RUNTIME_MATERIAL_INVALID",
-    });
-    return { active: false, reason: material.reason || "CANARY_RUNTIME_MATERIAL_INVALID" };
-  }
-
-  let evaluated;
-  const start = performance.now();
-  try {
-    evaluated = evaluatePolicy({
-      policy: material.policy,
-      decisionType: state.decision_type_override || activeState.decisionType || undefined,
-      state,
-      availableActions,
-      baselineAction,
-    });
-  } catch (error) {
-    rollbackCanary({
-      repoRoot,
-      trigger: "CANARY_POLICY_EXCEPTION",
-      details: { message: String(error?.message || error) },
-    });
-    return { active: false, reason: "CANARY_POLICY_EXCEPTION" };
-  }
-  const latencyMs = Math.max(0, performance.now() - start);
-
-  // evaluatePolicy needs the factual decision type, supplied separately below.
-  // This fallback exists only for direct unit invocation without decisionType.
-  if (state.decision_type_override || activeState.decisionType) {
-    // no-op
-  }
-
-  return {
-    active: true,
-    selected: true,
-    candidate_policy_id: config.candidate_policy_id,
+function markCanaryTaskActive(repoRoot, config, taskId, bucket) {
+  const path = canaryTaskMarkerPath(repoRoot, taskId);
+  const marker = {
     canary_session_id: config.canary_session_id,
-    bucket: selection.bucket,
-    evaluation: evaluated,
-    policy_latency_ms: latencyMs,
+    candidate_policy_id: config.candidate_policy_id,
+    task_id: String(taskId),
+    bucket,
   };
+  if (existsSync(path)) {
+    try {
+      const existing = readJson(path);
+      if (
+        existing?.canary_session_id === marker.canary_session_id
+        && existing?.candidate_policy_id === marker.candidate_policy_id
+        && existing?.task_id === marker.task_id
+      ) {
+        return { marked: true, reused: true, path, marker: existing };
+      }
+    } catch {}
+  }
+  atomicJson(path, marker);
+  return { marked: true, reused: false, path, marker };
 }
 
 export function evaluateCanaryPolicyOverlay({
@@ -608,6 +546,7 @@ export function evaluateCanaryPolicyOverlay({
   }
 
   const action = evaluation.ok ? evaluation.action : baselineAction;
+  markCanaryTaskActive(repoRoot, config, taskId, selection.bucket);
   return {
     active: true,
     selected: true,
@@ -625,7 +564,23 @@ export function evaluateCanaryPolicyOverlay({
 export function isCanaryTaskSelected({ repoRoot, taskId } = {}) {
   const current = loadCanaryConfig(repoRoot);
   if (!current.active) return { selected: false, reason: current.reason };
-  return deterministicCanarySelection(taskId, current.config.candidate_policy_id);
+  if (!taskId) return { selected: false, reason: "TASK_ID_REQUIRED" };
+  const path = canaryTaskMarkerPath(repoRoot, taskId);
+  if (!existsSync(path)) return { selected: false, reason: "TASK_NOT_CANARIED" };
+  let marker;
+  try {
+    marker = readJson(path);
+  } catch {
+    return { selected: false, reason: "CANARY_TASK_MARKER_INVALID" };
+  }
+  if (
+    marker?.canary_session_id !== current.config.canary_session_id
+    || marker?.candidate_policy_id !== current.config.candidate_policy_id
+    || marker?.task_id !== String(taskId)
+  ) {
+    return { selected: false, reason: "CANARY_TASK_MARKER_INVALID" };
+  }
+  return { selected: true, bucket: marker.bucket, marker };
 }
 
 export function isCanaryExternalSideEffect({ toolName, toolArgs = {} } = {}) {
@@ -728,6 +683,19 @@ export function registerCanaryDecision({ repoRoot, decisionEvent } = {}) {
     ".agents/state/dream/canary-decisions",
     decisionEvent.decision_id + ".json",
   );
+  if (existsSync(path)) {
+    try {
+      const existing = readJson(path);
+      if (
+        existing?.canary_session_id === marker.canary_session_id
+        && existing?.decision_id === marker.decision_id
+        && existing?.policy_id === marker.policy_id
+      ) {
+        return { registered: true, reused: true, marker: existing, path };
+      }
+    } catch {}
+    return { registered: false, reason: "CANARY_DECISION_MARKER_CONFLICT", path };
+  }
   atomicJson(path, marker);
   appendEvent(repoRoot, marker.canary_session_id, "CANARY_DECISION_EXECUTED", {
     decision_id: marker.decision_id,
@@ -736,7 +704,7 @@ export function registerCanaryDecision({ repoRoot, decisionEvent } = {}) {
     baseline_action: marker.baseline_action,
     candidate_action: marker.candidate_action,
   });
-  return { registered: true, marker, path };
+  return { registered: true, reused: false, marker, path };
 }
 
 function loadSession(repoRoot, sessionId) {
