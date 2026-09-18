@@ -483,6 +483,7 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
         selection_rule: "LEAST_OBSERVED_LEGAL_ACTION",
       },
       budget: { ...EXPLORATION_BUDGET },
+      runtime_fingerprint: seed.runtime_fingerprint,
       primary_workspace_fingerprint: primaryFingerprint,
       status: "PREPARED",
       created_at: new Date(now).toISOString(),
@@ -825,7 +826,11 @@ export function collectExplorationResult({ primaryRepoRoot, branchWorkspace } = 
   if (sha256Canonical(primary.manifest) !== session.primary_workspace_fingerprint) {
     return { collected: false, reason: "PRIMARY_WORKSPACE_CHANGED_DURING_EXPLORATION" };
   }
-  const sealed = sealWorld({ repoRoot: branchWorkspace, rootSnapshotId: session.source.snapshot_id });
+  const sealed = sealWorld({
+    repoRoot: branchWorkspace,
+    rootSnapshotId: session.source.snapshot_id,
+    expectedRuntimeFingerprint: session.runtime_fingerprint,
+  });
   if (sealed.status !== "SEALED" || !sealed.world) return { collected: false, reason: sealed.status, errors: sealed.errors || [] };
   const written = writeSealedWorld(primaryRepoRoot, sealed.world);
   if (!written.written) return { collected: false, reason: written.reason || "WORLD_WRITE_FAILED", errors: written.errors || [] };
