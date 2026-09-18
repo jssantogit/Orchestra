@@ -37,6 +37,10 @@ const preToolScript = resolve(
   orchestraRoot,
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs",
 );
+const stopScript = resolve(
+  orchestraRoot,
+  "runtimes/antigravity/.agents/hooks/stop-guard.mjs",
+);
 
 const FAST_CI_REQUIREMENT = Object.freeze({
   id: "fast-ci",
@@ -354,6 +358,164 @@ test("evidence: worker-owned local command is actionable and stays with the work
   const childOwned = childOwnedMissingRequirements(result);
   assert.equal(childOwned.length, 1);
   assert.equal(childOwned[0].command, "git check-ignore -v .agents/hooks.json GEMINI.md");
+});
+
+test("evidence: WORK child cannot terminate while an actionable local command is missing", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchestra-child-evidence-"));
+  try {
+    mkdirSync(join(root, ".agents", "state"), { recursive: true });
+    const contract = {
+      allowedPaths: [".gitignore"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+      requiredEvidence: [{
+        id: "ignore-check",
+        class: "LOCAL_COMMAND",
+        kind: "LOCAL_COMMAND",
+        command: "git check-ignore -v .agents/hooks.json GEMINI.md",
+      }],
+    };
+    writeFileSync(join(root, ".agents", "state", "active-state.json"), JSON.stringify({
+      state: "DELEGATED",
+      taskAction: "MECHANICAL_FIX",
+      taskId: "ignore-runtime-files",
+      attempt: 0,
+      mutationSeq: 1,
+      scopeContract: contract,
+      evidenceLedger: [],
+    }, null, 2));
+    writeFileSync(join(root, ".agents", "state", "active-contract.json"), JSON.stringify(contract, null, 2));
+    writeFileSync(join(root, ".agents", "state", "role-bindings.json"), JSON.stringify({
+      mainConversationId: "parent-ignore",
+      bindings: {
+        "parent-ignore": {
+          conversationId: "parent-ignore",
+          role: "ORCHESTRATOR",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
+        "child-ignore": {
+          conversationId: "child-ignore",
+          parentConversationId: "parent-ignore",
+          role: "WORKER",
+          profile: "flash-low-worker",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          delegationKind: "WORK",
+          taskIdentifier: "ignore-runtime-files",
+          attempt: 0,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2));
+
+    const output = execFileSync(process.execPath, [stopScript], {
+      input: JSON.stringify({
+        workspacePaths: [root],
+        conversationId: "child-ignore",
+        parentConversationId: "parent-ignore",
+        taskId: "ignore-runtime-files",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    });
+    const decision = JSON.parse(output);
+    assert.equal(decision.decision, "continue");
+    assert.match(decision.reason, /CHILD_EVIDENCE_REQUIRED/);
+    assert.match(decision.reason, /git check-ignore/);
+
+    const state = JSON.parse(readFileSync(join(root, ".agents", "state", "active-state.json"), "utf8"));
+    assert.deepEqual(state.childEvidenceContinuation.requirementIds, ["ignore-check"]);
+    assert.notEqual(state.state, "HUMAN_GATE");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("evidence: WORK child with its factual local command may terminate normally", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchestra-child-evidence-pass-"));
+  try {
+    mkdirSync(join(root, ".agents", "state"), { recursive: true });
+    const command = "git check-ignore -v .agents/hooks.json GEMINI.md";
+    const contract = {
+      allowedPaths: [".gitignore"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+      requiredEvidence: [{
+        id: "ignore-check",
+        class: "LOCAL_COMMAND",
+        kind: "LOCAL_COMMAND",
+        command,
+      }],
+    };
+    writeFileSync(join(root, ".agents", "state", "active-state.json"), JSON.stringify({
+      state: "DELEGATED",
+      taskAction: "MECHANICAL_FIX",
+      taskId: "ignore-runtime-files-pass",
+      attempt: 0,
+      mutationSeq: 1,
+      scopeContract: contract,
+      evidenceLedger: [{
+        id: "ev-ignore-check",
+        executionId: "exec-ignore-check",
+        type: "GENERIC_COMMAND_RESULT",
+        scope: "GLOBAL",
+        command,
+        exitCode: 0,
+        passed: null,
+        failed: null,
+        mutationSeq: 1,
+        actorRole: "WORKER",
+        actorId: "child-ignore-pass",
+        conversationId: "child-ignore-pass",
+        confidence: "HIGH",
+        evidenceSource: "EXECUTION_HOOK",
+        delegationKind: "WORK",
+        attempt: 0,
+      }],
+    }, null, 2));
+    writeFileSync(join(root, ".agents", "state", "active-contract.json"), JSON.stringify(contract, null, 2));
+    writeFileSync(join(root, ".agents", "state", "role-bindings.json"), JSON.stringify({
+      mainConversationId: "parent-ignore-pass",
+      bindings: {
+        "parent-ignore-pass": {
+          conversationId: "parent-ignore-pass",
+          role: "ORCHESTRATOR",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
+        "child-ignore-pass": {
+          conversationId: "child-ignore-pass",
+          parentConversationId: "parent-ignore-pass",
+          role: "WORKER",
+          profile: "flash-low-worker",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          delegationKind: "WORK",
+          taskIdentifier: "ignore-runtime-files-pass",
+          attempt: 0,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2));
+
+    const output = execFileSync(process.execPath, [stopScript], {
+      input: JSON.stringify({
+        workspacePaths: [root],
+        conversationId: "child-ignore-pass",
+        parentConversationId: "parent-ignore-pass",
+        taskId: "ignore-runtime-files-pass",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    });
+    const decision = JSON.parse(output);
+    assert.equal(decision.decision, "stop");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("evidence: LOCAL_FACT FILE_EXISTS and GIT_IGNORED are factual runtime evidence", () => {
