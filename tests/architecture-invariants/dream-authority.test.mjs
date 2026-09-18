@@ -1722,3 +1722,94 @@ test("ARCH-024: Pending Uniqueness Is Not Factual Child Identity", () => {
     cleanTestState();
   }
 });
+
+
+// ---------------------------------------------------------------------------
+// ARCH-025: Investigation Authority Is Read-Only
+// Reusing an implementation-capable model/profile for investigation must never
+// grant workspace mutation authority.
+// ---------------------------------------------------------------------------
+test("ARCH-025: Investigation Authority Is Read-Only", () => {
+  cleanTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "arch-025-contract",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "arch-025-parent",
+      bindings: {
+        "arch-025-child": {
+          conversationId: "arch-025-child",
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: "arch-025-parent",
+          delegationKind: "INVESTIGATION",
+          originToolCallId: "arch-025-dispatch",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf-8");
+
+    const mutate = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-025-child",
+        parentConversationId: "arch-025-parent",
+        toolCall: {
+          id: "arch-025-write",
+          name: "write_to_file",
+          args: {
+            TargetFile: "src/arch025.ts",
+            CodeContent: "export const forbidden = true;",
+          },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(mutate.decision, "deny");
+    assert.match(mutate.reason, /INVESTIGATOR_READ_ONLY/);
+
+    const shellMutate = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-025-child",
+        parentConversationId: "arch-025-parent",
+        toolCall: {
+          id: "arch-025-shell",
+          name: "run_command",
+          args: { CommandLine: "touch src/arch025-shell.ts" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(shellMutate.decision, "deny");
+    assert.match(shellMutate.reason, /INVESTIGATOR_READ_ONLY/);
+
+    const inspect = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "arch-025-child",
+        parentConversationId: "arch-025-parent",
+        toolCall: {
+          id: "arch-025-read",
+          name: "view_file",
+          args: { AbsolutePath: resolve(repoRoot, "package.json") },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(inspect.decision, "allow");
+  } finally {
+    cleanTestState();
+  }
+});
