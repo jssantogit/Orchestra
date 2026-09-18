@@ -6,7 +6,13 @@ import { JevClient, createFakeJevClient } from "./client.mjs";
 import { buildCatalog } from "./catalog-builder.mjs";
 import { runArtifactRankingShadow, readShadowTelemetry } from "./shadow-runner.mjs";
 import { annotateDreamDirectory } from "./dream-analyzer.mjs";
-import { createEvaluationReport, createLocalApproval, writeLocalApproval } from "./activation-gate.mjs";
+import {
+  createProjectEvaluationReport,
+  createLocalApproval,
+  loadStoredEvaluation,
+  writeEvaluationReport,
+  writeLocalApproval,
+} from "./activation-gate.mjs";
 
 function args(argv) {
   const out = { _: [] };
@@ -29,7 +35,7 @@ catalog  --repo <path>
 shadow   --repo <path> --goal <text> [--live] [--task-category lookup]
 dream    --repo <path> [--live]
 evaluate --repo <path>
-approve  --repo <path> --report <evaluation.json> [--note text]
+approve  --repo <path> [--report <evaluation.json>] [--note text]
 
 Live calls require TYPESAFE_API_KEY.
 No command mutates provider transcripts or Orchestra evidence.`);
@@ -72,11 +78,13 @@ if (command === "catalog") {
   const client = live ? new JevClient() : createFakeJevClient(() => 0.5);
   print(await annotateDreamDirectory({ projectRoot: repo, client, live }));
 } else if (command === "evaluate") {
-  const runs = readShadowTelemetry(repo);
-  print(createEvaluationReport(runs));
+  const report = createProjectEvaluationReport(repo);
+  print({ report, path: writeEvaluationReport(repo, report) });
 } else if (command === "approve") {
-  if (!parsed.report || !existsSync(resolve(parsed.report))) throw new Error("--report file is required");
-  const report = json(parsed.report);
+  const report = parsed.report && existsSync(resolve(parsed.report))
+    ? json(parsed.report)
+    : loadStoredEvaluation(repo);
+  if (!report) throw new Error("Stored Jev evaluation report is required; run evaluate first.");
   const approval = createLocalApproval({ report, note: parsed.note || "" });
   print({ approval, path: writeLocalApproval(repo, approval) });
 } else {
