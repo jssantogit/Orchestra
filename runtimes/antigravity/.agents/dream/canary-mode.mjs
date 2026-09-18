@@ -291,6 +291,12 @@ export function approveCanary({
     baseline_policy_id: shadow.report.baseline_policy_id,
     support_index_id: shadow.report.support_index_id,
     traffic_percent: CANARY_GATES.initial_traffic_percent,
+    rollout_stage_index: 0,
+    rollout_generation: 0,
+    rollout_stage_started_at: new Date().toISOString(),
+    rollout_approval_id: null,
+    rollout_approval_hash: null,
+    previous_rollout_approval_id: null,
     created_at: new Date().toISOString(),
   };
   config.config_hash = configHash(config);
