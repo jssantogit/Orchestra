@@ -128,6 +128,13 @@ See [Project Runtime Management](../../docs/project-runtime.md).
 5. **Direct Action Fast Path**:
    - Operational intents ("status", "diff", "test", "commit", "push") transition directly to `DIRECT_ACTION` with zero subagents and strict side-quest prevention.
 
+6. **Mechanical Fast Path**:
+   - This is distinct from `DIRECT_ACTION`: the Orchestrator still never edits workspace/product files.
+   - Eligibility is conservative: `MECHANICAL_FIX`, `NORMAL`, first attempt, at most four concrete nonsensitive target files, `flash-low-worker`, no required local shell/test command, and a structured `LOCAL_FACT` contract with at least one outcome fact (`FILE_EXISTS`, `FILE_NOT_EXISTS`, `EXPECTED_FILE_MODIFIED`, or `GIT_IGNORED`).
+   - Runtime enforcement permits one implementation worker, reads only of declared targets, bounded native mutations, then handoff. Search, shell/status/test ceremony, extra validators/reviewers, and additional subagents are denied while active.
+   - Acceptance is unchanged: Stop Guard collects the runtime facts and verifies the ordinary Evidence Contract before `DONE`. Failed/stale/unavailable evidence exits the fast path into normal retry/replan/fail-closed handling.
+   - Sensitive mutation targets such as governance, workflows, security/auth, deployment/release, migrations/database, billing/payment, infrastructure, and lockfiles never enter this path.
+
 ---
 
 ## 5. Dream Layer Recursive Policy Lifecycle (Milestones A–H)
