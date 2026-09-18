@@ -1719,33 +1719,50 @@ function main() {
       roleBindings.pendingSeq = seq;
       saveRoleBindings(roleBindingsPath, roleBindings);
 
-      // Auto-persist Scope Contract from invoke_subagent payload/prompt
-      for (const sub of subagents) {
+      // Build a delegation-local Scope Contract for every child, but only
+      // implementation WORK may replace the active acceptance contract.
+      // REVIEW/INVESTIGATION prompts must never redefine implementation tests/paths.
+      for (let subIdx = 0; subIdx < subagents.length; subIdx++) {
+        const sub = subagents[subIdx];
+        const pending = candidatePending[subIdx];
         const promptText = sub.Prompt || "";
         const extracted = extractScopeContractFromPrompt(promptText, sub);
-        const allowedPaths = extracted.allowedPaths.length > 0
-          ? extracted.allowedPaths
-          : (activeContract?.allowedPaths || []);
-        const testsRequired = extracted.testsRequired.length > 0
-          ? extracted.testsRequired
-          : (activeContract?.testsRequired || []);
+        const baseAllowedPaths = activeContract?.allowedPaths || [];
+        const baseForbiddenPaths = activeContract?.forbiddenPaths || [".agents/**"];
+        const baseTestsRequired = activeContract?.testsRequired || [];
 
-        const contract = {
-          contractId: activeContract?.contractId || `contract-${Date.now()}`,
+        const delegationContract = {
+          contractId: `delegation-contract-${toolCall.id || payload.toolCallId || "unknown"}-${subIdx}`,
           taskId: activeState.taskId || activeState.taskKey || null,
-          targetAgent: sub.TypeName || (sub.Role && String(sub.Role).toLowerCase().includes("reviewer") ? "flash-reviewer" : "flash-low-worker"),
-          allowedPaths,
-          forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : (activeContract?.forbiddenPaths || [".agents/**"]),
-          testsRequired,
-          createdAt: activeContract?.createdAt || new Date().toISOString(),
+          targetAgent: sub.TypeName || (pending?.role === "REVIEWER" ? "flash-reviewer" : "flash-low-worker"),
+          delegationKind: pending?.delegationKind || null,
+          allowedPaths: extracted.allowedPaths.length > 0 ? extracted.allowedPaths : baseAllowedPaths,
+          forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : baseForbiddenPaths,
+          testsRequired: extracted.testsRequired.length > 0 ? extracted.testsRequired : baseTestsRequired,
+          createdAt: new Date().toISOString(),
         };
-        activeContract = contract;
-        activeState.scopeContract = contract;
-        try {
-          mkdirSync(dirname(contractPath), { recursive: true });
-          writeFileSync(contractPath, JSON.stringify(contract, null, 2), "utf-8");
-        } catch {}
+
+        if (pending) {
+          pending.scopeContract = delegationContract;
+        }
+
+        if (pending?.delegationKind === "WORK") {
+          const implementationContract = {
+            ...delegationContract,
+            contractId: activeContract?.contractId || `contract-${Date.now()}`,
+            createdAt: activeContract?.createdAt || delegationContract.createdAt,
+          };
+          activeContract = implementationContract;
+          activeState.scopeContract = implementationContract;
+          try {
+            mkdirSync(dirname(contractPath), { recursive: true });
+            writeFileSync(contractPath, JSON.stringify(implementationContract, null, 2), "utf-8");
+          } catch {}
+        }
       }
+
+      // Persist pending records again after attaching delegation-local contracts.
+      saveRoleBindings(roleBindingsPath, roleBindings);
 
       // Update state machine deterministically
       activeState.state = "DELEGATED";
