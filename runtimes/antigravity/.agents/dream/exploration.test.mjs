@@ -29,7 +29,18 @@ const stopGuardScript = resolve(__dirname, "../hooks/stop-guard.mjs");
 function fixture() {
   const repo = mkdtempSync(join(tmpdir(), "orchestra-e-test-"));
   mkdirSync(join(repo, "src"), { recursive: true });
+  mkdirSync(join(repo, ".agents", "hooks"), { recursive: true });
   writeFileSync(join(repo, "src", "unit.js"), "export const value = 1;\n");
+  writeFileSync(join(repo, ".agents", "hooks.json"), JSON.stringify({
+    "scope-enforcer": {
+      PreToolUse: [{
+        matcher: "write_to_file|replace_file_content|edit_file|create_file|invoke_subagent|define_subagent|run_command|manage_task|manage_subagents|schedule|send_message|view_file|grep_search|find_by_name",
+        hooks: [{ type: "command", command: "node hooks/pre-tool-enforce.mjs", timeout: 10 }],
+      }],
+    },
+  }, null, 2), "utf8");
+  writeFileSync(join(repo, ".agents", "hooks", "pre-tool-enforce.mjs"), "// fixture baseline hook\n", "utf8");
+  writeFileSync(join(repo, ".agents", "hooks", "pre-tool-exploration-guard.mjs"), "// fixture exploration wrapper\n", "utf8");
   const state = {
     task_action: "IMPLEMENT",
     task_domain: "CODE",
@@ -218,6 +229,15 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     branch = prepared.branch_workspace;
     assert.notEqual(branch, f.repo);
     assert.equal(prepared.selection.selected, "FLASH_MEDIUM");
+
+    const siblingHooks = JSON.parse(readFileSync(join(branch, ".agents", "hooks.json"), "utf8"));
+    assert.equal(siblingHooks["scope-enforcer"].PreToolUse[0].matcher, "*");
+    assert.equal(
+      siblingHooks["scope-enforcer"].PreToolUse[0].hooks[0].command,
+      "node hooks/pre-tool-exploration-guard.mjs",
+    );
+    assert.equal(prepared.session.hook_overlay.mode, "EXPLORATION_PRETOOL_WRAPPER");
+    assert.match(prepared.session.hook_overlay.overlay_hash, /^sha256:/);
 
     const overlay = resolveExplorationPolicyOverlay({
       repoRoot: branch,
