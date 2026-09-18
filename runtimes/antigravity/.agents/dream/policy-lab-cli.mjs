@@ -65,11 +65,11 @@ if (command === "submit") {
   if (!flags.repo || !flags.cycle || !flags.candidates) fail("--repo, --cycle and --candidates are required");
   if (!existsSync(resolve(flags.candidates))) fail("Candidates file not found");
   const raw = json(flags.candidates);
-  const candidates = Array.isArray(raw) ? raw : raw?.candidates;
   const out = submitDesignerCandidates({
     repoRoot: resolve(flags.repo),
     cyclePath: resolve(flags.cycle),
-    candidates,
+    packetId: raw?.packet_id,
+    candidates: raw?.candidates,
   });
   print(out); process.exit(out.accepted ? 0 : 5);
 }
