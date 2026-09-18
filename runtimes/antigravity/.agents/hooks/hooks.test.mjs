@@ -4451,3 +4451,42 @@ test("governance: post-tool telemetry never overwrites corrupted authority state
     cleanState();
   }
 });
+
+
+test("governance: pre-invocation preserves corrupted authority state and injects warning", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    const brokenState = "{broken-preinv-state";
+    writeFileSync(".agents/state/active-state.json", brokenState, "utf8");
+    let out = JSON.parse(execFileSync("node", [preInvocationScript], {
+      input: JSON.stringify({ conversationId: "preinv-corrupt-parent" }),
+      encoding: "utf8",
+    }));
+    assert.equal(readFileSync(".agents/state/active-state.json", "utf8"), brokenState);
+    assert.equal(out.injectSteps.length, 1);
+    assert.match(out.injectSteps[0].ephemeralMessage, /GOVERNANCE STATE INVALID.*ACTIVE_STATE_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "preinv-corrupt-parent",
+    }), "utf8");
+    const brokenBindings = "{broken-preinv-bindings";
+    writeFileSync(".agents/state/role-bindings.json", brokenBindings, "utf8");
+
+    out = JSON.parse(execFileSync("node", [preInvocationScript], {
+      input: JSON.stringify({ conversationId: "preinv-corrupt-parent" }),
+      encoding: "utf8",
+    }));
+    assert.equal(readFileSync(".agents/state/role-bindings.json", "utf8"), brokenBindings);
+    assert.equal(out.injectSteps.length, 1);
+    assert.match(out.injectSteps[0].ephemeralMessage, /GOVERNANCE STATE INVALID.*ROLE_BINDINGS_MALFORMED_JSON/);
+
+    const events = readFileSync(".agents/telemetry/events.jsonl", "utf8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((e) => e.type === "GOVERNANCE_STATE_CORRUPT" && e.phase === "PRE_INVOCATION"));
+  } finally {
+    cleanState();
+  }
+});
