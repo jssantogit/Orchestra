@@ -19,6 +19,7 @@ import {
   buildAndPersistPolicyDataset,
   buildPolicyDesignerPacket,
   buildPolicyDevelopmentDataset,
+  deriveLineageAssignments,
   evaluatePolicyLabCycle,
   loadCurrentPolicy,
   openPolicyLabCycle,
@@ -201,6 +202,33 @@ test("Milestone F constants freeze train/holdout and designer-call budgets", () 
   assert.equal(POLICY_LAB_LIMITS.max_designer_calls, 2);
   assert.equal(POLICY_LAB_LIMITS.max_candidates_per_call, 4);
   assert.equal(Object.isFrozen(POLICY_LAB_LIMITS), true);
+});
+
+test("causally descendant worlds inherit the same frozen lineage split", () => {
+  const parentRoot = sha256Canonical({ root: "parent" });
+  const childRoot = sha256Canonical({ root: "child" });
+  const parent = {
+    world_manifest_hash: sha256Canonical({ world: "parent" }),
+    root_snapshot_id: parentRoot,
+    decisions: [{ snapshot_id: parentRoot }, { snapshot_id: childRoot }],
+    outcomes: [],
+  };
+  const child = {
+    world_manifest_hash: sha256Canonical({ world: "child" }),
+    root_snapshot_id: childRoot,
+    decisions: [{ snapshot_id: childRoot }],
+    outcomes: [],
+  };
+
+  const assignments = deriveLineageAssignments([child, parent]);
+  const a = assignments.get(parent.world_manifest_hash);
+  const b = assignments.get(child.world_manifest_hash);
+
+  assert.equal(a.lineage_root_snapshot_id, parentRoot);
+  assert.equal(b.lineage_root_snapshot_id, parentRoot);
+  assert.equal(a.lineage_ref, b.lineage_ref);
+  assert.equal(a.split, b.split);
+  assert.equal(a.bucket, b.bucket);
 });
 
 test("PolicyDevelopmentDataset is deterministic, aggregated, and excludes raw history", () => {
