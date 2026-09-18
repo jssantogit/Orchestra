@@ -4533,3 +4533,44 @@ test("governance: unresolved actor never receives shell authority", () => {
     cleanState();
   }
 });
+
+
+test("governance: stop guard fails closed on malformed or missing runtime payload", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "stop-payload-parent",
+      state: "DONE",
+      acceptanceState: "ACCEPTED",
+    }), "utf8");
+
+    const empty = JSON.parse(execFileSync("node", [stopScript], {
+      input: "",
+      encoding: "utf8",
+    }));
+    assert.equal(empty.decision, "continue");
+    assert.match(empty.reason, /INVALID_STOP_PAYLOAD/);
+
+    const malformed = JSON.parse(execFileSync("node", [stopScript], {
+      input: "{broken",
+      encoding: "utf8",
+    }));
+    assert.equal(malformed.decision, "continue");
+    assert.match(malformed.reason, /MALFORMED_STOP_PAYLOAD/);
+
+    const nonObject = JSON.parse(execFileSync("node", [stopScript], {
+      input: "[]",
+      encoding: "utf8",
+    }));
+    assert.equal(nonObject.decision, "continue");
+    assert.match(nonObject.reason, /INVALID_STOP_PAYLOAD/);
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.state, "DONE");
+    assert.equal(state.acceptanceState, "ACCEPTED");
+  } finally {
+    cleanState();
+  }
+});
