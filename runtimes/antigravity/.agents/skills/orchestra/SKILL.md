@@ -45,6 +45,8 @@ Orchestra provides a 100% **ALL-GEMINI** local architecture in the Antigravity C
 ### 5. Fresh Evidence & Acceptance Diet
 - MODEL CLAIM IS NOT EVIDENCE. Verified runtime/provider facts are evidence.
 - Fresh factual evidence is reused without re-running.
+- Delegated validation evidence is accepted only after the runtime resolves the child to factual HIGH-confidence `RUNTIME_IDENTITY` and federates its structured record to the active parent task. The binding must remain consistent with task, attempt, mutation sequence, parent, producer role, and candidate commit.
+- A dedicated validation subagent may use role `validator` / delegation kind `VALIDATION`. Reviewers are never validation producers for acceptance. Parent-local validation remains valid only when it is a factual orchestrator execution, not a model claim.
 - CI-first tasks should set `testsRequired: []` and declare a structured `REMOTE_CI` requirement. GitHub Actions evidence must bind to the current origin/HEAD/workflow and all required jobs.
 - Mechanical facts should use runtime-owned `LOCAL_FACT` requirements instead of asking workers to run `test -f`, `git status`, or equivalent commands solely to create evidence.
 - If remote CI is still running, enter `CI_WAIT`; do not substitute local validation or create side quests.
