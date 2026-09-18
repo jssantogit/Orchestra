@@ -47,7 +47,7 @@ export function validateEvidenceRecord(record) {
   if (!record.evidenceId || !record.requirementId || !record.class || !record.kind) {
     return { valid: false, reason: "INVALID_EVIDENCE_SHAPE" };
   }
-  if (!["PASS", "FAIL", "PENDING", "UNAVAILABLE"].includes(record.result)) {
+  if (!["PASS", "FAIL", "PENDING", "UNAVAILABLE", "STALE"].includes(record.result)) {
     return { valid: false, reason: "INVALID_EVIDENCE_RESULT" };
   }
   if (record.recordHash !== hashEvidenceRecord(record)) {
@@ -229,6 +229,9 @@ function evaluateRequirement(requirement, ledger, activeState) {
     }
     if (ev.result === "UNAVAILABLE") {
       return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "SOURCE_UNAVAILABLE", reason: ev.reason || "EVIDENCE_SOURCE_UNAVAILABLE", evidence: ev, requirement };
+    }
+    if (ev.result === "STALE") {
+      return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: ev.reason || "EVIDENCE_STALE", evidence: ev, requirement };
     }
   }
 
