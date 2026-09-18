@@ -357,3 +357,89 @@ npm run dream:explore -- collect --repo /path/to/project --workspace <branch_wor
 ```
 
 The sibling index is durable under `.agents/dream-data/explorations/` and prevents creating a second sibling for the same world/snapshot/decision-state key.
+---
+
+## 12. Milestone F: Offline Policy Lab
+
+Milestone F turns sealed factual history into **candidate policy proposals and deterministic replay evaluations**. It deliberately stops before Shadow Mode, Canary, or policy activation.
+
+### Authority boundary
+
+- The Policy Lab is offline. No online hook imports or calls it.
+- `flash-policy-designer` is a tool-less `gemini-3.8-flash-high` subagent. It cannot read files, execute commands, browse, inspect raw history, write code, or activate policy.
+- The model never receives raw worlds. It receives only `orchestra.policy-designer-packet.v1`, derived from the sanitized deterministic dataset.
+- Candidate policies are stored only under `.agents/dream-data/policy-lab/candidates/` and are revalidated by `validatePolicy()` before replay.
+- Milestone F has **no active-policy pointer write path**. Every evaluation records `activation_allowed: false` and names `SHADOW_MODE` as the next milestone required for activation.
+
+### PolicyDevelopmentDataset
+
+`policy-lab.mjs` builds a content-addressed `orchestra.policy-development-dataset.v1` from valid sealed worlds. Input order does not affect `dataset_id`.
+
+The dataset may contain only structured policy-development evidence:
+
+- sanitized policy-visible state buckets and chosen-action counts;
+- exact legal-action support, including unknown/ambiguous coverage;
+- terminal outcome counts and first-pass acceptance rate;
+- retry-reason counts;
+- p50/p90 model-call, retry, token, and latency costs;
+- at most 20 sanitized replay counterexamples;
+- the current validated baseline policy.
+
+Raw user prompts, terminal logs, outcome free text, file/web contents, conversation transcripts, and other unsanitized history are not copied into the dataset or designer packet.
+
+### Frozen train / holdout split
+
+Each factual root lineage is assigned deterministically by SHA-256 to an **80% TRAIN / 20% HOLDOUT** split. The split is stored in the content-addressed dataset, so every descendant/world in the same root lineage remains on the same side for that improvement cycle.
+
+Milestone F reports the future promotion sample gate (`>=100` supported train lineages and `>=30` supported holdout lineages) but does not use that gate to activate anything. With smaller samples, candidates may still be retained as offline recommendations.
+
+### Designer cycle
+
+A content-addressed cycle always includes the current baseline. Cycle state is protected by `state_hash` and cannot be reopened to reset the designer-call budget.
+
+- Maximum designer calls per cycle: **2**.
+- Maximum candidates per call: **4**.
+- Call 1 may propose up to four candidate JSON policies.
+- After deterministic replay feedback, call 2 may propose up to four revisions.
+- An oversized submission consumes its designer call instead of providing a free retry.
+- Candidate `policy_id` and timestamps supplied by the model are discarded; the lab computes deterministic content-addressed identity.
+
+### Exact Replay and evaluation
+
+Every baseline/candidate policy is evaluated with the existing zero-model-call `replayExact()` engine. The candidate is a declarative overlay: a non-matching rule falls back to baseline; conflict/illegal action makes the replay invalid.
+
+TRAIN and HOLDOUT are summarized independently. Evaluation remains lexicographic and non-compensatory:
+
+1. Safety / Fidelity
+2. Acceptance
+3. Evidence Completeness
+4. First-pass Acceptance
+5. Retry Cost
+6. Model Calls
+7. Tokens
+8. Latency
+
+`UNKNOWN_BRANCH` never counts as failure or guessed success. Any unsupported candidate divergence becomes `NEEDS_EXPLORATION`.
+
+After hard/quality gates, operational improvement is material when at least one specified threshold is met: >=5% fewer model calls per accepted task, >=10% fewer retries per accepted task, or >=2 percentage-points first-pass acceptance. Smaller improvements may be retained but are not labeled material.
+
+### CLI flow
+
+```bash
+# Build and persist the deterministic dataset from sealed worlds.
+npm run dream:policy-lab -- dataset --repo /path/to/project
+
+# Open (or reopen) the deterministic improvement cycle.
+npm run dream:policy-lab -- open --repo /path/to/project
+
+# Produce the sanitized packet for the tool-less flash-policy-designer.
+npm run dream:policy-lab -- packet --repo /path/to/project --cycle <cycle.json>
+
+# Submit the designer's JSON output. Input may be an array or {"candidates":[...]}.
+npm run dream:policy-lab -- submit --repo /path/to/project --cycle <cycle.json> --candidates <candidates.json>
+
+# Run zero-model-call Exact Replay across frozen TRAIN and HOLDOUT.
+npm run dream:policy-lab -- evaluate --repo /path/to/project --cycle <cycle.json>
+```
+
+Candidate statuses include `NEEDS_EXPLORATION`, `INELIGIBLE`, `REGRESSION`, `EQUIVALENT`, `IMPROVEMENT_BELOW_MATERIALITY_THRESHOLD`, and `RECOMMENDATION_CANDIDATE`. None of these statuses activate a policy in Milestone F.
