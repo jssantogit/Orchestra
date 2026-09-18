@@ -344,15 +344,49 @@ test("retrieval assist activates only with eligible report + matching human appr
     writeLocalApproval(root, approval);
 
     const core = { goal: "x", scopeContract: { allowedPaths: ["src/**"] } };
+    const candidate = c("assist-a", { bytes: 10 });
+    const projection = projectForJev({ goal: "x", candidates: [candidate] });
+    const ranking = {
+      schema: JEV_SCHEMAS.RANKING,
+      ranking_id: "ranking-current",
+      authority: "NONE",
+      projection_id: projection.projection_id,
+      skipped: false,
+      items: [{
+        id: candidate.id,
+        relevance: 0.9,
+        future_use: 0.9,
+        duplicate: 0.1,
+        semantic_score: 0.9,
+        pinned: false,
+        bytes: 10,
+      }],
+    };
+    const baseline = { ...core, auxiliary_refs: ["current-baseline"] };
     const result = buildRetrievalAssistedPacket({
       projectRoot: root,
+      baselinePacket: baseline,
       mandatoryCore: core,
-      candidates: [],
-      ranking: { items: [] },
+      projection,
+      candidates: [candidate],
+      ranking,
       env: { ORCHESTRA_JEV_RETRIEVAL_ASSIST: "1" },
     });
     assert.equal(result.active, true);
     assert.equal(result.packet.mandatory_core, core);
+
+    const stale = buildRetrievalAssistedPacket({
+      projectRoot: root,
+      baselinePacket: baseline,
+      mandatoryCore: core,
+      projection,
+      candidates: [candidate],
+      ranking: { ...ranking, projection_id: "stale-projection" },
+      env: { ORCHESTRA_JEV_RETRIEVAL_ASSIST: "1" },
+    });
+    assert.equal(stale.active, false);
+    assert.equal(stale.packet, baseline);
+    assert.ok(stale.reasons.includes("CURRENT_RANKING_PROJECTION_MISMATCH"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
