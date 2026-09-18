@@ -258,6 +258,10 @@ function main() {
     recordAdvisory("HUMAN_GATE", "HUMAN GATE ACTIVE: Automation cannot safely resolve current state. Stop tool execution and present UNRESOLVED_DECISION_PACKET to user.");
   }
 
+  if (state.state === "CI_WAIT") {
+    recordAdvisory("CI_WAIT", "CI_WAIT ACTIVE: Authoritative remote evidence is pending. Do not substitute local tests, inspect unrelated files, spawn subagents, or claim completion from memory. Yield with zero work; Stop Guard will re-query the declared provider evidence.");
+  }
+
   if (state.directActionOverheadDetected || state.circuitBreakerType === "DIRECT_ACTION_OVERHEAD") {
     recordAdvisory("DIRECT_ACTION_OVERHEAD", "DIRECT_ACTION_OVERHEAD: Target for direct action is 1-3 tool calls. Consolidate operations via git-operation.mjs or execute command directly.");
   }
