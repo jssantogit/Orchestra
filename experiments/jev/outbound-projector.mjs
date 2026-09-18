@@ -62,19 +62,19 @@ export function projectForJev({
     assertNoRawFields(candidate);
 
     const item = {
-      id: candidate.id,
-      kind: candidate.kind,
-      source_kind: candidate.source_kind || null,
+      id: safeSummary(candidate.id, 160),
+      kind: safeSummary(candidate.kind, 80),
+      source_kind: candidate.source_kind ? safeSummary(candidate.source_kind, 80) : null,
       summary: safeSummary(candidate.summary, limits.max_candidate_summary_chars),
-      task_id: candidate.task_id || null,
+      task_id: candidate.task_id ? safeSummary(candidate.task_id, 160) : null,
       mutation_seq: Number.isInteger(candidate.mutation_seq) ? candidate.mutation_seq : null,
-      evidence_id: candidate.evidence_id || null,
-      execution_id: candidate.execution_id || null,
-      result: candidate.result || null,
+      evidence_id: candidate.evidence_id ? safeSummary(candidate.evidence_id, 160) : null,
+      execution_id: candidate.execution_id ? safeSummary(candidate.execution_id, 160) : null,
+      result: candidate.result ? safeSummary(candidate.result, 80) : null,
       bytes: Number.isInteger(candidate.bytes) ? candidate.bytes : 0,
       tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 12).map((tag) => safeSummary(tag, 80)) : [],
       pinned: candidate.pinned === true,
-      freshness: candidate.freshness || null,
+      freshness: candidate.freshness ? safeSummary(candidate.freshness, 80) : null,
     };
     const path = includeRelativePaths ? relativeSafePath(candidate.relative_path) : null;
     if (path) item.relative_path = path;
@@ -91,10 +91,10 @@ export function projectForJev({
     authority: JEV_AUTHORITY,
     goal: safeSummary(goal, 1200),
     task: {
-      task_id: task.task_id || null,
-      task_action: task.task_action || null,
-      task_domain: task.task_domain || null,
-      criticality: task.criticality || null,
+      task_id: task.task_id ? safeSummary(task.task_id, 160) : null,
+      task_action: task.task_action ? safeSummary(task.task_action, 80) : null,
+      task_domain: task.task_domain ? safeSummary(task.task_domain, 80) : null,
+      criticality: task.criticality ? safeSummary(task.criticality, 80) : null,
     },
     candidates: projected,
   };
