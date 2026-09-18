@@ -270,6 +270,47 @@ test("K defers control outcomes until a factual branch consequence and seals one
   }
 });
 
+test("K namespacing permits another attempt but never repeats the same unknown action for one source decision", () => {
+  const fixture = controllerFixture();
+  try {
+    assert.equal(startFullExploration({ repoRoot: fixture.repo }).started, true);
+    const first = prepareFullExplorationBranch({
+      repoRoot: fixture.repo,
+      seedPath: fixture.seedPath,
+      world: fixture.world,
+      decisionId: "decision-k-source",
+    });
+    assert.equal(first.prepared, true, JSON.stringify(first));
+    assert.equal(first.branch.selected_action, "FLASH_MEDIUM");
+
+    const failedRun = runFullExplorationBranch({
+      repoRoot: fixture.repo,
+      branchId: first.branch.branch_id,
+      command: "node",
+      args: ["script.mjs"],
+    });
+    assert.equal(failedRun.ran, false);
+
+    const second = prepareFullExplorationBranch({
+      repoRoot: fixture.repo,
+      seedPath: fixture.seedPath,
+      world: fixture.world,
+      decisionId: "decision-k-source",
+    });
+    assert.equal(second.prepared, false);
+    assert.equal(second.reason, "NO_UNKNOWN_BRANCH");
+    assert.equal(second.branch.status, "FAILED_TO_START");
+    assert.equal(second.branch.selected_action, null);
+
+    const status = fullExplorationStatus({ repoRoot: fixture.repo });
+    assert.equal(status.branches_started, 2);
+    assert.equal(status.branches_remaining, 1);
+    assert.equal(status.pending_decision_outcomes, 0);
+  } finally {
+    rmSync(fixture.repo, { recursive: true, force: true });
+  }
+});
+
 test("unattributable K infrastructure outcomes become insufficient support, not negative evidence", () => {
   const evaluated = evaluateTrajectory({
     status: "EXACT_REPLAY_COMPLETE",
