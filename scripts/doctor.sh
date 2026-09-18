@@ -92,6 +92,7 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/evidence-inspector.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-cli.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs"
@@ -182,10 +183,10 @@ else
   report_fail "Antigravity routing policy tests failed"
 fi
 
-if node --test "${ROOT_DIR}/tests/evidence/first-class-evidence.test.mjs" "${ROOT_DIR}/tests/evidence/cross-agent-evidence.test.mjs"; then
-  report_pass "First-class and cross-agent evidence tests passed"
+if node --test "${ROOT_DIR}/tests/evidence/first-class-evidence.test.mjs" "${ROOT_DIR}/tests/evidence/cross-agent-evidence.test.mjs" "${ROOT_DIR}/tests/evidence/evidence-observability.test.mjs"; then
+  report_pass "Evidence contract, federation, and observability tests passed"
 else
-  report_fail "Evidence contract/federation tests failed"
+  report_fail "Evidence contract/federation/observability tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/mechanical/mechanical-fast-path.test.mjs"; then
