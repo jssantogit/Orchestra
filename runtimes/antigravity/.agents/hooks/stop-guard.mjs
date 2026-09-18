@@ -549,6 +549,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         binding?.source === "RUNTIME_IDENTITY" &&
         binding?.delegationKind === "REVIEW" &&
         options.terminalFullyIdle === true &&
+        options.terminalSucceeded === true &&
         options.terminalChildConversationId === childConvId
       );
 
@@ -967,12 +968,22 @@ function main() {
     || convId
     || roleBindings.mainConversationId
     || null;
+  const terminalTerminationReason = String(payload.terminationReason || "");
+  const terminalFailed = Boolean(
+    payload.error ||
+    payload.cancelled ||
+    /(?:error|fail|cancel|kill|abort|max[_ -]?step|timeout)/i.test(terminalTerminationReason)
+  );
+  const terminalSucceeded = payload.fullyIdle === true && !terminalFailed;
+
   syncChildEvidence(activeState, factualParentConvId, {
     repoRoot,
     roleBindings,
     terminalChildConversationId:
       payload.fullyIdle === true && convId && convId !== factualParentConvId ? convId : null,
     terminalFullyIdle: payload.fullyIdle === true,
+    terminalSucceeded,
+    terminalTerminationReason: terminalTerminationReason || null,
   });
 
   const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
