@@ -409,6 +409,27 @@ export function enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs = 
   return { active: true, allowed: true };
 }
 
+export function getExplorationBudgetState(repoRoot) {
+  const session = loadExplorationSession(repoRoot);
+  if (!session) {
+    return { active: false, exhausted: false, timed_out: false, model_calls: 0 };
+  }
+
+  const callDir = resolve(repoRoot, CALLS);
+  const modelCalls = existsSync(callDir)
+    ? readdirSync(callDir).filter((name) => name.endsWith(".json")).length
+    : 0;
+  const timedOut = Date.now() >= Date.parse(session.deadline_at);
+  const exhausted = timedOut || modelCalls >= EXPLORATION_BUDGET.max_model_calls;
+  return {
+    active: ["PREPARED", "RUNNING"].includes(session.status),
+    exhausted,
+    timed_out: timedOut,
+    model_calls: modelCalls,
+    session_id: session.session_id,
+  };
+}
+
 export function recordExplorationModelCall({ repoRoot, payload = {} } = {}) {
   const session = loadExplorationSession(repoRoot);
   if (!session) return { active: false, terminate: false, model_calls: 0 };
