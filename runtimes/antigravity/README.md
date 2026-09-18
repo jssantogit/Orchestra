@@ -81,6 +81,7 @@ Inside an installed project:
 node .agents/skills/orchestra/project-runtime-cli.mjs doctor
 node .agents/skills/orchestra/project-runtime-cli.mjs version
 node .agents/skills/orchestra/project-runtime-cli.mjs backups
+node .agents/skills/orchestra/project-runtime-cli.mjs evidence
 ```
 
 See [Project Runtime Management](../../docs/project-runtime.md).
@@ -115,8 +116,9 @@ See [Project Runtime Management](../../docs/project-runtime.md).
    - Scope Contracts support both legacy `testsRequired` and first-class `requiredEvidence`.
    - Local command facts remain factual worker evidence; optional Gradle test/build/lint commands are classified normally when a project chooses local validation.
    - Runtime-owned `LOCAL_FACT` evidence can verify mechanical facts such as `FILE_EXISTS`, `GIT_IGNORED`, `GIT_CLEAN`, and `EXPECTED_FILE_MODIFIED` without requiring ceremonial shell commands from a worker.
-   - `REMOTE_CI` with provider `GITHUB_ACTIONS` is queried by Orchestra and must match the factual origin repository, workflow, current HEAD/ref, and every required job. A model saying "CI green" is never evidence.
-   - Remote CI still running enters `CI_WAIT`; success advances to acceptance, failure enters bounded Delta Retry / `BLOCKED`, and stale runs are rejected.
+   - `REMOTE_CI` providers are selected through the Evidence Provider Registry. `GITHUB_ACTIONS` is the first built-in provider and must match the factual origin repository, workflow, current HEAD/ref, and every required job. A model saying "CI green" is never evidence.
+   - Remote CI still running creates a persistent provider watch and enters `CI_WAIT`. The Stop Guard returns `stop` so the model does not poll. A detached Node runner follows provider backoff/deadline and may move the task only to `EVIDENCE_READY` when terminal evidence arrives.
+   - If the background runner is unavailable or disabled, the persisted watch remains authoritative and later invocations poll only after `nextPollAt`.
    - Each mutation increments `mutationSeq`. Evidence bound to an older candidate is stale and cannot satisfy acceptance.
    - A WORK/VALIDATION child that owes a local command cannot terminate until the factual command result is present in the Ledger.
    - Delegated local evidence is promoted into parent acceptance only after factual `RUNTIME_IDENTITY` correlation. The federated record carries task, attempt, mutation, producer/role, parent conversation, and candidate-commit binding; reviewer claims and model text cannot satisfy this path.
