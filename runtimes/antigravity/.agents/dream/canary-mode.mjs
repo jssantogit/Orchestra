@@ -354,6 +354,56 @@ function validateApproval(repoRoot, config) {
   return { valid: true, approval, path };
 }
 
+
+function validateRolloutApproval(repoRoot, config) {
+  const stage = currentCanaryRolloutStage(config);
+  if (!stage) return { valid: false, reason: "CANARY_ROLLOUT_STAGE_INVALID" };
+  if (stage.index === 0) {
+    return { valid: true, approval: null, path: null };
+  }
+
+  if (!config.rollout_approval_id || !config.rollout_approval_hash) {
+    return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_MISSING" };
+  }
+
+  const path = resolve(
+    repoRoot,
+    ROOT,
+    "rollout-approvals",
+    config.rollout_approval_id + ".json",
+  );
+  if (!existsSync(path)) {
+    return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_MISSING" };
+  }
+
+  let approval;
+  try {
+    approval = readJson(path);
+  } catch {
+    return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
+  }
+
+  const generation = rolloutGeneration(config);
+  if (
+    approval?.schema !== CANARY_ROLLOUT_APPROVAL_SCHEMA
+    || approval.rollout_approval_id !== config.rollout_approval_id
+    || approval.rollout_approval_hash !== config.rollout_approval_hash
+    || rolloutApprovalHash(approval) !== approval.rollout_approval_hash
+    || approval.approved_by !== "HUMAN_EXPLICIT_CLI"
+    || approval.canary_session_id !== config.canary_session_id
+    || approval.candidate_policy_id !== config.candidate_policy_id
+    || approval.baseline_policy_id !== config.baseline_policy_id
+    || approval.from_stage_index !== stage.index - 1
+    || approval.to_stage_index !== stage.index
+    || approval.to_traffic_percent !== stage.traffic_percent
+    || approval.rollout_generation !== generation
+  ) {
+    return { valid: false, reason: "CANARY_ROLLOUT_APPROVAL_INVALID" };
+  }
+
+  return { valid: true, approval, path };
+}
+
 export function loadCanaryConfig(repoRoot) {
   const path = activeConfigPath(repoRoot);
   if (!existsSync(path)) return { active: false, reason: "CANARY_DISABLED" };
