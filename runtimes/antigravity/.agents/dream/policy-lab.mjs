@@ -1038,7 +1038,7 @@ function feedbackExamples(items) {
       report.status === "NEEDS_EXPLORATION"
       || report.status === "INELIGIBLE"
     )
-    .map(({ world, split, report }) => sanitizeReplayExample(world, report, split))
+    .map(({ world, split, lineage_ref, report }) =>\n      sanitizeReplayExample(world, report, { split, lineage_ref }))
     .sort((a, b) => a.lineage_ref.localeCompare(b.lineage_ref))
     .slice(0, POLICY_LAB_LIMITS.max_structured_examples);
 }
