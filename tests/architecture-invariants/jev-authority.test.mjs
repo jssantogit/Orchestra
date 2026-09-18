@@ -81,7 +81,7 @@ test("ARCH-L04: outbound projection rejects transcript/provider-reasoning fields
   }
 });
 
-test("ARCH-L05: Retrieval Assist is identity fallback without factual report + human gate + flag", () => {
+test("ARCH-L05: Retrieval Assist is identity fallback without persisted factual report + human gate + flag", () => {
   const mandatory = {
     goal: "task",
     scopeContract: { allowedPaths: ["src/**"], forbiddenPaths: [".agents/**"] },
@@ -89,7 +89,6 @@ test("ARCH-L05: Retrieval Assist is identity fallback without factual report + h
   };
   const result = buildRetrievalAssistedPacket({
     projectRoot: root,
-    report: null,
     mandatoryCore: mandatory,
     candidates: [],
     ranking: { items: [] },
@@ -98,6 +97,14 @@ test("ARCH-L05: Retrieval Assist is identity fallback without factual report + h
   assert.equal(result.active, false);
   assert.equal(result.fallback_identity, true);
   assert.equal(result.packet, mandatory);
+});
+
+test("ARCH-L05B: activation gate binds approval to current project shadow telemetry", () => {
+  const source = read("experiments/jev/activation-gate.mjs");
+  assert.match(source, /PROJECT_SHADOW_TELEMETRY/);
+  assert.match(source, /SHADOW_TELEMETRY_CHANGED/);
+  assert.match(source, /REPORT_HASH_MISMATCH/);
+  assert.match(source, /ORCHESTRA_JEV_RETRIEVAL_ASSIST/);
 });
 
 test("ARCH-L06: Dream analyzer writes sidecars and contains no world mutation path", () => {
