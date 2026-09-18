@@ -52,6 +52,26 @@ function seedDreamFactualWorker(conversationId, parentConversationId = "dream-te
   }, null, 2), "utf-8");
 }
 
+
+function seedDreamFactualOrchestrator(conversationId) {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: conversationId,
+    bindings: {
+      [conversationId]: {
+        conversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf-8");
+  return conversationId;
+}
+
 test("Task 5 pre-tool: existing invoke_subagent allow fixtures return byte-compatible decision without unexpected fields", () => {
   cleanDreamTestState();
   try {
@@ -983,10 +1003,11 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
       taskDomain: "CODE",
       criticality: "NORMAL",
     }, null, 2), "utf-8");
+    seedDreamFactualOrchestrator("task1-leakage-conv");
 
     // Profile 1: flash-low-worker
     const inputLow = JSON.stringify({
-      conversationId: "task1-leakage-conv-low",
+      conversationId: "task1-leakage-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_leakage_low",
@@ -1002,7 +1023,7 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
 
     // Profile 2: flash-worker (FLASH_HIGH)
     const inputHigh = JSON.stringify({
-      conversationId: "task1-leakage-conv-high",
+      conversationId: "task1-leakage-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_leakage_high",
@@ -1027,7 +1048,7 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
 
     // Profile 3: flash-medium-worker (matching profile) -> ALLOW
     const inputMed = JSON.stringify({
-      conversationId: "task1-leakage-conv-med",
+      conversationId: "task1-leakage-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_leakage_med",
@@ -1045,7 +1066,7 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
     // Check recorded DECISION event
     const eventsPath = ".agents/telemetry/events.jsonl";
     const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
-    const medDec = events.find(e => e.conversation_id === "task1-leakage-conv-med" && e.type === "DECISION");
+    const medDec = events.find(e => e.conversation_id === "task1-leakage-conv" && e.type === "DECISION");
     assert.ok(medDec);
     assert.equal(medDec.state.complexity, "NORMAL", "Decision state complexity must be NORMAL, not leaked from requested profile");
     assert.equal(medDec.baseline_action, "FLASH_MEDIUM");
@@ -1189,6 +1210,7 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
       mutationSeq: 0,
       postInvestigation: false,
     }, null, 2), "utf-8");
+    seedDreamFactualOrchestrator("task2-lifecycle-conv");
 
     // 1. Direct implementation attempt via invoke_subagent -> DENIED, pending requirement created, NO DECISION recorded
     const inputInvoke = JSON.stringify({
@@ -1308,6 +1330,7 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
           role: "ORCHESTRATOR",
           profile: "flash-orchestrator",
           source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
         },
         "task2-investigator-child": {
           role: "WORKER",
@@ -1589,6 +1612,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
       retryReason: "MISINTERPRETED_REQUIREMENT",
       lastWorkerProfile: "flash-medium-worker",
     }, null, 2), "utf-8");
+    seedDreamFactualOrchestrator("replan-causal-conv");
 
     // 1. Worker retry attempted -> DECISION(REPLAN) pre-transition, state PLANNED, worker DENIED, no pending REPLAN requirement
     const inputRetry = JSON.stringify({
@@ -1667,7 +1691,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
     unlinkSync(eventsPath);
 
     const inputInvalid = JSON.stringify({
-      conversationId: "replan-invalid-conv",
+      conversationId: "replan-causal-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_worker_invalid",
