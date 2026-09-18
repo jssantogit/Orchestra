@@ -344,6 +344,173 @@ function evaluateRequirement(requirement, ledger, activeState) {
   };
 }
 
+
+function evidenceCandidateIdentity(ev = {}) {
+  return ev.evidenceId
+    || ev.executionId
+    || ev.transcriptEvidenceId
+    || ev.run?.id
+    || null;
+}
+
+function candidateSummary(ev = {}) {
+  const producer = localProducer(ev);
+  return {
+    evidenceId: evidenceCandidateIdentity(ev),
+    requirementId: ev.requirementId || null,
+    class: ev.class || ev.type || null,
+    kind: ev.kind || null,
+    result: ev.result || null,
+    command: ev.command || null,
+    exitCode: Number.isInteger(ev.exitCode) ? ev.exitCode : null,
+    producer: {
+      actorId: ev.producer?.actorId || ev.actorId || null,
+      role: producer.role || null,
+      delegationKind: producer.delegationKind || null,
+      confidence: producer.confidence || null,
+      source: producer.source || null,
+      parentConversationId: producer.parentConversationId || null,
+    },
+    binding: ev.binding ? {
+      taskId: ev.binding.taskId || null,
+      attempt: Number.isInteger(ev.binding.attempt) ? ev.binding.attempt : null,
+      mutationSeq: Number.isInteger(ev.binding.mutationSeq) ? ev.binding.mutationSeq : null,
+      commitSha: ev.binding.commitSha || null,
+      observedHeadSha: ev.binding.observedHeadSha || null,
+    } : null,
+    provider: ev.provider || null,
+    repository: ev.repository || null,
+    workflow: ev.workflow || null,
+    run: ev.run ? {
+      id: ev.run.id || null,
+      attempt: ev.run.attempt || null,
+      headSha: ev.run.headSha || null,
+      headBranch: ev.run.headBranch || null,
+      status: ev.run.status || null,
+      conclusion: ev.run.conclusion || null,
+    } : null,
+    provenance: ev.provenance ? {
+      source: ev.provenance.source || null,
+      observedAt: ev.provenance.observedAt || null,
+    } : null,
+    timestamp: ev.timestamp || null,
+  };
+}
+
+function diagnoseCandidate(requirement, ev, activeState) {
+  const summary = candidateSummary(ev);
+
+  if (!attemptMatches(ev, activeState)) {
+    return { ...summary, status: "REJECTED", reason: "ATTEMPT_MISMATCH" };
+  }
+
+  if (requirement.kind === "LOCAL_COMMAND") {
+    if (ev.evidenceSource === "CHILD_TRANSCRIPT" && (ev.mutationAfterValidation === true || ev.fresh === false)) {
+      return { ...summary, status: "REJECTED", reason: "CHILD_MUTATION_AFTER_VALIDATION" };
+    }
+    if (!localEvidenceTaskMatches(ev, activeState)) {
+      return {
+        ...summary,
+        status: "REJECTED",
+        reason: ev.binding?.taskId ? "TASK_ID_MISMATCH" : "TASK_BINDING_MISSING",
+      };
+    }
+    if (!mutationMatches(ev, activeState)) {
+      return { ...summary, status: "REJECTED", reason: "MUTATION_SEQ_MISMATCH" };
+    }
+    if (!localEvidenceCommitMatches(ev, activeState)) {
+      return { ...summary, status: "REJECTED", reason: "COMMIT_SHA_MISMATCH" };
+    }
+    if (!validLocalCommandProvenance(ev, activeState)) {
+      return { ...summary, status: "REJECTED", reason: "LOCAL_EVIDENCE_PRODUCER_NOT_AUTHORIZED" };
+    }
+    if (ev.exitCode !== 0 || Number(ev.failed || 0) > 0) {
+      return { ...summary, status: "FAILED", reason: "LOCAL_COMMAND_FAILED" };
+    }
+    return { ...summary, status: "SATISFIED", reason: null };
+  }
+
+  if (!validRuntimeProvenance(ev)) {
+    const validation = validateEvidenceRecord(ev);
+    return {
+      ...summary,
+      status: "REJECTED",
+      reason: validation.valid ? "RUNTIME_EVIDENCE_PROVENANCE_INVALID" : validation.reason,
+    };
+  }
+  if (!mutationMatches(ev, activeState)) {
+    return { ...summary, status: "REJECTED", reason: "MUTATION_SEQ_MISMATCH" };
+  }
+
+  if (ev.result === "PASS") return { ...summary, status: "SATISFIED", reason: null };
+  if (ev.result === "PENDING") return { ...summary, status: "PENDING", reason: ev.reason || "EVIDENCE_PENDING" };
+  if (ev.result === "FAIL") return { ...summary, status: "FAILED", reason: ev.reason || "EVIDENCE_FAILED" };
+  if (ev.result === "UNAVAILABLE") return { ...summary, status: "SOURCE_UNAVAILABLE", reason: ev.reason || "EVIDENCE_SOURCE_UNAVAILABLE" };
+  if (ev.result === "STALE") return { ...summary, status: "STALE", reason: ev.reason || "EVIDENCE_STALE" };
+
+  return { ...summary, status: "REJECTED", reason: "EVIDENCE_RESULT_UNRECOGNIZED" };
+}
+
+function relevantEvidenceCandidates(requirement, ledger) {
+  return ledger.slice().reverse().filter((ev) => {
+    if (!ev) return false;
+    if (requirement.kind === "LOCAL_COMMAND") return localCommandMatches(requirement, ev);
+    return (
+      ev.requirementId === requirement.id
+      && String(ev.class || "").toUpperCase() === requirement.class
+      && String(ev.kind || "").toUpperCase() === requirement.kind
+    );
+  });
+}
+
+export function explainEvidenceContract({ activeState = {}, contract = null, evidenceLedger = null } = {}) {
+  const verification = verifyEvidenceContract({ activeState, contract, evidenceLedger });
+  const ledger = Array.isArray(evidenceLedger)
+    ? evidenceLedger
+    : Array.isArray(activeState.evidenceLedger)
+      ? activeState.evidenceLedger
+      : [];
+
+  const requirements = Array.isArray(verification.requirements)
+    ? verification.requirements
+    : [];
+
+  const explained = requirements.map((requirement) => {
+    const result = verification.results.find((item) => item.id === requirement.id) || null;
+    const candidates = relevantEvidenceCandidates(requirement, ledger)
+      .map((ev) => diagnoseCandidate(requirement, ev, activeState));
+
+    return {
+      id: requirement.id,
+      class: requirement.class,
+      kind: requirement.kind,
+      status: result?.status || "UNKNOWN",
+      reason: result?.reason || null,
+      requirement,
+      selectedEvidenceId: evidenceCandidateIdentity(result?.evidence || {}),
+      candidateCount: candidates.length,
+      candidates,
+    };
+  });
+
+  return {
+    status: verification.status,
+    verified: verification.verified,
+    fresh: verification.fresh,
+    reason: verification.reason,
+    source: verification.source || null,
+    ledgerCount: ledger.length,
+    relevantCandidateCount: explained.reduce((sum, item) => sum + item.candidateCount, 0),
+    unrelatedLedgerCount: Math.max(
+      0,
+      ledger.length - new Set(
+        explained.flatMap((item) => item.candidates.map((candidate) => candidate.evidenceId).filter(Boolean))
+      ).size
+    ),
+    requirements: explained,
+  };
+}
+
 export function verifyEvidenceContract({ activeState = {}, contract = null, evidenceLedger = null } = {}) {
   const effectiveContract = contract || activeState.scopeContract || {};
   const normalized = normalizeEvidenceRequirements(effectiveContract, activeState);

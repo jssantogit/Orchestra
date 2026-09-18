@@ -15,6 +15,7 @@ const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-poli
 const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
 const federation = read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs");
+const inspector = read("runtimes/antigravity/.agents/skills/orchestra/evidence-inspector.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
 const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
 
@@ -95,4 +96,21 @@ test("ARCH-EVIDENCE-09: distinct command executions are merged by execution iden
   assert.match(federation, /transcriptEvidenceId/);
   assert.match(federation, /exactEvidenceIdentity/);
   assert.equal(federation.includes("command + type + scope"), false);
+});
+
+
+test("ARCH-EVIDENCE-10: evidence observability is read-only and non-authoritative", () => {
+  assert.match(inspector, /inspectProjectEvidence/);
+  assert.match(inspector, /explainEvidenceContract/);
+  assert.equal(inspector.includes("collectRuntimeEvidenceSync"), false);
+  assert.equal(inspector.includes("writeFileSync"), false);
+  assert.equal(inspector.includes("appendFileSync"), false);
+  assert.equal(inspector.includes("acceptanceState ="), false);
+});
+
+test("ARCH-EVIDENCE-11: diagnostics expose rejected model claims instead of promoting them", () => {
+  assert.match(contract, /LOCAL_EVIDENCE_PRODUCER_NOT_AUTHORIZED/);
+  assert.match(contract, /candidateSummary/);
+  assert.match(contract, /diagnoseCandidate/);
+  assert.equal(inspector.includes("MODEL_CLAIM IS EVIDENCE"), false);
 });

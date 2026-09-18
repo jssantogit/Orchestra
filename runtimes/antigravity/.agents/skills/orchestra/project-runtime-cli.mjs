@@ -11,6 +11,10 @@ import {
   rollbackProjectRuntime,
   updateProjectRuntime,
 } from "./project-runtime-manager.mjs";
+import {
+  formatEvidenceInspection,
+  inspectProjectEvidence,
+} from "./evidence-inspector.mjs";
 
 function parseArgs(argv) {
   const positional = [];
@@ -47,11 +51,13 @@ function usage() {
     "  orchestra-project diff-runtime <target> [--source <runtime-root>] [--json]",
     "  orchestra-project rollback-runtime <target> [--backup <id|latest>] [--dry-run] [--force]",
     "  orchestra-project backups <target> [--json]",
+    "  orchestra-project evidence <target> [--json]",
     "",
     "Installed-project shortcuts:",
     "  node .agents/skills/orchestra/project-runtime-cli.mjs doctor",
     "  node .agents/skills/orchestra/project-runtime-cli.mjs version",
     "  node .agents/skills/orchestra/project-runtime-cli.mjs backups",
+    "  node .agents/skills/orchestra/project-runtime-cli.mjs evidence",
     "",
     "Update/diff require an Orchestra source runtime. The source-repo wrapper",
     "scripts/orchestra-project.mjs supplies it automatically.",
@@ -274,6 +280,14 @@ export async function runProjectRuntimeCli(argv = process.argv.slice(2), {
         console.log(line("Safety backup:", result.safetyBackup.backupId));
       }
       return 0;
+    }
+
+    case "evidence":
+    case "evidence-status": {
+      result = inspectProjectEvidence(target);
+      if (flags.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(formatEvidenceInspection(result));
+      return result.available ? 0 : 1;
     }
 
     case "backups": {
