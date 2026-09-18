@@ -223,12 +223,36 @@ test("PolicyDevelopmentDataset is deterministic, aggregated, and excludes raw hi
     assert.equal(a.dataset.split_counts.holdout_lineages, 1);
     assert.equal(a.dataset.source_world_count, 2);
     assert.ok(a.dataset.state_buckets.length >= 1);
+    const normalBucket = a.dataset.state_buckets.find((bucket) => bucket.state?.complexity === "NORMAL");
+    assert.ok(normalBucket);
+    assert.equal(normalBucket.action_support.FLASH_LOW.unknown, false);
+    assert.equal(normalBucket.action_support.FLASH_MEDIUM.unknown, false);
+    assert.equal(normalBucket.action_support.FLASH_HIGH.unknown, true);
     assert.ok(a.dataset.action_support.unknown_branches >= 2, "FLASH_HIGH must remain UNKNOWN_BRANCH");
     assert.equal(a.dataset.current_policy.policy_id, f.currentPolicy.policy_id);
 
     const serialized = JSON.stringify(a.dataset);
     assert.equal(serialized.includes(RAW_SENTINEL), false);
     assert.equal(serialized.includes("private_note"), false);
+  } finally {
+    rmSync(f.repo, { recursive: true, force: true });
+  }
+});
+
+test("Policy Lab refuses to open a cycle from a merely content-addressed but unpersisted dataset", () => {
+  const f = fixture();
+  try {
+    const built = buildPolicyDevelopmentDataset({
+      worlds: [f.trainWorld, f.holdoutWorld],
+      currentPolicy: f.currentPolicy,
+    });
+    assert.equal(built.ok, true);
+    const opened = openPolicyLabCycle({
+      repoRoot: f.repo,
+      dataset: built.dataset,
+    });
+    assert.equal(opened.opened, false);
+    assert.equal(opened.reason, "DATASET_NOT_BUILT_LOCALLY");
   } finally {
     rmSync(f.repo, { recursive: true, force: true });
   }
