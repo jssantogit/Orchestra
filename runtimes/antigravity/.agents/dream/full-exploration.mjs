@@ -99,6 +99,15 @@ function highestFeedbackStatus(summary = {}) {
 }
 
 function branchRuntimeStatus(branch) {
+  const explicitTerminal = String(branch?.status || "").toUpperCase();
+  if (["FAILED", "FAILED_TO_START", "TIMEOUT", "BLOCKED", "PRUNED"].includes(explicitTerminal)) {
+    return {
+      status: explicitTerminal,
+      model_calls: Number.isInteger(branch?.model_calls) ? branch.model_calls : 0,
+      feedback_summary: branch?.feedback_summary || null,
+      invalid: true,
+    };
+  }
   if (!branch?.branch_workspace) {
     const status = branch?.status || "UNKNOWN";
     return {
@@ -552,6 +561,7 @@ function factualOutcomeFromWorld(world, details = {}) {
   return {
     result: {
       factual: true,
+      attributable: true,
       source_world_id: world.world_id || null,
       source_observation_id: last?.observation_id || null,
       source_terminal_state: normalizeTerminalState(last),
@@ -575,12 +585,14 @@ function factualOutcomeFromWorld(world, details = {}) {
   };
 }
 
-function factualFailureOutcome(reason, details = {}) {
+function unattributableOutcome(reason, details = {}) {
   return {
     result: {
       factual: true,
-      status: "FAILED",
-      reason: String(reason || "FULL_EXPLORATION_FAILURE"),
+      attributable: false,
+      support_status: "INSUFFICIENT_SUPPORT",
+      status: "UNKNOWN",
+      reason: String(reason || "FULL_EXPLORATION_UNATTRIBUTABLE"),
       ...details,
     },
     evidence_summary: {
@@ -594,7 +606,7 @@ function factualFailureOutcome(reason, details = {}) {
     cost_metrics: {
       model_calls: Number.isInteger(details.exploration_model_calls) ? details.exploration_model_calls : 0,
     },
-    terminal_state: "FAILED",
+    terminal_state: "UNKNOWN",
     resulting_snapshot_id: null,
   };
 }
@@ -608,6 +620,7 @@ function factualPruneOutcome(branch, action) {
   return {
     result: {
       factual: true,
+      attributable: true,
       action,
       branch_id: branch.branch_id,
       branch_feedback_status: branch.feedback_status || "UNKNOWN",
@@ -951,7 +964,7 @@ export function prepareFullExplorationBranch({
       repoRoot,
       control,
       branch,
-      factualFailureOutcome(prepared.reason || "EXPLORATION_PREPARE_FAILED", {
+      unattributableOutcome(prepared.reason || "EXPLORATION_PREPARE_FAILED", {
         branch_id: branch.branch_id,
         controller_session_id: control.session_id,
         source_world_id: world.world_id || null,
@@ -1011,7 +1024,7 @@ export function runFullExplorationBranch({
       repoRoot,
       control,
       branch,
-      factualFailureOutcome(out.reason || branch.status, {
+      unattributableOutcome(out.reason || branch.status, {
         branch_id: branch.branch_id,
         controller_session_id: control.session_id,
         exploration_model_calls: branch.model_calls || 0,
@@ -1060,7 +1073,7 @@ export function collectFullExplorationBranch({ repoRoot, branchId } = {}) {
         repoRoot,
         control,
         branch,
-        factualFailureOutcome(collected.reason || "EXPLORATION_COLLECTION_FAILED", {
+        unattributableOutcome(collected.reason || "EXPLORATION_COLLECTION_FAILED", {
           branch_id: branch.branch_id,
           controller_session_id: control.session_id,
           exploration_model_calls: branch.model_calls || 0,
@@ -1080,7 +1093,7 @@ export function collectFullExplorationBranch({ repoRoot, branchId } = {}) {
       repoRoot,
       control,
       branch,
-      factualFailureOutcome("COLLECTED_WORLD_INVALID", {
+      unattributableOutcome("COLLECTED_WORLD_INVALID", {
         branch_id: branch.branch_id,
         controller_session_id: control.session_id,
         exploration_model_calls: branch.model_calls || 0,
