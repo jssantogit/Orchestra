@@ -421,6 +421,7 @@ function parseCodexJsonl(rawOutput) {
     advisory_injections: 0,
     worker_packet_bytes: 0,
     context_proxy_bytes: 0,
+    ...emptyJevMetrics(),
     parent_delegated_sidequest_attempts: 0,
     parent_delegated_sidequest_attempts_by_tool: {},
     parent_delegated_sidequest_denied: 0,
@@ -1166,12 +1167,80 @@ export function computePacketFingerprint(promptText = "") {
   return createHash("sha256").update(stripped).digest("hex").slice(0, 16);
 }
 
+export function emptyJevMetrics() {
+  return {
+    jev_calls: 0,
+    jev_latency_ms: 0,
+    jev_input_tokens: 0,
+    jev_candidates: 0,
+    jev_ranked_items: 0,
+    jev_candidate_bytes: 0,
+    jev_selected_bytes: 0,
+    potential_context_reduction: 0,
+    redundant_tool_candidates: 0,
+    rehydration_count: 0,
+    false_prune_risk: 0,
+    future_use_recall_at_k: 0,
+    future_use_precision_at_k: 0,
+    critical_reference_recall: 0,
+    false_low_relevance: 0,
+    tool_reexecution_delta: 0,
+    acceptance_delta: 0,
+    fallback_identity_failures: 0,
+  };
+}
+
+export function parseJevShadowTelemetry(targetDir) {
+  const path = join(targetDir, ".agents/telemetry/jev-shadow.jsonl");
+  if (!existsSync(path)) return emptyJevMetrics();
+
+  let events = [];
+  try {
+    events = readFileSync(path, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((event) => event?.schema === "orchestra.jev-shadow-report.v1");
+  } catch {
+    return emptyJevMetrics();
+  }
+  if (events.length === 0) return emptyJevMetrics();
+
+  const sum = (field) => events.reduce((total, event) => (
+    total + (typeof event[field] === "number" && Number.isFinite(event[field]) ? event[field] : 0)
+  ), 0);
+  const avg = (field) => Number((sum(field) / events.length).toFixed(6));
+
+  return {
+    jev_calls: sum("jev_calls"),
+    jev_latency_ms: sum("jev_latency_ms"),
+    jev_input_tokens: sum("jev_input_tokens"),
+    jev_candidates: sum("jev_candidates"),
+    jev_ranked_items: sum("jev_ranked_items"),
+    jev_candidate_bytes: sum("jev_candidate_bytes"),
+    jev_selected_bytes: sum("jev_selected_bytes"),
+    potential_context_reduction: avg("potential_context_reduction"),
+    redundant_tool_candidates: sum("redundant_tool_candidates"),
+    rehydration_count: sum("rehydration_count"),
+    false_prune_risk: avg("false_prune_risk"),
+    future_use_recall_at_k: avg("future_use_recall_at_k"),
+    future_use_precision_at_k: avg("future_use_precision_at_k"),
+    critical_reference_recall: avg("critical_reference_recall"),
+    false_low_relevance: avg("false_low_relevance"),
+    tool_reexecution_delta: avg("tool_reexecution_delta"),
+    acceptance_delta: avg("acceptance_delta"),
+    fallback_identity_failures: sum("fallback_identity_failures"),
+  };
+}
+
 /**
  * Parses AGY telemetry from .agents/state/active-state.json, events.jsonl, and agy JSON output.
  */
 export function parseAgyTelemetry(targetDir, rawOutput) {
   const stateFile = join(targetDir, ".agents/state/active-state.json");
   const telemetryFile = join(targetDir, ".agents/telemetry/events.jsonl");
+  const jevMetrics = parseJevShadowTelemetry(targetDir);
 
   let state = {};
   if (existsSync(stateFile)) {
@@ -1721,6 +1790,7 @@ export function parseAgyTelemetry(targetDir, rawOutput) {
     advisory_injections: state.advisory_injections_total || 0,
     worker_packet_bytes: state.worker_packet_bytes || 0,
     context_proxy_bytes: state.context_proxy_bytes || 0,
+    ...jevMetrics,
     input_tokens: normUsage.inputTokens,
     cached_input_tokens: normUsage.cachedInputTokens,
     uncached_input_tokens: normUsage.uncachedInputTokens,
