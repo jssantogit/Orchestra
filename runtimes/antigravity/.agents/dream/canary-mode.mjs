@@ -272,6 +272,8 @@ export function approveCanary({
     baseline_policy_id: shadow.report.baseline_policy_id,
     support_index_id: shadow.report.support_index_id,
     traffic_percent: CANARY_GATES.initial_traffic_percent,
+    rollout_stage_index: 0,
+    rollout_generation: 0,
     approved_by: "HUMAN_EXPLICIT_CLI",
     created_at: new Date().toISOString(),
   };
