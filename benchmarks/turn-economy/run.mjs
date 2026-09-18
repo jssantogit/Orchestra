@@ -1200,37 +1200,55 @@ export function parseJevShadowTelemetry(targetDir) {
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter((event) => event?.schema === "orchestra.jev-shadow-report.v1");
+      .map((line) => JSON.parse(line));
   } catch {
     return emptyJevMetrics();
   }
-  if (events.length === 0) return emptyJevMetrics();
 
-  const sum = (field) => events.reduce((total, event) => (
+  const reports = new Map();
+  const labels = new Map();
+  for (const event of events) {
+    if (event?.schema === "orchestra.jev-shadow-report.v1" && event.shadow_id) {
+      reports.set(event.shadow_id, event);
+    }
+    if (event?.schema === "orchestra.jev-shadow-label.v1" && event.shadow_id) {
+      labels.set(event.shadow_id, event);
+    }
+  }
+  if (reports.size === 0) return emptyJevMetrics();
+
+  const reportList = [...reports.values()];
+  const labeled = reportList.flatMap((report) => {
+    const label = labels.get(report.shadow_id);
+    return label ? [{ ...report, ...label }] : [];
+  });
+
+  const sum = (items, field) => items.reduce((total, event) => (
     total + (typeof event[field] === "number" && Number.isFinite(event[field]) ? event[field] : 0)
   ), 0);
-  const avg = (field) => Number((sum(field) / events.length).toFixed(6));
+  const avg = (items, field) => items.length > 0
+    ? Number((sum(items, field) / items.length).toFixed(6))
+    : 0;
 
   return {
-    jev_calls: sum("jev_calls"),
-    jev_latency_ms: sum("jev_latency_ms"),
-    jev_input_tokens: sum("jev_input_tokens"),
-    jev_candidates: sum("jev_candidates"),
-    jev_ranked_items: sum("jev_ranked_items"),
-    jev_candidate_bytes: sum("jev_candidate_bytes"),
-    jev_selected_bytes: sum("jev_selected_bytes"),
-    potential_context_reduction: avg("potential_context_reduction"),
-    redundant_tool_candidates: sum("redundant_tool_candidates"),
-    rehydration_count: sum("rehydration_count"),
-    false_prune_risk: avg("false_prune_risk"),
-    future_use_recall_at_k: avg("future_use_recall_at_k"),
-    future_use_precision_at_k: avg("future_use_precision_at_k"),
-    critical_reference_recall: avg("critical_reference_recall"),
-    false_low_relevance: avg("false_low_relevance"),
-    tool_reexecution_delta: avg("tool_reexecution_delta"),
-    acceptance_delta: avg("acceptance_delta"),
-    fallback_identity_failures: sum("fallback_identity_failures"),
+    jev_calls: sum(reportList, "jev_calls"),
+    jev_latency_ms: sum(reportList, "jev_latency_ms"),
+    jev_input_tokens: sum(reportList, "jev_input_tokens"),
+    jev_candidates: sum(reportList, "jev_candidates"),
+    jev_ranked_items: sum(reportList, "jev_ranked_items"),
+    jev_candidate_bytes: sum(reportList, "jev_candidate_bytes"),
+    jev_selected_bytes: sum(reportList, "jev_selected_bytes"),
+    potential_context_reduction: avg(reportList, "potential_context_reduction"),
+    redundant_tool_candidates: sum(reportList, "redundant_tool_candidates"),
+    rehydration_count: sum(reportList, "rehydration_count"),
+    false_prune_risk: avg(labeled, "false_prune_risk"),
+    future_use_recall_at_k: avg(labeled, "future_use_recall_at_k"),
+    future_use_precision_at_k: avg(labeled, "future_use_precision_at_k"),
+    critical_reference_recall: avg(labeled, "critical_reference_recall"),
+    false_low_relevance: avg(labeled, "false_low_relevance"),
+    tool_reexecution_delta: avg(labeled, "tool_reexecution_delta"),
+    acceptance_delta: avg(labeled, "acceptance_delta"),
+    fallback_identity_failures: sum(reportList, "fallback_identity_failures"),
   };
 }
 
