@@ -103,8 +103,10 @@ Target Economy: `worker_model_turns <= 8`, `worker_pre_mutation_turns <= 3`, `wo
 - Apply the smallest correct surgical fix via `replace_file_content`. Preserve existing function signatures and option interfaces (EXISTING EXTENSION POINT FIRST).
 
 ### 5. Focused Validation Diet & Validation Completion Lock
-- Run the **SAME** focused test command that reproduced the failure (e.g. `node --test <focused-test-file>`).
-- If it exits code 0 and satisfies the Scope Contract: **VALIDATION IS COMPLETE**.
+- Execute only worker-owned local evidence declared by the Scope Contract (`testsRequired` or `requiredEvidence.kind == LOCAL_COMMAND`).
+- For bug-fix flows with an explicit local reproduction command, run the matching focused post-mutation validation when it is part of the contract.
+- If the contract contains only runtime-owned `REMOTE_CI` / `LOCAL_FACT` requirements, do not run a local substitute; hand off after mutation and let Orchestra collect the authoritative evidence.
+- When a required local command exits code 0 and satisfies the Scope Contract: **VALIDATION IS COMPLETE**.
 - **VALIDATION COMPLETION LOCK (RUNTIME ENFORCED)**:
   Once fresh worker evidence satisfies the Scope Contract validation requirement for the current mutation state, the runtime strictly enforces the **Validation Completion Lock**:
   further routine validation commands (reruns, broader suites like `npm test`, stress loops) are **DENIED** with `VALIDATION_ALREADY_SATISFIED`.
