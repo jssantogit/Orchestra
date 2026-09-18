@@ -17,6 +17,20 @@ test("side-effect classifier distinguishes local process, remote VCS, network wr
   assert.equal(classifyCommandCapability("curl -T result.zip https://transfer.sh/result.zip").capability, SIDE_EFFECT_CAPABILITIES.PUBLICATION);
 });
 
+test("common alternate side channels are classified before shell execution", () => {
+  assert.equal(
+    classifyCommandCapability('python -c "import requests; requests.post(\'https://example.com\', data=\'x\')"').capability,
+    SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE,
+  );
+  assert.equal(
+    classifyCommandCapability('node -e "fetch(\'https://example.com\', {method: \'POST\'})"').capability,
+    SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE,
+  );
+  assert.equal(classifyCommandCapability("scp result.zip host:/tmp/result.zip").capability, SIDE_EFFECT_CAPABILITIES.NETWORK_WRITE);
+  assert.equal(classifyCommandCapability("npm publish").capability, SIDE_EFFECT_CAPABILITIES.PUBLICATION);
+  assert.equal(classifyCommandCapability("python -m http.server 8000").capability, SIDE_EFFECT_CAPABILITIES.PUBLICATION);
+});
+
 test("remote/public writes default deny and become legal only through factual capability or classified direct action", () => {
   const denied = authorizeToolCapability({
     toolName: "run_command",
