@@ -1238,6 +1238,33 @@ function main() {
     activeContract = activeState.scopeContract;
   }
 
+  const canaryTaskId =
+    payload.taskId
+    || payload.taskIdentifier
+    || activeState.taskId
+    || activeState.taskKey
+    || process.env.BENCHMARK_TASK_ID
+    || null;
+
+  // A task that already entered live Canary may never cross into an external
+  // side effect. Roll back first, deny this one tool call, then the task can
+  // continue under the static policy on its next turn.
+  if (isCanaryExternalSideEffect({ toolName, toolArgs })) {
+    const rollback = rollbackSelectedCanaryTask({
+      repoRoot,
+      taskId: canaryTaskId,
+      trigger: "EXTERNAL_SIDE_EFFECT_ATTEMPT",
+      details: { tool_name: toolName },
+    });
+    if (rollback.rolled_back) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "CANARY_ROLLBACK: External side effects are ineligible during Canary. Session rolled back; retry/replan under static policy.",
+      }));
+      return;
+    }
+  }
+
   const roleBindings = loadRoleBindings(roleBindingsPath);
   if (roleBindings.__governanceLoadError) {
     console.log(JSON.stringify({
@@ -2511,6 +2538,12 @@ function main() {
       }
 
       if (effectiveTargets.some(isAgentControlPlanePath)) {
+        rollbackSelectedCanaryTask({
+          repoRoot,
+          taskId: canaryTaskId,
+          trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+          details: { tool_name: toolName, targets: effectiveTargets },
+        });
         console.log(JSON.stringify({
           decision: "deny",
           reason: "CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** regardless of Scope Contract."
@@ -2581,6 +2614,12 @@ function main() {
 
     // 0. Constitution protection: AGENTS.md is strictly immutable across all agents
     if (relTarget === "AGENTS.md" || relTarget.endsWith("/AGENTS.md")) {
+      rollbackSelectedCanaryTask({
+        repoRoot,
+        taskId: canaryTaskId,
+        trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+        details: { tool_name: toolName, target: relTarget },
+      });
       console.log(JSON.stringify({
         decision: "deny",
         reason: "AGENTS.md is the provider-neutral repository constitution and is strictly read-only for all agents."
@@ -2629,6 +2668,12 @@ function main() {
     const isControlPlane = isControlPlanePath(relTarget);
 
     if (isWorkerRole(activeRole) && isAgentControlPlanePath(relTarget)) {
+      rollbackSelectedCanaryTask({
+        repoRoot,
+        taskId: canaryTaskId,
+        trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+        details: { tool_name: toolName, target: relTarget },
+      });
       console.log(JSON.stringify({
         decision: "deny",
         reason: `CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** ("${relTarget}") regardless of Scope Contract.`
@@ -2656,6 +2701,12 @@ function main() {
         return;
       }
       if (isAgentControlPlanePath(relTarget)) {
+        rollbackSelectedCanaryTask({
+          repoRoot,
+          taskId: canaryTaskId,
+          trigger: "GOVERNANCE_MODIFICATION_ATTEMPT",
+          details: { tool_name: toolName, target: relTarget },
+        });
         console.log(JSON.stringify({
           decision: "deny",
           reason: `HOOK_OWNED_GOVERNANCE_STATE: .agents/** ("${relTarget}") is runtime-hook-owned. Orchestrator may inspect governance state but cannot write it directly.`
