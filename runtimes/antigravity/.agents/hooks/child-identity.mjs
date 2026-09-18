@@ -1,0 +1,105 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+function normalizeRole(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function findFactualSubagentRecord({
+  parentConversationId,
+  childConversationId,
+  brainBaseDir = process.env.AGY_BRAIN_DIR || join(homedir(), ".gemini/antigravity-cli/brain"),
+} = {}) {
+  if (!parentConversationId || !childConversationId) return null;
+
+  const subagentsDir = join(brainBaseDir, parentConversationId, ".system_generated/subagents");
+  if (!existsSync(subagentsDir)) return null;
+
+  try {
+    for (const file of readdirSync(subagentsDir)) {
+      if (!file.endsWith(".json")) continue;
+      let record;
+      try {
+        record = JSON.parse(readFileSync(join(subagentsDir, file), "utf-8"));
+      } catch {
+        continue;
+      }
+      if (record?.conversationId === childConversationId) {
+        return record;
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+export function factualSubagentMatchesPending(record, pending) {
+  if (!record || !pending) return false;
+  const descriptor = record.subagentDescriptor || {};
+  const descTypeName = String(descriptor.typeName || "").trim();
+  const descRole = normalizeRole(descriptor.role);
+
+  // A factual child record without any descriptor cannot prove which pending
+  // delegation it belongs to.
+  if (!descTypeName && !descRole) return false;
+
+  const pendingProfile = String(pending.profile || pending.typeName || "").trim();
+  const pendingRole = normalizeRole(pending.role);
+
+  let descriptorMatches = false;
+  if (descTypeName && pendingProfile && descTypeName === pendingProfile) {
+    descriptorMatches = true;
+  }
+  if (descRole && pendingRole && (descRole === pendingRole || descRole.includes(pendingRole))) {
+    descriptorMatches = true;
+  }
+  if (!descriptorMatches) return false;
+
+  const spawnStepIndex = record.spawnStepIndex;
+  const originStepIdx = pending.originStepIdx;
+  if (Number.isInteger(spawnStepIndex) && Number.isInteger(originStepIdx) && spawnStepIndex !== originStepIdx) {
+    return false;
+  }
+
+  return true;
+}
+
+export function filterFactualPendingCandidates({
+  pendingSubagents = [],
+  record,
+  parentConversationId = null,
+  taskId = null,
+  benchmarkRunId = null,
+} = {}) {
+  let candidates = Array.isArray(pendingSubagents)
+    ? pendingSubagents.filter((p) => !p.consumed)
+    : [];
+
+  if (parentConversationId) {
+    candidates = candidates.filter((p) => p.parentConversationId === parentConversationId);
+  }
+  if (taskId) {
+    candidates = candidates.filter((p) => (p.taskIdentifier || p.taskId) === taskId);
+  }
+  if (benchmarkRunId) {
+    candidates = candidates.filter((p) => p.benchmarkRunId === benchmarkRunId);
+  }
+
+  return candidates.filter((p) => factualSubagentMatchesPending(record, p));
+}
+
+export function isSymmetricReviewerSet(candidates = []) {
+  if (!Array.isArray(candidates) || candidates.length < 2) return false;
+  const firstRole = candidates[0].role;
+  const firstProfile = candidates[0].profile;
+  return (
+    firstRole === "REVIEWER" &&
+    candidates.every(
+      (c) =>
+        c.role === firstRole &&
+        c.profile === firstProfile &&
+        c.delegationKind === "REVIEW"
+    )
+  );
+}
