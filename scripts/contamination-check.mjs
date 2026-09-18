@@ -31,6 +31,8 @@ export function runContaminationCheck(rootDir = root) {
     { pattern: /(?:model|executor)\s*[:=]\s*["']gemini-/i, name: "Active route to Gemini model" },
     { pattern: /(?:executor|worker|profile)\s*[:=]\s*["']flash-(?:worker|orchestrator)/i, name: "Active route to Flash worker" },
     { pattern: /ALL-GEMINI\s+Architecture/i, name: "ALL-GEMINI reference in active Codex instructions" },
+    { pattern: /(?:model|executor|worker|reviewer|profile)\s*[:=][^\n]*(?:jev|typesafe)/i, name: "Active route to Jev/TypeSafe semantic service" },
+    { pattern: /experiments[\\/]jev|api\.typesafe\.ai|TYPESAFE_API_KEY/i, name: "Jev experiment/service reference in active Codex runtime" },
   ];
 
   for (const file of codexFiles) {
@@ -82,6 +84,22 @@ export function runContaminationCheck(rootDir = root) {
             violation: `Active route to OpenAI/Codex model: ${line.trim()}`,
           });
         }
+        if (/jev|typesafe/i.test(line)) {
+          violations.push({
+            runtime: "ANTIGRAVITY",
+            file: relative(rootDir, file),
+            line: i + 1,
+            violation: `Active route to Jev/TypeSafe semantic service: ${line.trim()}`,
+          });
+        }
+      }
+      if (/experiments[\\/]jev|api\.typesafe\.ai|TYPESAFE_API_KEY/i.test(line)) {
+        violations.push({
+          runtime: "ANTIGRAVITY",
+          file: relative(rootDir, file),
+          line: i + 1,
+          violation: `Jev experiment/service reference in active runtime: ${line.trim()}`,
+        });
       }
     }
   }
@@ -118,6 +136,14 @@ export function runContaminationCheck(rootDir = root) {
           file: relative(rootDir, file),
           line: i + 1,
           violation: `Foreign provider import: ${line.trim()}`,
+        });
+      }
+      if (/experiments[\\/]jev|api\.typesafe\.ai|TYPESAFE_API_KEY|jev-latest/i.test(line)) {
+        violations.push({
+          runtime: "ANTIGRAVITY_DREAM",
+          file: relative(rootDir, file),
+          line: i + 1,
+          violation: `Jev semantic service contamination in Dream runtime: ${line.trim()}`,
         });
       }
     }
