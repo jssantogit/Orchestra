@@ -305,12 +305,33 @@ test("Policy Lab cycle keeps baseline, evaluates candidates, and never activates
     });
     assert.equal(packet1.ok, true, JSON.stringify(packet1));
     assert.equal(packet1.packet.designer_call_index, 1);
+    assert.match(packet1.packet.packet_id, /^packet-[a-f0-9]{64}$/);
     assert.equal(packet1.packet.dataset.source_manifest, undefined);
     assert.equal(JSON.stringify(packet1.packet).includes(RAW_SENTINEL), false);
+    assert.equal(packet1.cycle.status, "DESIGNER_PENDING");
+    assert.equal(packet1.cycle.designer_calls.length, 1);
+    assert.equal(packet1.cycle.designer_calls[0].status, "PACKET_ISSUED");
+
+    const repeatedPacket1 = buildPolicyDesignerPacket({
+      repoRoot: f.repo,
+      cyclePath: opened.path,
+    });
+    assert.equal(repeatedPacket1.ok, true);
+    assert.equal(repeatedPacket1.pending, true);
+    assert.equal(repeatedPacket1.packet.packet_id, packet1.packet.packet_id);
+    assert.equal(repeatedPacket1.cycle.designer_calls.length, 1);
+
+    const prematureEvaluation = evaluatePolicyLabCycle({
+      repoRoot: f.repo,
+      cyclePath: opened.path,
+    });
+    assert.equal(prematureEvaluation.evaluated, false);
+    assert.equal(prematureEvaluation.reason, "DESIGNER_CALL_PENDING");
 
     const submitted = submitDesignerCandidates({
       repoRoot: f.repo,
       cyclePath: opened.path,
+      packetId: packet1.packet.packet_id,
       candidates: [
         candidate("FLASH_LOW", "prefer-low-normal"),
         candidate("FLASH_HIGH", "prefer-high-normal"),
@@ -359,12 +380,15 @@ test("Policy Lab cycle keeps baseline, evaluates candidates, and never activates
     });
     assert.equal(packet2.ok, true, JSON.stringify(packet2));
     assert.equal(packet2.packet.designer_call_index, 2);
+    assert.match(packet2.packet.packet_id, /^packet-[a-f0-9]{64}$/);
+    assert.notEqual(packet2.packet.packet_id, packet1.packet.packet_id);
     assert.ok(packet2.packet.replay_feedback);
     assert.equal(JSON.stringify(packet2.packet).includes(RAW_SENTINEL), false);
 
     const second = submitDesignerCandidates({
       repoRoot: f.repo,
       cyclePath: opened.path,
+      packetId: packet2.packet.packet_id,
       candidates: [],
     });
     assert.equal(second.accepted, true);
@@ -395,9 +419,16 @@ test("Policy Lab fails closed on cycle tampering and oversized designer output c
     const built = buildAndPersistPolicyDataset(f.repo);
     const opened = openPolicyLabCycle({ repoRoot: f.repo, dataset: built.dataset });
 
+    const packet = buildPolicyDesignerPacket({
+      repoRoot: f.repo,
+      cyclePath: opened.path,
+    });
+    assert.equal(packet.ok, true);
+
     const oversized = submitDesignerCandidates({
       repoRoot: f.repo,
       cyclePath: opened.path,
+      packetId: packet.packet.packet_id,
       candidates: [
         candidate("FLASH_LOW", "c1"),
         candidate("FLASH_LOW", "c2"),
