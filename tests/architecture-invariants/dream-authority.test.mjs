@@ -1095,6 +1095,35 @@ test("ARCH-018: Exact Replay Remains Model-Free (Valid & Adversarial)", () => {
   assert.equal(replayResult.trajectories[0].steps.length, 1);
   assert.equal(replayResult.trajectories[0].steps[0].result, "TESTS_PASSED");
 
+  const worldBeforeReplay = sha256Canonical(sealRes.world);
+  const mutationAttemptReplay = replayExact({
+    world: sealRes.world,
+    chooseAction: (ctx) => {
+      try { ctx.state.task_action = "MUTATED"; } catch {}
+      try { ctx.availableActions.push("ILLEGAL_ACTION"); } catch {}
+      try { ctx.prefix.push({ forged: true }); } catch {}
+      return "FLASH_MEDIUM";
+    },
+  });
+  assert.equal(mutationAttemptReplay.status, REPLAY_STATUS.EXACT_REPLAY_COMPLETE);
+  assert.equal(
+    sha256Canonical(sealRes.world),
+    worldBeforeReplay,
+    "Replay callback must not mutate sealed world state or materialized history"
+  );
+
+  const throwingReplay = replayExact({
+    world: sealRes.world,
+    chooseAction: () => {
+      throw new Error("policy callback failure");
+    },
+  });
+  assert.equal(
+    throwingReplay.status,
+    REPLAY_STATUS.POLICY_INVALID_ACTION,
+    "Policy callback exceptions fail closed without crashing replay"
+  );
+
   // Prove the implementation boundary directly instead of using timing as a proxy.
   const replaySource = readFileSync(
     resolve(repoRoot, "runtimes/antigravity/.agents/dream/replay-simulator.mjs"),
@@ -1829,4 +1858,91 @@ test("ARCH-025: Investigation Authority Is Read-Only", () => {
   } finally {
     cleanTestState();
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// ARCH-026: Sealed World Material Integrity
+// events are the factual source of truth; projections cannot diverge and caller
+// references cannot mutate a world after sealing.
+// ---------------------------------------------------------------------------
+test("ARCH-026: Sealed World Material Integrity", () => {
+  const rootSnapshotId = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+  const runtimeFp = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+
+  const decision = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "dec-026",
+    parent_decision_id: null,
+    snapshot_id: rootSnapshotId,
+    decision_type: "WORKER_TIER",
+    state: { task_action: "IMPLEMENT", complexity: "NORMAL" },
+    available_actions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    chosen_action: "FLASH_MEDIUM",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+    step_idx: 1,
+    created_at: "2026-09-18T00:00:00.000Z",
+  });
+  const outcome = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: "dec-026",
+    observation_id: "obs-026",
+    result: { status: "COMPLETED" },
+    resulting_snapshot_id: null,
+    terminal_state: "ACCEPTED",
+    evidence_summary: {},
+    retry_state: {},
+    cost_metrics: {},
+    created_at: "2026-09-18T00:00:01.000Z",
+  });
+
+  const sealed = sealWorld({
+    events: [decision, outcome],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+  });
+  assert.equal(sealed.status, "SEALED");
+  assert.equal(validateWorld(sealed.world).valid, true);
+
+  // Caller-owned records are detached from the sealed representation.
+  decision.chosen_action = "FLASH_LOW";
+  outcome.result = { status: "TAMPERED" };
+  assert.equal(sealed.world.decisions[0].chosen_action, "FLASH_MEDIUM");
+  assert.deepEqual(sealed.world.outcomes[0].result, { status: "COMPLETED" });
+  assert.equal(validateWorld(sealed.world).valid, true);
+
+  // Tampering the canonical event material is detected against event_hashes.
+  const tamperedEventWorld = structuredClone(sealed.world);
+  tamperedEventWorld.events[0].chosen_action = "FLASH_LOW";
+  const eventValidation = validateWorld(tamperedEventWorld);
+  assert.equal(eventValidation.valid, false);
+  assert.match(eventValidation.errors.join("; "), /TAMPERED_WORLD_EVENT_HASH|WORLD_EVENT_HASH/);
+
+  // Tampering only a materialized projection is also detected.
+  const tamperedProjectionWorld = structuredClone(sealed.world);
+  tamperedProjectionWorld.decisions[0].chosen_action = "FLASH_LOW";
+  const projectionValidation = validateWorld(tamperedProjectionWorld);
+  assert.equal(projectionValidation.valid, false);
+  assert.match(
+    projectionValidation.errors.join("; "),
+    /TAMPERED_WORLD_DECISION_HASH|WORLD_DECISION_PROJECTION_MISMATCH/
+  );
+
+  // Clearing a materialized projection is tampering, not an events-only fallback.
+  const clearedProjectionWorld = structuredClone(sealed.world);
+  clearedProjectionWorld.decisions = [];
+  const clearedValidation = validateWorld(clearedProjectionWorld);
+  assert.equal(clearedValidation.valid, false);
+  assert.match(clearedValidation.errors.join("; "), /WORLD_DECISION_PROJECTION_COUNT_MISMATCH/);
+
+  // Filesystem-facing world ids must be safe tokens.
+  const unsafeId = sealWorld({
+    events: [structuredClone(sealed.world.events[0]), structuredClone(sealed.world.events[1])],
+    expectedRuntimeFingerprint: runtimeFp,
+    rootSnapshotId,
+    worldId: "../escape",
+  });
+  assert.equal(unsafeId.status, "WORLD_INVALID");
+  assert.match(unsafeId.errors.join("; "), /world_id must be a safe filename token/);
 });
