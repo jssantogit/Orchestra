@@ -83,7 +83,7 @@ test("factual Evidence Ledger execution deterministically supports or falsifies 
 test("CAUSALLY_VERIFIED requires exact same factual command failing before and passing after a mutation", () => {
   const state = baseState();
   applyFeedbackDeclarations(state, [
-    { type: "HYPOTHESIS", key: "h1", statement: "the scoped mutation fixes the observed failure", falsifier: "post-mutation command still fails" },
+    { type: "HYPOTHESIS", key: "h1", statement: "the scoped mutation fixes the observed failure", falsifier: "post-mutation command still fails", target_paths: ["src/parser.js"] },
     {
       type: "EXPERIMENT",
       key: "ab",
@@ -99,6 +99,12 @@ test("CAUSALLY_VERIFIED requires exact same factual command failing before and p
     { executionId: "exec-before", command: "node --test test/focused.test.js", exitCode: 1, mutationSeq: 1, attempt: 0, confidence: "HIGH" },
     { executionId: "exec-after", command: "node --test test/focused.test.js", exitCode: 0, mutationSeq: 2, attempt: 0, confidence: "HIGH" },
   );
+  state.mutations = [{
+    mutationSeq: 2,
+    paths: ["src/parser.js"],
+    confidence: "HIGH",
+    evidenceSource: "RUNTIME_IDENTITY",
+  }];
 
   reconcileFeedbackPlane(state);
   assert.equal(state.feedbackPlane.feedback[0].status, FEEDBACK_STATUS.CAUSALLY_VERIFIED);
@@ -122,4 +128,23 @@ test("model-only, low-confidence, unknown, or cross-attempt records cannot produ
   assert.equal(state.feedbackPlane.observations.length, 0);
   assert.equal(state.feedbackPlane.feedback[0].status, FEEDBACK_STATUS.UNKNOWN);
   assert.equal(feedbackSummary(state).observations, 0);
+});
+
+test("MUTATION_AB remains supported rather than causal when intervention is confounded", () => {
+  const state = baseState();
+  applyFeedbackDeclarations(state, [
+    { type: "HYPOTHESIS", key: "h1", statement: "target mutation causes recovery", falsifier: "recovery occurs without target mutation", target_paths: ["src/a.js"] },
+    { type: "EXPERIMENT", key: "ab", hypothesis_key: "h1", command: "node --test test/focused.test.js", design: "MUTATION_AB", pass_interpretation: "SUPPORTS", fail_interpretation: "SUPPORTS" },
+  ], actor);
+  state.evidenceLedger.push(
+    { executionId: "red", command: "node --test test/focused.test.js", exitCode: 1, mutationSeq: 1, attempt: 0, confidence: "HIGH" },
+    { executionId: "green", command: "node --test test/focused.test.js", exitCode: 0, mutationSeq: 3, attempt: 0, confidence: "HIGH" },
+  );
+  state.mutations = [
+    { mutationSeq: 2, paths: ["src/a.js"], confidence: "HIGH", evidenceSource: "RUNTIME_IDENTITY" },
+    { mutationSeq: 3, paths: ["src/b.js"], confidence: "HIGH", evidenceSource: "RUNTIME_IDENTITY" },
+  ];
+  reconcileFeedbackPlane(state);
+  assert.equal(state.feedbackPlane.feedback[0].status, FEEDBACK_STATUS.SUPPORTED);
+  assert.equal(state.feedbackPlane.feedback[0].causal_pair, null);
 });
