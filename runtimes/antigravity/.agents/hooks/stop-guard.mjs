@@ -152,11 +152,14 @@ function evaluateTwoKeyRuntimeGate(activeState, roleBindings, repoRoot) {
 
   const currentHead = readGitHead(repoRoot);
   const currentMutationSeq = activeState.mutationSeq || activeState.mutation_seq || 0;
+  const currentAttempt = Number.isInteger(activeState.attempt) ? activeState.attempt : 0;
+  const candidateAttempt = Number.isInteger(review.candidateAttempt) ? review.candidateAttempt : 0;
   if (
     !review.candidateHead ||
     !currentHead ||
     review.candidateHead !== currentHead ||
-    review.candidateMutationSeq !== currentMutationSeq
+    review.candidateMutationSeq !== currentMutationSeq ||
+    candidateAttempt !== currentAttempt
   ) {
     return {
       required: true,
@@ -166,6 +169,8 @@ function evaluateTwoKeyRuntimeGate(activeState, roleBindings, repoRoot) {
       currentHead,
       candidateMutationSeq: review.candidateMutationSeq ?? null,
       currentMutationSeq,
+      candidateAttempt,
+      currentAttempt,
     };
   }
 
@@ -201,12 +206,16 @@ function evaluateTwoKeyRuntimeGate(activeState, roleBindings, repoRoot) {
       return { required: true, satisfied: false, reason: "TWO_KEY_REVIEWER_IDENTITY_NOT_FACTUAL" };
     }
 
+    const resultCandidateAttempt = Number.isInteger(result.candidateAttempt) ? result.candidateAttempt : 0;
+    const resultCompletionAttempt = Number.isInteger(result.completionAttempt) ? result.completionAttempt : 0;
     if (
       result.reviewBatchId !== review.reviewBatchId ||
       result.candidateHead !== review.candidateHead ||
       result.candidateMutationSeq !== review.candidateMutationSeq ||
+      resultCandidateAttempt !== candidateAttempt ||
       result.completionHead !== review.candidateHead ||
-      result.completionMutationSeq !== review.candidateMutationSeq
+      result.completionMutationSeq !== review.candidateMutationSeq ||
+      resultCompletionAttempt !== candidateAttempt
     ) {
       return { required: true, satisfied: false, reason: "TWO_KEY_REVIEW_RESULT_STALE" };
     }
@@ -568,16 +577,22 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         const verdict = extractReviewerVerdict(steps);
         const candidateHead = pending?.reviewCandidateHead || review?.candidateHead || null;
         const candidateMutationSeq = pending?.reviewCandidateMutationSeq ?? review?.candidateMutationSeq ?? null;
+        const candidateAttempt = Number.isInteger(pending?.reviewCandidateAttempt)
+          ? pending.reviewCandidateAttempt
+          : (Number.isInteger(review?.candidateAttempt) ? review.candidateAttempt : 0);
         const reviewBatchId = pending?.reviewBatchId || review?.reviewBatchId || binding.originToolCallId || null;
         const completionHead = readGitHead(repoRoot);
         const completionMutationSeq = activeState.mutationSeq || activeState.mutation_seq || 0;
+        const completionAttempt = Number.isInteger(activeState.attempt) ? activeState.attempt : 0;
 
         if (
           review &&
           reviewBatchId &&
           review.reviewBatchId === reviewBatchId &&
           candidateHead === review.candidateHead &&
-          candidateMutationSeq === review.candidateMutationSeq
+          candidateMutationSeq === review.candidateMutationSeq &&
+          candidateAttempt === (Number.isInteger(review.candidateAttempt) ? review.candidateAttempt : 0) &&
+          completionAttempt === candidateAttempt
         ) {
           if (!review.reviews || typeof review.reviews !== "object") review.reviews = {};
           review.reviews[childConvId] = {
@@ -586,8 +601,10 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
             reviewBatchId,
             candidateHead,
             candidateMutationSeq,
+            candidateAttempt,
             completionHead,
             completionMutationSeq,
+            completionAttempt,
             readOnlyViolation: mutationStepIndices.length > 0,
             completedAt: new Date().toISOString(),
           };
@@ -600,6 +617,8 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
             reviewBatchId,
             candidateHead,
             candidateMutationSeq,
+            candidateAttempt,
+            completionAttempt,
             timestamp: new Date().toISOString(),
           };
         }
