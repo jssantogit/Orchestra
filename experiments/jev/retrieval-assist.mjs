@@ -3,14 +3,13 @@ import { buildCounterfactualPacket } from "./packet-builder.mjs";
 
 export function buildRetrievalAssistedPacket({
   projectRoot,
-  report,
   mandatoryCore,
   candidates,
   ranking,
   env = process.env,
   limits = {},
 } = {}) {
-  const gate = checkRetrievalAssistGate({ projectRoot, report, env });
+  const gate = checkRetrievalAssistGate({ projectRoot, env });
   if (!gate.allowed) {
     return {
       active: false,
