@@ -459,6 +459,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 conversationId: childConvId,
                 confidence: childConfidence,
                 evidenceSource: "CHILD_TRANSCRIPT",
+                delegationKind: binding?.delegationKind || null,
                 transcriptStepIndex: stepIdx,
                 latestMutationStepBeforeValidation,
                 mutationAfterValidation,
@@ -496,11 +497,26 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
           } else if (toolName === "send_message") {
             const msg = String(args.Message || "");
             if (msg.includes("IMPLEMENTATION_COMPLETE")) {
-              if (isWorkerRole(childRole)) {
+              const factualImplementationWorker =
+                isWorkerRole(childRole) &&
+                childConfidence === "HIGH" &&
+                binding?.source === "RUNTIME_IDENTITY" &&
+                binding?.delegationKind === "WORK";
+              if (factualImplementationWorker) {
                 activeState.workerCompletionClaimed = true;
+                activeState.workerCompletionClaimFactual = true;
+                activeState.workerCompletionClaimTimestamp = new Date().toISOString();
+                activeState.workerCompletionClaimIdentity = {
+                  actorId: childConvId,
+                  source: binding.source,
+                  confidence: childConfidence,
+                  delegationKind: binding.delegationKind,
+                };
                 activeState.implementationComplete = true;
                 activeState.handoffObserved = true;
                 activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + Buffer.byteLength(msg, "utf-8");
+              } else {
+                activeState.nonFactualCompletionClaims = (activeState.nonFactualCompletionClaims || 0) + 1;
               }
             }
           }
@@ -1001,7 +1017,7 @@ function main() {
   }
 
   const completionClaimed = activeState.workerCompletionClaimed === true
-    || (activeState.implementationComplete === true && activeState.handoffObserved === true);
+    && activeState.workerCompletionClaimFactual === true;
 
   const noScopeViolation = !activeState.scopeViolation && !activeState.forbiddenAccessDetected;
   const noUnresolvedWrites = (activeState.orchestratorWorkspaceWrites || 0) === 0
