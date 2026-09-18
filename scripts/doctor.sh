@@ -84,6 +84,16 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/dream/exploration-governance.mjs"
   "runtimes/antigravity/.agents/dream/full-exploration.mjs"
   "runtimes/antigravity/.agents/dream/full-exploration-cli.mjs"
+  "experiments/jev/schemas.mjs"
+  "experiments/jev/client.mjs"
+  "experiments/jev/outbound-projector.mjs"
+  "experiments/jev/catalog-builder.mjs"
+  "experiments/jev/candidate-generator.mjs"
+  "experiments/jev/artifact-ranker.mjs"
+  "experiments/jev/shadow-runner.mjs"
+  "experiments/jev/activation-gate.mjs"
+  "experiments/jev/retrieval-assist.mjs"
+  "experiments/jev/jev-cli.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-side-effect-guard.mjs"
   "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs"
@@ -151,6 +161,17 @@ JS_FILES=(
   "runtimes/antigravity/.agents/dream/exploration-governance.mjs"
   "runtimes/antigravity/.agents/dream/full-exploration.mjs"
   "runtimes/antigravity/.agents/dream/full-exploration-cli.mjs"
+  "experiments/jev/schemas.mjs"
+  "experiments/jev/client.mjs"
+  "experiments/jev/outbound-projector.mjs"
+  "experiments/jev/catalog-builder.mjs"
+  "experiments/jev/candidate-generator.mjs"
+  "experiments/jev/artifact-ranker.mjs"
+  "experiments/jev/shadow-runner.mjs"
+  "experiments/jev/activation-gate.mjs"
+  "experiments/jev/retrieval-assist.mjs"
+  "experiments/jev/jev-cli.mjs"
+  "benchmarks/turn-economy/jev-evaluation.mjs"
   "scripts/contamination-check.mjs"
 )
 
@@ -216,6 +237,12 @@ if node --test "${ROOT_DIR}/tests/feedback/feedback-plane.test.mjs" "${ROOT_DIR}
   report_pass "Milestones I-J-K feedback, trust, and full-exploration tests passed"
 else
   report_fail "Milestones I-J-K tests failed"
+fi
+
+if node --test "${ROOT_DIR}/tests/jev/jev-contract.test.mjs" "${ROOT_DIR}/tests/jev/jev-shadow.test.mjs" "${ROOT_DIR}/tests/jev/future-use-oracle.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-jev.test.mjs"; then
+  report_pass "Milestone L Jev semantic shadow tests passed"
+else
+  report_fail "Milestone L Jev semantic shadow tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/cross-runtime/cross-runtime-firewall.test.mjs" >/dev/null 2>&1; then
