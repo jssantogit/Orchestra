@@ -2900,3 +2900,60 @@ test("governance: unresolved actor cannot execute validation shell", () => {
     cleanState();
   }
 });
+
+
+test("governance: child Stop cannot inherit orchestrator acceptance authority", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "stop-parent-orchestrator",
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerValidationObserved: true,
+      workerValidationVerified: true,
+      workerValidationFresh: true,
+      evidenceLedger: [{
+        executionId: "child-stop-evidence",
+        command: "node --test test/example.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "stop-parent-orchestrator",
+      bindings: {
+        "stop-parent-orchestrator": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "unbound-child-stop",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "continue", "A child Stop must not finalize parent acceptance");
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.notEqual(state.acceptanceState, "ACCEPTED");
+  } finally {
+    cleanState();
+  }
+});
