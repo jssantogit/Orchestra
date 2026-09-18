@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { resolve, relative, dirname, basename, sep, isAbsolute } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
@@ -251,16 +251,41 @@ function normalizePath(p) {
 
 function canonicalizeWorkspaceTarget(rawTarget, repoRoot) {
   const raw = String(rawTarget || "").trim().replace(/^["']|["']$/g, "");
-  const absolutePath = resolve(repoRoot, raw);
-  const rel = relative(repoRoot, absolutePath);
+  const lexicalAbsolutePath = resolve(repoRoot, raw);
+
+  let physicalRepoRoot = resolve(repoRoot);
+  try { physicalRepoRoot = realpathSync(repoRoot); } catch {}
+
+  // Resolve symlinks in the deepest existing ancestor, then append any
+  // non-existing suffix. This protects create_file/write_to_file targets too.
+  let ancestor = lexicalAbsolutePath;
+  const suffix = [];
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    suffix.unshift(basename(ancestor));
+    ancestor = parent;
+  }
+
+  let physicalAncestor = ancestor;
+  try {
+    if (existsSync(ancestor)) physicalAncestor = realpathSync(ancestor);
+  } catch {}
+
+  const physicalAbsolutePath = suffix.length > 0
+    ? resolve(physicalAncestor, ...suffix)
+    : physicalAncestor;
+  const rel = relative(physicalRepoRoot, physicalAbsolutePath);
   const outsideWorkspace = Boolean(
     rel === ".." ||
     rel.startsWith(`..${sep}`) ||
     isAbsolute(rel)
   );
+
   return {
     path: normalizePath(rel),
-    absolutePath,
+    absolutePath: physicalAbsolutePath,
+    lexicalAbsolutePath,
     outsideWorkspace,
   };
 }
