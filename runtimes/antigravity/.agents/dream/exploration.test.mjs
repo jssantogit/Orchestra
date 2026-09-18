@@ -14,6 +14,7 @@ import {
   armExplorationCapture,
   buildSandboxedExplorationCommand,
   captureBranchSeedIfArmed,
+  collectExplorationResult,
   enforceExplorationToolBoundary,
   getExplorationBudgetState,
   isSafeExplorationCommand,
@@ -434,6 +435,94 @@ test("MAJOR exploration requires approval captured in the immutable BranchSeed",
     const prepared = prepareExploration({ repoRoot: f.repo, seedPath: approved.seed_path, world });
     assert.equal(prepared.prepared, true, JSON.stringify(prepared));
     branch = prepared.branch_workspace;
+  } finally {
+    rmSync(f.repo, { recursive: true, force: true });
+    if (branch) rmSync(branch, { recursive: true, force: true });
+  }
+});
+
+
+test("collect seals a finished explored sibling with the factual runtime fingerprint", () => {
+  const f = fixture();
+  let branch = null;
+  try {
+    armExplorationCapture({ repoRoot: f.repo, decisionType: "WORKER_TIER" });
+    const captured = captureBranchSeedIfArmed({
+      repoRoot: f.repo,
+      snapshot: f.snapshot,
+      decisionType: "WORKER_TIER",
+      decisionState: f.state,
+      availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+      scopeContract: f.contract,
+      taskDescriptor: f.task,
+      evidenceSummary: f.evidence,
+      runtimeState: { state: "EXECUTING" },
+    });
+    assert.equal(captured.captured, true);
+    const sourceWorld = sealedWorld(f.snapshot, f.state);
+    const prepared = prepareExploration({
+      repoRoot: f.repo,
+      seedPath: captured.seed_path,
+      world: sourceWorld,
+    });
+    assert.equal(prepared.prepared, true, JSON.stringify(prepared));
+    branch = prepared.branch_workspace;
+    assert.equal(prepared.session.runtime_fingerprint, f.snapshot.runtime_fingerprint);
+
+    const exploredDecision = createDreamEvent("DECISION", {
+      schema: DREAM_SCHEMAS.DECISION,
+      decision_id: "decision-e-explored",
+      snapshot_id: f.snapshot.snapshot_id,
+      decision_type: "WORKER_TIER",
+      state: f.state,
+      available_actions: ["FLASH_LOW", "FLASH_MEDIUM"],
+      chosen_action: "FLASH_MEDIUM",
+      policy_source: "EXPLORATION_LAB",
+      actor_identity: "ORCHESTRATOR",
+      created_at: "2026-09-18T00:10:00.000Z",
+      step_idx: 0,
+      branch_ordinal: 0,
+    });
+    const exploredOutcome = createDreamEvent("DECISION_OUTCOME", {
+      schema: DREAM_SCHEMAS.OUTCOME,
+      decision_id: exploredDecision.decision_id,
+      observation_id: "observation-e-explored",
+      result: "SUCCESS",
+      evidence_summary: {
+        tests: "NOT_REQUIRED",
+        typecheck: "NOT_REQUIRED",
+        build: "NOT_REQUIRED",
+        scope_check: "PASS",
+        validation_fresh: false,
+      },
+      retry_state: { retry_remaining: 1 },
+      cost_metrics: { model_calls: 1 },
+      terminal_state: "ACCEPTED",
+      resulting_snapshot_id: null,
+      created_at: "2026-09-18T00:10:01.000Z",
+    });
+    writeFileSync(
+      join(branch, ".agents", "telemetry", "events.jsonl"),
+      JSON.stringify(exploredDecision) + "\n" + JSON.stringify(exploredOutcome) + "\n",
+      "utf8",
+    );
+
+    const sessionPath = join(branch, ".agents", "state", "dream", "exploration-session.json");
+    const finished = JSON.parse(readFileSync(sessionPath, "utf8"));
+    finished.status = "FINISHED";
+    finished.finished_at = "2026-09-18T00:10:02.000Z";
+    writeFileSync(sessionPath, JSON.stringify(finished, null, 2), "utf8");
+
+    const collected = collectExplorationResult({
+      primaryRepoRoot: f.repo,
+      branchWorkspace: branch,
+    });
+    assert.equal(collected.collected, true, JSON.stringify(collected));
+    assert.equal(existsSync(collected.path), true);
+    const stored = JSON.parse(readFileSync(collected.path, "utf8"));
+    assert.equal(stored.root_snapshot_id, f.snapshot.snapshot_id);
+    assert.equal(stored.runtime_fingerprint, f.snapshot.runtime_fingerprint);
+    assert.equal(stored.decisions[0].chosen_action, "FLASH_MEDIUM");
   } finally {
     rmSync(f.repo, { recursive: true, force: true });
     if (branch) rmSync(branch, { recursive: true, force: true });
