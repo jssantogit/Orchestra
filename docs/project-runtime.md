@@ -101,3 +101,7 @@ Local edits/corruption under runtime-owned paths are reported as runtime drift i
 - destructive managed-runtime replacement always has a pre-update/pre-rollback backup;
 - runtime content is content-addressed and drift-detectable;
 - project-owned data remains project-owned even though it lives under `.agents/`.
+
+## Semantic project state
+
+`.agents/semantic` is project-owned and preserved across runtime updates. It may contain local Jev Retrieval Assist approval artifacts; these are never shipped from the Orchestra source runtime.
