@@ -2810,3 +2810,93 @@ test("governance: native write aliases are intercepted, scoped, and tracked", ()
     cleanState();
   }
 });
+
+
+test("governance: state-derived worker role cannot grant mutation authority", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const nativeWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unbound-worker-conv",
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: "src/state-derived.js", CodeContent: "export const bad = true;" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(nativeWrite.decision, "deny");
+    assert.match(nativeWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL|ROLE_IDENTITY_UNRESOLVED/);
+
+    const shellWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unbound-worker-conv",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch src/state-derived-shell.js" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(shellWrite.decision, "deny");
+    assert.match(shellWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL|ROLE_IDENTITY_UNRESOLVED/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: factual worker cannot execute unclassified arbitrary shell", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("factual-arbitrary-shell-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "node scripts/custom-mutation.js" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /WORKER_UNVERIFIED_SHELL_COMMAND/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: unresolved actor cannot execute validation shell", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unknown-validation-actor",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "npm test" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ROLE_IDENTITY_UNRESOLVED/);
+  } finally {
+    cleanState();
+  }
+});
