@@ -5,6 +5,7 @@ import {
   TRUST_CLASSES,
   authorizeToolCapability,
   classifyCommandCapability,
+  classifyToolCapability,
   createContinuationCapsule,
   detectAuthorityInjection,
   trustEnvelope,
