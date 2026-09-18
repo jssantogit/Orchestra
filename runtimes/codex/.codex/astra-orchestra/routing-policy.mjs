@@ -575,22 +575,47 @@ export function consumeRetryBudget(facts = {}) {
 export const createRetryState = createRetryBudget;
 export const nextRetryBudget = consumeRetryBudget;
 
+export const SIDE_EFFECT_CAPABILITIES = Object.freeze([
+  "LOCAL_READ",
+  "LOCAL_WRITE",
+  "PROCESS_EXEC",
+  "NETWORK_READ",
+  "NETWORK_WRITE",
+  "REMOTE_REPO_WRITE",
+  "VCS_REMOTE_WRITE",
+  "CROSS_AGENT_MESSAGE",
+  "PUBLICATION",
+]);
+const SIDE_EFFECT_CAPABILITY_SET = new Set(SIDE_EFFECT_CAPABILITIES);
+
+function normalizeSideEffectCapabilities(value) {
+  const items = Array.isArray(value) ? value : (typeof value === "string" && value.trim() ? [value] : []);
+  return [...new Set(items.map((item) => normalizeToken(item)).filter(Boolean))];
+}
+
 export function createScopeContract(details = {}) {
-  const taskAction = normalizeTaskAction(details) === "UNKNOWN" ? "IMPLEMENT" : normalizeTaskAction(details);
-  const allowedPaths = Array.isArray(details.allowedPaths) ? [...details.allowedPaths] : [];
-  const forbiddenPaths = Array.isArray(details.forbiddenPaths) ? [...details.forbiddenPaths] : [];
+  const nested = details.scopeContract && typeof details.scopeContract === "object"
+    ? details.scopeContract
+    : {};
+  const merged = { ...details, ...nested };
+  const taskAction = normalizeTaskAction(merged) === "UNKNOWN" ? "IMPLEMENT" : normalizeTaskAction(merged);
+  const allowedPaths = Array.isArray(merged.allowedPaths) ? [...merged.allowedPaths] : [];
+  const forbiddenPaths = Array.isArray(merged.forbiddenPaths) ? [...merged.forbiddenPaths] : [];
   return {
     taskAction,
-    taskDomain: normalizeTaskDomain(details),
+    taskDomain: normalizeTaskDomain(merged),
     allowedPaths,
     forbiddenPaths,
-    dependencies: Array.isArray(details.dependencies) ? [...details.dependencies] : [],
-    acceptanceCriteria: Array.isArray(details.acceptanceCriteria) ? [...details.acceptanceCriteria] : [],
-    testsRequired: Array.isArray(details.testsRequired) ? [...details.testsRequired] : [],
-    retryBudget: createRetryBudget(details),
-    stopConditions: Array.isArray(details.stopConditions) ? [...details.stopConditions] : [],
-    doNotChange: Array.isArray(details.doNotChange) ? [...details.doNotChange] : [],
-    criticality: normalizeCriticality(details),
+    dependencies: Array.isArray(merged.dependencies) ? [...merged.dependencies] : [],
+    acceptanceCriteria: Array.isArray(merged.acceptanceCriteria) ? [...merged.acceptanceCriteria] : [],
+    testsRequired: Array.isArray(merged.testsRequired) ? [...merged.testsRequired] : [],
+    retryBudget: createRetryBudget(merged),
+    stopConditions: Array.isArray(merged.stopConditions) ? [...merged.stopConditions] : [],
+    doNotChange: Array.isArray(merged.doNotChange) ? [...merged.doNotChange] : [],
+    sideEffectCapabilities: normalizeSideEffectCapabilities(
+      merged.sideEffectCapabilities ?? merged.side_effect_capabilities ?? merged.capabilities ?? [],
+    ),
+    criticality: normalizeCriticality(merged),
   };
 }
 
@@ -601,13 +626,18 @@ export function validateScopeContract(contractOrFacts = {}, changedPaths = []) {
   const paths = Array.isArray(changedPaths) ? changedPaths : [];
   const allowed = Array.isArray(contract?.allowedPaths) ? contract.allowedPaths : [];
   const forbidden = Array.isArray(contract?.forbiddenPaths) ? contract.forbiddenPaths : [];
+  const sideEffectCapabilities = normalizeSideEffectCapabilities(
+    contract?.sideEffectCapabilities ?? contract?.side_effect_capabilities ?? contract?.capabilities ?? [],
+  );
+  const invalidSideEffectCapabilities = sideEffectCapabilities.filter((capability) => !SIDE_EFFECT_CAPABILITY_SET.has(capability));
   const forbiddenViolations = paths.filter((path) => matchesPath(forbidden, path));
   const outsideAllowed = allowed.length === 0 ? [] : paths.filter((path) => !matchesPath(allowed, path));
   const violations = [...new Set([...forbiddenViolations, ...outsideAllowed])];
   return {
-    valid: violations.length === 0,
+    valid: violations.length === 0 && invalidSideEffectCapabilities.length === 0,
     scopeViolation: violations.length > 0,
     violations,
+    invalidSideEffectCapabilities,
     forbiddenViolations,
     outsideAllowed,
     checkedPaths: paths,
