@@ -381,16 +381,7 @@ export function deriveDecisionState(facts = {}, activeState = {}, evidenceSummar
     validation_fresh: validationFresh,
   });
 
-  const feedbackCounts = safeActiveState.feedbackSummary?.status_counts || safeFacts.feedbackSummary?.status_counts || {};
-  const control = safeActiveState.explorationControl || safeFacts.explorationControl || {};
-  const maxBranches = Number.isInteger(control.max_branches) ? control.max_branches : 0;
-  const branchesStarted = Number.isInteger(control.branches_started) ? control.branches_started : 0;
-  const branchesActive = Number.isInteger(control.branches_active) ? control.branches_active : 0;
-  const branchesRemaining = Number.isInteger(control.branches_remaining)
-    ? control.branches_remaining
-    : Math.max(0, maxBranches - branchesStarted);
-
-  return Object.freeze({
+  const baseState = {
     task_action: taskAction,
     task_domain: taskDomain,
     criticality,
@@ -402,6 +393,27 @@ export function deriveDecisionState(facts = {}, activeState = {}, evidenceSummar
     mutation_seq: mutationSeq,
     post_investigation: postInvestigation,
     evidence,
+  };
+
+  // Milestone K state is intentionally opt-in. Existing A-H decisions retain
+  // their exact historical state shape/hash unless the isolated full
+  // exploration controller explicitly supplies explorationControl.
+  const hasExplorationControl = Boolean(
+    safeActiveState.explorationControl || safeFacts.explorationControl
+  );
+  if (!hasExplorationControl) return Object.freeze(baseState);
+
+  const feedbackCounts = safeActiveState.feedbackSummary?.status_counts || safeFacts.feedbackSummary?.status_counts || {};
+  const control = safeActiveState.explorationControl || safeFacts.explorationControl || {};
+  const maxBranches = Number.isInteger(control.max_branches) ? control.max_branches : 0;
+  const branchesStarted = Number.isInteger(control.branches_started) ? control.branches_started : 0;
+  const branchesActive = Number.isInteger(control.branches_active) ? control.branches_active : 0;
+  const branchesRemaining = Number.isInteger(control.branches_remaining)
+    ? control.branches_remaining
+    : Math.max(0, maxBranches - branchesStarted);
+
+  return Object.freeze({
+    ...baseState,
     exploration_branches_started: branchesStarted,
     exploration_branches_active: branchesActive,
     exploration_branches_remaining: branchesRemaining,
