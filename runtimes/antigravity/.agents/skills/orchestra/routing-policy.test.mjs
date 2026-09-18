@@ -1216,7 +1216,7 @@ test("dream routing parity matrix: preserves 100% routing parity across comprehe
       expectedKind: "worker",
       expectedModel: GEMINI_MODELS.WORKER_LOW,
       expectedDreamDecision: { decisionType: "WORKER_TIER", chosenAction: "FLASH_LOW" },
-      expectedLegalActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+      expectedLegalActions: ["FLASH_LOW"],
     },
     // 4. Normal
     {
