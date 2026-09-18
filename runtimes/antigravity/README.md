@@ -27,7 +27,9 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 - `.agents/hooks.json` — Declares tool lifecycle hooks registered with the Antigravity engine.
 - `.agents/hooks/` — Lifecycle enforcement scripts:
   - `pre-tool-enforce.mjs`: Enforces scope contracts, path boundaries, worker subagent restrictions, large file guard, and polling budgets.
+  - `pre-tool-exploration-guard.mjs`: Milestone E firewall that blocks external/irreversible effects while an isolated exploration session is active.
   - `post-tool-telemetry.mjs`: Captures tool telemetry, execution metrics, mutation sequences, and Evidence Ledger records.
+  - `post-invocation-exploration-guard.mjs`: Enforces the Milestone E model-call/timeout termination budget.
   - `pre-invocation-guard.mjs`: Injects advisory notices, circuit breakers (loop, stall, coordination overhead), and native-tools-first guidance.
   - `stop-guard.mjs`: Blocks model completion claims unless verified evidence is recorded in the Evidence Ledger.
   - `output-gate-runner.mjs`: Truncates large stdout/stderr before entering context, redirecting to artifact files.
@@ -48,7 +50,7 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 - `.agents/state/dream/` — Ephemeral dream correlation files (`pending-decisions/`) and workspace hash cache (`workspace-hash-cache.json`).
 - `.agents/telemetry/` — Telemetry events (`events.jsonl`).
 - `.agents/artifacts/outputs/` — Truncated command outputs (`output-*.log`).
-- `.agents/dream-data/` — Durable offline sealed worlds (`sealed-worlds/*.json`).
+- `.agents/dream-data/` — Durable offline Dream data: sealed worlds plus Milestone E BranchSeeds and exploration sibling index.
 
 ---
 
@@ -87,9 +89,9 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator & Control Plane)
 
 ---
 
-## 5. Dream Layer Foundation & Declarative Static Policy (Milestones A–D)
+## 5. Dream Layer Foundation, Static Policy & Explicit Exploration (Milestones A–E)
 
-The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–D) for offline, model-free recursive policy evaluation and deterministic declarative policy execution:
+The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–E) for offline recursive policy evaluation, deterministic declarative policy execution, and explicitly bounded unknown-branch exploration:
 
 - **Real Online Policy Authority (Milestone D Corrective Closure)**: PreToolUse hook enforces `RECORDED_CHOSEN_ACTION == ACTUAL_EXECUTED_ACTION`. Invocations diverging from policy action are deterministically denied pre-execution without recording false DECISION events.
 - **Three Decision Points**: Strict policy governance over `WORKER_TIER`, `INVESTIGATION_STRATEGY` (enforced gate before implementation), and `RETRY_ACTION` (governs retry path and enforces retry budget monotonicity).
@@ -101,6 +103,8 @@ The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–D
 - **Fail-Open Telemetry**: Telemetry capture errors record diagnostic markers in ephemeral state and fall back safely to static routing without blocking user tasks.
 - **World Sealing & Exact Replay**: Sealed execution worlds are verified against workspace hashes and Evidence Ledger provenance. Exact replay executes strictly offline with zero model calls and returns `UNKNOWN_BRANCH` for unobserved paths.
 - **No Context Contamination**: Historical discovery trajectories never enter online prompt context.
+- **Explicit Exploration Lab (Milestone E)**: An opt-in CLI can capture a prospective BranchSeed and materialize exactly one physical sibling for a deterministic `UNKNOWN_BRANCH`. The lab is isolated from the primary workspace, caps execution at one sibling / two model calls / five minutes, excludes CRITICAL and Human Gate states, requires explicit approval for MAJOR, blocks external side effects, regenerates ephemeral runtime identity, and never auto-promotes policy.
+- **Prospective Physical Seeds**: A-D historical snapshots remain valid for Exact Replay, but physical exploration requires a Milestone E BranchSeed because older DECISION records intentionally do not contain the complete workspace payload/Scope Contract.
 
 For architecture and specification details, see [docs/dream-layer.md](../../docs/dream-layer.md).
 
@@ -117,10 +121,10 @@ node --test runtimes/antigravity/tests/routing-policy.test.mjs
 # Deterministic hook lifecycle test (run with concurrency 1)
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
 
-# Dream Layer Foundation unit and integration tests (63 tests)
+# Dream Layer unit and integration tests, including Milestone E
 npm run test:dream
 # or directly:
-node --test runtimes/antigravity/.agents/dream/dream.test.mjs
+node --test runtimes/antigravity/.agents/dream/dream.test.mjs runtimes/antigravity/.agents/dream/exploration.test.mjs
 ```
 
 ---
