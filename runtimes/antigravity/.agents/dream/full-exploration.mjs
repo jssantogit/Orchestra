@@ -202,6 +202,31 @@ function refreshControl(repoRoot, control) {
     || totalCalls >= FULL_EXPLORATION_LIMITS.max_total_model_calls
     || Date.now() >= Date.parse(control.deadline_at)
   );
+  const pendingDecisionOutcomes = (control.decisions || []).filter((item) => (
+    item.outcome_status === "PENDING"
+    || item.outcome_status === "RECORDED_UNSEALED"
+    || item.outcome_status === "OUTCOME_RECORD_FAILED"
+  )).length;
+  control.pending_decision_outcomes = pendingDecisionOutcomes;
+
+  if (
+    control.status === "STOP_REQUESTED"
+    && active === 0
+    && pendingDecisionOutcomes === 0
+  ) {
+    control.status = "STOPPED";
+    control.stopped_at ||= new Date().toISOString();
+  } else if (
+    control.status === "ACTIVE"
+    && control.budget_exhausted
+    && active === 0
+    && pendingDecisionOutcomes === 0
+  ) {
+    control.status = "STOPPED";
+    control.stop_reason ||= "STATIC_EXPLORATION_BUDGET_EXHAUSTED";
+    control.stopped_at ||= new Date().toISOString();
+  }
+
   control.updated_at = new Date().toISOString();
   return control;
 }
@@ -215,10 +240,12 @@ function persist(repoRoot, control) {
 export function startFullExploration({ repoRoot } = {}) {
   if (!repoRoot) return { started: false, reason: "MISSING_REPO_ROOT" };
   const existing = loadFullExploration(repoRoot);
-  if (existing && existing.status === "ACTIVE" && !existing.budget_exhausted) {
+  if (existing && ["ACTIVE", "STOP_REQUESTED"].includes(existing.status)) {
     return {
       started: false,
-      reason: "FULL_EXPLORATION_ALREADY_ACTIVE",
+      reason: existing.status === "STOP_REQUESTED"
+        ? "FULL_EXPLORATION_STOP_PENDING"
+        : "FULL_EXPLORATION_ALREADY_ACTIVE",
       control: refreshControl(repoRoot, existing),
     };
   }
@@ -804,6 +831,16 @@ export function prepareFullExplorationBranch({
   if (!control) return { prepared: false, reason: "FULL_EXPLORATION_NOT_STARTED" };
   control.repo_root = resolve(repoRoot);
   refreshControl(repoRoot, control);
+  if (control.status !== "ACTIVE") {
+    persist(repoRoot, control);
+    return {
+      prepared: false,
+      reason: control.status === "STOP_REQUESTED"
+        ? "FULL_EXPLORATION_STOP_PENDING"
+        : "FULL_EXPLORATION_NOT_ACTIVE",
+      control,
+    };
+  }
 
   const seed = loadSeed(seedPath);
   if (!seed) return { prepared: false, reason: "BRANCH_SEED_INVALID" };
@@ -1238,13 +1275,23 @@ export function collectFullExplorationBranch({ repoRoot, branchId } = {}) {
 export function stopFullExploration({ repoRoot, reason = "HUMAN_STOP" } = {}) {
   const control = loadFullExploration(repoRoot);
   if (!control) return { stopped: false, reason: "FULL_EXPLORATION_NOT_STARTED" };
-  control.status = "STOPPED";
+  refreshControl(repoRoot, control);
+
   control.stop_reason = String(reason || "HUMAN_STOP");
-  control.stopped_at = new Date().toISOString();
+  control.stop_requested_at = new Date().toISOString();
+  const pending = control.pending_decision_outcomes || 0;
+  if (control.branches_active > 0 || pending > 0) {
+    control.status = "STOP_REQUESTED";
+  } else {
+    control.status = "STOPPED";
+    control.stopped_at = new Date().toISOString();
+  }
   persist(repoRoot, control);
   return {
-    stopped: true,
-    pending_decision_outcomes: (control.decisions || []).filter((item) => item.outcome_status === "PENDING").length,
+    stopped: control.status === "STOPPED",
+    stop_requested: control.status === "STOP_REQUESTED",
+    pending_decision_outcomes: control.pending_decision_outcomes || 0,
+    active_branches: control.branches_active || 0,
     control,
   };
 }
@@ -1262,10 +1309,7 @@ export function fullExplorationStatus({ repoRoot } = {}) {
     branches_remaining: control.branches_remaining,
     total_model_calls: control.total_model_calls,
     budget_exhausted: control.budget_exhausted,
-    pending_decision_outcomes: (control.decisions || []).filter((item) => (
-      item.outcome_status === "PENDING"
-      || item.outcome_status === "RECORDED_UNSEALED"
-    )).length,
+    pending_decision_outcomes: control.pending_decision_outcomes || 0,
     decision_worlds: (control.decisions || [])
       .filter((item) => item.outcome_world_id)
       .map((item) => item.outcome_world_id),
