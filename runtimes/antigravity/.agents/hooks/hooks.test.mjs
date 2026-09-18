@@ -2072,6 +2072,79 @@ test("pre-tool hook: ORCHESTRATOR writing to control plane .agents/state/foo.jso
   }
 });
 
+test("pre-tool hook: ambiguous identical workers fail closed instead of FIFO binding", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "ambiguous-workers",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "ambiguous-parent",
+      bindings: {
+        "ambiguous-parent": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [
+        {
+          seq: 1,
+          parentConversationId: "ambiguous-parent",
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          model: "gemini-3.8-flash-medium",
+          delegationKind: "WORK",
+          consumed: false,
+          decisionCorrelationKey: "corr-worker-a",
+        },
+        {
+          seq: 2,
+          parentConversationId: "ambiguous-parent",
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          model: "gemini-3.8-flash-medium",
+          delegationKind: "WORK",
+          consumed: false,
+          decisionCorrelationKey: "corr-worker-b",
+        },
+      ],
+    }, null, 2), "utf-8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "ambiguous-child",
+        parentConversationId: "ambiguous-parent",
+        toolCall: {
+          id: "ambiguous-write",
+          name: "write_to_file",
+          args: { TargetFile: "src/ambiguous.ts", CodeContent: "export const x = 1;" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ROLE_IDENTITY_UNRESOLVED/);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf-8"));
+    assert.equal(bindings.pendingSubagents.filter(p => p.consumed).length, 0, "Ambiguous workers must not be consumed FIFO");
+    assert.equal(bindings.bindings["ambiguous-child"], undefined, "Ambiguous child must not receive a guessed worker binding");
+  } finally {
+    cleanState();
+  }
+});
+
 test("pre-tool hook: two pending subagents are consumed sequentially and cannot be reused", () => {
   cleanState();
   try {
