@@ -301,7 +301,8 @@ Milestone E adds a deliberately **opt-in, local/offline** mechanism for observin
 - The immutable budget is: **1 sibling branch**, **2 model calls**, **5 minutes**.
 - `NORMAL` decisions are eligible by default. `MAJOR` requires explicit approval at capture time (`--approve-major`). `CRITICAL` and `HUMAN_GATE` states are ineligible.
 - External or irreversible effects are blocked by a dedicated `PreToolUse` exploration firewall. Shell commands are fail-closed to a small local/read-only validation allowlist.
-- `PostInvocation` terminates the exploration loop when the second model call completes or the deadline is exhausted.
+- The exploration runner accepts only Antigravity CLI executables (`agy` / `antigravity`), forces the CLI `--sandbox` override, and rejects explicit permission/sandbox bypass flags.
+- `PostInvocation` terminates the exploration loop when the second model call completes or the deadline is exhausted; the Stop Guard independently refuses to reopen an exhausted exploration loop.
 - Conversation IDs, execution IDs, correlations, role bindings, locks, telemetry identity, PIDs, ports, and timestamps are not cloned from the factual run.
 - The first explored decision remains causally attached to the factual source `snapshot_id`; regenerated ephemeral runtime identity does not redefine the historical root.
 - The primary workspace manifest is checked again before collection. Any drift rejects collection.
@@ -341,7 +342,8 @@ npm run dream:explore -- prepare \
   --world /path/to/world.json \
   --seed /path/to/.agents/dream-data/branch-seeds/<seed-id>/branch-seed.json
 
-# 3. Run Antigravity (or a test harness) only inside the returned branch_workspace.
+# 3. Run Antigravity only inside the returned branch_workspace.
+# The wrapper injects --sandbox itself and rejects bypass flags.
 npm run dream:explore -- run --workspace <branch_workspace> -- agy
 
 # 4. Seal and collect the explored factual world after the run.
