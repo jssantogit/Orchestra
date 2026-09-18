@@ -4,7 +4,10 @@ import { resolve } from "node:path";
 
 import { JevClient, createFakeJevClient } from "./client.mjs";
 import { buildCatalog } from "./catalog-builder.mjs";
-import { runArtifactRankingShadow, readShadowTelemetry } from "./shadow-runner.mjs";
+import {
+  runArtifactRankingShadow,
+  labelShadowRun,
+} from "./shadow-runner.mjs";
 import { annotateDreamDirectory } from "./dream-analyzer.mjs";
 import {
   createProjectEvaluationReport,
@@ -34,6 +37,7 @@ function usage() {
 catalog  --repo <path>
 shadow   --repo <path> --goal <text> [--live] [--task-category lookup]
 dream    --repo <path> [--live]
+label    --repo <path> --shadow-id <id> --future-events <events.json> [--critical-ids id1,id2]
 evaluate --repo <path>
 approve  --repo <path> [--report <evaluation.json>] [--note text]
 
@@ -77,6 +81,23 @@ if (command === "catalog") {
   const live = parsed.live === true;
   const client = live ? new JevClient() : createFakeJevClient(() => 0.5);
   print(await annotateDreamDirectory({ projectRoot: repo, client, live }));
+} else if (command === "label") {
+  if (!parsed["shadow-id"]) throw new Error("--shadow-id is required");
+  if (!parsed["future-events"] || !existsSync(resolve(parsed["future-events"]))) {
+    throw new Error("--future-events JSON file is required");
+  }
+  const events = json(parsed["future-events"]);
+  if (!Array.isArray(events)) throw new Error("--future-events must contain a JSON array");
+  const criticalIds = String(parsed["critical-ids"] || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  print(labelShadowRun({
+    projectRoot: repo,
+    shadowId: parsed["shadow-id"],
+    futureEvents: events,
+    criticalIds,
+  }));
 } else if (command === "evaluate") {
   const report = createProjectEvaluationReport(repo);
   print({ report, path: writeEvaluationReport(repo, report) });
