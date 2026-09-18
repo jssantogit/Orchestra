@@ -40,6 +40,9 @@ import {
 import {
   buildSnapshot,
 } from "../../runtimes/antigravity/.agents/dream/snapshot.mjs";
+import {
+  recordDecision,
+} from "../../runtimes/antigravity/.agents/dream/decision-recorder.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
@@ -1184,19 +1187,39 @@ test("ARCH-019: Factual Investigator Completion Boundary (Valid & Adversarial)",
       post_investigation: false,
     }, null, 2), "utf-8");
 
-    writeFileSync(".agents/state/dream/pending-decisions/" + corr + ".json", JSON.stringify({
-      decision_id: "dec-019",
-      conversation_id: parent,
-      step_idx: 4,
-      tool_call_id: toolCallId,
-    }, null, 2), "utf-8");
+    const decision019 = recordDecision({
+      repoRoot,
+      correlationKey: corr,
+      decision: {
+        decision_id: "dec-019",
+        snapshot_id: "sha256:1919191919191919191919191919191919191919191919191919191919191919",
+        decision_type: "INVESTIGATION_STRATEGY",
+        state: {
+          task_action: "IMPLEMENT",
+          criticality: "NORMAL",
+          mutation_seq: 0,
+          post_investigation: false,
+        },
+        available_actions: ["IMPLEMENT_DIRECT", "INVESTIGATE_FIRST"],
+        chosen_action: "INVESTIGATE_FIRST",
+        policy_source: "STATIC_POLICY_V1",
+        actor_identity: "ORCHESTRATOR",
+        conversation_id: parent,
+        step_idx: 4,
+        tool_call_id: toolCallId,
+        branch_ordinal: 0,
+      },
+    });
+    assert.equal(decision019.recorded, true, "ARCH-019 fixture must use an integrity-valid pending Dream decision");
 
     const bindings = {
       mainConversationId: parent,
       bindings: {
         [parent]: {
+          conversationId: parent,
           role: "ORCHESTRATOR",
           profile: "flash-orchestrator",
+          confidence: "HIGH",
           source: "CONVERSATION_BOUND_IDENTITY",
         },
         [child]: {
@@ -1425,6 +1448,32 @@ test("ARCH-021: IMPLEMENT_DIRECT Decision Completes With Its Worker", () => {
     }, null, 2), "utf-8");
 
     const child = "arch-021-child";
+    const parent = "arch-021-parent";
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: parent,
+      bindings: {
+        [parent]: {
+          conversationId: parent,
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        [child]: {
+          conversationId: child,
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          parentConversationId: parent,
+          delegationKind: "WORK",
+          attempt: 0,
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf-8");
     const writeCall = {
       id: "call-021-write",
       name: "write_to_file",
@@ -1450,23 +1499,7 @@ test("ARCH-021: IMPLEMENT_DIRECT Decision Completes With Its Worker", () => {
     assert.ok(decision);
     assert.equal(events.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === decision.decision_id).length, 0);
 
-    const bindings = {
-      mainConversationId: "arch-021-parent",
-      bindings: {
-        [child]: {
-          conversationId: child,
-          role: "WORKER",
-          profile: "flash-medium-worker",
-          parentConversationId: "arch-021-parent",
-          delegationKind: "WORK",
-          confidence: "HIGH",
-          source: "RUNTIME_IDENTITY",
-          consumed: true,
-        },
-      },
-      conversations: {},
-      pendingSubagents: [],
-    };
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf-8"));
     bindings.conversations[child] = bindings.bindings[child];
     writeFileSync(".agents/state/role-bindings.json", JSON.stringify(bindings, null, 2), "utf-8");
 
