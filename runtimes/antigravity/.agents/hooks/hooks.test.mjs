@@ -1994,8 +1994,8 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
       modelName: "gemini-3.8-flash-low",
       toolCall: {
         id: "call-child-provisional",
-        name: "write_to_file",
-        args: { TargetFile: resolve("src/formatter.js") },
+        name: "view_file",
+        args: { AbsolutePath: resolve("package.json") },
       },
     });
     const provisionalOutput = JSON.parse(execFileSync("node", [preToolScript], { input: provisionalInput }));
@@ -2020,7 +2020,15 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
     }, null, 2), "utf-8");
 
     const factualOutput = JSON.parse(execFileSync("node", [preToolScript], {
-      input: noProofInput,
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        toolCall: {
+          id: "call-child-factual",
+          name: "view_file",
+          args: { AbsolutePath: resolve("package.json") },
+        },
+      }),
       env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
     }));
     assert.equal(factualOutput.decision, "allow");
