@@ -136,7 +136,7 @@ export function authorizeToolCapability({
 
 function evidenceRefs(activeState = {}) {
   const ledger = Array.isArray(activeState.evidenceLedger) ? activeState.evidenceLedger : [];
-  return ledger.map((ev) => ({
+  return ledger.slice(-20).map((ev) => ({
     id: ev.id || ev.evidenceId || ev.executionId || null,
     kind: ev.kind || ev.type || null,
     result: ev.result || ev.status || (typeof ev.exitCode === "number" ? (ev.exitCode === 0 ? "PASS" : "FAIL") : null),
@@ -146,7 +146,7 @@ function evidenceRefs(activeState = {}) {
 
 function authorityRoleBindings(roleBindings = {}) {
   const source = roleBindings.bindings || roleBindings.conversations || {};
-  return Object.fromEntries(Object.entries(source).map(([id, record]) => [id, {
+  return Object.fromEntries(Object.entries(source).sort(([a], [b]) => a.localeCompare(b)).slice(-16).map(([id, record]) => [id, {
     role: record?.role || null,
     profile: record?.profile || null,
     model: record?.model || null,
@@ -186,7 +186,9 @@ export function createContinuationCapsule({
       side_effect_capabilities: [...normalizedCaps(contract)].sort(),
     },
     identities: authorityRoleBindings(roleBindings),
+    identity_count: Object.keys(roleBindings.bindings || roleBindings.conversations || {}).length,
     evidence_refs: evidenceRefs(activeState),
+    evidence_ref_count: Array.isArray(activeState.evidenceLedger) ? activeState.evidenceLedger.length : 0,
     pending: {
       policy_requirement: activeState.pendingPolicyRequirement ? stable(activeState.pendingPolicyRequirement) : null,
       investigation_in_flight: activeState.investigationInFlight ? stable(activeState.investigationInFlight) : null,
