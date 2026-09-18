@@ -234,6 +234,7 @@ test("malformed or post-approval shadow telemetry invalidates Retrieval Assist",
       const shadowId = `s-${i}`;
       lines.push(JSON.stringify({
         schema: "orchestra.jev-shadow-report.v1",
+        authority: "NONE",
         shadow_id: shadowId,
         task_category: ["status", "lookup", "simple", "multi", "investigation"][i % 5],
         jev_calls: 1,
@@ -244,6 +245,8 @@ test("malformed or post-approval shadow telemetry invalidates Retrieval Assist",
       }));
       lines.push(JSON.stringify({
         schema: "orchestra.jev-shadow-label.v1",
+        authority: "NONE",
+        label_source: "PROJECT_RUNTIME_TELEMETRY",
         shadow_id: shadowId,
         future_use_recall_at_k: 1,
         future_use_precision_at_k: 0.8,
@@ -297,6 +300,7 @@ test("retrieval assist activates only with eligible report + matching human appr
       const shadowId = `shadow-${i}`;
       lines.push({
         schema: "orchestra.jev-shadow-report.v1",
+        authority: "NONE",
         shadow_id: shadowId,
         task_category: ["status", "lookup", "simple", "multi", "investigation"][i % 5],
         jev_calls: 1,
@@ -315,6 +319,8 @@ test("retrieval assist activates only with eligible report + matching human appr
       });
       lines.push({
         schema: "orchestra.jev-shadow-label.v1",
+        authority: "NONE",
+        label_source: "PROJECT_RUNTIME_TELEMETRY",
         shadow_id: shadowId,
         future_event_count: 2,
         future_used_total: 2,
