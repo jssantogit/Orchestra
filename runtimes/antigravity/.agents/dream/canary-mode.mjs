@@ -1283,18 +1283,24 @@ export function promoteCanary({
     return { promoted: false, reason: "EXPLICIT_HUMAN_PROMOTION_REQUIRED" };
   }
 
-  const reportResult = loadCanaryReport(repoRoot, canaryReportId);
+  const reportResult = loadPromotionReport(repoRoot, canaryReportId);
   if (!reportResult.ok) return { promoted: false, ...reportResult };
   const report = reportResult.report;
 
   const current = loadCanaryConfig(repoRoot);
+  const currentStage = current.active ? currentCanaryRolloutStage(current.config) : null;
   if (
     !current.active
+    || !currentStage
+    || !isFinalCanaryRolloutStage(current.config)
     || current.config.canary_session_id !== report.canary_session_id
     || current.config.candidate_policy_id !== report.candidate_policy_id
     || current.config.baseline_policy_id !== report.baseline_policy_id
+    || current.config.traffic_percent !== report.traffic_percent
+    || currentStage.index !== report.rollout_stage_index
+    || rolloutGeneration(current.config) !== report.rollout_generation
   ) {
-    return { promoted: false, reason: "CANARY_SESSION_NOT_ACTIVE_FOR_REPORT" };
+    return { promoted: false, reason: "CANARY_SESSION_NOT_ACTIVE_FOR_FINAL_REPORT" };
   }
 
   const runtime = loadRuntimePolicy(repoRoot);
@@ -1331,6 +1337,9 @@ export function promoteCanary({
     status: "PROMOTED",
     promoted_policy_id: candidate.policy.policy_id,
     canary_report_id: report.report_id,
+    final_rollout_stage_index: currentStage.index,
+    final_traffic_percent: currentStage.traffic_percent,
+    final_rollout_generation: rolloutGeneration(current.config),
     promoted_at: new Date().toISOString(),
   };
   promotedSession.config_hash = configHash(promotedSession);
@@ -1347,6 +1356,9 @@ export function promoteCanary({
     policy_id: candidate.policy.policy_id,
     canary_report_id: report.report_id,
     pointer_hash: activation.pointer.pointer_hash,
+    rollout_stage_index: currentStage.index,
+    traffic_percent: currentStage.traffic_percent,
+    rollout_generation: rolloutGeneration(current.config),
     approved_by: "HUMAN_EXPLICIT_CLI",
   });
 
