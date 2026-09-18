@@ -4396,3 +4396,58 @@ test("governance: stop guard cannot finalize with corrupted authority state", ()
     cleanState();
   }
 });
+
+
+test("governance: post-tool telemetry never overwrites corrupted authority state", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    const brokenState = "{broken-post-state";
+    writeFileSync(".agents/state/active-state.json", brokenState, "utf8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "post-corrupt-parent",
+        toolCall: { name: "view_file", args: { AbsolutePath: resolve("README.md") } },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    assert.equal(readFileSync(".agents/state/active-state.json", "utf8"), brokenState);
+    let events = readFileSync(".agents/telemetry/events.jsonl", "utf8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((e) =>
+      e.type === "GOVERNANCE_STATE_CORRUPT" &&
+      e.phase === "POST_TOOL" &&
+      e.reason === "ACTIVE_STATE_MALFORMED_JSON"
+    ));
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "post-corrupt-parent",
+    }), "utf8");
+    const brokenBindings = "{broken-post-bindings";
+    writeFileSync(".agents/state/role-bindings.json", brokenBindings, "utf8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "post-corrupt-parent",
+        toolCall: { name: "view_file", args: { AbsolutePath: resolve("README.md") } },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    assert.equal(readFileSync(".agents/state/role-bindings.json", "utf8"), brokenBindings);
+    events = readFileSync(".agents/telemetry/events.jsonl", "utf8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((e) =>
+      e.type === "GOVERNANCE_STATE_CORRUPT" &&
+      e.phase === "POST_TOOL" &&
+      e.reason === "ROLE_BINDINGS_MALFORMED_JSON"
+    ));
+  } finally {
+    cleanState();
+  }
+});
