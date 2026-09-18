@@ -4241,6 +4241,12 @@ test("governance: WORK delegation preserves contract criticality for later Two-K
       allowedPaths: ["src/**"],
       forbiddenPaths: [".agents/**"],
       testsRequired: ["npm test"],
+      acceptanceCriteria: ["behavior preserved", "no regression"],
+      retryBudget: { maxAttempts: 2, attempt: 0, remainingAttempts: 2 },
+      stopConditions: ["tests pass", "scope clean"],
+      dependencies: ["src/dependency.js"],
+      implementationPlan: ["edit implementation", "run focused test"],
+      rootCauseDecision: "known-root-cause",
       criticality: "CRITICAL",
       createdAt: "2026-09-18T00:00:00.000Z",
     };
@@ -4276,6 +4282,12 @@ test("governance: WORK delegation preserves contract criticality for later Two-K
     const contract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf8"));
     assert.equal(state.scopeContract.criticality, "CRITICAL");
     assert.equal(contract.criticality, "CRITICAL");
+    assert.deepEqual(contract.acceptanceCriteria, originalContract.acceptanceCriteria);
+    assert.deepEqual(contract.retryBudget, originalContract.retryBudget);
+    assert.deepEqual(contract.stopConditions, originalContract.stopConditions);
+    assert.deepEqual(contract.dependencies, originalContract.dependencies);
+    assert.deepEqual(contract.implementationPlan, originalContract.implementationPlan);
+    assert.equal(contract.rootCauseDecision, originalContract.rootCauseDecision);
   } finally {
     cleanState();
   }
