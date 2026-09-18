@@ -404,7 +404,11 @@ export function evaluateTrajectory(trajectory) {
     trajectory.status === REPLAY_STATUS.UNKNOWN_BRANCH ||
       trajectory.terminal_state === "UNKNOWN_BRANCH" ||
       trajectory.has_unknown_branch === true ||
-      steps.some((s) => s.status === REPLAY_STATUS.UNKNOWN_BRANCH)
+      trajectory.result?.attributable === false ||
+      steps.some((s) => (
+        s.status === REPLAY_STATUS.UNKNOWN_BRANCH
+        || (s.result && typeof s.result === "object" && s.result.attributable === false)
+      ))
   );
 
   const terminalState = isUnknownBranch ? "UNKNOWN_BRANCH" : rawTerminalState;
