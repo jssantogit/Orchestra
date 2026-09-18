@@ -20,7 +20,10 @@
       "const": "orchestra.world.v1"
     },
     "world_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "root_snapshot_id": {
       "type": "string",
@@ -28,8 +31,13 @@
     },
     "runtime_fingerprint": {
       "oneOf": [
-        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-        { "type": "object" }
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        {
+          "type": "object"
+        }
       ]
     },
     "event_hashes": {
@@ -59,6 +67,18 @@
     },
     "created_at": {
       "type": "string"
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "outcomes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
     }
   },
   "additionalProperties": false
