@@ -2002,12 +2002,11 @@ test("pre-tool hook: pending uniqueness is not factual identity; brain record up
     assert.equal(provisionalOutput.decision, "allow");
 
     bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.bindings["child-conv-42"].role, "WORKER");
-    assert.equal(bindings.bindings["child-conv-42"].confidence, "MEDIUM");
-    assert.equal(bindings.bindings["child-conv-42"].source, "HOOK_PAYLOAD_CORRELATION");
+    assert.equal(bindings.bindings["child-conv-42"], undefined, "Provisional hook metadata must not create durable child identity");
+    assert.equal(bindings.pendingSubagents[0].consumed, false, "Provisional authorization must not consume the pending factual identity slot");
 
-    // The factual Antigravity brain record for the exact child upgrades the same
-    // binding to HIGH/RUNTIME_IDENTITY.
+    // The factual Antigravity brain record for the exact child creates the
+    // durable HIGH/RUNTIME_IDENTITY binding.
     const subagentsDir = resolve(brainBaseDir, "parent-conv-1/.system_generated/subagents");
     mkdirSync(subagentsDir, { recursive: true });
     writeFileSync(resolve(subagentsDir, "child-conv-42.json"), JSON.stringify({
@@ -2310,16 +2309,15 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
     assert.equal(revBOutput.decision, "deny");
     assert(revBOutput.reason.includes("Reviewer is strictly read-only"));
 
-    // Verify bindings confirm both received REVIEWER role
+    // Provisional reviewer hook metadata is sufficient to apply the conservative
+    // read-only policy, but must not create durable identity or consume a factual slot.
     const bindingsPath = resolve(".agents/state/role-bindings.json");
     const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.bindings["rev-conv-a"].role, "REVIEWER");
-    assert.equal(bindings.bindings["rev-conv-b"].role, "REVIEWER");
-    assert.equal(bindings.bindings["rev-conv-a"].confidence, "MEDIUM");
-    assert.equal(bindings.bindings["rev-conv-b"].confidence, "MEDIUM");
-    assert.equal(bindings.bindings["rev-conv-a"].source, "HOOK_PAYLOAD_CORRELATION");
-    assert.equal(bindings.bindings["rev-conv-b"].source, "HOOK_PAYLOAD_CORRELATION");
-    assert.equal(bindings.bindings["rev-conv-a"].slotAssignment, "SYMMETRIC_REVIEW_SLOT");
+    assert.equal(bindings.bindings["rev-conv-a"], undefined);
+    assert.equal(bindings.bindings["rev-conv-b"], undefined);
+    assert.equal(bindings.pendingSubagents.length, 2);
+    assert.equal(bindings.pendingSubagents[0].consumed, false);
+    assert.equal(bindings.pendingSubagents[1].consumed, false);
   } finally {
     cleanState();
   }
