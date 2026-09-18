@@ -6,7 +6,11 @@ import { join, resolve } from "node:path";
 
 import { createFakeJevClient } from "../../experiments/jev/client.mjs";
 import { buildCatalog } from "../../experiments/jev/catalog-builder.mjs";
-import { runArtifactRankingShadow, readShadowTelemetry } from "../../experiments/jev/shadow-runner.mjs";
+import {
+  runArtifactRankingShadow,
+  readShadowTelemetry,
+  labelShadowRun,
+} from "../../experiments/jev/shadow-runner.mjs";
 import { scoreRedundancyShadow } from "../../experiments/jev/redundancy-shadow.mjs";
 import { annotateDreamDirectory } from "../../experiments/jev/dream-analyzer.mjs";
 
@@ -75,6 +79,39 @@ test("artifact ranking shadow writes telemetry and never changes packet behavior
     assert.equal(telemetry.length, 2);
     assert.equal(telemetry[0].schema, "orchestra.jev-shadow-report.v1");
     assert.equal(telemetry[1].schema, "orchestra.jev-shadow-label.v1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a shadow prediction is append-only and cannot be labeled twice", async () => {
+  const root = fixture();
+  try {
+    const client = createFakeJevClient(() => 0.5);
+    const result = await runArtifactRankingShadow({
+      projectRoot: root,
+      client,
+      goal: "fix auth test",
+      task: { task_id: "task-shadow", task_category: "investigation" },
+      live: true,
+      env: { ORCHESTRA_JEV_ALLOW_PROJECT_EGRESS: "1" },
+      mandatoryCore: { goal: "fix auth test" },
+    });
+    assert.equal(result.label, null);
+    const label = labelShadowRun({
+      projectRoot: root,
+      shadowId: result.event.shadow_id,
+      futureEvents: [{ type: "ACCEPTANCE", evidenceId: "ev-1" }],
+    });
+    assert.equal(label.schema, "orchestra.jev-shadow-label.v1");
+    assert.throws(
+      () => labelShadowRun({
+        projectRoot: root,
+        shadowId: result.event.shadow_id,
+        futureEvents: [{ type: "ACCEPTANCE", evidenceId: "ev-1" }],
+      }),
+      /JEV_SHADOW_ALREADY_LABELED/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
