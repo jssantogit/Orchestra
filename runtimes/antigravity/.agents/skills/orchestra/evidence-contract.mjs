@@ -193,12 +193,51 @@ function localCommandMatches(requirement, ev) {
   return cmd.includes(req) || req.includes(cmd);
 }
 
-function validLocalCommandProvenance(ev) {
-  const role = String(ev.actorRole || "").toUpperCase();
-  const worker = ["WORKER", "FLASH", "FLASH_WORKER", "FLASH_MEDIUM_WORKER", "FLASH_LOW_WORKER"].includes(role);
-  return worker
-    && ev.confidence === "HIGH"
-    && (!ev.delegationKind || ev.delegationKind === "WORK");
+function localProducer(ev) {
+  return {
+    role: String(ev.producer?.role || ev.actorRole || "").toUpperCase(),
+    confidence: ev.producer?.confidence || ev.confidence || "LOW",
+    source: ev.producer?.source || ev.evidenceSource || "UNRESOLVED",
+    delegationKind: ev.producer?.delegationKind || ev.delegationKind || null,
+    parentConversationId: ev.producer?.parentConversationId || ev.parentConversationId || null,
+  };
+}
+
+function activeTaskId(activeState = {}) {
+  return activeState.taskId || activeState.taskKey || null;
+}
+
+function localEvidenceTaskMatches(ev, activeState) {
+  const taskId = activeTaskId(activeState);
+  if (!taskId) return true;
+  return ev.binding?.taskId === taskId;
+}
+
+function localEvidenceCommitMatches(ev, activeState) {
+  const candidateHead = activeState.evidenceCandidateHead || null;
+  const evidenceHead = ev.binding?.commitSha || null;
+  // Dirty-worktree evidence may be commit-unbound and remains governed by
+  // exact task/attempt/mutation freshness. A concrete old commit never matches.
+  if (!candidateHead || !evidenceHead) return true;
+  return candidateHead === evidenceHead;
+}
+
+function validLocalCommandProvenance(ev, activeState) {
+  const producer = localProducer(ev);
+  const workerRole = ["WORKER", "FLASH", "FLASH_WORKER", "FLASH_MEDIUM_WORKER", "FLASH_LOW_WORKER", "VALIDATOR"].includes(producer.role);
+  const delegatedValidation = workerRole
+    && ["WORK", "VALIDATION"].includes(String(producer.delegationKind || "WORK").toUpperCase())
+    && producer.source === "RUNTIME_IDENTITY";
+  const parentValidation = ["ORCHESTRATOR", "FLASH_ORCHESTRATOR"].includes(producer.role)
+    && ["RUNTIME_IDENTITY", "CONVERSATION_BOUND_IDENTITY"].includes(producer.source)
+    && !producer.delegationKind;
+  const parentMatches = !producer.parentConversationId
+    || !activeState.conversationId
+    || producer.parentConversationId === activeState.conversationId;
+
+  return producer.confidence === "HIGH"
+    && parentMatches
+    && (delegatedValidation || parentValidation);
 }
 
 function validRuntimeProvenance(ev) {
@@ -241,11 +280,17 @@ function evaluateRequirement(requirement, ledger, activeState) {
       if (ev.evidenceSource === "CHILD_TRANSCRIPT" && (ev.mutationAfterValidation === true || ev.fresh === false)) {
         return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "CHILD_MUTATION_AFTER_VALIDATION", evidence: ev, requirement };
       }
+      if (!localEvidenceTaskMatches(ev, activeState)) {
+        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: ev.binding?.taskId ? "TASK_ID_MISMATCH" : "TASK_BINDING_MISSING", evidence: ev, requirement };
+      }
       if (!mutationMatches(ev, activeState)) {
         return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "MUTATION_SEQ_MISMATCH", evidence: ev, requirement };
       }
-      if (!validLocalCommandProvenance(ev)) {
-        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "MISSING_ACTIONABLE", reason: "LOCAL_EVIDENCE_NOT_FACTUAL_WORKER", evidence: ev, requirement };
+      if (!localEvidenceCommitMatches(ev, activeState)) {
+        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "STALE", reason: "COMMIT_SHA_MISMATCH", evidence: ev, requirement };
+      }
+      if (!validLocalCommandProvenance(ev, activeState)) {
+        return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "MISSING_ACTIONABLE", reason: "LOCAL_EVIDENCE_PRODUCER_NOT_AUTHORIZED", evidence: ev, requirement };
       }
       if (ev.exitCode !== 0 || (Number(ev.failed || 0) > 0)) {
         return { id: requirement.id, class: requirement.class, kind: requirement.kind, status: "FAILED", reason: "LOCAL_COMMAND_FAILED", evidence: ev, requirement };
