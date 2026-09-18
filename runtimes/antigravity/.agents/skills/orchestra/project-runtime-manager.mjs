@@ -144,6 +144,7 @@ function copyPath(sourceBase, targetBase, relPath) {
     recursive: true,
     force: true,
     dereference: false,
+    verbatimSymlinks: true,
     preserveTimestamps: true,
   });
 }
