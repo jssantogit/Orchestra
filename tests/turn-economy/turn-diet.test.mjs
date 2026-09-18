@@ -204,6 +204,14 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
     state: "EVIDENCE_READY",
     implementationComplete: true,
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "accept-worker-1",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     workerValidationObserved: true,
     workerValidationVerified: true,
     workerValidationFresh: true,
@@ -215,6 +223,8 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
         mutationSeq: 0,
         actorRole: "WORKER",
         confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         timestamp: new Date().toISOString(),
       },
     ],
@@ -223,7 +233,13 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
     },
   }));
 
@@ -279,6 +295,14 @@ test("turn-diet: fresh worker evidence in Evidence Ledger avoids duplicate accep
     state: "EVIDENCE_READY",
     implementationComplete: true,
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "accept-worker-2",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     mutationSeq: 2,
     mutations: [
       { path: "src/formatter.js", seq: 1 },
@@ -295,6 +319,8 @@ test("turn-diet: fresh worker evidence in Evidence Ledger avoids duplicate accep
         mutationSeq: 2,
         actorRole: "WORKER",
         confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         timestamp: new Date().toISOString(),
       },
     ],
@@ -303,7 +329,13 @@ test("turn-diet: fresh worker evidence in Evidence Ledger avoids duplicate accep
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
     },
   }));
 
@@ -470,6 +502,14 @@ test("turn-diet: regression 31: Valid Success — exitCode 0, fresh, worker-auth
     state: "DELEGATED",
     implementationComplete: true,
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "accept-worker-3",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     taskAction: "IMPLEMENT",
     mutationSeq: 1,
     mutations: [
@@ -486,6 +526,8 @@ test("turn-diet: regression 31: Valid Success — exitCode 0, fresh, worker-auth
         mutationSeq: 1,
         actorRole: "WORKER",
         confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         timestamp: new Date().toISOString(),
       },
     ],
@@ -493,7 +535,13 @@ test("turn-diet: regression 31: Valid Success — exitCode 0, fresh, worker-auth
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
     },
   }));
 
@@ -2065,8 +2113,22 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-acceptance-conv",
     bindings: {
-      "orch-acceptance-conv": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
-      "child-worker-conv": { role: "WORKER", profile: "flash-low-worker", confidence: "HIGH" },
+      "orch-acceptance-conv": {
+        conversationId: "orch-acceptance-conv",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-conv": {
+        conversationId: "child-worker-conv",
+        role: "WORKER",
+        profile: "flash-low-worker", confidence: "HIGH",
+        parentConversationId: "orch-acceptance-conv",
+        delegationKind: "WORK",
+        attempt: 0,
+        source: "RUNTIME_IDENTITY",
+      },
     },
   }));
 
@@ -2075,6 +2137,14 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
     conversationId: "orch-acceptance-conv",
     state: "DELEGATED",
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "child-worker-conv",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     evidenceLedger: [
       {
         executionId: null,
@@ -2083,6 +2153,9 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
         exitCode: 0,
         fresh: true,
         actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         conversationId: "child-worker-conv",
       },
     ],
@@ -2421,8 +2494,22 @@ test("reactive-delegation-lock: 12. healthy delegated execution can yield and la
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-yield-accept",
     bindings: {
-      "orch-yield-accept": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
-      "child-worker-clean": { role: "WORKER", profile: "flash-medium-worker", confidence: "HIGH" },
+      "orch-yield-accept": {
+        conversationId: "orch-yield-accept",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-clean": {
+        conversationId: "child-worker-clean",
+        role: "WORKER",
+        profile: "flash-medium-worker", confidence: "HIGH",
+        parentConversationId: "orch-yield-accept",
+        delegationKind: "WORK",
+        attempt: 0,
+        source: "RUNTIME_IDENTITY",
+      },
     },
   }));
 
@@ -2432,6 +2519,14 @@ test("reactive-delegation-lock: 12. healthy delegated execution can yield and la
     conversationId: "orch-yield-accept",
     state: "DELEGATED",
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "child-worker-clean",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     evidenceLedger: [
       {
         executionId: null,
@@ -2440,6 +2535,9 @@ test("reactive-delegation-lock: 12. healthy delegated execution can yield and la
         exitCode: 0,
         fresh: true,
         actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         conversationId: "child-worker-clean",
       },
     ],
