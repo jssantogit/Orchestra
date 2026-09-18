@@ -2148,6 +2148,7 @@ test("pre-tool hook: allows worker to write within scope contract but denies out
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("scope-contract-worker");
     writeFileSync(
       ".agents/state/active-contract.json",
       JSON.stringify({
@@ -2159,6 +2160,7 @@ test("pre-tool hook: allows worker to write within scope contract but denies out
 
     // In-scope write
     const inScopeInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("src/formatter.js") },
@@ -2169,6 +2171,7 @@ test("pre-tool hook: allows worker to write within scope contract but denies out
 
     // Out-of-scope write
     const outOfScopeInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("packages/core/secret.ts") },
@@ -2807,7 +2810,7 @@ test("governance: native write aliases are intercepted, scoped, and tracked", ()
     assert.equal(state.write_tool_calls, 1);
     assert.equal(state.workerWorkspaceWrites, 1);
     assert.ok(Array.isArray(state.mutations));
-    assert.ok(state.mutations.some((m) => m.path === "src/alias-created.js" && m.tool === "create_file"));
+    assert.ok(state.mutations.some((m) => Array.isArray(m.paths) && m.paths.includes("src/alias-created.js") && m.tool === "create_file"));
   } finally {
     cleanState();
   }
@@ -3079,8 +3082,9 @@ test("governance: post-tool telemetry does not attribute unbound child writes to
     assert.equal(state.orchestratorWorkspaceWrites || 0, 0);
     assert.equal(state.unknownWorkspaceWrites, 1);
     assert.ok(state.mutations.some((m) =>
-      m.path === "src/unbound-child.js" &&
-      m.actorRole === "UNKNOWN" &&
+      Array.isArray(m.paths) &&
+      m.paths.includes("src/unbound-child.js") &&
+      m.authorRole === "UNKNOWN" &&
       m.confidence === "LOW"
     ));
   } finally {
