@@ -412,21 +412,37 @@ export function enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs = 
 export function recordExplorationModelCall({ repoRoot, payload = {} } = {}) {
   const session = loadExplorationSession(repoRoot);
   if (!session) return { active: false, terminate: false, model_calls: 0 };
+
+  if (!Number.isInteger(payload.invocationNum) || payload.invocationNum < 0) {
+    return {
+      active: true,
+      terminate: true,
+      reason: "EXPLORATION_INVOCATION_IDENTITY_MISSING",
+      model_calls: null,
+    };
+  }
+
   const dir = resolve(repoRoot, CALLS);
   mkdirSync(dir, { recursive: true });
   const id = sha256Canonical({
     session_id: session.session_id,
     conversation_id: payload.conversationId || null,
-    invocation_num: payload.invocationNum ?? null,
+    invocation_num: payload.invocationNum,
     model_name: payload.modelName || null,
   }).slice(7);
   const marker = resolve(dir, id + ".json");
   if (!existsSync(marker)) {
-    try { writeFileSync(marker, "{}", { encoding: "utf8", flag: "wx" }); } catch {}
+    try {
+      writeFileSync(marker, JSON.stringify({
+        session_id: session.session_id,
+        conversation_id: payload.conversationId || null,
+        invocation_num: payload.invocationNum,
+      }), { encoding: "utf8", flag: "wx" });
+    } catch {}
   }
   const calls = readdirSync(dir).filter((name) => name.endsWith(".json")).length;
   const timedOut = Date.now() >= Date.parse(session.deadline_at);
-  const terminate = timedOut || calls >= Number(session.budget?.max_model_calls || 2);
+  const terminate = timedOut || calls >= EXPLORATION_BUDGET.max_model_calls;
   return {
     active: true,
     terminate,
