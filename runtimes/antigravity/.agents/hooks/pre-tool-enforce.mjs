@@ -2199,15 +2199,12 @@ function main() {
       return;
     }
 
-    // Unknown role: read-only/validation without workspace redirections is safe; mutating commands fail closed!
+    // Unknown role: shell is privileged even when the command looks read-only.
+    // Unresolved actors may use native inspection tools, but never receive terminal authority.
     if (!activeRole || activeRole === "UNKNOWN") {
-      if (isReadOnly && !hasWorkspaceMutationTargets && redir.targets.length === 0 && targets.length === 0) {
-        allowCommand(cmd);
-        return;
-      }
       console.log(JSON.stringify({
         decision: "deny",
-        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Workspace mutations are prohibited for unresolved roles."
+        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Shell execution is prohibited for unresolved roles."
       }));
       return;
     }
