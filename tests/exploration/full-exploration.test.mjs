@@ -261,7 +261,8 @@ test("K defers control outcomes until a factual branch consequence and seals one
       assert.equal(world.decisions.length, 1);
       assert.equal(world.outcomes.length, 1);
       assert.equal(world.decisions[0].decision_type, decision.decision_type);
-      assert.equal(world.outcomes[0].terminal_state, "FAILED");
+      assert.equal(world.outcomes[0].terminal_state, "UNKNOWN");
+      assert.equal(world.outcomes[0].result.attributable, false);
     }
   } finally {
     rmSync(fixture.repo, { recursive: true, force: true });
