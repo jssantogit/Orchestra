@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { verifyEvidenceContract } from "./evidence-contract.mjs";
 
 /**
  * ALL-GEMINI Deterministic Routing Policy & State Machine Governance
@@ -52,6 +53,7 @@ export const STATE_NAMES = Object.freeze([
   "DELEGATED",
   "EXECUTING",
   "EVIDENCE_READY",
+  "CI_WAIT",
   "ACCEPTANCE",
   "INTEGRATING",
   "DONE",
@@ -67,6 +69,7 @@ export const VALID_TRANSITIONS = Object.freeze({
   DELEGATED: ["EXECUTING", "PLANNED", "BLOCKED", "HUMAN_GATE"],
   EXECUTING: [
     "EVIDENCE_READY",
+    "CI_WAIT",
     "EXECUTING",
     "DELEGATED",
     "PLANNED",
@@ -74,7 +77,8 @@ export const VALID_TRANSITIONS = Object.freeze({
     "BLOCKED",
     "HUMAN_GATE",
   ],
-  EVIDENCE_READY: ["ACCEPTANCE", "EXECUTING", "BLOCKED", "HUMAN_GATE"],
+  EVIDENCE_READY: ["ACCEPTANCE", "CI_WAIT", "EXECUTING", "BLOCKED", "HUMAN_GATE"],
+  CI_WAIT: ["CI_WAIT", "EVIDENCE_READY", "PLANNED", "BLOCKED", "HUMAN_GATE"],
   ACCEPTANCE: [
     "DONE",
     "PLANNED",
@@ -103,6 +107,7 @@ export const RETRY_REASONS = Object.freeze([
   "MISINTERPRETED_REQUIREMENT",
   "INCOMPLETE_IMPLEMENTATION",
   "FAILED_TEST",
+  "REMOTE_VALIDATION_FAILURE",
   "SCOPE_GAP",
   "MISSING_CONTEXT",
   "INTEGRATION_FAILURE",
@@ -4055,6 +4060,36 @@ export function verifyWorkerValidation(activeState = {}) {
       ? "ATTEMPT_MISMATCH: available validation evidence belongs to a different retry attempt"
       : "NO_VERIFIED_WORKER_VALIDATION",
     evidence: crossAttemptTest || null,
+  };
+}
+
+
+export function verifyTaskEvidence(activeState = {}) {
+  const contract = activeState.scopeContract || {};
+  if (Array.isArray(contract.requiredEvidence)) {
+    return verifyEvidenceContract({
+      activeState,
+      contract,
+      evidenceLedger: activeState.evidenceLedger || [],
+    });
+  }
+
+  const legacy = verifyWorkerValidation(activeState);
+  return {
+    status: legacy.verified
+      ? "SATISFIED"
+      : String(legacy.reason || "").startsWith("STALE:")
+        ? "STALE"
+        : String(legacy.reason || "").startsWith("FAILED:")
+          ? "FAILED"
+          : "MISSING_ACTIONABLE",
+    verified: legacy.verified,
+    fresh: legacy.fresh,
+    reason: legacy.reason,
+    evidence: legacy.evidence || null,
+    requirements: [],
+    results: [],
+    source: "LEGACY_WORKER_VALIDATION",
   };
 }
 
