@@ -4342,3 +4342,57 @@ test("governance: corrupted authority state fails closed before tool authorizati
     cleanState();
   }
 });
+
+
+test("governance: stop guard cannot finalize with corrupted authority state", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    writeFileSync(".agents/state/active-state.json", "{broken-stop-state", "utf8");
+    let out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-stop-parent",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ACTIVE_STATE_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "corrupt-stop-parent",
+      state: "EVIDENCE_READY",
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+    }), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", "{broken-stop-bindings", "utf8");
+
+    out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-stop-parent",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "corrupt-stop-parent",
+      bindings: [],
+    }), "utf8");
+    out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-stop-parent",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_INVALID_SHAPE/);
+  } finally {
+    cleanState();
+  }
+});
