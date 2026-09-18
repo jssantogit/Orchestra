@@ -81,6 +81,14 @@ Orchestra preserves two independent provider runtimes. They share core principle
    - Codex active runtime strictly rejects routes or dependencies on Gemini/Flash.
    - Antigravity active routing strictly rejects routes to GPT models.
    - Validated continuously via automated firewall test suites.
+7. **Attributable Feedback & Context Trust**:
+   - Hypotheses and experiments remain model claims until bound to factual runtime evidence.
+   - Antigravity reconstructs a bounded Runtime Continuation Capsule from persisted authority rather than trusting summaries or handoff prose.
+   - Remote/public writes are capability-gated and default-deny unless factual authority explicitly permits them.
+8. **Governed Recursive Exploration**:
+   - Dream policy can optimize isolated branching, bounded parallelism, pruning, and stopping only inside static runtime ceilings.
+   - Full exploration composes sandboxed sibling workspaces; it never turns the primary project into a multi-writer free-for-all.
+   - Learned exploration changes still pass Exact Replay, Shadow, progressive human-approved Canary, and explicit human promotion.
 
 ---
 

@@ -638,3 +638,90 @@ npm run dream:canary -- rollback-policy --repo /path/to/project --confirm
 ```
 
 Automatic stage advancement and `auto_promote` remain forbidden.
+
+---
+
+## 15. Milestone I: Attributable Feedback Plane
+
+Milestone I introduces dense, local, attributable feedback without turning model prose into truth.
+
+A worker may declare:
+
+- `HYPOTHESIS`: a falsifiable model claim;
+- `EXPERIMENT`: an exact command plus expected interpretation;
+- `OBSERVATION`: created only by the runtime when that experiment binds to factual Evidence Ledger execution;
+- `FEEDBACK`: deterministic inference over factual observations.
+
+The runtime states are `UNKNOWN`, `OBSERVED`, `SUPPORTED`, `FALSIFIED`, and `CAUSALLY_VERIFIED`. The last state requires an explicit `MUTATION_AB` design, the same exact factual command changing from FAIL to PASS, and exactly one HIGH-confidence `RUNTIME_IDENTITY` mutation between the two observations. That mutation must overlap the hypothesis `target_paths`; multiple interventions are treated as confounded and remain at most `SUPPORTED`. Causal status cannot be asserted by the model.
+
+Feedback never satisfies an Evidence Contract and never grants routing, write, or acceptance authority.
+
+---
+
+## 16. Milestone J: Context and Side-Effect Trust Boundary
+
+Milestone J formalizes the rule: **data may cross a context boundary; authority may not**.
+
+The runtime classifies information as `RUNTIME_AUTHORITY`, `MODEL_CLAIM`, `UNTRUSTED_CONTEXT`, or `FACTUAL_EVIDENCE_REF`. On every PreInvocation, Orchestra rebuilds a bounded Runtime Continuation Capsule from factual state, contract, identities, evidence references, retry state, and Human Gate state. Narrative summaries and handoff prose are excluded from authority reconstruction.
+
+The side-effect capability model distinguishes local reads/writes/processes from `NETWORK_WRITE`, `REMOTE_REPO_WRITE`, `VCS_REMOTE_WRITE`, and `PUBLICATION`. Remote/public writes are denied unless the active factual Scope Contract (or an exact classified direct-action intent for VCS push) authorizes the capability.
+
+Detected attempts inside handoffs to override scope, evidence, roles, or Human Gates are recorded as untrusted authority claims; they are not promoted into control state.
+
+---
+
+## 17. Milestone K: Full Exploration Policy
+
+Milestone K gives the learned policy control over **whether exploration continues**, not over governance itself.
+
+New policy decision classes are:
+
+```text
+EXPLORATION_BRANCHING -> NO_NEW_BRANCH | OPEN_BRANCH
+PARALLELISM           -> SERIAL | PARALLEL_2
+PRUNE_BRANCH          -> KEEP_BRANCH | PRUNE_BRANCH
+STOPPING              -> CONTINUE_EXPLORATION | STOP_EXPLORATION
+```
+
+The controller composes Milestone-E isolated siblings rather than allowing parallel writers in the primary workspace. Static non-learnable ceilings are 3 branches, 2 simultaneous siblings, 6 exploration model calls, and 15 minutes total. Each sibling retains E's own 2-call / 5-minute sandbox and external-side-effect firewall.
+
+Standalone Milestone E remains one-sibling by default. K may namespace additional E siblings only when `exploration-lab.mjs` verifies the persisted full-controller session, exact immutable K limits, deadline, fresh branch ordinal, and a per-slot capability token created atomically with `O_EXCL`. This makes the three-branch ceiling race-safe.
+
+Previously selected actions for the same factual source decision are excluded inside the current controller. Before selecting a K alternative, the lab also scans valid sealed worlds and excludes actions already observed at the exact same `snapshot_id + decision_type + state_hash`. A later controller therefore does not pay again for an already known branch; there is no similarity-based inference.
+
+Stopping is quiescence-aware. Explicit stop becomes `STOP_REQUESTED` while a branch or control-decision outcome remains pending. New branches are denied, existing branches may finish to close their factual outcomes, and a successor controller cannot start until the old controller reaches `STOPPED`. Static budget exhaustion is finalized under the same rule.
+
+The static baseline is conservative: exploration continues while budget remains, parallelism defaults to serial, and pruning requires factual invalid/falsified state. A promoted learned policy may choose a different action only when that action is already in the runtime's legal set.
+
+K uses deferred causal observation. `CONTINUE_EXPLORATION`, `OPEN_BRANCH`, and `PARALLELISM` are published before the branch action, but their outcomes remain pending until that branch reaches a factual terminal consequence. A sealed branch world yields attributable policy evidence. Setup/runner/collection failures without a sealed branch world are recorded as factual `attributable: false` observations; the evaluator maps them to `UNKNOWN_BRANCH / INSUFFICIENT_SUPPORT` rather than treating infrastructure trouble as a policy regression.
+
+Each K decision/outcome pair is sealed into an independent replay-eligible one-decision world. This avoids conflating `STOPPING`, `EXPLORATION_BRANCHING`, `PARALLELISM`, and `PRUNE_BRANCH` at one source snapshot. Failed branch materialization still consumes a controller branch slot, closing the retry-budget loophole.
+
+K applies the existing active policy and Canary overlay before execution. Therefore K policy changes still require the same offline dataset/replay, Shadow support, human-approved progressive Canary, and human promotion lifecycle.
+
+### Full-exploration CLI
+
+```bash
+# Explicitly create the bounded controller session.
+npm run dream:explore-full -- start --repo /path/to/project
+
+# Prepare one isolated branch from an existing factual world + BranchSeed.
+npm run dream:explore-full -- prepare \
+  --repo /path/to/project \
+  --world /path/to/world.json \
+  --seed /path/to/branch-seed.json
+
+# Execute the prepared branch by branch ID. Antigravity sandbox forcing remains mandatory.
+npm run dream:explore-full -- run \
+  --repo /path/to/project \
+  --branch <full-branch-id> -- agy <args>
+
+# Seal/collect the result; pruning/stopping decisions are evaluated factually.
+npm run dream:explore-full -- collect --repo /path/to/project --branch <full-branch-id>
+
+npm run dream:explore-full -- status --repo /path/to/project
+npm run dream:explore-full -- stop --repo /path/to/project --reason "human stop"
+```
+
+Milestones I-K add no authority to the model itself: factual evidence, isolation, capability checks, static ceilings, and explicit human gates remain runtime-owned.
+

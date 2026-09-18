@@ -5,6 +5,10 @@ import {
   deliverPendingAdvisories,
   consumeDeliveredAdvisories,
 } from "../skills/agy-orchestra/routing-policy.mjs";
+import {
+  createContinuationCapsule,
+  formatContinuationCapsule,
+} from "../skills/orchestra/trust-boundary.mjs";
 
 function readStdin() {
   try {
@@ -50,6 +54,8 @@ function getWorkspacePaths(payload = {}) {
   return {
     repoRoot,
     statePath: resolve(repoRoot, ".agents/state/active-state.json"),
+    contractPath: resolve(repoRoot, ".agents/state/active-contract.json"),
+    roleBindingsPath: resolve(repoRoot, ".agents/state/role-bindings.json"),
     telemetryPath: resolve(repoRoot, ".agents/telemetry/events.jsonl"),
   };
 }
@@ -103,7 +109,7 @@ function main() {
     }
   }
 
-  const { statePath, telemetryPath } = getWorkspacePaths(payload);
+  const { statePath, contractPath, roleBindingsPath, telemetryPath } = getWorkspacePaths(payload);
   const injectSteps = [];
 
   let state = {};
@@ -134,7 +140,6 @@ function main() {
   if (taskId) state.taskId = taskId;
 
   // Bootstrap role-bindings for root orchestrator if not yet initialized
-  const roleBindingsPath = resolve(dirname(statePath), "role-bindings.json");
   let roleBindings = { mainConversationId: null, bindings: {}, conversations: {}, pendingSubagents: [] };
   const roleBindingsLoad = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
   if (!roleBindingsLoad.ok || (roleBindingsLoad.exists && !validRoleBindingsShape(roleBindingsLoad.value))) {
@@ -201,6 +206,27 @@ function main() {
     state.agentProfile = "flash-orchestrator";
     state.orchestratorModel = payload.modelName || "gemini-3.8-flash-medium";
   }
+
+  let capsuleContract = state.scopeContract || {};
+  const contractLoad = readGovernanceObject(contractPath, "ACTIVE_CONTRACT");
+  if (!contractLoad.ok) {
+    console.log(JSON.stringify({
+      injectSteps: [{
+        ephemeralMessage: `GOVERNANCE STATE INVALID: ${contractLoad.reason}. Scope authority could not be reconstructed; do not execute tools until repaired.`
+      }]
+    }));
+    return;
+  }
+  if (contractLoad.exists) capsuleContract = contractLoad.value;
+
+  const continuationCapsule = createContinuationCapsule({
+    activeState: state,
+    activeContract: capsuleContract,
+    roleBindings,
+  });
+  state.continuationCapsuleId = continuationCapsule.capsule_id;
+  state.continuation_capsule_injections = (state.continuation_capsule_injections || 0) + 1;
+  injectSteps.push({ ephemeralMessage: formatContinuationCapsule(continuationCapsule) });
 
   // Turn Economy: observational counters
   state.preinvocation_count = (state.preinvocation_count || 0) + 1;

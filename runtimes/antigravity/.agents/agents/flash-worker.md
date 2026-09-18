@@ -119,7 +119,20 @@ Target Economy: `worker_model_turns <= 8`, `worker_pre_mutation_turns <= 3`, `wo
 - If work requires touching code outside your assigned `taskDomain`, stop immediately and return `CROSS_DOMAIN_REQUEST`.
 - Never spawn or coordinate other workers.
 
-### 7. Compact Output Packet
+### 7. Attributable Investigation Feedback
+For investigation/bug-fix work, use the runtime-parsed feedback declarations only when you have a concrete falsifiable claim or experiment. These are **claims**, never evidence:
+
+```text
+ORCHESTRA_FEEDBACK_V1: {"type":"HYPOTHESIS","key":"h1","statement":"<falsifiable mechanism>","falsifier":"<observation that would disprove it>","target_paths":["src/file.ts"]}
+ORCHESTRA_FEEDBACK_V1: {"type":"EXPERIMENT","key":"e1","hypothesis_key":"h1","command":"<exact declared validation command>","design":"OBSERVATIONAL|MUTATION_AB","pass_interpretation":"SUPPORTS|FALSIFIES|OBSERVES_ONLY","fail_interpretation":"SUPPORTS|FALSIFIES|OBSERVES_ONLY"}
+```
+
+- Emit only experiments that correspond to an exact command already permitted by the Scope Contract.
+- Do not claim `CAUSALLY_VERIFIED`; only the runtime may derive it from factual Evidence Ledger executions.
+- `MUTATION_AB` is appropriate only when the same exact command factually fails before the scoped mutation and passes after a later mutation.
+- Do not fabricate hypotheses merely to populate telemetry.
+
+### 8. Compact Output Packet
 Send to parent via `send_message` and stop cleanly with 0 tools on the following turn:
 ```text
 STATUS: IMPLEMENTATION_COMPLETE | BLOCKED | CROSS_DOMAIN_REQUEST

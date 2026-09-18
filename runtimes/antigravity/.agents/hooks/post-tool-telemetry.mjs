@@ -30,6 +30,13 @@ import {
   bindLocalEvidence,
   mergeFederatedEvidence,
 } from "../skills/orchestra/evidence-federation.mjs";
+import {
+  applyFeedbackDeclarations,
+  extractFeedbackDeclarations,
+  feedbackSummary,
+  reconcileFeedbackPlane,
+} from "../skills/orchestra/feedback-plane.mjs";
+import { detectAuthorityInjection } from "../skills/orchestra/trust-boundary.mjs";
 
 function readStdin() {
   try {
@@ -959,6 +966,38 @@ function main() {
           activeState.workerConversationId = conversationId;
         }
         const msgStr = typeof msg === "string" ? msg : JSON.stringify(msg);
+        const authorityClaim = detectAuthorityInjection(msgStr);
+        if (authorityClaim.detected) {
+          activeState.untrustedAuthorityClaims = (activeState.untrustedAuthorityClaims || 0) + 1;
+          activeState.lastUntrustedAuthorityClaim = {
+            actorId: actor.actorId || conversationId || null,
+            role: actor.role || "UNKNOWN",
+            reasons: authorityClaim.reasons,
+            trustClass: "MODEL_CLAIM",
+            observedAt: new Date().toISOString(),
+          };
+        }
+        const parsedFeedback = extractFeedbackDeclarations(msgStr);
+        if (parsedFeedback.declarations.length > 0 || parsedFeedback.errors.length > 0) {
+          const appliedFeedback = applyFeedbackDeclarations(
+            activeState,
+            parsedFeedback.declarations,
+            {
+              actorId: actor.actorId || conversationId || null,
+              conversationId,
+              role: actor.role || "UNKNOWN",
+              source: actor.source || "UNRESOLVED",
+              confidence: actor.confidence || "LOW",
+              taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || null,
+              attempt: Number.isInteger(actor.attempt) ? actor.attempt : (activeState.attempt || 0),
+              mutationSeq: activeState.mutationSeq || 0,
+            },
+          );
+          activeState.feedbackDeclarationStats = {
+            accepted: (activeState.feedbackDeclarationStats?.accepted || 0) + appliedFeedback.accepted,
+            rejected: (activeState.feedbackDeclarationStats?.rejected || 0) + appliedFeedback.rejected + parsedFeedback.errors.length,
+          };
+        }
         if (msgStr.includes("IMPLEMENTATION_COMPLETE")) {
           if (isFactualImplementationWorker) {
             activeState.workerCompletionClaimed = true;
@@ -1125,6 +1164,17 @@ function main() {
     }
 
     try {
+      reconcileFeedbackPlane(activeState);
+      activeState.feedbackSummary = feedbackSummary(activeState);
+    } catch (error) {
+      activeState.feedbackPlaneDiagnostic = {
+        status: "ERROR",
+        reason: String(error?.message || error),
+        observedAt: new Date().toISOString(),
+      };
+    }
+
+    try {
       writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
     } catch {}
 
@@ -1219,6 +1269,9 @@ function main() {
       worker_validation_exit_code: activeState.workerValidationExitCode ?? null,
       worker_validation_actor: activeState.workerValidationActor || null,
       worker_validation_fresh: activeState.workerValidationFresh || false,
+      feedback_summary: activeState.feedbackSummary || null,
+      untrusted_authority_claims: activeState.untrustedAuthorityClaims || 0,
+      last_capability_decision: activeState.lastCapabilityDecision || null,
       type: "TOOL_STEP"
     };
 

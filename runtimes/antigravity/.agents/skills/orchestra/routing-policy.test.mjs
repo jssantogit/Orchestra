@@ -1569,3 +1569,27 @@ test("validation authority: retry attempts cannot reuse prior-attempt evidence",
   });
   assert.equal(initialLegacyEvidence.verified, true, "Legacy missing attempt is compatible only with initial attempt 0");
 });
+
+test("scope contract preserves explicit side-effect capabilities and rejects unknown authority", () => {
+  const contract = createScopeContract({
+    allowedPaths: ["src/**"],
+    sideEffectCapabilities: ["network_write", "VCS_REMOTE_WRITE", "network_write"],
+  });
+  assert.deepEqual(contract.sideEffectCapabilities, ["NETWORK_WRITE", "VCS_REMOTE_WRITE"]);
+  assert.equal(validateScopeContract(contract, ["src/index.js"]).valid, true);
+
+  const nested = createScopeContract({
+    scopeContract: {
+      allowedPaths: ["src/**"],
+      side_effect_capabilities: ["PUBLICATION"],
+    },
+  });
+  assert.deepEqual(nested.sideEffectCapabilities, ["PUBLICATION"]);
+
+  const invalid = validateScopeContract({
+    allowedPaths: ["src/**"],
+    sideEffectCapabilities: ["NETWORK_WRITE", "ROOT_ACCESS"],
+  }, ["src/index.js"]);
+  assert.equal(invalid.valid, false);
+  assert(invalid.violations.some((entry) => entry.reason === "unknown-side-effect-capability"));
+});

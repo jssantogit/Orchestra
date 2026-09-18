@@ -114,3 +114,62 @@ Orchestra incorporates an offline, deterministic recursive policy evaluation sub
 - **Atomic Human Promotion**: Each rollout stage requires complete factual outcomes and its stage-specific minimum before it can produce a human advance gate. Only a healthy fully observed 100% stage may yield a promotion-review artifact. A separate explicit promotion confirmation stores the candidate in content-addressed policy versions and atomically updates a minimal active pointer using fsync+rename. Invalid/missing active state fails back to static routing. Automatic stage advancement and auto-promotion are absent.
 - **Recursive Baseline Continuity**: The Policy Lab and online router resolve the same active-policy store, so the next RSI cycle starts from the last human-promoted policy rather than silently resetting to the original static policy.
 - **Zero Context Pollution**: Raw discovery histories, prompts, terminal logs, file/web contents, replay artifacts, private Shadow actions, Canary approval state, and policy-store internals are never injected into normal model context; the policy designer receives only a sanitized aggregate packet.
+
+---
+
+## 6. Attributable Feedback Plane (Milestone I)
+
+The Evidence Ledger and Feedback Plane have deliberately separate authority:
+
+- **Evidence answers acceptance**: whether factual, fresh proof satisfies a Scope Contract.
+- **Feedback answers attribution**: what a factual observation supports, falsifies, or causally verifies.
+- Workers may emit compact `ORCHESTRA_FEEDBACK_V1` hypothesis/experiment declarations, but those declarations are `MODEL_CLAIM` until an exact command is matched to factual Evidence Ledger execution.
+- `CAUSALLY_VERIFIED` is runtime-derived only for an explicit `MUTATION_AB` experiment where the same factual command fails before a mutation and passes after a later mutation. Model prose cannot self-promote a root-cause claim.
+- Feedback records never satisfy Evidence Contracts, grant write authority, change routing, or bypass Stop Guard.
+
+This creates a dense local feedback channel without injecting raw traces/logs into model context.
+
+---
+
+## 7. Context & Side-Effect Trust Boundary (Milestone J)
+
+Orchestra treats context content and control authority as different domains.
+
+- `RUNTIME_AUTHORITY`: factual state, Scope Contract, role bindings, retry/Human Gate state, and Evidence Ledger references.
+- `MODEL_CLAIM`: worker/reviewer/orchestrator prose and handoff fields.
+- `UNTRUSTED_CONTEXT`: summaries, retrieved external text, historical prose, and raw tool-output text.
+- `FACTUAL_EVIDENCE_REF`: compact references to verified evidence; references are facts, not instructions.
+
+Every Antigravity `PreInvocation` reconstructs a bounded, content-addressed **Runtime Continuation Capsule** from runtime authority. It intentionally excludes task prose, worker messages, and summaries. Capsule payloads include only recent evidence references and bounded identity data while the complete authority remains on disk.
+
+Remote/public effects are classified into explicit capabilities. `NETWORK_WRITE`, `REMOTE_REPO_WRITE`, `VCS_REMOTE_WRITE`, and `PUBLICATION` default-deny unless factual contract/direct-action authority grants them. A dedicated global `PreToolUse` side-effect guard runs for **every tool**, including plugins/connectors not listed in the native scope hook. Clearly read-only external operations map to `NETWORK_READ`; unfamiliar external semantics fail conservatively toward `NETWORK_WRITE`. This prevents an agent from turning a handoff, summary, new plugin, upload workaround, or arbitrary shell command into an unreviewed side channel.
+
+---
+
+## 8. Full Exploration Policy (Milestone K)
+
+Milestone K extends the Dream policy surface with four decision classes:
+
+- `EXPLORATION_BRANCHING`: `NO_NEW_BRANCH | OPEN_BRANCH`
+- `PARALLELISM`: `SERIAL | PARALLEL_2`
+- `PRUNE_BRANCH`: `KEEP_BRANCH | PRUNE_BRANCH`
+- `STOPPING`: `CONTINUE_EXPLORATION | STOP_EXPLORATION`
+
+K does **not** loosen ordinary workspace concurrency. It composes the existing physically isolated Milestone-E exploration siblings under immutable controller ceilings:
+
+- maximum 3 branches;
+- maximum 2 simultaneous isolated branches;
+- maximum 6 exploration model calls total;
+- maximum 15-minute controller lifetime;
+- each individual E sibling still keeps its 2-model-call / 5-minute sandbox budget.
+
+CRITICAL and HUMAN_GATE states fail closed before policy evaluation. A policy may choose only inside the runtime-computed legal action set; it cannot change ceilings, sandboxing, Scope Contracts, side-effect capabilities, or Human Gates.
+
+K decisions use the existing active-policy store, Exact Replay/Policy Lab, Shadow, progressive Canary 5→20→50→100, and explicit human promotion pipeline. Standalone E still permits one sibling; extra siblings require a factual K controller artifact, exact static limits, a fresh ordinal, and an atomically reserved per-slot capability token. Exact historical support is deduplicated across sessions by `snapshot_id + decision_type + state_hash`, so already observed actions are not explored again.
+
+Controller termination is quiescent: stop/budget exhaustion cannot orphan pending causal outcomes or permit a successor session to overwrite active control state.
+
+Branch-opening decisions are not rewarded merely because a workspace was created. Their outcomes are deferred until the branch yields a factual consequence. Controller/setup failures without a sealed branch trajectory are marked factual but non-attributable and become insufficient support. Each K decision/outcome pair is sealed as a separate one-decision world so Exact Replay never has to infer which of several decision types sharing a snapshot came first.
+
+Thus greater exploration autonomy is learned only inside pre-existing governance rather than becoming a new authority plane.
+

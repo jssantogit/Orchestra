@@ -12,15 +12,16 @@ import { sha256Canonical } from "./canonical.mjs";
 import { buildWorkspaceManifest } from "./snapshot.mjs";
 import { buildDiscoveryTree, BRANCH_STATUS } from "./discovery-tree-builder.mjs";
 import { sealWorld, validateWorld, writeSealedWorld } from "./world-sealer.mjs";
+import {
+  EXPLORATION_BUDGET,
+  FULL_EXPLORATION_LIMITS,
+  fullExplorationLimitsMatch,
+} from "./exploration-governance.mjs";
 
 export const BRANCH_SEED_SCHEMA = "orchestra.branch-seed.v1";
 export const EXPLORATION_SESSION_SCHEMA = "orchestra.exploration-session.v1";
 export const EXPLORATION_ARM_SCHEMA = "orchestra.exploration-arm.v1";
-export const EXPLORATION_BUDGET = Object.freeze({
-  max_sibling_branches: 1,
-  max_model_calls: 2,
-  timeout_ms: 300000,
-});
+export { EXPLORATION_BUDGET } from "./exploration-governance.mjs";
 
 const ARM = ".agents/state/dream/exploration-arm.json";
 const SESSION = ".agents/state/dream/exploration-session.json";
@@ -28,6 +29,9 @@ const CALLS = ".agents/state/dream/exploration-model-calls";
 const SEEDS = ".agents/dream-data/branch-seeds";
 const EXPLORATIONS = ".agents/dream-data/explorations";
 const INDEX = ".agents/dream-data/explorations/index.json";
+const FULL_EXPLORATION_CONTROL = ".agents/dream-data/full-exploration/control.json";
+const FULL_EXPLORATION_RESERVATIONS = ".agents/dream-data/full-exploration/reservations";
+const SEALED_WORLDS = ".agents/dream-data/worlds";
 
 const EPHEMERAL_KEY = /(conversation(?:_?id)?|execution(?:_?id)?|correlation|role_?bindings?|pending|lock|\bpid\b|\bport\b|telemetry|timestamp|created_?at|updated_?at|started_?at|finished_?at)$/i;
 const SENSITIVE_PATH = [
@@ -194,6 +198,112 @@ function loadIndex(repoRoot) {
     if (value?.schema === "orchestra.exploration-index.v1" && value.entries) return value;
   } catch {}
   return { schema: "orchestra.exploration-index.v1", entries: {} };
+}
+
+function historicallyObservedActions(repoRoot, {
+  snapshotId,
+  decisionType: type,
+  stateHash,
+} = {}) {
+  const observed = new Set();
+  if (!repoRoot || !snapshotId || !type || !stateHash) return observed;
+
+  const dir = resolve(repoRoot, SEALED_WORLDS);
+  if (!existsSync(dir)) return observed;
+
+  const files = readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+  for (const name of files) {
+    let world;
+    try {
+      world = readJson(resolve(dir, name));
+    } catch {
+      continue;
+    }
+    if (!validateWorld(world).valid) continue;
+
+    for (const decision of worldDecisions(world)) {
+      if (
+        decision?.snapshot_id !== snapshotId
+        || decisionType(decision?.decision_type) !== decisionType(type)
+        || sha256Canonical(stripEphemeral(decision?.state || {})) !== stateHash
+        || typeof decision?.chosen_action !== "string"
+      ) {
+        continue;
+      }
+      observed.add(decision.chosen_action);
+    }
+  }
+  return observed;
+}
+
+function validateFullExplorationContext(repoRoot, context) {
+  if (!context) return { ok: true, controlled: false, excluded_actions: [] };
+  if (!context || typeof context !== "object" || Array.isArray(context)) {
+    return { ok: false, reason: "FULL_EXPLORATION_CONTEXT_INVALID" };
+  }
+  const sessionId = String(context.session_id || "").trim();
+  const branchOrdinal = context.branch_ordinal;
+  const reservationToken = String(context.reservation_token || "").trim();
+  if (
+    !sessionId
+    || !reservationToken
+    || !Number.isInteger(branchOrdinal)
+    || branchOrdinal < 0
+    || branchOrdinal >= FULL_EXPLORATION_LIMITS.max_branches
+  ) {
+    return { ok: false, reason: "FULL_EXPLORATION_CONTEXT_INVALID" };
+  }
+
+  let control;
+  try {
+    control = readJson(resolve(repoRoot, FULL_EXPLORATION_CONTROL));
+  } catch {
+    return { ok: false, reason: "FULL_EXPLORATION_CONTROL_UNAVAILABLE" };
+  }
+  if (
+    control?.schema !== "orchestra.full-exploration.v1"
+    || control.session_id !== sessionId
+    || control.status !== "ACTIVE"
+    || control.budget_exhausted === true
+    || !fullExplorationLimitsMatch(control.limits)
+    || Date.now() >= Date.parse(control.deadline_at)
+  ) {
+    return { ok: false, reason: "FULL_EXPLORATION_CONTROL_NOT_AUTHORIZED" };
+  }
+  if ((control.branches || []).length !== branchOrdinal) {
+    return { ok: false, reason: "FULL_EXPLORATION_BRANCH_ORDINAL_STALE" };
+  }
+
+  const reservationPath = resolve(
+    repoRoot,
+    FULL_EXPLORATION_RESERVATIONS,
+    sessionId + "-" + branchOrdinal + ".json",
+  );
+  let reservation;
+  try {
+    reservation = readJson(reservationPath);
+  } catch {
+    return { ok: false, reason: "FULL_EXPLORATION_BRANCH_RESERVATION_MISSING" };
+  }
+  if (
+    reservation?.schema !== "orchestra.full-exploration-branch-reservation.v1"
+    || reservation.session_id !== sessionId
+    || reservation.branch_ordinal !== branchOrdinal
+    || reservation.reservation_token !== reservationToken
+    || !fullExplorationLimitsMatch(reservation.limits)
+  ) {
+    return { ok: false, reason: "FULL_EXPLORATION_BRANCH_RESERVATION_INVALID" };
+  }
+
+  return {
+    ok: true,
+    controlled: true,
+    session_id: sessionId,
+    branch_ordinal: branchOrdinal,
+    reservation_path: reservationPath,
+    control,
+    excluded_actions: [],
+  };
 }
 function activateExplorationPreToolWrapper(branchRoot) {
   const hooksPath = resolve(branchRoot, ".agents/hooks.json");
@@ -367,9 +477,10 @@ export function captureBranchSeedIfArmed({
   return { captured: true, seed_id: seedId, seed_path: resolve(seedDir, "branch-seed.json") };
 }
 
-export function selectLeastObservedLegalAction({ tree, snapshotId, availableActions } = {}) {
+export function selectLeastObservedLegalAction({ tree, snapshotId, availableActions, excludedActions = [] } = {}) {
   if (!tree?.nodes?.[snapshotId]) return { selected: null, reason: "DISCOVERY_SNAPSHOT_NOT_FOUND" };
-  const ranked = [...new Set(availableActions || [])].map((action) => {
+  const excluded = new Set(Array.isArray(excludedActions) ? excludedActions.map(String) : []);
+  const ranked = [...new Set(availableActions || [])].filter((action) => !excluded.has(String(action))).map((action) => {
     const branch = tree.nodes[snapshotId]?.actions?.[action];
     return {
       action,
@@ -382,8 +493,16 @@ export function selectLeastObservedLegalAction({ tree, snapshotId, availableActi
   return { selected: ranked[0].action, reason: "LEAST_OBSERVED_LEGAL_ACTION", ranked };
 }
 
-export function prepareExploration({ repoRoot, seedPath, world, decisionId = null } = {}) {
+export function prepareExploration({
+  repoRoot,
+  seedPath,
+  world,
+  decisionId = null,
+  fullExplorationContext = null,
+} = {}) {
   if (!repoRoot || !seedPath || !world) return { prepared: false, reason: "MISSING_PREPARE_INPUT" };
+  const fullControl = validateFullExplorationContext(repoRoot, fullExplorationContext);
+  if (!fullControl.ok) return { prepared: false, reason: fullControl.reason };
   const valid = validateWorld(world);
   if (!valid.valid) return { prepared: false, reason: "WORLD_INVALID", errors: valid.errors };
   let seed;
@@ -423,7 +542,29 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
   }
 
   const tree = buildDiscoveryTree(world);
-  const selection = selectLeastObservedLegalAction({ tree, snapshotId: source.snapshot_id, availableActions: source.available_actions });
+  const priorControlledActions = fullControl.controlled
+    ? (fullControl.control?.branches || [])
+      .filter((branch) => (
+        branch?.source_world_id === world.world_id
+        && branch?.source_decision_id === source.decision_id
+        && typeof branch?.selected_action === "string"
+      ))
+      .map((branch) => branch.selected_action)
+    : [];
+  const historicalActions = fullControl.controlled
+    ? [...historicallyObservedActions(repoRoot, {
+        snapshotId: source.snapshot_id,
+        decisionType: source.decision_type,
+        stateHash: seed.decision.state_hash,
+      })]
+    : [];
+  const excludedActions = [...new Set([...priorControlledActions, ...historicalActions])];
+  const selection = selectLeastObservedLegalAction({
+    tree,
+    snapshotId: source.snapshot_id,
+    availableActions: source.available_actions,
+    excludedActions,
+  });
   if (!selection.selected) return { prepared: false, reason: selection.reason, ranked: selection.ranked };
 
   const key = sha256Canonical({
@@ -431,6 +572,8 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
     snapshot_id: source.snapshot_id,
     decision_type: source.decision_type,
     state_hash: seed.decision.state_hash,
+    full_exploration_session_id: fullControl.controlled ? fullControl.session_id : null,
+    full_exploration_branch_ordinal: fullControl.controlled ? fullControl.branch_ordinal : null,
   });
   const index = loadIndex(repoRoot);
   if (index.entries[key]) return { prepared: false, reason: "SIBLING_LIMIT_REACHED", existing: index.entries[key] };
@@ -472,13 +615,16 @@ export function prepareExploration({ repoRoot, seedPath, world, decisionId = nul
     const session = {
       schema: EXPLORATION_SESSION_SCHEMA,
       session_id: sessionId,
-      mode: "EXPLICIT_LOCAL",
+      mode: fullControl.controlled ? "FULL_EXPLORATION_CONTROLLED" : "EXPLICIT_LOCAL",
       source: {
         world_id: world.world_id,
         seed_id: seed.seed_id,
+        decision_id: source.decision_id,
         snapshot_id: source.snapshot_id,
         decision_type: source.decision_type,
         state_hash: seed.decision.state_hash,
+        full_exploration_session_id: fullControl.controlled ? fullControl.session_id : null,
+        full_exploration_branch_ordinal: fullControl.controlled ? fullControl.branch_ordinal : null,
       },
       target: {
         decision_type: source.decision_type,

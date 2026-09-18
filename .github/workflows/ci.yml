@@ -44,6 +44,14 @@ jobs:
         run: |
           npm run test:evidence
 
+      - name: Run Attributable Feedback Tests
+        run: |
+          npm run test:feedback
+
+      - name: Run Context Trust Boundary Tests
+        run: |
+          npm run test:trust
+
       - name: Run Mechanical Fast Path Tests
         run: |
           npm run test:mechanical

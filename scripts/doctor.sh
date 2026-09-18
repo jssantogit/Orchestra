@@ -81,7 +81,11 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/dream/canary-rollout.mjs"
   "runtimes/antigravity/.agents/dream/canary-cli.mjs"
   "runtimes/antigravity/.agents/dream/policy-store.mjs"
+  "runtimes/antigravity/.agents/dream/exploration-governance.mjs"
+  "runtimes/antigravity/.agents/dream/full-exploration.mjs"
+  "runtimes/antigravity/.agents/dream/full-exploration-cli.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
+  "runtimes/antigravity/.agents/hooks/pre-tool-side-effect-guard.mjs"
   "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs"
   "runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs"
   "runtimes/antigravity/.agents/hooks/stop-guard.mjs"
@@ -100,6 +104,8 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-cli.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/feedback-plane.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/trust-boundary.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.test.mjs"
   "runtimes/antigravity/GEMINI.md"
 )
@@ -122,9 +128,12 @@ JS_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/project-runtime-cli.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/feedback-plane.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/trust-boundary.mjs"
   "scripts/orchestra-project.mjs"
   "scripts/install-antigravity.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
+  "runtimes/antigravity/.agents/hooks/pre-tool-side-effect-guard.mjs"
   "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs"
   "runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs"
   "runtimes/antigravity/.agents/hooks/stop-guard.mjs"
@@ -139,6 +148,9 @@ JS_FILES=(
   "runtimes/antigravity/.agents/dream/canary-rollout.mjs"
   "runtimes/antigravity/.agents/dream/canary-cli.mjs"
   "runtimes/antigravity/.agents/dream/policy-store.mjs"
+  "runtimes/antigravity/.agents/dream/exploration-governance.mjs"
+  "runtimes/antigravity/.agents/dream/full-exploration.mjs"
+  "runtimes/antigravity/.agents/dream/full-exploration-cli.mjs"
   "scripts/contamination-check.mjs"
 )
 
@@ -198,6 +210,12 @@ if node --test "${ROOT_DIR}/tests/mechanical/mechanical-fast-path.test.mjs"; the
   report_pass "Mechanical fast-path tests passed"
 else
   report_fail "Mechanical fast-path tests failed"
+fi
+
+if node --test "${ROOT_DIR}/tests/feedback/feedback-plane.test.mjs" "${ROOT_DIR}/tests/trust/trust-boundary.test.mjs" "${ROOT_DIR}/tests/exploration/full-exploration.test.mjs"; then
+  report_pass "Milestones I-J-K feedback, trust, and full-exploration tests passed"
+else
+  report_fail "Milestones I-J-K tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/cross-runtime/cross-runtime-firewall.test.mjs" >/dev/null 2>&1; then

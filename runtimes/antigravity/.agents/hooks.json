@@ -42,5 +42,19 @@
         "timeout": 10
       }
     ]
+  },
+  "side-effect-boundary": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node hooks/pre-tool-side-effect-guard.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }

@@ -13,6 +13,7 @@ const runtimeRoot = resolve(__dirname, "../..");
 process.chdir(runtimeRoot);
 
 const preToolScript = resolve(".agents/hooks/pre-tool-enforce.mjs");
+const sideEffectGuardScript = resolve(".agents/hooks/pre-tool-side-effect-guard.mjs");
 const postToolScript = resolve(".agents/hooks/post-tool-telemetry.mjs");
 const preInvocationScript = resolve(".agents/hooks/pre-invocation-guard.mjs");
 const stopScript = resolve(".agents/hooks/stop-guard.mjs");
@@ -83,6 +84,59 @@ function seedFactualOrchestratorIdentity(conversationId = "orchestrator-test") {
 
 test.after(() => {
   cleanState();
+});
+
+test("side-effect boundary: hooks every tool and defaults external writes to deny", () => {
+  cleanState();
+  try {
+    const hooksConfig = JSON.parse(readFileSync(resolve(__dirname, "../hooks.json"), "utf8"));
+    assert.equal(hooksConfig["side-effect-boundary"].PreToolUse[0].matcher, "*");
+    assert.equal(
+      hooksConfig["side-effect-boundary"].PreToolUse[0].hooks[0].command,
+      "node hooks/pre-tool-side-effect-guard.mjs",
+    );
+
+    const denied = JSON.parse(execFileSync("node", [sideEffectGuardScript], {
+      input: JSON.stringify({
+        toolCall: {
+          name: "mcp__GitHub__create_issue",
+          args: { title: "should not be authorized" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(denied.decision, "deny");
+    assert.match(denied.reason, /REMOTE_REPO_WRITE/);
+
+    const readOnly = JSON.parse(execFileSync("node", [sideEffectGuardScript], {
+      input: JSON.stringify({
+        toolCall: {
+          name: "mcp__GitHub__search_code",
+          args: { query: "symbol" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(readOnly.decision, "allow");
+
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      sideEffectCapabilities: ["REMOTE_REPO_WRITE"],
+    }));
+    const explicitlyAuthorized = JSON.parse(execFileSync("node", [sideEffectGuardScript], {
+      input: JSON.stringify({
+        toolCall: {
+          name: "mcp__GitHub__create_issue",
+          args: { title: "authorized remote write" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(explicitlyAuthorized.decision, "allow");
+  } finally {
+    cleanState();
+  }
 });
 
 test("pre-tool hook: orchestrator cannot directly mutate hook-owned governance state", () => {

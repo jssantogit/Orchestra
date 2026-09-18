@@ -29,7 +29,10 @@
       "type": "string"
     },
     "parent_decision_id": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "snapshot_id": {
       "type": "string",
@@ -40,7 +43,11 @@
       "enum": [
         "WORKER_TIER",
         "INVESTIGATION_STRATEGY",
-        "RETRY_ACTION"
+        "RETRY_ACTION",
+        "EXPLORATION_BRANCHING",
+        "PARALLELISM",
+        "PRUNE_BRANCH",
+        "STOPPING"
       ]
     },
     "state": {
@@ -56,19 +63,31 @@
       "type": "string"
     },
     "policy_id": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "policy_source": {
       "type": "string"
     },
     "baseline_action": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "policy_diagnostic": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "actor_identity": {
-      "type": ["string", "object"]
+      "type": [
+        "string",
+        "object"
+      ]
     },
     "conversation_id": {
       "type": "string"

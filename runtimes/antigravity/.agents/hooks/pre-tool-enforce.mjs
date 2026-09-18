@@ -56,6 +56,7 @@ import {
   mechanicalFastPathAllowsRunCommand,
   mechanicalFastPathMutationBudget,
 } from "../skills/orchestra/mechanical-fast-path.mjs";
+import { authorizeToolCapability } from "../skills/orchestra/trust-boundary.mjs";
 
 const WORKER_ACTION_TO_PROFILE = Object.freeze({
   FLASH_LOW: "flash-low-worker",
@@ -1326,6 +1327,36 @@ function main() {
   const actorHasOrchestratorAuthority = isOrchestratorRole(actor.role) && actor.confidence === "HIGH";
   const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
+
+  const sideEffectAuth = authorizeToolCapability({
+    toolName,
+    toolArgs,
+    activeState,
+    activeContract: activeContract || activeState.scopeContract || {},
+  });
+  activeState.lastCapabilityDecision = {
+    toolName,
+    capability: sideEffectAuth.capability,
+    allowed: sideEffectAuth.allowed,
+    explicit: sideEffectAuth.explicit === true,
+    authority: sideEffectAuth.authority || null,
+    observedAt: new Date().toISOString(),
+  };
+  if (!sideEffectAuth.allowed) {
+    recordDeniedAttempt(
+      activeState,
+      statePath,
+      toolName,
+      toolArgs,
+      `SIDE_EFFECT_CAPABILITY_DENIED: ${sideEffectAuth.reason || sideEffectAuth.capability}`,
+    );
+    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `SIDE_EFFECT_CAPABILITY_DENIED: ${sideEffectAuth.capability} requires explicit factual authority in the Scope Contract.`,
+    }));
+    return;
+  }
 
   // Check 1: Worker or Reviewer spawning subagents, OR any subagent during DIRECT_ACTION
   if (toolName === "invoke_subagent" || toolName === "define_subagent") {

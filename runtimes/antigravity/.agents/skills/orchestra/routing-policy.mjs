@@ -936,6 +936,24 @@ function contractValue(details, names, fallback) {
   return value === undefined || value === null ? fallback : value;
 }
 
+export const SIDE_EFFECT_CAPABILITIES = Object.freeze([
+  "LOCAL_READ",
+  "LOCAL_WRITE",
+  "PROCESS_EXEC",
+  "NETWORK_READ",
+  "NETWORK_WRITE",
+  "REMOTE_REPO_WRITE",
+  "VCS_REMOTE_WRITE",
+  "CROSS_AGENT_MESSAGE",
+  "PUBLICATION",
+]);
+
+const SIDE_EFFECT_CAPABILITY_SET = new Set(SIDE_EFFECT_CAPABILITIES);
+
+function normalizeSideEffectCapabilities(value) {
+  return [...new Set(listValue(value).map((item) => normalizeToken(item)).filter(Boolean))];
+}
+
 export function createScopeContract(details = {}) {
   const nested = details.scopeContract && typeof details.scopeContract === "object"
     ? details.scopeContract
@@ -963,6 +981,9 @@ export function createScopeContract(details = {}) {
     retryBudget: budget,
     stopConditions: listValue(contractValue(merged, ["stopConditions", "stop_conditions"], [])),
     doNotChange: listValue(contractValue(merged, ["doNotChange", "do_not_change"], [])),
+    sideEffectCapabilities: normalizeSideEffectCapabilities(
+      contractValue(merged, ["sideEffectCapabilities", "side_effect_capabilities", "capabilities"], []),
+    ),
     criticality: normalizeCriticality(merged),
   };
   return contract;
@@ -981,6 +1002,14 @@ export function validateScopeContract(contractOrFacts = {}, changedPaths = []) {
   const allowedPaths = normalizePathList(firstPresent(contract, ["allowedPaths", "allowedScope", "allowed_paths"]) ?? []);
   const forbiddenPaths = normalizePathList(firstPresent(contract, ["forbiddenPaths", "forbiddenScope", "forbidden_paths"]) ?? []);
   const violations = [];
+  const sideEffectCapabilities = normalizeSideEffectCapabilities(
+    firstPresent(contract, ["sideEffectCapabilities", "side_effect_capabilities", "capabilities"]) ?? [],
+  );
+  for (const capability of sideEffectCapabilities) {
+    if (!SIDE_EFFECT_CAPABILITY_SET.has(capability)) {
+      violations.push({ capability, reason: "unknown-side-effect-capability" });
+    }
+  }
   for (const path of paths) {
     const workspaceEscape = path === ".." || path.startsWith("../") || path.startsWith("/") || /^[A-Za-z]:\//.test(path);
     if (workspaceEscape) {

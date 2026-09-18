@@ -40,6 +40,16 @@ const STATE_FIELDS = Object.freeze([
   "retry_reason",
   "post_investigation",
   "evidence",
+  "exploration_branches_started",
+  "exploration_branches_active",
+  "exploration_branches_remaining",
+  "feedback_unknown",
+  "feedback_observed",
+  "feedback_supported",
+  "feedback_falsified",
+  "feedback_causal",
+  "branch_feedback_status",
+  "branch_invalid",
 ]);
 
 const LAB_ROOT = ".agents/dream-data/policy-lab";
