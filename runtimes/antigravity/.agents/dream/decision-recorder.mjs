@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, ren
 import { dirname, join, resolve } from "node:path";
 import { DREAM_SCHEMAS, createDreamEvent, validateDreamRecord } from "./records.mjs";
 import { sha256Canonical } from "./canonical.mjs";
+import { recordShadowObservationBestEffort } from "./shadow-mode.mjs";
 
 /**
  * Builds a deterministic safe filesystem key string for correlating decisions with outcomes.
@@ -317,6 +318,10 @@ export function recordDecision({
           // pending correlation became durable but the DECISION append did not complete.
           mkdirSync(dirname(resolvedTelemetryPath), { recursive: true });
           appendFileSync(resolvedTelemetryPath, JSON.stringify(existingPending.decision_event) + "\n", "utf8");
+          recordShadowObservationBestEffort({
+            repoRoot,
+            decisionEvent: existingPending.decision_event,
+          });
           return {
             recorded: true,
             recovered: true,
@@ -329,7 +334,12 @@ export function recordDecision({
         if (alreadyPublished) {
           // Idempotent hook retry after the durable decision but before surrounding
           // control-plane state was persisted. Reuse the exact pending decision
-          // without publishing a duplicate event.
+          // without publishing a duplicate event. Shadow observation is itself
+          // idempotent and remains private to Dream data.
+          recordShadowObservationBestEffort({
+            repoRoot,
+            decisionEvent: alreadyPublished,
+          });
           return {
             recorded: true,
             reused: true,
@@ -355,6 +365,10 @@ export function recordDecision({
       // fails synchronously, roll the pending record back so no phantom execution remains.
       mkdirSync(dirname(resolvedTelemetryPath), { recursive: true });
       appendFileSync(resolvedTelemetryPath, JSON.stringify(event) + "\n", "utf8");
+      recordShadowObservationBestEffort({
+        repoRoot,
+        decisionEvent: event,
+      });
     } catch (writeErr) {
       try { unlinkSync(tempFile); } catch {}
       if (pendingCommitted) {
