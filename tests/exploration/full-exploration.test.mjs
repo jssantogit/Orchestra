@@ -27,7 +27,7 @@ import {
 import { evaluateTrajectory } from "../../runtimes/antigravity/.agents/dream/evaluator.mjs";
 import { buildSnapshot } from "../../runtimes/antigravity/.agents/dream/snapshot.mjs";
 import { createDreamEvent, DREAM_SCHEMAS } from "../../runtimes/antigravity/.agents/dream/records.mjs";
-import { sealWorld, validateWorld } from "../../runtimes/antigravity/.agents/dream/world-sealer.mjs";
+import { sealWorld, validateWorld, writeSealedWorld } from "../../runtimes/antigravity/.agents/dream/world-sealer.mjs";
 import {
   armExplorationCapture,
   captureBranchSeedIfArmed,
@@ -363,6 +363,64 @@ test("K namespacing permits another attempt but never repeats the same unknown a
     const status = fullExplorationStatus({ repoRoot: fixture.repo });
     assert.equal(status.branches_started, 2);
     assert.equal(status.branches_remaining, 1);
+    assert.equal(status.pending_decision_outcomes, 0);
+  } finally {
+    rmSync(fixture.repo, { recursive: true, force: true });
+  }
+});
+
+test("a successor K session does not reexplore an exact alternative already sealed in history", () => {
+  const fixture = controllerFixture();
+  try {
+    const sourceDecision = fixture.world.decisions[0];
+    const alternateDecision = createDreamEvent("DECISION", {
+      ...sourceDecision,
+      decision_id: "decision-k-historical-alternate",
+      chosen_action: "FLASH_MEDIUM",
+      created_at: "2026-09-18T00:01:00.000Z",
+    });
+    const alternateOutcome = createDreamEvent("DECISION_OUTCOME", {
+      schema: DREAM_SCHEMAS.OUTCOME,
+      decision_id: alternateDecision.decision_id,
+      observation_id: "observation-k-historical-alternate",
+      result: "SUCCESS",
+      evidence_summary: {
+        tests: "NOT_REQUIRED",
+        typecheck: "NOT_REQUIRED",
+        build: "NOT_REQUIRED",
+        scope_check: "PASS",
+        validation_fresh: false,
+      },
+      retry_state: { retry_remaining: 1 },
+      cost_metrics: { model_calls: 1 },
+      terminal_state: "ACCEPTED",
+      resulting_snapshot_id: null,
+      created_at: "2026-09-18T00:01:01.000Z",
+    });
+    const historical = sealWorld({
+      events: [alternateDecision, alternateOutcome],
+      expectedRuntimeFingerprint: fixture.world.runtime_fingerprint,
+      rootSnapshotId: fixture.world.root_snapshot_id,
+      worldId: "world-k-historical-alternate",
+    });
+    assert.equal(historical.status, "SEALED", JSON.stringify(historical.errors));
+    const written = writeSealedWorld(fixture.repo, historical.world);
+    assert.equal(written.written, true, JSON.stringify(written));
+
+    assert.equal(startFullExploration({ repoRoot: fixture.repo }).started, true);
+    const attempt = prepareFullExplorationBranch({
+      repoRoot: fixture.repo,
+      seedPath: fixture.seedPath,
+      world: fixture.world,
+      decisionId: "decision-k-source",
+    });
+
+    assert.equal(attempt.prepared, false);
+    assert.equal(attempt.reason, "NO_UNKNOWN_BRANCH");
+    assert.equal(attempt.branch.status, "FAILED_TO_START");
+    assert.equal(attempt.branch.selected_action, null);
+    const status = fullExplorationStatus({ repoRoot: fixture.repo });
+    assert.equal(status.branches_started, 1);
     assert.equal(status.pending_decision_outcomes, 0);
   } finally {
     rmSync(fixture.repo, { recursive: true, force: true });
