@@ -1841,6 +1841,92 @@ function main() {
     console.log(JSON.stringify({ decision: "allow" }));
   }
 
+  // Check 1: agent-to-agent messaging is parent/child only and identity-bound.
+  if (toolName === "send_message") {
+    const recipient = String(
+      toolArgs.Recipient || toolArgs.recipient || toolArgs.ConversationId || toolArgs.conversationId || ""
+    ).trim();
+
+    if (!recipient) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "MESSAGE_RECIPIENT_REQUIRED: send_message requires an explicit recipient conversationId."
+      }));
+      return;
+    }
+
+    if (isReviewerRole(activeRole)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "REVIEWER_MESSAGE_PROHIBITED: Two-Key reviewers are isolated and cannot send agent-to-agent messages."
+      }));
+      return;
+    }
+
+    if (isWorkerRole(activeRole)) {
+      if (!(actor.source === "RUNTIME_IDENTITY" && actor.confidence === "HIGH")) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "MESSAGE_IDENTITY_REQUIRED: Worker/investigator messaging requires factual HIGH runtime identity."
+        }));
+        return;
+      }
+      const actorBinding = roleBindings.bindings?.[actor.actorId]
+        || roleBindings.conversations?.[actor.actorId]
+        || null;
+      const expectedParent = actorBinding?.parentConversationId || null;
+      if (!expectedParent || recipient !== expectedParent) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "CROSS_AGENT_MESSAGE_PROHIBITED: Subagents may send messages only to their factual parent Orchestrator."
+        }));
+        return;
+      }
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
+    }
+
+    if (isOrchestratorRole(activeRole)) {
+      if (!actorHasOrchestratorAuthority) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "MESSAGE_IDENTITY_REQUIRED: Orchestrator messaging requires HIGH main-conversation identity."
+        }));
+        return;
+      }
+      if (isHealthyDelegatedExecution(activeState, activeRole)) {
+        const reason = "Reactive Wakeup policy: Orchestrator send_message is prohibited during healthy delegated execution. Yield and await child completion.";
+        recordDeniedAttempt(activeState, statePath, "send_message", toolArgs, reason);
+        console.log(JSON.stringify({ decision: "deny", reason }));
+        return;
+      }
+
+      const recipientBinding = roleBindings.bindings?.[recipient]
+        || roleBindings.conversations?.[recipient]
+        || null;
+      if (
+        !recipientBinding ||
+        recipientBinding.parentConversationId !== actor.actorId ||
+        recipientBinding.source !== "RUNTIME_IDENTITY" ||
+        recipientBinding.confidence !== "HIGH"
+      ) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "CROSS_AGENT_MESSAGE_PROHIBITED: Orchestrator may message only a factual child bound to this main conversation."
+        }));
+        return;
+      }
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
+    }
+
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "MESSAGE_IDENTITY_REQUIRED: Unresolved actors cannot send agent-to-agent messages."
+    }));
+    return;
+  }
+
   // Check 1a: schedule / timer policy during delegated execution
   if (toolName === "schedule") {
     if (!actorHasOrchestratorAuthority) {
