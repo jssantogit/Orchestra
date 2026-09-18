@@ -287,3 +287,65 @@ The Milestone D Integration & Correlation Micro-Hotfixes harden the runtime agai
      - `ARCH-021`: IMPLEMENT_DIRECT Decision Completes With Its Worker
      - `ARCH-022`: Retry Escalation Requires Factual Previous Worker Identity
      - `ARCH-023`: Retry Budget Is Factual, Never Manufactured
+
+---
+
+## 11. Milestone E: Explicit Exploration Lab
+
+Milestone E adds a deliberately **opt-in, local/offline** mechanism for observing one previously unknown legal branch without weakening online governance.
+
+### Safety boundary
+
+- Automatic exploration remains **OFF**.
+- Exploration is never executed in the primary workspace. `prepare` materializes a physical sibling under the OS temporary directory from a captured `BranchSeed`.
+- The immutable budget is: **1 sibling branch**, **2 model calls**, **5 minutes**.
+- `NORMAL` decisions are eligible by default. `MAJOR` requires explicit approval at capture time (`--approve-major`). `CRITICAL` and `HUMAN_GATE` states are ineligible.
+- External or irreversible effects are blocked by a dedicated `PreToolUse` exploration firewall. Shell commands are fail-closed to a small local/read-only validation allowlist.
+- `PostInvocation` terminates the exploration loop when the second model call completes or the deadline is exhausted.
+- Conversation IDs, execution IDs, correlations, role bindings, locks, telemetry identity, PIDs, ports, and timestamps are not cloned from the factual run.
+- The first explored decision remains causally attached to the factual source `snapshot_id`; regenerated ephemeral runtime identity does not redefine the historical root.
+- The primary workspace manifest is checked again before collection. Any drift rejects collection.
+- Exploration only writes a new sealed factual world. It **never promotes or rewrites the active policy**.
+
+### Why BranchSeed capture is prospective
+
+Milestones A-D persist content-addressed snapshot fingerprints, but historical `DECISION` records do not contain the physical workspace manifest and complete Scope Contract needed to reconstruct an exact isolated sibling. Milestone E therefore refuses to invent a historical state.
+
+An exploration target must first be explicitly armed. The next matching eligible decision captures a local `BranchSeed` containing the physical product-state archive plus the exact policy-visible state, legal actions, Scope Contract, evidence summary, and runtime fingerprint. Historical worlds without such a seed remain replayable through Exact Replay but return `EXPLORATION_SEED_UNAVAILABLE` for physical exploration.
+
+Before materialization, the lab revalidates the seed's decision-state hash, action space, manifest hash, archived workspace payload, sensitive-path rules, and persisted `MAJOR` approval.
+
+### Deterministic branch selection
+
+For the source decision, the lab counts factual observations for every legal action and selects:
+
+```text
+LEAST_OBSERVED_LEGAL_ACTION
+then stable lexicographic action-id tie-break
+```
+
+Milestone E only proceeds when the selected legal action has zero factual observations (`UNKNOWN_BRANCH`). If every legal action has already been observed, no sibling is created.
+
+### CLI flow
+
+```bash
+# 1. Explicitly arm capture for the next matching decision.
+npm run dream:explore -- arm --repo /path/to/project --decision-type WORKER_TIER
+
+# For MAJOR only, human approval must be explicit at capture time.
+npm run dream:explore -- arm --repo /path/to/project --decision-type WORKER_TIER --approve-major
+
+# 2. After the factual decision/world is available, materialize one isolated sibling.
+npm run dream:explore -- prepare \
+  --repo /path/to/project \
+  --world /path/to/world.json \
+  --seed /path/to/.agents/dream-data/branch-seeds/<seed-id>/branch-seed.json
+
+# 3. Run Antigravity (or a test harness) only inside the returned branch_workspace.
+npm run dream:explore -- run --workspace <branch_workspace> -- agy
+
+# 4. Seal and collect the explored factual world after the run.
+npm run dream:explore -- collect --repo /path/to/project --workspace <branch_workspace>
+```
+
+The sibling index is durable under `.agents/dream-data/explorations/` and prevents creating a second sibling for the same world/snapshot/decision-state key.
