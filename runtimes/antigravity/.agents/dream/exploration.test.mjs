@@ -10,6 +10,7 @@ import { sealWorld } from "./world-sealer.mjs";
 import {
   EXPLORATION_BUDGET,
   armExplorationCapture,
+  buildSandboxedExplorationCommand,
   captureBranchSeedIfArmed,
   enforceExplorationToolBoundary,
   isSafeExplorationCommand,
@@ -126,6 +127,26 @@ test("command boundary is fail-closed for external or compound shell effects", (
   assert.equal(isSafeExplorationCommand("node --test test.mjs && git push"), false);
 });
 
+test("exploration runner accepts only Antigravity and forces sandbox without bypass flags", () => {
+  const launch = buildSandboxedExplorationCommand("agy", ["--model=gemini-3.8-flash-high"]);
+  assert.equal(launch.ok, true);
+  assert.deepEqual(launch.args, ["--sandbox", "--model=gemini-3.8-flash-high"]);
+
+  const duplicate = buildSandboxedExplorationCommand("antigravity", ["--sandbox", "--model=x"]);
+  assert.equal(duplicate.ok, true);
+  assert.deepEqual(duplicate.args, ["--sandbox", "--model=x"]);
+
+  assert.equal(buildSandboxedExplorationCommand("node", ["script.mjs"]).ok, false);
+  assert.equal(
+    buildSandboxedExplorationCommand("agy", ["--dangerously-skip-permissions"]).reason,
+    "EXPLORATION_SANDBOX_BYPASS_FORBIDDEN",
+  );
+  assert.equal(
+    buildSandboxedExplorationCommand("agy", ["--no-sandbox"]).reason,
+    "EXPLORATION_SANDBOX_BYPASS_FORBIDDEN",
+  );
+});
+
 test("armed capture creates one sanitized physical BranchSeed and refuses CRITICAL", () => {
   const f = fixture();
   try {
@@ -209,9 +230,15 @@ test("prepare materializes exactly one sibling and overlay executes only the unk
     assert.equal(blocked.allowed, false);
     assert.equal(enforceExplorationToolBoundary({ repoRoot: branch, toolName: "search_web", toolArgs: {} }).allowed, false);
 
+    const missingIdentity = recordExplorationModelCall({ repoRoot: branch, payload: { conversationId: "fresh-a", modelName: "test" } });
+    assert.equal(missingIdentity.terminate, true);
+    assert.equal(missingIdentity.reason, "EXPLORATION_INVOCATION_IDENTITY_MISSING");
+
     const first = recordExplorationModelCall({ repoRoot: branch, payload: { conversationId: "fresh-a", invocationNum: 0, modelName: "test" } });
+    const repeatedFirst = recordExplorationModelCall({ repoRoot: branch, payload: { conversationId: "fresh-a", invocationNum: 0, modelName: "test" } });
     const second = recordExplorationModelCall({ repoRoot: branch, payload: { conversationId: "fresh-a", invocationNum: 1, modelName: "test" } });
     assert.equal(first.terminate, false);
+    assert.equal(repeatedFirst.model_calls, 1, "PostInvocation retries must be idempotent");
     assert.equal(second.terminate, true);
     assert.equal(second.model_calls, 2);
 
