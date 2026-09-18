@@ -84,6 +84,17 @@ export function launchEvidenceWatchRunner({
   contractPath,
   activeState,
 } = {}) {
+  if (process.env.ORCHESTRA_DISABLE_BACKGROUND_EVIDENCE_WATCH === "1") {
+    return {
+      launched: false,
+      disabled: true,
+      reason: "BACKGROUND_EVIDENCE_WATCH_DISABLED",
+      pid: null,
+      binding: bindingOf(activeState),
+      startedAt: null,
+    };
+  }
+
   const root = resolve(repoRoot);
   const expectedBinding = bindingOf(activeState);
   const lock = lockPath(root);
