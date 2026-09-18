@@ -1330,8 +1330,14 @@ function main() {
   if (valEval.status === "STALE") {
     activeState.state = "PLANNED";
     activeState.acceptanceState = "PENDING";
-    activeState.retryReason = "INCOMPLETE_IMPLEMENTATION";
-    activeState.retry_reason = activeState.retryReason;
+    delete activeState.retryReason;
+    delete activeState.retry_reason;
+    delete activeState.retry;
+    activeState.evidenceStale = {
+      reason: valEval.reason || "EVIDENCE_STALE",
+      requirementIds: (valEval.results || []).filter((r) => r.status === "STALE").map((r) => r.id),
+      observedAt: new Date().toISOString(),
+    };
     activeState.workerCompletionClaimed = false;
     activeState.workerCompletionClaimFactual = false;
     activeState.implementationComplete = false;
