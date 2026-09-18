@@ -566,6 +566,7 @@ export function resolveExplorationPolicyOverlay({ repoRoot, decisionType: type, 
   const session = loadExplorationSession(repoRoot);
   if (!session) return null;
   if (!["PREPARED", "RUNNING"].includes(session.status)) return { active: true, blocked: true, reason: "EXPLORATION_SESSION_NOT_ACTIVE" };
+  if (session.target?.consumed === true) return null;
   if (Date.now() > Date.parse(session.deadline_at)) return { active: true, blocked: true, reason: "EXPLORATION_TIMEOUT" };
   if (decisionType(type) !== decisionType(session.target?.decision_type)) return null;
   if (sha256Canonical(stripEphemeral(state || {})) !== session.target?.state_hash) return null;
@@ -584,6 +585,28 @@ export function resolveExplorationPolicyOverlay({ repoRoot, decisionType: type, 
     policy_diagnostic: null,
     source_snapshot_id: session.source?.snapshot_id || null,
   };
+}
+
+export function consumeExplorationTarget({ repoRoot, decisionType: type, state, action } = {}) {
+  const session = loadExplorationSession(repoRoot);
+  if (!session || !["PREPARED", "RUNNING"].includes(session.status)) {
+    return { consumed: false, reason: "EXPLORATION_SESSION_NOT_ACTIVE" };
+  }
+  if (session.target?.consumed === true) {
+    return { consumed: false, reason: "EXPLORATION_TARGET_ALREADY_CONSUMED" };
+  }
+
+  const typeMatches = decisionType(type) === decisionType(session.target?.decision_type);
+  const stateMatches = sha256Canonical(stripEphemeral(state || {})) === session.target?.state_hash;
+  const actionMatches = String(action || "") === String(session.target?.selected_action || "");
+  if (!typeMatches || !stateMatches || !actionMatches) {
+    return { consumed: false, reason: "EXPLORATION_TARGET_MISMATCH" };
+  }
+
+  session.target.consumed = true;
+  session.target.consumed_at = new Date().toISOString();
+  atomicJson(resolve(repoRoot, SESSION), session);
+  return { consumed: true, session_id: session.session_id };
 }
 
 export function enforceExplorationToolBoundary({ repoRoot, toolName, toolArgs = {} } = {}) {
