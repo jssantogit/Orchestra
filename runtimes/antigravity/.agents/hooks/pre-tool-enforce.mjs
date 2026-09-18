@@ -680,8 +680,8 @@ function extractTargetPaths(commandLine, repoRoot) {
     }
   }
 
-  // 3. rm, mv, cp, touch, truncate
-  const fileOpRegex = /\b(rm|mv|cp|touch|truncate)\s+([^;&|]+)/g;
+  // 3. rm, mv, cp, touch, truncate, mkdir
+  const fileOpRegex = /\b(rm|mv|cp|touch|truncate|mkdir)\s+([^;&|]+)/g;
   let match;
   while ((match = fileOpRegex.exec(cmd)) !== null) {
     const op = match[1];
@@ -922,6 +922,8 @@ function main() {
   const activeRole = actor.role;
   const actorDelegationKind = actor.delegationKind || null;
   const actorIdentityIsProvisional = actor.source === "HOOK_PAYLOAD_CORRELATION";
+  const actorIdentityIsFactual = actor.source === "RUNTIME_IDENTITY" && actor.confidence === "HIGH";
+  const actorHasFactualWorkerAuthority = isWorkerRole(actor.role) && actorIdentityIsFactual;
   const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
@@ -1712,7 +1714,10 @@ function main() {
       const safeInvestigationCommand =
         !hasWorkspaceMutationTargets &&
         redir.targets.length === 0 &&
-        (isReadOnly || (isValidation && mutation.isMutation === false));
+        (
+          isReadOnly ||
+          (actorIdentityIsFactual && isValidation && mutation.isMutation === false)
+        );
       if (safeInvestigationCommand) {
         allowCommand(cmd);
         return;
@@ -1726,7 +1731,7 @@ function main() {
 
     // Unknown role: read-only/validation without workspace redirections is safe; mutating commands fail closed!
     if (!activeRole || activeRole === "UNKNOWN") {
-      if ((isReadOnly || isValidation) && !hasWorkspaceMutationTargets && redir.targets.length === 0 && targets.length === 0) {
+      if (isReadOnly && !hasWorkspaceMutationTargets && redir.targets.length === 0 && targets.length === 0) {
         allowCommand(cmd);
         return;
       }
@@ -1815,10 +1820,26 @@ function main() {
       return;
     }
 
-    // 2c. Worker (Flash): validate mutating commands against Scope Contract
+    // 2c. Worker (Flash): shell authority requires factual child identity.
     if (isWorkerRole(activeRole)) {
       if (isReadOnly) {
         allowCommand(cmd);
+        return;
+      }
+
+      if (!actorHasFactualWorkerAuthority) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "ROLE_IDENTITY_NOT_FACTUAL: Worker shell execution beyond read-only inspection requires HIGH RUNTIME_IDENTITY."
+        }));
+        return;
+      }
+
+      if (!activeContract) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "SCOPE_VIOLATION: Worker shell execution beyond read-only inspection requires an active Scope Contract."
+        }));
         return;
       }
 
@@ -1841,76 +1862,70 @@ function main() {
         return;
       }
 
-      if (actorIdentityIsProvisional) {
+      const mutation = classifyShellMutation(cmd);
+      if (!mutation.isMutation) {
         console.log(JSON.stringify({
           decision: "deny",
-          reason: "ROLE_IDENTITY_PROVISIONAL: Hook payload correlation may apply restrictive role policy but cannot grant workspace mutation authority. Wait for factual runtime child identity."
+          reason: "WORKER_UNVERIFIED_SHELL_COMMAND: Non-validation shell command is neither read-only nor a deterministically classified mutation. Use native tools or an explicitly scoped mutation command."
         }));
         return;
       }
 
-      if (activeContract) {
-        const allowed = Array.isArray(activeContract.allowedPaths) ? activeContract.allowedPaths : [];
-        const forbidden = Array.isArray(activeContract.forbiddenPaths) ? activeContract.forbiddenPaths : [];
-
-        // Check forbiddenPaths
-        for (const t of targets) {
-          for (const pattern of forbidden) {
-            if (pathMatchesPattern(t, pattern)) {
-              console.log(JSON.stringify({
-                decision: "deny",
-                reason: `Scope contract violation: shell command targets forbidden path "${t}" matching "${pattern}".`
-              }));
-              return;
-            }
-          }
+      const effectiveTargets = [...targets];
+      if (mutation.targetPath) {
+        const normalizedMutationTarget = normalizePath(
+          String(mutation.targetPath).startsWith(repoRoot)
+            ? relative(repoRoot, String(mutation.targetPath))
+            : String(mutation.targetPath)
+        );
+        if (normalizedMutationTarget && !effectiveTargets.includes(normalizedMutationTarget)) {
+          effectiveTargets.push(normalizedMutationTarget);
         }
+      }
 
-        // Check allowedPaths
-        if (allowed.length > 0) {
-          for (const t of targets) {
-            const isAllowed = allowed.some((pattern) => pathMatchesPattern(t, pattern));
-            if (!isAllowed) {
-              console.log(JSON.stringify({
-                decision: "deny",
-                reason: `Scope contract violation: shell command targets path "${t}" outside allowedPaths [${allowed.join(", ")}]. If required, return CROSS_DOMAIN_REQUEST to Orchestrator.`
-              }));
-              return;
-            }
-          }
-        }
+      if (effectiveTargets.length === 0 || (mutation.unknownScope && !mutation.targetPath && targets.length === 0)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "SCOPE_UNRESOLVED: Mutating worker shell command has no deterministic target path. Use a native file tool or provide an explicitly scoped command."
+        }));
+        return;
+      }
 
-        // Fallback check on forbidden keywords in command string
+      const allowed = Array.isArray(activeContract.allowedPaths) ? activeContract.allowedPaths : [];
+      const forbidden = Array.isArray(activeContract.forbiddenPaths) ? activeContract.forbiddenPaths : [];
+
+      if (allowed.length === 0) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "SCOPE_VIOLATION: Worker has no allowedPaths specified in active Scope Contract."
+        }));
+        return;
+      }
+
+      for (const t of effectiveTargets) {
         for (const pattern of forbidden) {
-          const rawPatternPrefix = pattern.replace(/\/\*\*?$/, "");
-          if (cmd.includes(rawPatternPrefix) && (/\b(rm|sed\s+-[a-zA-Z]*i|mv|cp|touch)\b/.test(cmd) || redir.targets.some(t => t.includes(rawPatternPrefix)))) {
+          if (pathMatchesPattern(t, pattern)) {
             console.log(JSON.stringify({
               decision: "deny",
-              reason: `Scope contract violation: shell command references forbidden path "${rawPatternPrefix}".`
+              reason: `Scope contract violation: shell command targets forbidden path "${t}" matching "${pattern}".`
             }));
             return;
           }
         }
 
-        // Anti-obfuscation check: if decoding used to target files, scope must be respected
-        if (/\b(base64\s+(?:-[a-zA-Z]*d|--decode)|xxd\s+-r)\b/.test(cmd)) {
-          for (const t of targets) {
-            const isAllowed = allowed.some((pattern) => pathMatchesPattern(t, pattern));
-            if (!isAllowed) {
-              console.log(JSON.stringify({
-                decision: "deny",
-                reason: `Scope contract violation: encoded write targets path "${t}" outside allowedPaths. Reformulate using supported safe mechanism within authorized scope.`
-              }));
-              return;
-            }
-          }
+        const isAllowed = allowed.some((pattern) => pathMatchesPattern(t, pattern));
+        if (!isAllowed) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: `Scope contract violation: shell command targets path "${t}" outside allowedPaths [${allowed.join(", ")}]. If required, return CROSS_DOMAIN_REQUEST to Orchestrator.`
+          }));
+          return;
         }
       }
 
       allowCommand(cmd);
       return;
     }
-
     allowCommand(cmd);
     return;
   }
@@ -1957,11 +1972,12 @@ function main() {
       return;
     }
 
-    // Provisional hook metadata can restrict an actor, but must never grant write authority.
-    if (isWorkerRole(activeRole) && actorIdentityIsProvisional) {
+    // Worker mutation authority is granted only by factual runtime child identity.
+    // STATE_DERIVED and HOOK_PAYLOAD_CORRELATION may restrict behavior but cannot authorize writes.
+    if (isWorkerRole(activeRole) && !actorHasFactualWorkerAuthority) {
       console.log(JSON.stringify({
         decision: "deny",
-        reason: "ROLE_IDENTITY_PROVISIONAL: Worker mutation requires factual runtime child identity. Hook payload correlation is not authorization to write."
+        reason: "ROLE_IDENTITY_NOT_FACTUAL: Worker mutation requires HIGH RUNTIME_IDENTITY. State-derived or hook-payload roles are not write authorization."
       }));
       return;
     }
