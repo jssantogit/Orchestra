@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,8 @@ import {
 import {
   FULL_EXPLORATION_LIMITS,
   fullExplorationStatus,
+  prepareFullExplorationBranch,
+  runFullExplorationBranch,
   startFullExploration,
   stopFullExploration,
 } from "../../runtimes/antigravity/.agents/dream/full-exploration.mjs";
@@ -22,8 +24,153 @@ import {
   evaluatePolicy,
   validatePolicy,
 } from "../../runtimes/antigravity/.agents/dream/policy-engine.mjs";
+import { buildSnapshot } from "../../runtimes/antigravity/.agents/dream/snapshot.mjs";
+import { createDreamEvent, DREAM_SCHEMAS } from "../../runtimes/antigravity/.agents/dream/records.mjs";
+import { sealWorld, validateWorld } from "../../runtimes/antigravity/.agents/dream/world-sealer.mjs";
+import {
+  armExplorationCapture,
+  captureBranchSeedIfArmed,
+} from "../../runtimes/antigravity/.agents/dream/exploration-lab.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const staticPolicy = JSON.parse(readFileSync(resolve(__dirname, "../../runtimes/antigravity/.agents/dream/policies/static-policy-v1.json"), "utf8"));
+
+function controllerFixture() {
+  const repo = mkdtempSync(join(tmpdir(), "orchestra-k-factual-"));
+  mkdirSync(join(repo, "src"), { recursive: true });
+  mkdirSync(join(repo, ".agents", "hooks"), { recursive: true });
+  writeFileSync(join(repo, "src", "unit.js"), "export const value = 1;\n");
+  writeFileSync(join(repo, ".agents", "hooks.json"), JSON.stringify({
+    "scope-enforcer": {
+      PreToolUse: [{
+        matcher: "write_to_file|replace_file_content|edit_file|create_file|invoke_subagent|define_subagent|run_command|manage_task|manage_subagents|schedule|send_message|view_file|grep_search|find_by_name",
+        hooks: [{ type: "command", command: "node hooks/pre-tool-enforce.mjs", timeout: 10 }],
+      }],
+    },
+  }, null, 2));
+  writeFileSync(join(repo, ".agents", "hooks", "pre-tool-enforce.mjs"), "// fixture baseline hook\n");
+  writeFileSync(join(repo, ".agents", "hooks", "pre-tool-exploration-guard.mjs"), "// fixture exploration wrapper\n");
+  writeFileSync(join(repo, ".agents", "hooks", "post-invocation-exploration-guard.mjs"), "// fixture budget wrapper\n");
+
+  const state = {
+    task_action: "IMPLEMENT",
+    task_domain: "CODE",
+    criticality: "NORMAL",
+    complexity: "NORMAL",
+    state: "EXECUTING",
+    attempt: 0,
+    retry_remaining: 1,
+    retry_reason: null,
+    mutation_seq: 0,
+    post_investigation: false,
+    evidence: {
+      tests: "UNKNOWN",
+      typecheck: "UNKNOWN",
+      build: "UNKNOWN",
+      scope_check: "UNKNOWN",
+      validation_fresh: false,
+    },
+  };
+  const task = {
+    task_id: "task-k-fixture",
+    spec: "Milestone K factual controller fixture",
+    task_action: "IMPLEMENT",
+    task_domain: "CODE",
+    criticality: "NORMAL",
+  };
+  const contract = {
+    allowedPaths: ["src/**"],
+    forbiddenPaths: [".agents/**"],
+    criticality: "NORMAL",
+    testsRequired: [],
+  };
+  const evidence = {
+    tests: "UNKNOWN",
+    typecheck: "UNKNOWN",
+    build: "UNKNOWN",
+    scope_check: "UNKNOWN",
+    validation_fresh: false,
+  };
+  const snapshotResult = buildSnapshot({
+    repoRoot: repo,
+    task,
+    contract,
+    runtime: {
+      node_version: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      schema_version: DREAM_SCHEMAS.SNAPSHOT,
+    },
+    executionState: {
+      step_sequence: 0,
+      attempt: 0,
+      retry_remaining: 1,
+      mutation_seq: 0,
+    },
+    evidence,
+  });
+  assert.equal(snapshotResult.ok, true);
+
+  const decision = createDreamEvent("DECISION", {
+    schema: DREAM_SCHEMAS.DECISION,
+    decision_id: "decision-k-source",
+    snapshot_id: snapshotResult.snapshot.snapshot_id,
+    decision_type: "WORKER_TIER",
+    state,
+    available_actions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    chosen_action: "FLASH_LOW",
+    policy_source: "STATIC_POLICY_V1",
+    actor_identity: "ORCHESTRATOR",
+    created_at: "2026-09-18T00:00:00.000Z",
+    step_idx: 0,
+    branch_ordinal: 0,
+  });
+  const outcome = createDreamEvent("DECISION_OUTCOME", {
+    schema: DREAM_SCHEMAS.OUTCOME,
+    decision_id: decision.decision_id,
+    observation_id: "observation-k-source",
+    result: "SUCCESS",
+    evidence_summary: {
+      tests: "NOT_REQUIRED",
+      typecheck: "NOT_REQUIRED",
+      build: "NOT_REQUIRED",
+      scope_check: "PASS",
+      validation_fresh: false,
+    },
+    retry_state: { retry_remaining: 1 },
+    cost_metrics: { model_calls: 1 },
+    terminal_state: "ACCEPTED",
+    resulting_snapshot_id: null,
+    created_at: "2026-09-18T00:00:01.000Z",
+  });
+  const sealed = sealWorld({
+    events: [decision, outcome],
+    expectedRuntimeFingerprint: snapshotResult.snapshot.runtime_fingerprint,
+    rootSnapshotId: snapshotResult.snapshot.snapshot_id,
+    worldId: "world-k-source",
+  });
+  assert.equal(sealed.status, "SEALED", JSON.stringify(sealed.errors));
+
+  const armed = armExplorationCapture({ repoRoot: repo, decisionType: "WORKER_TIER" });
+  assert.equal(armed.armed, true);
+  const captured = captureBranchSeedIfArmed({
+    repoRoot: repo,
+    snapshot: snapshotResult.snapshot,
+    decisionType: "WORKER_TIER",
+    decisionState: state,
+    availableActions: ["FLASH_LOW", "FLASH_MEDIUM"],
+    scopeContract: contract,
+    taskDescriptor: task,
+    evidenceSummary: evidence,
+    runtimeState: { state: "EXECUTING" },
+  });
+  assert.equal(captured.captured, true, JSON.stringify(captured));
+
+  return {
+    repo,
+    seedPath: captured.seed_path,
+    world: sealed.world,
+  };
+}
 
 test("full exploration hard ceilings are static and bounded", () => {
   assert.deepEqual(FULL_EXPLORATION_LIMITS, {
@@ -62,6 +209,62 @@ test("full exploration controller persists an explicit bounded lifecycle", () =>
     assert.equal(finalStatus.status, "STOPPED");
   } finally {
     rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("K defers control outcomes until a factual branch consequence and seals one decision per world", () => {
+  const fixture = controllerFixture();
+  try {
+    const started = startFullExploration({ repoRoot: fixture.repo });
+    assert.equal(started.started, true);
+
+    const prepared = prepareFullExplorationBranch({
+      repoRoot: fixture.repo,
+      seedPath: fixture.seedPath,
+      world: fixture.world,
+      decisionId: "decision-k-source",
+    });
+    assert.equal(prepared.prepared, true, JSON.stringify(prepared));
+    assert.equal(prepared.branch.selected_action, "FLASH_MEDIUM");
+    assert.equal(prepared.branch.deferred_decision_ids.length, 3);
+
+    let status = fullExplorationStatus({ repoRoot: fixture.repo });
+    assert.equal(status.pending_decision_outcomes, 3);
+    assert.equal(status.decision_worlds.length, 0);
+
+    const failedRun = runFullExplorationBranch({
+      repoRoot: fixture.repo,
+      branchId: prepared.branch.branch_id,
+      command: "node",
+      args: ["script.mjs"],
+    });
+    assert.equal(failedRun.ran, false);
+    assert.equal(failedRun.branch.status, "FAILED_TO_START");
+    assert.equal(failedRun.branch.decision_outcomes_finalized, true);
+
+    status = fullExplorationStatus({ repoRoot: fixture.repo });
+    assert.equal(status.pending_decision_outcomes, 0);
+    assert.equal(status.decision_worlds.length, 3);
+
+    const control = JSON.parse(readFileSync(join(
+      fixture.repo,
+      ".agents",
+      "dream-data",
+      "full-exploration",
+      "control.json",
+    ), "utf8"));
+    const completed = control.decisions.filter((item) => item.outcome_status === "COMPLETE");
+    assert.equal(completed.length, 3);
+    for (const decision of completed) {
+      const world = JSON.parse(readFileSync(decision.outcome_world_path, "utf8"));
+      assert.equal(validateWorld(world).valid, true);
+      assert.equal(world.decisions.length, 1);
+      assert.equal(world.outcomes.length, 1);
+      assert.equal(world.decisions[0].decision_type, decision.decision_type);
+      assert.equal(world.outcomes[0].terminal_state, "FAILED");
+    }
+  } finally {
+    rmSync(fixture.repo, { recursive: true, force: true });
   }
 });
 
