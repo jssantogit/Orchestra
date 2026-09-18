@@ -112,8 +112,26 @@ test("turn-diet: post-tool hook records worker claim from send_message and verif
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "child-worker-1": { role: "WORKER", profile: "flash-low-worker" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-1": {
+        conversationId: "child-worker-1",
+        role: "WORKER",
+        profile: "flash-low-worker",
+        parentConversationId: "orch-parent",
+        delegationKind: "WORK",
+        attempt: 0,
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+      },
     },
+    conversations: {},
+    pendingSubagents: [],
   }));
 
   const completionPacket = [
@@ -142,6 +160,11 @@ test("turn-diet: post-tool hook records worker claim from send_message and verif
   // Model Claim Is Not Evidence: send_message records claims, NOT verified validation
   assert.equal(state.implementationComplete, true);
   assert.equal(state.workerCompletionClaimed, true);
+  assert.equal(state.workerCompletionClaimFactual, true);
+  assert.equal(state.workerCompletionClaimIdentity.source, "RUNTIME_IDENTITY");
+  assert.equal(state.workerCompletionClaimIdentity.confidence, "HIGH");
+  assert.equal(state.workerCompletionClaimIdentity.delegationKind, "WORK");
+  assert.equal(state.workerCompletionClaimIdentity.attempt, 0);
   assert.equal(state.claimedValidationCommand, "node --test test/formatter.test.js");
   assert.equal(state.claimedTestsPassed, "5 passed / 0 failed");
   assert.equal(state.claimedValidationExitCode, 0);
