@@ -178,6 +178,15 @@ export function validateDreamRecord(kind, value) {
       if (typeof value.created_at !== "string" || value.created_at.length === 0) {
         errors.push("created_at must be a non-empty string");
       }
+      if (value.events !== undefined && !Array.isArray(value.events)) {
+        errors.push("events must be an array when present");
+      }
+      if (value.decisions !== undefined && !Array.isArray(value.decisions)) {
+        errors.push("decisions must be an array when present");
+      }
+      if (value.outcomes !== undefined && !Array.isArray(value.outcomes)) {
+        errors.push("outcomes must be an array when present");
+      }
       break;
     }
 
@@ -223,8 +232,11 @@ export function validateDreamRecord(kind, value) {
       if (value.schema !== DREAM_SCHEMAS.WORLD) {
         errors.push(`Invalid schema: expected "${DREAM_SCHEMAS.WORLD}", got "${value.schema}"`);
       }
-      if (typeof value.world_id !== "string" || value.world_id.length === 0) {
-        errors.push("world_id must be a non-empty string");
+      if (
+        typeof value.world_id !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.world_id)
+      ) {
+        errors.push("world_id must be a safe filename token using only letters, digits, dot, underscore, or hyphen");
       }
       if (typeof value.root_snapshot_id !== "string" || !value.root_snapshot_id.startsWith(SHA256_PREFIX)) {
         errors.push('root_snapshot_id must be a string starting with "sha256:"');

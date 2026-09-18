@@ -1,9 +1,16 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve, dirname, basename, join } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { findReusableEvidence, verifyWorkerValidation, classifyShellMutation, isWorkerRole } from "../skills/agy-orchestra/routing-policy.mjs";
+import { evaluateTwoKeyReview } from "../skills/orchestra/routing-policy.mjs";
 import { recordDecisionOutcome } from "../dream/outcome-recorder.mjs";
+import {
+  factualSubagentMatchesPending,
+  filterFactualPendingCandidates,
+  isSymmetricReviewerSet,
+} from "./child-identity.mjs";
 
 function readStdin() {
   try {
@@ -53,6 +60,39 @@ function getWorkspacePaths(payload = {}) {
   };
 }
 
+function readGovernanceObject(path, label) {
+  if (!existsSync(path)) return { ok: true, exists: false, value: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return { ok: false, exists: true, value: null, reason: `${label}_MALFORMED_JSON` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, exists: true, value: null, reason: `${label}_INVALID_SHAPE` };
+  }
+  return { ok: true, exists: true, value: parsed };
+}
+
+function validRoleBindingsShape(roleBindings) {
+  if (!roleBindings || typeof roleBindings !== "object" || Array.isArray(roleBindings)) return false;
+  if (
+    roleBindings.mainConversationId !== undefined &&
+    roleBindings.mainConversationId !== null &&
+    typeof roleBindings.mainConversationId !== "string"
+  ) return false;
+  if (
+    roleBindings.bindings !== undefined &&
+    (!roleBindings.bindings || typeof roleBindings.bindings !== "object" || Array.isArray(roleBindings.bindings))
+  ) return false;
+  if (
+    roleBindings.conversations !== undefined &&
+    (!roleBindings.conversations || typeof roleBindings.conversations !== "object" || Array.isArray(roleBindings.conversations))
+  ) return false;
+  if (roleBindings.pendingSubagents !== undefined && !Array.isArray(roleBindings.pendingSubagents)) return false;
+  return true;
+}
+
 function recordStopTelemetry(telemetryPath, activeState, payload, decision, continuationReason = null) {
   try {
     mkdirSync(dirname(telemetryPath), { recursive: true });
@@ -76,6 +116,158 @@ function recordStopTelemetry(telemetryPath, activeState, payload, decision, cont
     };
     appendFileSync(telemetryPath, JSON.stringify(stopEvent) + "\n", "utf-8");
   } catch {}
+}
+
+function readGitHead(repoRoot) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseReviewerVerdictText(text = "") {
+  const norm = String(text || "");
+  const explicit = norm.match(/(?:^|\n)\s*(?:VERDICT|DECISION|RECOMMENDATION)\s*[:=\-]\s*([^\r\n]+)/im);
+  if (!explicit) return { present: false, verdict: null };
+
+  const raw = explicit[1]
+    .replace(/[\`*_]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
+  if (/^(?:ACCEPT_WITH_NOTES|ACCEPT_NOTES|PASS_WITH_NOTES)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "ACCEPT_WITH_NOTES" };
+  }
+  if (/^(?:CHANGES_REQUIRED|CHANGE_REQUIRED|REWORK|RETRY)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "CHANGES_REQUIRED" };
+  }
+  if (/^(?:BLOCK|BLOCKED|REJECT|REJECTED)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "BLOCK" };
+  }
+  if (/^(?:NOT_ACCEPT|DO_NOT_ACCEPT|NO_ACCEPT|NOT_APPROVED|DO_NOT_APPROVE)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: null };
+  }
+  if (/^(?:ACCEPT|ACCEPTED|PASS|PASSED)(?:_|$)/.test(raw)) {
+    return { present: true, verdict: "ACCEPT" };
+  }
+
+  return { present: true, verdict: null };
+}
+
+export function extractReviewerVerdict(steps = []) {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const text = String(steps[i]?.content || "");
+    if (!text) continue;
+    const parsed = parseReviewerVerdictText(text);
+    if (parsed.present) return parsed.verdict;
+  }
+  return null;
+}
+
+function evaluateTwoKeyRuntimeGate(activeState, roleBindings, repoRoot) {
+  const criticality = String(
+    activeState.criticality || activeState.scopeContract?.criticality || ""
+  ).toUpperCase();
+  const required = criticality === "CRITICAL" || activeState.independentReviewRequired === true;
+  if (!required) return { required: false, satisfied: true, reason: null };
+
+  const review = activeState.twoKeyReview;
+  if (!review || review.expectedReviewerCount !== 2) {
+    return { required: true, satisfied: false, reason: "TWO_KEY_REVIEW_MISSING" };
+  }
+
+  const currentHead = readGitHead(repoRoot);
+  const currentMutationSeq = activeState.mutationSeq || activeState.mutation_seq || 0;
+  const currentAttempt = Number.isInteger(activeState.attempt) ? activeState.attempt : 0;
+  const candidateAttempt = Number.isInteger(review.candidateAttempt) ? review.candidateAttempt : 0;
+  if (
+    !review.candidateHead ||
+    !currentHead ||
+    review.candidateHead !== currentHead ||
+    review.candidateMutationSeq !== currentMutationSeq ||
+    candidateAttempt !== currentAttempt
+  ) {
+    return {
+      required: true,
+      satisfied: false,
+      reason: "TWO_KEY_REVIEW_STALE",
+      candidateHead: review.candidateHead || null,
+      currentHead,
+      candidateMutationSeq: review.candidateMutationSeq ?? null,
+      currentMutationSeq,
+      candidateAttempt,
+      currentAttempt,
+    };
+  }
+
+  const entries = Object.entries(review.reviews || {});
+  if (entries.length !== 2) {
+    return {
+      required: true,
+      satisfied: false,
+      reason: "TWO_KEY_REVIEW_INCOMPLETE",
+      observedReviewerCount: entries.length,
+    };
+  }
+
+  const seen = new Set();
+  const verdicts = [];
+  for (const [conversationId, result] of entries) {
+    if (seen.has(conversationId)) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEWER_IDENTITY_REUSED" };
+    }
+    seen.add(conversationId);
+
+    const binding = roleBindings.bindings?.[conversationId]
+      || roleBindings.conversations?.[conversationId]
+      || null;
+    if (
+      !binding ||
+      binding.role !== "REVIEWER" ||
+      binding.profile !== "flash-reviewer" ||
+      binding.source !== "RUNTIME_IDENTITY" ||
+      binding.confidence !== "HIGH" ||
+      binding.delegationKind !== "REVIEW"
+    ) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEWER_IDENTITY_NOT_FACTUAL" };
+    }
+
+    const resultCandidateAttempt = Number.isInteger(result.candidateAttempt) ? result.candidateAttempt : 0;
+    const resultCompletionAttempt = Number.isInteger(result.completionAttempt) ? result.completionAttempt : 0;
+    if (
+      result.reviewBatchId !== review.reviewBatchId ||
+      result.candidateHead !== review.candidateHead ||
+      result.candidateMutationSeq !== review.candidateMutationSeq ||
+      resultCandidateAttempt !== candidateAttempt ||
+      result.completionHead !== review.candidateHead ||
+      result.completionMutationSeq !== review.candidateMutationSeq ||
+      resultCompletionAttempt !== candidateAttempt
+    ) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEW_RESULT_STALE" };
+    }
+    if (result.readOnlyViolation === true) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEWER_WRITE_DETECTED" };
+    }
+    if (!result.verdict) {
+      return { required: true, satisfied: false, reason: "TWO_KEY_REVIEW_VERDICT_MISSING" };
+    }
+    verdicts.push(result.verdict);
+  }
+
+  const consensus = evaluateTwoKeyReview(review, verdicts[0], verdicts[1]);
+  return {
+    required: true,
+    satisfied: consensus.acceptable === true,
+    reason: consensus.acceptable ? null : "TWO_KEY_CONSENSUS_NOT_ACCEPTED",
+    consensus,
+  };
 }
 
 function isStepMutation(step) {
@@ -137,53 +329,47 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         || (roleBindings.conversations && roleBindings.conversations[childConvId])
         || null;
 
+      const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || process.env.BENCHMARK_TASK_ID || null;
+      const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
+
+      // A provisional hook-payload correlation is authorization context, not factual
+      // runtime identity. Upgrade it only when this exact child exists in the parent
+      // brain and the factual descriptor/spawn metadata matches the originating pending slot.
+      if (binding && binding.source !== "RUNTIME_IDENTITY") {
+        const pending = Array.isArray(roleBindings.pendingSubagents)
+          ? roleBindings.pendingSubagents.find((p) => p.seq === binding.pendingSeq)
+          : null;
+        if (pending && factualSubagentMatchesPending(sub, pending)) {
+          binding.confidence = "HIGH";
+          binding.source = "RUNTIME_IDENTITY";
+          binding.factualIdentityAt = new Date().toISOString();
+          if (!roleBindings.bindings) roleBindings.bindings = {};
+          if (!roleBindings.conversations) roleBindings.conversations = {};
+          roleBindings.bindings[childConvId] = binding;
+          roleBindings.conversations[childConvId] = binding;
+          roleBindingsModified = true;
+        }
+      }
+
       if (!binding && Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0) {
-        // Step 1: Filter candidates by available scope:
-        // parentConversationId === current parent
-        // taskIdentifier/taskId === current task
-        // benchmarkRunId === current run
-        let candidates = roleBindings.pendingSubagents.filter((p) => !p.consumed);
-        if (parentConvId) {
-          candidates = candidates.filter((p) => p.parentConversationId && p.parentConversationId === parentConvId);
-        }
-        const activeTaskId = activeState.taskId || activeState.taskKey || options.taskId || process.env.BENCHMARK_TASK_ID || null;
-        if (activeTaskId) {
-          candidates = candidates.filter((p) => (p.taskIdentifier || p.taskId) && (p.taskIdentifier || p.taskId) === activeTaskId);
-        }
-        const activeRunId = activeState.benchmarkRunId || options.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
-        if (activeRunId) {
-          candidates = candidates.filter((p) => p.benchmarkRunId && p.benchmarkRunId === activeRunId);
-        }
-
-        // Step 2: Use role/profile evidence from descriptor
-        const descTypeName = sub.subagentDescriptor?.typeName || "";
-        const descRole = String(sub.subagentDescriptor?.role || "").toLowerCase();
-
-        let matchedCandidates = [];
-        if (descTypeName || descRole) {
-          matchedCandidates = candidates.filter((p) => {
-            if (descTypeName && (p.profile === descTypeName || p.typeName === descTypeName)) return true;
-            if (descRole && p.role && descRole.includes(p.role.toLowerCase())) return true;
-            return false;
-          });
-        } else {
-          matchedCandidates = candidates;
-        }
+        const matchedCandidates = filterFactualPendingCandidates({
+          pendingSubagents: roleBindings.pendingSubagents,
+          record: sub,
+          parentConversationId: parentConvId,
+          taskId: activeTaskId,
+          benchmarkRunId: activeRunId,
+          attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
+        });
 
         let match = null;
+        let slotAssignment = null;
         if (matchedCandidates.length === 1) {
           match = matchedCandidates[0];
-        } else if (matchedCandidates.length > 1) {
-          const firstRole = matchedCandidates[0].role;
-          const firstProfile = matchedCandidates[0].profile;
-          const allSameRoleAndProfile = matchedCandidates.every((c) => c.role === firstRole && c.profile === firstProfile);
-          if (allSameRoleAndProfile) {
-            match = matchedCandidates[0];
-          } else {
-            match = null;
-          }
-        } else {
-          match = null;
+        } else if (isSymmetricReviewerSet(matchedCandidates)) {
+          // Reviewer slots are permission- and policy-equivalent. The exact child
+          // identity is factual; only the A/B slot label is symmetric.
+          match = matchedCandidates.slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0];
+          slotAssignment = "SYMMETRIC_REVIEW_SLOT";
         }
 
         if (match) {
@@ -193,8 +379,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
           match.consumedAt = consumedAt;
 
           const childRole = match.role || null;
-          const childProfile = match.profile || match.typeName || (descTypeName || null);
-          const isFactual = Boolean(childRole && childProfile);
+          const childProfile = match.profile || match.typeName || sub.subagentDescriptor?.typeName || null;
 
           const boundRecord = {
             conversationId: childConvId,
@@ -204,11 +389,18 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
             parentConversationId: match.parentConversationId || parentConvId,
             taskIdentifier: match.taskIdentifier || activeTaskId || null,
             benchmarkRunId: match.benchmarkRunId || activeRunId || null,
+            attempt: Number.isInteger(match.attempt) ? match.attempt : 0,
             originToolCallId: match.originToolCallId || match.toolCallId || null,
+            originStepIdx: match.originStepIdx ?? null,
             pendingSeq: match.seq ?? null,
             delegationKind: match.delegationKind || null,
-            confidence: isFactual ? "HIGH" : "LOW",
-            source: isFactual ? "RUNTIME_IDENTITY" : "UNRESOLVED",
+            decisionCorrelationKey: match.decisionCorrelationKey || null,
+            decisionType: match.decisionType || null,
+            decisionBranchOrdinal: match.decisionBranchOrdinal ?? null,
+            confidence: "HIGH",
+            source: "RUNTIME_IDENTITY",
+            slotAssignment,
+            factualIdentityAt: new Date().toISOString(),
             consumed: true,
             consumedBy: childConvId,
             consumedAt,
@@ -242,6 +434,9 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
         if (binding.benchmarkRunId && activeRunId) {
           if (binding.benchmarkRunId !== activeRunId) continue;
         }
+        const activeAttempt = Number.isInteger(activeState.attempt) ? activeState.attempt : 0;
+        const bindingAttempt = Number.isInteger(binding.attempt) ? binding.attempt : 0;
+        if (bindingAttempt !== activeAttempt) continue;
       }
 
       // Child Identity Resolution
@@ -331,6 +526,8 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
                 conversationId: childConvId,
                 confidence: childConfidence,
                 evidenceSource: "CHILD_TRANSCRIPT",
+                delegationKind: binding?.delegationKind || null,
+                attempt: Number.isInteger(binding?.attempt) ? binding.attempt : 0,
                 transcriptStepIndex: stepIdx,
                 latestMutationStepBeforeValidation,
                 mutationAfterValidation,
@@ -368,19 +565,99 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
           } else if (toolName === "send_message") {
             const msg = String(args.Message || "");
             if (msg.includes("IMPLEMENTATION_COMPLETE")) {
-              if (isWorkerRole(childRole)) {
+              const factualImplementationWorker =
+                isWorkerRole(childRole) &&
+                childConfidence === "HIGH" &&
+                binding?.source === "RUNTIME_IDENTITY" &&
+                binding?.delegationKind === "WORK";
+              if (factualImplementationWorker) {
                 activeState.workerCompletionClaimed = true;
+                activeState.workerCompletionClaimFactual = true;
+                activeState.workerCompletionClaimTimestamp = new Date().toISOString();
+                activeState.workerCompletionClaimIdentity = {
+                  actorId: childConvId,
+                  source: binding.source,
+                  confidence: childConfidence,
+                  delegationKind: binding.delegationKind,
+                  attempt: Number.isInteger(binding.attempt) ? binding.attempt : 0,
+                };
                 activeState.implementationComplete = true;
                 activeState.handoffObserved = true;
                 activeState.worker_packet_bytes = (activeState.worker_packet_bytes || 0) + Buffer.byteLength(msg, "utf-8");
+              } else {
+                activeState.nonFactualCompletionClaims = (activeState.nonFactualCompletionClaims || 0) + 1;
               }
             }
           }
         }
       }
 
-      if (lastWorkerValidationEv) {
-        activeState.workerValidationObserved = true;
+      const isTerminalReviewerStop = Boolean(
+        childRole === "REVIEWER" &&
+        childConfidence === "HIGH" &&
+        binding?.source === "RUNTIME_IDENTITY" &&
+        binding?.delegationKind === "REVIEW" &&
+        options.terminalFullyIdle === true &&
+        options.terminalSucceeded === true &&
+        options.terminalChildConversationId === childConvId
+      );
+
+      if (isTerminalReviewerStop) {
+        const pending = Array.isArray(roleBindings.pendingSubagents)
+          ? roleBindings.pendingSubagents.find((p) => p.seq === binding.pendingSeq)
+          : null;
+        const review = activeState.twoKeyReview;
+        const verdict = extractReviewerVerdict(steps);
+        const candidateHead = pending?.reviewCandidateHead || review?.candidateHead || null;
+        const candidateMutationSeq = pending?.reviewCandidateMutationSeq ?? review?.candidateMutationSeq ?? null;
+        const candidateAttempt = Number.isInteger(pending?.reviewCandidateAttempt)
+          ? pending.reviewCandidateAttempt
+          : (Number.isInteger(review?.candidateAttempt) ? review.candidateAttempt : 0);
+        const reviewBatchId = pending?.reviewBatchId || review?.reviewBatchId || binding.originToolCallId || null;
+        const completionHead = readGitHead(repoRoot);
+        const completionMutationSeq = activeState.mutationSeq || activeState.mutation_seq || 0;
+        const completionAttempt = Number.isInteger(activeState.attempt) ? activeState.attempt : 0;
+
+        if (
+          review &&
+          reviewBatchId &&
+          review.reviewBatchId === reviewBatchId &&
+          candidateHead === review.candidateHead &&
+          candidateMutationSeq === review.candidateMutationSeq &&
+          candidateAttempt === (Number.isInteger(review.candidateAttempt) ? review.candidateAttempt : 0) &&
+          completionAttempt === candidateAttempt
+        ) {
+          if (!review.reviews || typeof review.reviews !== "object") review.reviews = {};
+          review.reviews[childConvId] = {
+            conversationId: childConvId,
+            verdict,
+            reviewBatchId,
+            candidateHead,
+            candidateMutationSeq,
+            candidateAttempt,
+            completionHead,
+            completionMutationSeq,
+            completionAttempt,
+            readOnlyViolation: mutationStepIndices.length > 0,
+            completedAt: new Date().toISOString(),
+          };
+          review.reviewerConversationIds = Object.keys(review.reviews);
+          review.status = review.reviewerConversationIds.length === 2 ? "EVIDENCE_READY" : "IN_FLIGHT";
+        } else {
+          activeState.twoKeyReviewViolation = {
+            reason: "TWO_KEY_REVIEW_CANDIDATE_CORRELATION_MISMATCH",
+            conversationId: childConvId,
+            reviewBatchId,
+            candidateHead,
+            candidateMutationSeq,
+            candidateAttempt,
+            completionAttempt,
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
+
+      if (lastWorkerValidationEv) {        activeState.workerValidationObserved = true;
         activeState.workerValidationCommand = lastWorkerValidationEv.command;
         activeState.workerValidationExitCode = lastWorkerValidationEv.exitCode;
         activeState.workerValidationActor = "WORKER";
@@ -399,7 +676,7 @@ export function syncChildEvidence(activeState, parentConvId, options = {}) {
 
 function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings) {
   const inFlight = activeState.investigationInFlight;
-  if (!inFlight || payload.fullyIdle === false) {
+  if (!inFlight || payload.fullyIdle !== true) {
     return { matched: false, reason: "NOT_TERMINAL_INVESTIGATION_STOP" };
   }
 
@@ -420,6 +697,9 @@ function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindi
     || null;
   if (!binding) {
     return { matched: false, reason: "CHILD_BINDING_NOT_FOUND" };
+  }
+  if (binding.confidence !== "HIGH" || binding.source !== "RUNTIME_IDENTITY") {
+    return { matched: false, reason: "CHILD_IDENTITY_NOT_FACTUAL" };
   }
 
   if (binding.parentConversationId && parentConversationId && binding.parentConversationId !== parentConversationId) {
@@ -504,23 +784,221 @@ function finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindi
   return { matched: true, success: !failed, dreamOutcome };
 }
 
+function finalizeDirectInvestigationDecisionFromStop(activeState, payload, repoRoot, roleBindings) {
+  const inFlight = activeState.directInvestigationDecisionInFlight;
+  if (!inFlight || payload.fullyIdle !== true) {
+    return { matched: false, reason: "NO_TERMINAL_DIRECT_INVESTIGATION_DECISION" };
+  }
+
+  const childConversationId = payload.conversationId || null;
+  if (!childConversationId || inFlight.childConversationId !== childConversationId) {
+    return { matched: false, reason: "DIRECT_INVESTIGATION_CHILD_MISMATCH" };
+  }
+
+  const binding = (roleBindings.bindings && roleBindings.bindings[childConversationId])
+    || (roleBindings.conversations && roleBindings.conversations[childConversationId])
+    || null;
+  if (!binding || binding.confidence !== "HIGH" || binding.source !== "RUNTIME_IDENTITY" || binding.delegationKind !== "WORK") {
+    return { matched: false, reason: "DIRECT_INVESTIGATION_CHILD_NOT_FACTUAL" };
+  }
+
+  const terminationReason = String(payload.terminationReason || "");
+  const failed = Boolean(
+    payload.error ||
+    payload.cancelled ||
+    /(?:error|fail|cancel|kill|abort|max[_ -]?step|timeout)/i.test(terminationReason)
+  );
+
+  const outcome = recordDecisionOutcome({
+    repoRoot,
+    correlationKey: inFlight.correlationKey,
+    outcome: {
+      result: failed
+        ? {
+            status: "FAILED",
+            chosen_action: "IMPLEMENT_DIRECT",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+            error: payload.error || null,
+          }
+        : {
+            status: "COMPLETED",
+            chosen_action: "IMPLEMENT_DIRECT",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+          },
+      evidence_summary: activeState.evidenceSummary || activeState.evidence || {
+        tests: activeState.workerValidationVerified ? "PASS" : "UNKNOWN",
+        typecheck: "UNKNOWN",
+        build: "UNKNOWN",
+        validation_fresh: Boolean(activeState.workerValidationFresh),
+        scope_check: "UNKNOWN",
+      },
+      retry_state: {
+        attempt: activeState.attempt || 0,
+        retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+        retry_reason: activeState.retryReason || activeState.retry_reason || null,
+      },
+      cost_metrics: {
+        tool_calls: activeState.tool_calls || 0,
+        context_proxy_bytes: activeState.context_proxy_bytes || 0,
+      },
+      terminal_state: failed ? "FAILED" : "UNKNOWN",
+    },
+  });
+
+  activeState.directInvestigationDecisionCompletion = {
+    childConversationId,
+    correlationKey: inFlight.correlationKey,
+    success: !failed,
+    outcomeRecorded: Boolean(outcome?.recorded),
+    outcomeReason: outcome?.reason || null,
+    completedAt: new Date().toISOString(),
+  };
+  delete activeState.directInvestigationDecisionInFlight;
+
+  return { matched: true, success: !failed, outcome };
+}
+
+function finalizeDelegatedDecisionFromStop(activeState, payload, repoRoot, roleBindings) {
+  if (payload.fullyIdle !== true) {
+    return { matched: false, reason: "NOT_TERMINAL_DELEGATION_STOP" };
+  }
+
+  const childConversationId = payload.conversationId || null;
+  if (!childConversationId) {
+    return { matched: false, reason: "MISSING_CHILD_IDENTITY" };
+  }
+
+  const binding = (roleBindings.bindings && roleBindings.bindings[childConversationId])
+    || (roleBindings.conversations && roleBindings.conversations[childConversationId])
+    || null;
+  if (!binding) {
+    return { matched: false, reason: "CHILD_BINDING_NOT_FOUND" };
+  }
+  if (binding.confidence !== "HIGH" || binding.source !== "RUNTIME_IDENTITY") {
+    return { matched: false, reason: "CHILD_IDENTITY_NOT_FACTUAL" };
+  }
+  if (binding.delegationKind !== "WORK" || !binding.decisionCorrelationKey) {
+    return { matched: false, reason: "NO_FACTUAL_WORK_DECISION" };
+  }
+
+  const mainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+  if (binding.parentConversationId && mainConversationId && binding.parentConversationId !== mainConversationId) {
+    return { matched: false, reason: "PARENT_IDENTITY_MISMATCH" };
+  }
+
+  const activeTaskId = activeState.taskId || activeState.taskKey || null;
+  if ((binding.taskIdentifier || binding.taskId) && activeTaskId) {
+    const boundTaskId = binding.taskIdentifier || binding.taskId;
+    if (boundTaskId !== activeTaskId) {
+      return { matched: false, reason: "TASK_IDENTITY_MISMATCH" };
+    }
+  }
+  if (binding.benchmarkRunId && activeState.benchmarkRunId && binding.benchmarkRunId !== activeState.benchmarkRunId) {
+    return { matched: false, reason: "RUN_IDENTITY_MISMATCH" };
+  }
+
+  const terminationReason = String(payload.terminationReason || "");
+  const failed = Boolean(
+    payload.error ||
+    payload.cancelled ||
+    /(?:error|fail|cancel|kill|abort|max[_ -]?step|timeout)/i.test(terminationReason)
+  );
+
+  const outcome = recordDecisionOutcome({
+    repoRoot,
+    correlationKey: binding.decisionCorrelationKey,
+    outcome: {
+      result: failed
+        ? {
+            status: "FAILED",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+            error: payload.error || null,
+          }
+        : {
+            status: "COMPLETED",
+            child_conversation_id: childConversationId,
+            termination_reason: terminationReason || null,
+          },
+      evidence_summary: activeState.evidenceSummary || activeState.evidence || {
+        tests: activeState.workerValidationVerified ? "PASS" : "UNKNOWN",
+        typecheck: "UNKNOWN",
+        build: "UNKNOWN",
+        validation_fresh: Boolean(activeState.workerValidationFresh),
+        scope_check: "UNKNOWN",
+      },
+      retry_state: {
+        attempt: activeState.attempt || 0,
+        retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+        retry_reason: activeState.retryReason || activeState.retry_reason || null,
+      },
+      cost_metrics: {
+        tool_calls: activeState.tool_calls || 0,
+        context_proxy_bytes: activeState.context_proxy_bytes || 0,
+        worker_packet_bytes: activeState.toolMix?.worker_packet_bytes || activeState.worker_packet_bytes || 0,
+      },
+      terminal_state: failed ? "FAILED" : "UNKNOWN",
+    },
+  });
+
+  activeState.lastDelegatedDecisionCompletion = {
+    childConversationId,
+    parentConversationId: binding.parentConversationId || null,
+    originToolCallId: binding.originToolCallId || null,
+    decisionCorrelationKey: binding.decisionCorrelationKey,
+    decisionType: binding.decisionType || null,
+    success: !failed,
+    outcomeRecorded: Boolean(outcome?.recorded),
+    outcomeReason: outcome?.reason || null,
+    completedAt: new Date().toISOString(),
+  };
+
+  return { matched: true, success: !failed, outcome };
+}
+
 function main() {
   const rawInput = readStdin();
-  let payload = {};
-  if (rawInput.trim()) {
-    try {
-      payload = JSON.parse(rawInput);
-    } catch {}
+  if (!rawInput.trim()) {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "INVALID_STOP_PAYLOAD: Stop hook received no runtime payload."
+    }));
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawInput);
+  } catch {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "MALFORMED_STOP_PAYLOAD: Stop hook payload is not valid JSON."
+    }));
+    return;
+  }
+
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: "INVALID_STOP_PAYLOAD: Stop hook payload must be a JSON object."
+    }));
+    return;
   }
 
   const { repoRoot, statePath, telemetryPath } = getWorkspacePaths(payload);
 
   let activeState = {};
-  if (existsSync(statePath)) {
-    try {
-      activeState = JSON.parse(readFileSync(statePath, "utf-8"));
-    } catch {}
+  const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");
+  if (!stateLoad.ok) {
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: `GOVERNANCE_STATE_INVALID: ${stateLoad.reason}. Stop cannot be accepted while authority state is corrupted.`
+    }));
+    return;
   }
+  if (stateLoad.exists) activeState = stateLoad.value;
 
   const benchmarkRunId = process.env.BENCHMARK_RUN_ID || payload.benchmarkRunId || activeState.benchmarkRunId || null;
   const taskId = process.env.BENCHMARK_TASK_ID || payload.taskId || activeState.taskId || null;
@@ -548,34 +1026,102 @@ function main() {
   // Turn Diet: If worker completed and validation was observed,
   // Orchestrator concluding turn automatically accepts work deterministically
   const roleBindingsPath = resolve(repoRoot, ".agents/state/role-bindings.json");
-  let roleBindings = { mainConversationId: null, bindings: {} };
-  if (existsSync(roleBindingsPath)) {
-    try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
+  let roleBindings = { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  const roleBindingsLoad = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
+  if (!roleBindingsLoad.ok || (roleBindingsLoad.exists && !validRoleBindingsShape(roleBindingsLoad.value))) {
+    const reason = roleBindingsLoad.ok ? "ROLE_BINDINGS_INVALID_SHAPE" : roleBindingsLoad.reason;
+    recordStopTelemetry(telemetryPath, activeState, payload, "continue", reason);
+    console.log(JSON.stringify({
+      decision: "continue",
+      reason: `GOVERNANCE_STATE_INVALID: ${reason}. Stop cannot be accepted while role identity state is corrupted.`
+    }));
+    return;
   }
+  if (roleBindingsLoad.exists) roleBindings = roleBindingsLoad.value;
   const convId = payload.conversationId || activeState.conversationId || roleBindings.mainConversationId || null;
-  const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
-  const activeRole = (bound && bound.role) || activeState.activeRole || "ORCHESTRATOR";
 
-  const isOrchestrator = (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR");
-
-  // Sync child execution evidence from the authoritative parent brain. During a
-  // child Stop hook, payload.conversationId is the child, so use the in-flight
-  // investigation's parent identity to resolve the parent's subagent metadata.
+  // Sync factual child identity/evidence before resolving the Stop actor. A child
+  // may be unbound when Stop fires and become bound by this synchronization.
   const investigationParentConvId = activeState.investigationInFlight?.parentConversationId
     || activeState.investigationInFlight?.parent_conversation_id
     || activeState.investigationInFlight?.conversationId
     || activeState.investigationInFlight?.conversation_id
     || null;
-  syncChildEvidence(activeState, investigationParentConvId || convId, { repoRoot, roleBindings });
+  const factualParentConvId = investigationParentConvId
+    || payload.parentConversationId
+    || (
+      convId &&
+      roleBindings.mainConversationId &&
+      convId !== roleBindings.mainConversationId
+        ? roleBindings.mainConversationId
+        : null
+    )
+    || convId
+    || roleBindings.mainConversationId
+    || null;
+  const terminalTerminationReason = String(payload.terminationReason || "");
+  const terminalFailed = Boolean(
+    payload.error ||
+    payload.cancelled ||
+    /(?:error|fail|cancel|kill|abort|max[_ -]?step|timeout)/i.test(terminalTerminationReason)
+  );
+  const terminalSucceeded = payload.fullyIdle === true && !terminalFailed;
+
+  syncChildEvidence(activeState, factualParentConvId, {
+    repoRoot,
+    roleBindings,
+    terminalChildConversationId:
+      payload.fullyIdle === true && convId && convId !== factualParentConvId ? convId : null,
+    terminalFullyIdle: payload.fullyIdle === true,
+    terminalSucceeded,
+    terminalTerminationReason: terminalTerminationReason || null,
+  });
+
+  const bound = (convId && roleBindings.bindings && roleBindings.bindings[convId]) || null;
+  const authoritativeMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+  const isMainConversation = Boolean(
+    convId &&
+    authoritativeMainConversationId &&
+    convId === authoritativeMainConversationId
+  );
+  const activeRole = bound?.role
+    || (isMainConversation ? "ORCHESTRATOR" : (!payload.conversationId ? activeState.activeRole : "UNKNOWN"))
+    || "UNKNOWN";
+
+  // Acceptance authority belongs to the factual/main orchestrator conversation,
+  // never merely to a stale global activeRole inherited by a child Stop.
+  const isOrchestrator = Boolean(
+    isMainConversation &&
+    (activeRole === "ORCHESTRATOR" || activeRole === "FLASH_ORCHESTRATOR")
+  );
 
   // Factual investigation completion boundary: terminal Stop of the exact bound
   // investigator child. Dispatch ACKs and manage_subagents observations cannot reach here.
   const investigationStop = finalizeInvestigationFromStop(activeState, payload, repoRoot, roleBindings);
-  if (investigationStop.matched) {
+  const directInvestigationStop = investigationStop.matched
+    ? { matched: false, reason: "INVESTIGATION_HANDLED_SEPARATELY" }
+    : finalizeDirectInvestigationDecisionFromStop(activeState, payload, repoRoot, roleBindings);
+  const delegatedDecisionStop = investigationStop.matched
+    ? { matched: false, reason: "INVESTIGATION_HANDLED_SEPARATELY" }
+    : finalizeDelegatedDecisionFromStop(activeState, payload, repoRoot, roleBindings);
+  if (investigationStop.matched || directInvestigationStop.matched || delegatedDecisionStop.matched) {
     try {
       mkdirSync(dirname(statePath), { recursive: true });
       writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
     } catch {}
+  }
+
+  // Terminal child Stop closes the child only. Parent acceptance is evaluated
+  // exclusively when the factual main conversation reaches Stop.
+  if (payload.conversationId && !isMainConversation) {
+    activeState.clean_stops = (activeState.clean_stops || 0) + 1;
+    try {
+      mkdirSync(dirname(statePath), { recursive: true });
+      writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8");
+    } catch {}
+    recordStopTelemetry(telemetryPath, activeState, payload, "stop");
+    console.log(JSON.stringify({ decision: "stop" }));
+    return;
   }
 
   // Re-evaluate worker validation verification against authoritative Evidence Ledger
@@ -592,12 +1138,68 @@ function main() {
     activeState.workerValidationExecutionId = null;
   }
 
+  const currentAttempt = Number.isInteger(activeState.attempt) && activeState.attempt >= 0
+    ? activeState.attempt
+    : 0;
+  const completionIdentity = activeState.workerCompletionClaimIdentity || null;
+  const completionAttempt = Number.isInteger(completionIdentity?.attempt)
+    ? completionIdentity.attempt
+    : 0;
+  const completionIdentityFactual = Boolean(
+    completionIdentity &&
+    completionIdentity.source === "RUNTIME_IDENTITY" &&
+    completionIdentity.confidence === "HIGH" &&
+    completionIdentity.delegationKind === "WORK" &&
+    completionAttempt === currentAttempt
+  );
   const completionClaimed = activeState.workerCompletionClaimed === true
-    || (activeState.implementationComplete === true && activeState.handoffObserved === true);
+    && activeState.workerCompletionClaimFactual === true
+    && completionIdentityFactual;
+
+  if (
+    activeState.workerCompletionClaimed === true &&
+    activeState.workerCompletionClaimFactual === true &&
+    !completionIdentityFactual
+  ) {
+    activeState.completionClaimRejectedReason = completionAttempt !== currentAttempt
+      ? "ATTEMPT_MISMATCH"
+      : "COMPLETION_IDENTITY_NOT_FACTUAL";
+  } else {
+    delete activeState.completionClaimRejectedReason;
+  }
 
   const noScopeViolation = !activeState.scopeViolation && !activeState.forbiddenAccessDetected;
   const noUnresolvedWrites = (activeState.orchestratorWorkspaceWrites || 0) === 0
     && (activeState.unknownWorkspaceWrites || 0) === 0;
+
+  const twoKeyGate = evaluateTwoKeyRuntimeGate(activeState, roleBindings, repoRoot);
+  activeState.twoKeyReviewGate = {
+    required: twoKeyGate.required,
+    satisfied: twoKeyGate.satisfied,
+    reason: twoKeyGate.reason || null,
+    checkedAt: new Date().toISOString(),
+  };
+
+  if (twoKeyGate.required && !twoKeyGate.satisfied) {
+    if (twoKeyGate.consensus?.humanGateRequired === true) {
+      activeState.state = "HUMAN_GATE";
+      activeState.humanGateReason = twoKeyGate.consensus.reason || "TWO_KEY_DISAGREEMENT";
+    } else if (twoKeyGate.consensus?.nextState === "PLANNED") {
+      activeState.state = "PLANNED";
+      activeState.retryReason = twoKeyGate.consensus.retryReason || "TWO_KEY_REJECTION";
+    } else if (activeState.state === "DONE" || activeState.acceptanceState === "ACCEPTED") {
+      activeState.state = "ACCEPTANCE";
+    }
+
+    if (activeState.acceptanceState === "ACCEPTED") {
+      activeState.acceptanceState = "PENDING";
+      delete activeState.acceptanceActor;
+      activeState.acceptanceRevokedReason = twoKeyGate.reason || "TWO_KEY_REVIEW_REQUIRED";
+    }
+  } else if (twoKeyGate.required && twoKeyGate.satisfied) {
+    activeState.twoKeyReview.status = "ACCEPTED";
+    activeState.twoKeyReviewConsensus = twoKeyGate.consensus?.decision || "ACCEPT";
+  }
 
   // Hardened Turn Diet acceptance: Orchestrator automatically accepts if and only if
   // 1. Worker claimed completion
@@ -609,7 +1211,8 @@ function main() {
     && completionClaimed
     && valEval.verified
     && noScopeViolation
-    && noUnresolvedWrites;
+    && noUnresolvedWrites
+    && twoKeyGate.satisfied;
 
   if (canAccept) {
     if (!activeState.acceptanceState || activeState.acceptanceState !== "ACCEPTED") {
@@ -653,6 +1256,9 @@ function main() {
     if (!valEval.verified) {
       reasonKey = "EVIDENCE_MISSING";
       reasonMsg = `STOP_BLOCKED: Completion claimed by worker, but required fresh validation evidence is not satisfied (${valEval.reason || "EVIDENCE_MISSING"}). MODEL CLAIM IS NOT EVIDENCE.`;
+    } else if (twoKeyGate.required && !twoKeyGate.satisfied) {
+      reasonKey = twoKeyGate.reason || "TWO_KEY_REVIEW_REQUIRED";
+      reasonMsg = `STOP_BLOCKED: CRITICAL acceptance requires two factual independent reviewer approvals bound to the current candidate (${reasonKey}).`;
     } else if (!noUnresolvedWrites) {
       reasonKey = "UNRESOLVED_WRITES";
       reasonMsg = "STOP_BLOCKED: Workspace writes by orchestrator or unknown actors detected. Separation of duties violated.";

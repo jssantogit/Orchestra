@@ -29,9 +29,14 @@ import {
   extractParentDelegatedSidequestAttempts,
   evaluateInvestigationEconomy,
   evaluateBoundedFactualCorrection,
+  extractReviewerVerdict as extractBenchmarkReviewerVerdict,
 } from "../../benchmarks/turn-economy/run.mjs";
 import { isValidAgentName } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
-import { syncChildEvidence } from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
+import {
+  syncChildEvidence,
+  parseReviewerVerdictText,
+  extractReviewerVerdict as extractRuntimeReviewerVerdict,
+} from "../../runtimes/antigravity/.agents/hooks/stop-guard.mjs";
 
 function cleanState() {
   process.chdir(runtimeRoot);
@@ -40,6 +45,24 @@ function cleanState() {
   try { unlinkSync(".agents/state/role-bindings.json"); } catch {}
   try { rmSync(".agents/state/executions", { recursive: true, force: true }); } catch {}
   try { unlinkSync(".agents/telemetry/events.jsonl"); } catch {}
+}
+
+function seedFactualOrchestrator(conversationId) {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: conversationId,
+    bindings: {
+      [conversationId]: {
+        conversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf-8");
 }
 
 test.beforeEach(() => {
@@ -107,8 +130,26 @@ test("turn-diet: post-tool hook records worker claim from send_message and verif
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "child-worker-1": { role: "WORKER", profile: "flash-low-worker" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-1": {
+        conversationId: "child-worker-1",
+        role: "WORKER",
+        profile: "flash-low-worker",
+        parentConversationId: "orch-parent",
+        delegationKind: "WORK",
+        attempt: 0,
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+      },
     },
+    conversations: {},
+    pendingSubagents: [],
   }));
 
   const completionPacket = [
@@ -137,6 +178,11 @@ test("turn-diet: post-tool hook records worker claim from send_message and verif
   // Model Claim Is Not Evidence: send_message records claims, NOT verified validation
   assert.equal(state.implementationComplete, true);
   assert.equal(state.workerCompletionClaimed, true);
+  assert.equal(state.workerCompletionClaimFactual, true);
+  assert.equal(state.workerCompletionClaimIdentity.source, "RUNTIME_IDENTITY");
+  assert.equal(state.workerCompletionClaimIdentity.confidence, "HIGH");
+  assert.equal(state.workerCompletionClaimIdentity.delegationKind, "WORK");
+  assert.equal(state.workerCompletionClaimIdentity.attempt, 0);
   assert.equal(state.claimedValidationCommand, "node --test test/formatter.test.js");
   assert.equal(state.claimedTestsPassed, "5 passed / 0 failed");
   assert.equal(state.claimedValidationExitCode, 0);
@@ -176,6 +222,14 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
     state: "EVIDENCE_READY",
     implementationComplete: true,
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "accept-worker-1",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     workerValidationObserved: true,
     workerValidationVerified: true,
     workerValidationFresh: true,
@@ -187,6 +241,8 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
         mutationSeq: 0,
         actorRole: "WORKER",
         confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         timestamp: new Date().toISOString(),
       },
     ],
@@ -195,7 +251,13 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
     },
   }));
 
@@ -217,6 +279,7 @@ test("turn-diet: stop-guard automatically records acceptanceState ACCEPTED and s
 test("turn-diet: polling is restricted and reactive wakeup is favored after worker spawn", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -251,6 +314,14 @@ test("turn-diet: fresh worker evidence in Evidence Ledger avoids duplicate accep
     state: "EVIDENCE_READY",
     implementationComplete: true,
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "accept-worker-2",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     mutationSeq: 2,
     mutations: [
       { path: "src/formatter.js", seq: 1 },
@@ -267,6 +338,8 @@ test("turn-diet: fresh worker evidence in Evidence Ledger avoids duplicate accep
         mutationSeq: 2,
         actorRole: "WORKER",
         confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         timestamp: new Date().toISOString(),
       },
     ],
@@ -275,7 +348,13 @@ test("turn-diet: fresh worker evidence in Evidence Ledger avoids duplicate accep
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
     },
   }));
 
@@ -442,6 +521,14 @@ test("turn-diet: regression 31: Valid Success — exitCode 0, fresh, worker-auth
     state: "DELEGATED",
     implementationComplete: true,
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "accept-worker-3",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     taskAction: "IMPLEMENT",
     mutationSeq: 1,
     mutations: [
@@ -458,6 +545,8 @@ test("turn-diet: regression 31: Valid Success — exitCode 0, fresh, worker-auth
         mutationSeq: 1,
         actorRole: "WORKER",
         confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         timestamp: new Date().toISOString(),
       },
     ],
@@ -465,7 +554,13 @@ test("turn-diet: regression 31: Valid Success — exitCode 0, fresh, worker-auth
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
     },
   }));
 
@@ -751,8 +846,26 @@ test("turn-diet: regression 38: batching guidance preserves allowedPaths enforce
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-parent",
     bindings: {
-      "child-worker-1": { role: "WORKER", profile: "flash-low-worker" },
+      "orch-parent": {
+        conversationId: "orch-parent",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-1": {
+        conversationId: "child-worker-1",
+        role: "WORKER",
+        profile: "flash-low-worker",
+        parentConversationId: "orch-parent",
+        delegationKind: "WORK",
+        attempt: 0,
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+      },
     },
+    conversations: {},
+    pendingSubagents: [],
   }));
 
   // Allowed edit
@@ -1451,6 +1564,7 @@ test("evidence-sync-integrity: regression 10: transcriptEvidenceId is separate f
 });
 
 test("evidence-sync-integrity: regression 11: invalid agent names are denied", () => {
+  seedFactualOrchestrator("parent-orch");
   const invalidNames = [
     "../worker",
     "../../foo",
@@ -1479,6 +1593,7 @@ test("evidence-sync-integrity: regression 11: invalid agent names are denied", (
 });
 
 test("evidence-sync-integrity: regression 12: valid registered profile is allowed with authoritative prompt", () => {
+  seedFactualOrchestrator("parent-orch");
   const input = JSON.stringify({
     conversationId: "parent-orch",
     toolCall: {
@@ -1494,6 +1609,7 @@ test("evidence-sync-integrity: regression 12: valid registered profile is allowe
 });
 
 test("evidence-sync-integrity: regression 13: valid name syntax but nonexistent profile is denied", () => {
+  seedFactualOrchestrator("parent-orch");
   const input = JSON.stringify({
     conversationId: "parent-orch",
     toolCall: {
@@ -1528,7 +1644,9 @@ test("evidence-sync-integrity: regression 14: module import does not invoke main
 });
 
 test("evidence-sync-integrity: regression 15: direct script execution still invokes hook", () => {
+  seedFactualOrchestrator("parent-orch");
   const input = JSON.stringify({
+    conversationId: "parent-orch",
     toolCall: {
       name: "define_subagent",
       args: { name: "invalid/name" },
@@ -2012,6 +2130,7 @@ test("fidelity-reactive-wakeup: regression 11: second sync reuses persisted exac
 test("fidelity-reactive-wakeup: regression 12: healthy delegation does not require manage_subagents polling", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("parent-orch-poll");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2037,8 +2156,22 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-acceptance-conv",
     bindings: {
-      "orch-acceptance-conv": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
-      "child-worker-conv": { role: "WORKER", profile: "flash-low-worker", confidence: "HIGH" },
+      "orch-acceptance-conv": {
+        conversationId: "orch-acceptance-conv",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-conv": {
+        conversationId: "child-worker-conv",
+        role: "WORKER",
+        profile: "flash-low-worker", confidence: "HIGH",
+        parentConversationId: "orch-acceptance-conv",
+        delegationKind: "WORK",
+        attempt: 0,
+        source: "RUNTIME_IDENTITY",
+      },
     },
   }));
 
@@ -2047,6 +2180,14 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
     conversationId: "orch-acceptance-conv",
     state: "DELEGATED",
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "child-worker-conv",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     evidenceLedger: [
       {
         executionId: null,
@@ -2055,6 +2196,9 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
         exitCode: 0,
         fresh: true,
         actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         conversationId: "child-worker-conv",
       },
     ],
@@ -2083,6 +2227,7 @@ test("fidelity-reactive-wakeup: regression 13: Reactive Wakeup preserves formal 
 test("reactive-delegation-lock: 1. Orchestrator + DELEGATED + healthy + schedule -> DENY", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2105,6 +2250,7 @@ test("reactive-delegation-lock: 1. Orchestrator + DELEGATED + healthy + schedule
 test("reactive-delegation-lock: 2. Orchestrator + DELEGATED + healthy + manage_task status -> DENY on first attempt", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2127,6 +2273,7 @@ test("reactive-delegation-lock: 2. Orchestrator + DELEGATED + healthy + manage_t
 test("reactive-delegation-lock: 3. Orchestrator + DELEGATED + healthy + manage_subagents list/status -> DENY", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-parent-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2316,6 +2463,7 @@ test("reactive-delegation-lock: 9. Orchestrator outside DELEGATED state performi
 test("reactive-delegation-lock: 10. explicit cancellation/recovery path -> coordination action allowed", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-cancel-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2347,6 +2495,7 @@ test("reactive-delegation-lock: 10. explicit cancellation/recovery path -> coord
 test("reactive-delegation-lock: 11. diagnosed stalled/recovery state -> appropriate coordination action allowed", () => {
   cleanState();
   mkdirSync(".agents/state", { recursive: true });
+  seedFactualOrchestrator("orch-stalled-conv");
   writeFileSync(".agents/state/active-state.json", JSON.stringify({
     activeRole: "ORCHESTRATOR",
     state: "DELEGATED",
@@ -2393,8 +2542,22 @@ test("reactive-delegation-lock: 12. healthy delegated execution can yield and la
   writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
     mainConversationId: "orch-yield-accept",
     bindings: {
-      "orch-yield-accept": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
-      "child-worker-clean": { role: "WORKER", profile: "flash-medium-worker", confidence: "HIGH" },
+      "orch-yield-accept": {
+        conversationId: "orch-yield-accept",
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      "child-worker-clean": {
+        conversationId: "child-worker-clean",
+        role: "WORKER",
+        profile: "flash-medium-worker", confidence: "HIGH",
+        parentConversationId: "orch-yield-accept",
+        delegationKind: "WORK",
+        attempt: 0,
+        source: "RUNTIME_IDENTITY",
+      },
     },
   }));
 
@@ -2404,6 +2567,14 @@ test("reactive-delegation-lock: 12. healthy delegated execution can yield and la
     conversationId: "orch-yield-accept",
     state: "DELEGATED",
     workerCompletionClaimed: true,
+    workerCompletionClaimFactual: true,
+    workerCompletionClaimIdentity: {
+      actorId: "child-worker-clean",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+      attempt: 0,
+    },
     evidenceLedger: [
       {
         executionId: null,
@@ -2412,6 +2583,9 @@ test("reactive-delegation-lock: 12. healthy delegated execution can yield and la
         exitCode: 0,
         fresh: true,
         actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
         conversationId: "child-worker-clean",
       },
     ],
@@ -2846,8 +3020,16 @@ test("task5-v1.2: 5. legitimate recovery or cancellation behavior remains intact
   const preToolScript = resolve(runtimeRoot, ".agents/hooks/pre-tool-enforce.mjs");
   const tempDir = mkdtempSync(join(tmpdir(), "orch-recovery-"));
   try {
-    // Cancellation (manage_task kill) is always allowed even during delegation
+    seedFactualOrchestrator("orch-recovery");
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "orch-recovery",
+      state: "DELEGATED",
+    }), "utf-8");
+
+    // Cancellation (manage_task kill) is allowed to the factual orchestrator during delegation
     const killPayload = JSON.stringify({
+      conversationId: "orch-recovery",
       toolName: "manage_task",
       toolArgs: { Action: "kill", TaskId: "task-999" },
       cwdOverride: tempDir,
@@ -2856,15 +3038,16 @@ test("task5-v1.2: 5. legitimate recovery or cancellation behavior remains intact
     assert.equal(killRes.decision, "allow");
 
     // Outside healthy delegation (e.g. idle/direct action), schedule is not blocked by delegation lock
-    const idleState = { state: "IDLE" };
-    const idleStatePath = join(tempDir, "active-state.json");
-    writeFileSync(idleStatePath, JSON.stringify(idleState), "utf-8");
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "orch-recovery",
+      state: "IDLE",
+    }), "utf-8");
 
     const idleSchedPayload = JSON.stringify({
+      conversationId: "orch-recovery",
       toolName: "schedule",
       toolArgs: { DurationSeconds: 10, Prompt: "remind" },
-      cwdOverride: tempDir,
-      customStatePath: idleStatePath,
     });
     const idleSchedRes = JSON.parse(execFileSync("node", [preToolScript], { input: idleSchedPayload }));
     assert.equal(idleSchedRes.decision, "allow");
@@ -2894,10 +3077,35 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
     const roleBindings = {
       mainConversationId: "orch-parent",
       bindings: {
-        "orch-parent": { role: "ORCHESTRATOR", profile: "flash-orchestrator" },
-        "worker-child": { role: "WORKER", profile: "flash-worker" },
-        "reviewer-child": { role: "REVIEWER", profile: "flash-reviewer" },
+        "orch-parent": {
+          conversationId: "orch-parent",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        "worker-child": {
+          conversationId: "worker-child",
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: "orch-parent",
+          delegationKind: "WORK",
+          attempt: 0,
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
+        "reviewer-child": {
+          conversationId: "reviewer-child",
+          role: "REVIEWER",
+          profile: "flash-reviewer",
+          parentConversationId: "orch-parent",
+          delegationKind: "REVIEW",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+        },
       },
+      conversations: {},
+      pendingSubagents: [],
     };
     writeFileSync(join(stateDir, "role-bindings.json"), JSON.stringify(roleBindings), "utf-8");
 
@@ -2933,6 +3141,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -2964,6 +3174,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -2987,6 +3199,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1, // stale!
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3014,6 +3228,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3034,6 +3250,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
         {
           command: "node --test test/b.test.js",
@@ -3041,6 +3259,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 1,
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3062,6 +3282,8 @@ test("task5-v1.3: 1. Validation Completion Lock (Cases A through J)", () => {
           mutationSeq: 0, // stale pre-mutation!
           actorRole: "WORKER",
           confidence: "HIGH",
+          delegationKind: "WORK",
+          attempt: 0,
         },
       ],
     };
@@ -3306,4 +3528,42 @@ test("task5-v1.4: 1. Policy B & Bounded Factual Correction (Cases A through J)",
   assert.equal(caseJ_econ.stretch_gate, "MISS", "Case J: worker 9 / total 12 must MISS stretch target without failing hard gate");
   assert.equal(caseJ_econ.hard_pass, true, "Case J: hard_pass must remain true");
   assert.equal(caseJ_econ.stretch_pass, false, "Case J: stretch_pass must be false");
+});
+
+
+test("two-key verdict parser: negative or unknown explicit verdicts fail closed", () => {
+  assert.deepEqual(
+    parseReviewerVerdictText("VERDICT: NOT ACCEPT"),
+    { present: true, verdict: null }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("Decision: do not accept"),
+    { present: true, verdict: null }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("RECOMMENDATION: maybe"),
+    { present: true, verdict: null }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("VERDICT: ACCEPT WITH NOTES"),
+    { present: true, verdict: "ACCEPT_WITH_NOTES" }
+  );
+  assert.deepEqual(
+    parseReviewerVerdictText("VERDICT: CHANGES REQUIRED"),
+    { present: true, verdict: "CHANGES_REQUIRED" }
+  );
+
+  const steps = [
+    { content: "VERDICT: ACCEPT" },
+    { content: "After further review\nVERDICT: NOT ACCEPT" },
+  ];
+  assert.equal(
+    extractRuntimeReviewerVerdict(steps),
+    null,
+    "Latest explicit invalid/negative verdict must not fall back to an older ACCEPT"
+  );
+
+  assert.equal(extractBenchmarkReviewerVerdict("VERDICT: NOT ACCEPT"), null);
+  assert.equal(extractBenchmarkReviewerVerdict("DECISION: ACCEPT WITH NOTES"), "ACCEPT_WITH_NOTES");
+  assert.equal(extractBenchmarkReviewerVerdict("No explicit verdict here; ACCEPT appears in prose."), null);
 });

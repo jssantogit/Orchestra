@@ -73,18 +73,13 @@ export function buildDiscoveryTree(world) {
   }
 
   // 1. Extract decisions and outcomes from the world record
-  let decisions = Array.isArray(world.decisions) ? world.decisions : [];
-  let outcomes = Array.isArray(world.outcomes) ? world.outcomes : [];
-
-  if (decisions.length === 0 && Array.isArray(world.events)) {
-    for (const ev of world.events) {
-      if (ev?.type === "DECISION" || ev?.schema === DREAM_SCHEMAS.DECISION) {
-        decisions.push(ev);
-      } else if (ev?.type === "DECISION_OUTCOME" || ev?.schema === DREAM_SCHEMAS.OUTCOME) {
-        outcomes.push(ev);
-      }
-    }
-  }
+  const events = Array.isArray(world.events) ? world.events : [];
+  const decisions = Array.isArray(world.decisions) && world.decisions.length > 0
+    ? [...world.decisions]
+    : events.filter((ev) => ev?.type === "DECISION" || ev?.schema === DREAM_SCHEMAS.DECISION);
+  const outcomes = Array.isArray(world.outcomes) && world.outcomes.length > 0
+    ? [...world.outcomes]
+    : events.filter((ev) => ev?.type === "DECISION_OUTCOME" || ev?.schema === DREAM_SCHEMAS.OUTCOME);
 
   // 2. Index outcomes by decision_id
   const outcomesByDecisionId = new Map();

@@ -7,7 +7,6 @@ import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync,
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { computePolicyId, validatePolicy } from "../.agents/dream/policy-engine.mjs";
-import { executeReplanTransition } from "../.agents/hooks/pre-tool-enforce.mjs";
 
 const __testDir = dirname(fileURLToPath(import.meta.url));
 const preToolScript = resolve(__testDir, "../.agents/hooks/pre-tool-enforce.mjs");
@@ -22,6 +21,55 @@ function cleanDreamTestState() {
   try { rmSync(".agents/state/dream", { recursive: true, force: true }); } catch {}
   try { rmSync(".agents/telemetry/events.jsonl", { recursive: true, force: true }); } catch {}
   try { rmSync("scratch", { recursive: true, force: true }); } catch {}
+}
+
+function seedDreamFactualWorker(conversationId, parentConversationId = "dream-test-parent", profile = "flash-medium-worker") {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: parentConversationId,
+    bindings: {
+      [parentConversationId]: {
+        conversationId: parentConversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      [conversationId]: {
+        conversationId,
+        role: "WORKER",
+        profile,
+        parentConversationId,
+        delegationKind: "WORK",
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+        factualIdentityAt: new Date().toISOString(),
+        consumed: true,
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf-8");
+}
+
+
+function seedDreamFactualOrchestrator(conversationId) {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: conversationId,
+    bindings: {
+      [conversationId]: {
+        conversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf-8");
+  return conversationId;
 }
 
 test("Task 5 pre-tool: existing invoke_subagent allow fixtures return byte-compatible decision without unexpected fields", () => {
@@ -184,7 +232,7 @@ test("Task 5 pre-tool: fallback to STATIC_ROUTING_FALLBACK when policy corrupted
   }
 });
 
-test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", () => {
+test("Task 5 delegated worker: ACK stays pending and factual child Stop records DECISION_OUTCOME", () => {
   cleanDreamTestState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -209,7 +257,6 @@ test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", 
       }
     };
 
-    // 1. Run pre-tool hook to generate pre-action DECISION
     const preInput = JSON.stringify({
       conversationId: "task5-orch-conv-post",
       stepIdx: 5,
@@ -218,16 +265,11 @@ test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", 
     const preOutput = JSON.parse(execFileSync("node", [preToolScript], { input: preInput, encoding: "utf-8" }).trim());
     assert.equal(preOutput.decision, "allow");
 
-    // Read recorded DECISION
     const preLines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map(line => JSON.parse(line));
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
     const decEvent = preLines.find(e => e.type === "DECISION");
     assert(decEvent, "DECISION event must exist");
 
-    // 2. Run post-tool hook to observe completion and record DECISION_OUTCOME
     const postInput = JSON.stringify({
       conversationId: "task5-orch-conv-post",
       stepIdx: 5,
@@ -238,28 +280,115 @@ test("Task 5 post-tool: post-tool execution records matching DECISION_OUTCOME", 
     const postOutput = JSON.parse(execFileSync("node", [postToolScript], { input: postInput, encoding: "utf-8" }).trim());
     assert.deepEqual(postOutput, {});
 
-    // Read recorded DECISION_OUTCOME
-    const postLines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map(line => JSON.parse(line));
-    const outcomeEvents = postLines.filter(e => e.type === "DECISION_OUTCOME");
-    assert.equal(outcomeEvents.length, 1, "Must record exactly 1 DECISION_OUTCOME event");
-    const outcome = outcomeEvents[0];
-    assert.equal(outcome.schema, "orchestra.outcome.v1");
-    assert.equal(outcome.decision_id, decEvent.decision_id);
-    assert.equal(outcome.result, "SUCCESS");
-    assert(outcome.evidence_summary && typeof outcome.evidence_summary === "object");
-    assert(outcome.retry_state && typeof outcome.retry_state === "object");
-    assert(outcome.cost_metrics && typeof outcome.cost_metrics === "object");
-    assert(outcome.observation_id && outcome.observation_id.startsWith("obs-"));
-    assert(outcome.event_hash && outcome.event_hash.startsWith("sha256:"));
+    let lines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(lines.filter(e => e.type === "DECISION_OUTCOME").length, 0, "Successful dispatch ACK must not record outcome");
 
-    // Check that pending decision file was consumed
     const pendingDir = resolve(".agents/state/dream/pending-decisions");
-    const pendingFiles = readdirSync(pendingDir).filter(f => f.endsWith(".json"));
-    assert.equal(pendingFiles.length, 0, "Pending decision file must be consumed");
+    assert.equal(readdirSync(pendingDir).filter(f => f.endsWith(".json")).length, 1, "Pending decision remains open after ACK");
+
+    const roleBindingsPath = resolve(".agents/state/role-bindings.json");
+    let roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    const pending = roleBindings.pendingSubagents.find(p => !p.consumed);
+    assert.ok(pending?.decisionCorrelationKey);
+
+    // Materialize the factual Antigravity child record. Pending uniqueness alone
+    // is deliberately insufficient for HIGH/RUNTIME_IDENTITY.
+    const brainBaseDir = resolve("scratch/task5-worker-brain");
+    const subagentsDir = resolve(brainBaseDir, "task5-orch-conv-post/.system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(resolve(subagentsDir, "task5-worker-child.json"), JSON.stringify({
+      conversationId: "task5-worker-child",
+      subagentDescriptor: {
+        typeName: "flash-medium-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 5,
+    }, null, 2), "utf-8");
+
+    // Let the real PreTool identity resolver bind the factual child from the pending delegation.
+    const childRead = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "task5-worker-child",
+        parentConversationId: "task5-orch-conv-post",
+        toolCall: {
+          id: "call-worker-read",
+          name: "view_file",
+          args: { AbsolutePath: resolve("package.json") },
+        },
+      }),
+      encoding: "utf-8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }).trim());
+    assert.equal(childRead.decision, "allow");
+
+    roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
+    const childBinding = roleBindings.bindings["task5-worker-child"];
+    assert.ok(childBinding, "PreTool must create factual child binding");
+    assert.equal(childBinding.delegationKind, "WORK");
+    assert.equal(childBinding.originToolCallId, "call_invoke_post_1");
+    assert.equal(childBinding.decisionCorrelationKey, pending.decisionCorrelationKey);
+    assert.equal(childBinding.decisionType, "WORKER_TIER");
+    assert.equal(childBinding.confidence, "HIGH");
+    assert.equal(childBinding.source, "RUNTIME_IDENTITY");
+
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({
+        conversationId: "task5-worker-child",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf-8",
+    });
+
+    lines = readFileSync(".agents/telemetry/events.jsonl", "utf-8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    const outcomeEvents = lines.filter(e => e.type === "DECISION_OUTCOME");
+    assert.equal(outcomeEvents.length, 1, "Factual child Stop must record exactly one outcome");
+    assert.equal(outcomeEvents[0].decision_id, decEvent.decision_id);
+    assert.equal(outcomeEvents[0].result.status, "COMPLETED");
+    assert.equal(outcomeEvents[0].result.child_conversation_id, "task5-worker-child");
+    assert.equal(readdirSync(pendingDir).filter(f => f.endsWith(".json")).length, 0, "Pending decision consumed at factual completion");
+  } finally {
+    cleanDreamTestState();
+  }
+});
+
+test("review/investigation delegation must not overwrite last implementation worker profile", () => {
+  cleanDreamTestState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "REVIEW",
+      taskDomain: "CODE",
+      criticality: "CRITICAL",
+      lastWorkerProfile: "flash-medium-worker",
+    }, null, 2), "utf-8");
+
+    const reviewInput = JSON.stringify({
+      conversationId: "last-worker-review-parent",
+      stepIdx: 1,
+      toolCall: {
+        id: "call-review-pair",
+        name: "invoke_subagent",
+        args: {
+          Subagents: [
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Reviewer A. allowedPaths: [src/**]" },
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Reviewer B. allowedPaths: [src/**]" },
+          ],
+        },
+      },
+    });
+
+    const reviewRes = JSON.parse(execFileSync("node", [preToolScript], { input: reviewInput, encoding: "utf-8" }).trim());
+    assert.equal(reviewRes.decision, "allow");
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.lastWorkerProfile, "flash-medium-worker", "Reviewer delegation must preserve last implementation worker identity");
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf-8"));
+    assert.equal(bindings.pendingSubagents.filter(p => p.delegationKind === "REVIEW").length, 2);
   } finally {
     cleanDreamTestState();
   }
@@ -345,7 +474,8 @@ test("Task 5 pre-tool: Direct Action and CRITICAL review paths do NOT record DEC
         name: "invoke_subagent",
         args: {
           Subagents: [
-            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review normal patch" }
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review normal patch A" },
+            { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review normal patch B" }
           ]
         }
       }
@@ -544,6 +674,7 @@ test("Task 3: INVESTIGATION_STRATEGY congruence (IMPLEMENT_DIRECT allows and rec
       mutationSeq: 0,
       postInvestigation: false,
     }, null, 2), "utf-8");
+    seedDreamFactualWorker("task3-inv-direct-conv");
 
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       contractId: "contract-inv-direct",
@@ -579,6 +710,46 @@ test("Task 3: INVESTIGATION_STRATEGY congruence (IMPLEMENT_DIRECT allows and rec
     const invDecision = events.find(e => e.type === "DECISION" && e.decision_type === "INVESTIGATION_STRATEGY");
     assert.ok(invDecision, "INVESTIGATION_STRATEGY decision must be recorded");
     assert.equal(invDecision.chosen_action, "IMPLEMENT_DIRECT");
+
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.ok(state.directInvestigationDecisionInFlight, "IMPLEMENT_DIRECT decision must remain causally in-flight until worker termination");
+
+    const directChildBinding = {
+      mainConversationId: "task3-parent-conv",
+      bindings: {
+        "task3-inv-direct-conv": {
+          conversationId: "task3-inv-direct-conv",
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          parentConversationId: "task3-parent-conv",
+          delegationKind: "WORK",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    };
+    directChildBinding.conversations["task3-inv-direct-conv"] = directChildBinding.bindings["task3-inv-direct-conv"];
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(directChildBinding, null, 2), "utf-8");
+
+    execFileSync("node", [stopToolScript], {
+      input: JSON.stringify({
+        conversationId: "task3-inv-direct-conv",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf-8",
+    });
+
+    const afterStopEvents = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
+    const invOutcomes = afterStopEvents.filter(e => e.type === "DECISION_OUTCOME" && e.decision_id === invDecision.decision_id);
+    assert.equal(invOutcomes.length, 1, "IMPLEMENT_DIRECT decision must close exactly once at factual worker Stop");
+    assert.equal(invOutcomes[0].result.chosen_action, "IMPLEMENT_DIRECT");
+
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf-8"));
+    assert.equal(state.directInvestigationDecisionInFlight, undefined);
   } finally {
     cleanDreamTestState();
   }
@@ -616,6 +787,7 @@ test("Task 3: INVESTIGATION_STRATEGY blocked mismatch (INVESTIGATE_FIRST blocks 
       mutationSeq: 0,
       postInvestigation: false,
     }, null, 2), "utf-8");
+    seedDreamFactualWorker("task3-inv-block-conv");
 
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       contractId: "contract-inv-gate",
@@ -831,10 +1003,11 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
       taskDomain: "CODE",
       criticality: "NORMAL",
     }, null, 2), "utf-8");
+    seedDreamFactualOrchestrator("task1-leakage-conv");
 
     // Profile 1: flash-low-worker
     const inputLow = JSON.stringify({
-      conversationId: "task1-leakage-conv-low",
+      conversationId: "task1-leakage-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_leakage_low",
@@ -850,7 +1023,7 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
 
     // Profile 2: flash-worker (FLASH_HIGH)
     const inputHigh = JSON.stringify({
-      conversationId: "task1-leakage-conv-high",
+      conversationId: "task1-leakage-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_leakage_high",
@@ -875,7 +1048,7 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
 
     // Profile 3: flash-medium-worker (matching profile) -> ALLOW
     const inputMed = JSON.stringify({
-      conversationId: "task1-leakage-conv-med",
+      conversationId: "task1-leakage-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_leakage_med",
@@ -893,7 +1066,7 @@ test("Task 1 Action Leakage RED test: different requested worker profiles must p
     // Check recorded DECISION event
     const eventsPath = ".agents/telemetry/events.jsonl";
     const events = readFileSync(eventsPath, "utf-8").trim().split("\n").filter(Boolean).map(JSON.parse);
-    const medDec = events.find(e => e.conversation_id === "task1-leakage-conv-med" && e.type === "DECISION");
+    const medDec = events.find(e => e.conversation_id === "task1-leakage-conv" && e.type === "DECISION");
     assert.ok(medDec);
     assert.equal(medDec.state.complexity, "NORMAL", "Decision state complexity must be NORMAL, not leaked from requested profile");
     assert.equal(medDec.baseline_action, "FLASH_MEDIUM");
@@ -1037,6 +1210,7 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
       mutationSeq: 0,
       postInvestigation: false,
     }, null, 2), "utf-8");
+    seedDreamFactualOrchestrator("task2-lifecycle-conv");
 
     // 1. Direct implementation attempt via invoke_subagent -> DENIED, pending requirement created, NO DECISION recorded
     const inputInvoke = JSON.stringify({
@@ -1156,6 +1330,7 @@ test("Task 2 Causal Lifecycle: INVESTIGATION_STRATEGY pending requirement and co
           role: "ORCHESTRATOR",
           profile: "flash-orchestrator",
           source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
         },
         "task2-investigator-child": {
           role: "WORKER",
@@ -1437,6 +1612,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
       retryReason: "MISINTERPRETED_REQUIREMENT",
       lastWorkerProfile: "flash-medium-worker",
     }, null, 2), "utf-8");
+    seedDreamFactualOrchestrator("replan-causal-conv");
 
     // 1. Worker retry attempted -> DECISION(REPLAN) pre-transition, state PLANNED, worker DENIED, no pending REPLAN requirement
     const inputRetry = JSON.stringify({
@@ -1470,7 +1646,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
     assert.ok(dec1, "Factual DECISION(REPLAN) must be recorded immediately pre-transition");
     assert.equal(dec1.baseline_action, "REPLAN");
 
-    // 2. Generic control plane write (write_to_file) is allowed as normal and does NOT trigger replan or change state
+    // 2. Generic scratch write (write_to_file) is allowed as normal and does NOT trigger replan or change state
     const inputPlanWrite = JSON.stringify({
       conversationId: "replan-causal-conv",
       stepIdx: 2,
@@ -1479,7 +1655,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
         id: "call_write_plan",
         name: "write_to_file",
         args: {
-          TargetFile: resolve(process.cwd(), ".agents/plans/test-replan.md"),
+          TargetFile: resolve(process.cwd(), "scratch/test-replan.md"),
           CodeContent: "# Corrected Replan",
           Overwrite: true,
         }
@@ -1494,7 +1670,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
     assert.equal(savedState2.state, "PLANNED", "State remains PLANNED without generic tool side effect");
 
     // Clean up created test plan file
-    try { unlinkSync(".agents/plans/test-replan.md"); } catch {}
+    try { unlinkSync("scratch/test-replan.md"); } catch {}
 
     // 3. Invalid state transition: if state cannot transition to PLANNED, do NOT record DECISION(REPLAN), fail closed to HUMAN_GATE
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
@@ -1515,7 +1691,7 @@ test("Task 2 Explicit REPLAN Execution: worker retry denied, DECISION(REPLAN) pr
     unlinkSync(eventsPath);
 
     const inputInvalid = JSON.stringify({
-      conversationId: "replan-invalid-conv",
+      conversationId: "replan-causal-conv",
       stepIdx: 1,
       toolCall: {
         id: "call_worker_invalid",

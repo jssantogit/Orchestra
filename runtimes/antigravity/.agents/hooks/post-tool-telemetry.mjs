@@ -15,9 +15,16 @@ import {
   detectDirectActionOverhead,
   isControlPlanePath,
   verifyWorkerValidation,
+  isWorkerRole,
 } from "../skills/agy-orchestra/routing-policy.mjs";
 import { recordDecisionOutcome, getPendingDecision } from "../dream/outcome-recorder.mjs";
 import { dreamCorrelationKey } from "../dream/decision-recorder.mjs";
+import {
+  factualSubagentMatchesPending,
+  filterFactualPendingCandidates,
+  findFactualSubagentRecord,
+  isSymmetricReviewerSet,
+} from "./child-identity.mjs";
 
 function readStdin() {
   try {
@@ -89,13 +96,59 @@ function getWorkspacePaths(payload = {}) {
   };
 }
 
-function loadRoleBindings(roleBindingsPath) {
-  if (roleBindingsPath && existsSync(roleBindingsPath)) {
-    try {
-      return JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
-    } catch {}
+function readGovernanceObject(path, label) {
+  if (!path || !existsSync(path)) return { ok: true, exists: false, value: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return { ok: false, exists: true, value: null, reason: `${label}_MALFORMED_JSON` };
   }
-  return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, exists: true, value: null, reason: `${label}_INVALID_SHAPE` };
+  }
+  return { ok: true, exists: true, value: parsed };
+}
+
+function validRoleBindingsShape(roleBindings) {
+  if (!roleBindings || typeof roleBindings !== "object" || Array.isArray(roleBindings)) return false;
+  if (
+    roleBindings.mainConversationId !== undefined &&
+    roleBindings.mainConversationId !== null &&
+    typeof roleBindings.mainConversationId !== "string"
+  ) return false;
+  if (
+    roleBindings.bindings !== undefined &&
+    (!roleBindings.bindings || typeof roleBindings.bindings !== "object" || Array.isArray(roleBindings.bindings))
+  ) return false;
+  if (
+    roleBindings.conversations !== undefined &&
+    (!roleBindings.conversations || typeof roleBindings.conversations !== "object" || Array.isArray(roleBindings.conversations))
+  ) return false;
+  if (roleBindings.pendingSubagents !== undefined && !Array.isArray(roleBindings.pendingSubagents)) return false;
+  return true;
+}
+
+function loadRoleBindings(roleBindingsPath) {
+  const loaded = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
+  if (!loaded.ok) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: loaded.reason,
+    };
+  }
+  if (!loaded.exists) return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  if (!validRoleBindingsShape(loaded.value)) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: "ROLE_BINDINGS_INVALID_SHAPE",
+    };
+  }
+  return loaded.value;
 }
 
 function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "", roleBindingsPath = "") {
@@ -104,14 +157,40 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
   if (convId) {
     const existing = (roleBindings.bindings && roleBindings.bindings[convId])
       || (roleBindings.conversations && roleBindings.conversations[convId]);
+
     if (existing) {
+      if (existing.source !== "RUNTIME_IDENTITY") {
+        const parentConversationId = existing.parentConversationId
+          || roleBindings.mainConversationId
+          || payload.parentConversationId
+          || activeState.parentConversationId
+          || null;
+        const factualRecord = findFactualSubagentRecord({
+          parentConversationId,
+          childConversationId: convId,
+        });
+        const pending = Array.isArray(roleBindings.pendingSubagents)
+          ? roleBindings.pendingSubagents.find((p) => p.seq === existing.pendingSeq)
+          : null;
+        if (factualRecord && pending && factualSubagentMatchesPending(factualRecord, pending)) {
+          existing.confidence = "HIGH";
+          existing.source = "RUNTIME_IDENTITY";
+          existing.factualIdentityAt = new Date().toISOString();
+          if (roleBindings.bindings) roleBindings.bindings[convId] = existing;
+          if (roleBindings.conversations) roleBindings.conversations[convId] = existing;
+          if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
+        }
+      }
+
       return {
         role: existing.role,
         source: existing.source || "CONVERSATION_BOUND_IDENTITY",
-        confidence: "HIGH",
+        confidence: existing.confidence || (existing.source === "RUNTIME_IDENTITY" ? "HIGH" : "MEDIUM"),
         actorId: convId,
         agentProfile: existing.profile || null,
         model: existing.model || payload.modelName || null,
+        delegationKind: existing.delegationKind || null,
+        attempt: Number.isInteger(existing.attempt) ? existing.attempt : 0,
       };
     }
 
@@ -126,56 +205,103 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
 
-    if ((roleBindings.mainConversationId && convId !== roleBindings.mainConversationId) || (Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0)) {
+    if ((roleBindings.mainConversationId && convId !== roleBindings.mainConversationId)
+      || (Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0)) {
       const pendingList = Array.isArray(roleBindings.pendingSubagents) ? roleBindings.pendingSubagents : [];
       const unconsumed = pendingList.filter((p) => !p.consumed);
 
       if (unconsumed.length > 0) {
-        let matched = null;
-        const reqRole = (payload.agentRole || payload.role || "").toUpperCase();
-        const reqProfile = payload.agentProfile || payload.typeName || payload.profile || "";
-        const reqModel = payload.modelName || "";
-
-        let candidates = unconsumed;
-        // Filter by parent/task/run context before matching role/profile:
-        const parentConvId = payload.parentConversationId || activeState.parentConversationId || roleBindings.mainConversationId || null;
-        if (parentConvId) {
-          candidates = candidates.filter((c) => c.parentConversationId && c.parentConversationId === parentConvId);
-        }
+        const parentConversationId = payload.parentConversationId
+          || roleBindings.mainConversationId
+          || activeState.parentConversationId
+          || null;
         const activeTaskId = payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null;
-        if (activeTaskId) {
-          candidates = candidates.filter((c) => (c.taskIdentifier || c.taskId) && (c.taskIdentifier || c.taskId) === activeTaskId);
-        }
         const activeRunId = payload.benchmarkRunId || activeState.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
-        if (activeRunId) {
-          candidates = candidates.filter((c) => c.benchmarkRunId && c.benchmarkRunId === activeRunId);
-        }
 
-        if (reqRole) {
-          candidates = candidates.filter((c) => c.role && c.role.toUpperCase() === reqRole);
-        }
-        if (reqProfile) {
-          candidates = candidates.filter((c) => c.profile === reqProfile || c.typeName === reqProfile);
-        }
-        if (reqModel) {
-          candidates = candidates.filter((c) => c.model === reqModel || (c.model && reqModel.includes(c.model)));
-        }
+        let matched = null;
+        let source = "UNRESOLVED";
+        let confidence = "LOW";
+        let slotAssignment = null;
 
-        if (candidates.length === 1) {
-          matched = candidates[0];
-        } else if (candidates.length > 1) {
-          // If multiple candidates share the exact same role and profile (e.g. Two-Key reviewers), safe to bind FIFO
-          const firstRole = candidates[0].role;
-          const firstProfile = candidates[0].profile;
-          const allSameRoleAndProfile = candidates.every((c) => c.role === firstRole && c.profile === firstProfile);
-          if (allSameRoleAndProfile) {
-            matched = candidates[0];
-          } else {
-            // Ambiguous candidates with different roles/profiles fail closed
-            matched = null;
+        const factualRecord = findFactualSubagentRecord({
+          parentConversationId,
+          childConversationId: convId,
+        });
+        if (factualRecord) {
+          const factualCandidates = filterFactualPendingCandidates({
+            pendingSubagents: pendingList,
+            record: factualRecord,
+            parentConversationId,
+            taskId: activeTaskId,
+            benchmarkRunId: activeRunId,
+            attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
+          });
+          if (factualCandidates.length === 1) {
+            matched = factualCandidates[0];
+          } else if (isSymmetricReviewerSet(factualCandidates)) {
+            matched = factualCandidates.slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0];
+            slotAssignment = "SYMMETRIC_REVIEW_SLOT";
           }
-        } else {
-          matched = null;
+          if (matched) {
+            source = "RUNTIME_IDENTITY";
+            confidence = "HIGH";
+          }
+        }
+
+        if (!matched) {
+          const reqRole = (payload.agentRole || payload.role || "").toUpperCase();
+          const reqProfile = payload.agentProfile || payload.typeName || payload.profile || "";
+          const reqModel = payload.modelName || "";
+          const hasRuntimeDiscriminator = Boolean(reqRole || reqProfile);
+
+          if (hasRuntimeDiscriminator) {
+            let candidates = unconsumed;
+            if (parentConversationId) {
+              candidates = candidates.filter((p) => p.parentConversationId === parentConversationId);
+            }
+            if (activeTaskId) {
+              candidates = candidates.filter((p) => (p.taskIdentifier || p.taskId) === activeTaskId);
+            }
+            if (activeRunId) {
+              candidates = candidates.filter((p) => p.benchmarkRunId === activeRunId);
+            }
+            if (reqRole) {
+              candidates = candidates.filter((p) => p.role && p.role.toUpperCase() === reqRole);
+            }
+            if (reqProfile) {
+              candidates = candidates.filter((p) => p.profile === reqProfile || p.typeName === reqProfile);
+            }
+            if (reqModel) {
+              candidates = candidates.filter((p) => p.model === reqModel || (p.model && reqModel.includes(p.model)));
+            }
+
+            if (candidates.length === 1) {
+              matched = candidates[0];
+            } else if (isSymmetricReviewerSet(candidates)) {
+              matched = candidates.slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0];
+              slotAssignment = "SYMMETRIC_REVIEW_SLOT";
+            }
+
+            if (matched) {
+              source = "HOOK_PAYLOAD_CORRELATION";
+              confidence = "MEDIUM";
+            }
+          }
+        }
+
+        if (matched && source === "HOOK_PAYLOAD_CORRELATION") {
+          // Hook payload is useful for applying a conservative role policy, but is
+          // not durable child identity. Do not consume/reserve the pending slot.
+          return {
+            role: matched.role || "UNKNOWN",
+            source,
+            confidence,
+            actorId: convId,
+            agentProfile: matched.profile || matched.typeName || null,
+            model: matched.model || payload.modelName || null,
+            delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
+          };
         }
 
         if (matched) {
@@ -188,10 +314,6 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           const childProfile = matched.profile || matched.typeName || null;
           const childModel = matched.model || payload.modelName || (childRole === "REVIEWER" ? "gemini-3.8-flash-high" : null);
 
-          const isFactualIdentity = Boolean(childRole && childProfile);
-          const confidence = isFactualIdentity ? "HIGH" : "LOW";
-          const source = isFactualIdentity ? "RUNTIME_IDENTITY" : "UNRESOLVED";
-
           if (!roleBindings.bindings) roleBindings.bindings = {};
           if (!roleBindings.conversations) roleBindings.conversations = {};
           const record = {
@@ -202,35 +324,35 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             taskIdentifier: matched.taskIdentifier || activeTaskId || null,
             benchmarkRunId: matched.benchmarkRunId || activeRunId || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
             originToolCallId: matched.originToolCallId || matched.toolCallId || null,
+            originStepIdx: matched.originStepIdx ?? null,
             pendingSeq: matched.seq ?? null,
             delegationKind: matched.delegationKind || null,
+            decisionCorrelationKey: matched.decisionCorrelationKey || null,
+            decisionType: matched.decisionType || null,
+            decisionBranchOrdinal: matched.decisionBranchOrdinal ?? null,
             confidence,
             source,
+            slotAssignment,
+            factualIdentityAt: new Date().toISOString(),
             consumed: true,
             consumedBy: convId,
             consumedAt,
           };
           roleBindings.bindings[convId] = record;
           roleBindings.conversations[convId] = record;
-          if (roleBindingsPath) {
-            saveRoleBindings(roleBindingsPath, roleBindings);
-          }
-          if (!isFactualIdentity) {
-            return {
-              role: "UNKNOWN",
-              source: "UNRESOLVED",
-              confidence: "LOW",
-              actorId: convId,
-            };
-          }
+          if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
+
           return {
-            role: childRole,
-            source: "RUNTIME_IDENTITY",
-            confidence: "HIGH",
+            role: childRole || "UNKNOWN",
+            source,
+            confidence,
             actorId: convId,
             agentProfile: childProfile,
             model: childModel,
+            delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
           };
         }
       }
@@ -250,7 +372,8 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
     if (stateRole === "ORCHESTRATOR" || stateRole === "FLASH_ORCHESTRATOR") {
-      if (roleBindings.mainConversationId && convId && convId !== roleBindings.mainConversationId) {
+      const expectedMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+      if (expectedMainConversationId && convId && convId !== expectedMainConversationId) {
         return {
           role: "UNKNOWN",
           source: "UNRESOLVED",
@@ -260,8 +383,10 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       }
       return {
         role: "ORCHESTRATOR",
-        source: "STATE_DERIVED",
-        confidence: "MEDIUM",
+        source: expectedMainConversationId && convId === expectedMainConversationId
+          ? "CONVERSATION_BOUND_IDENTITY"
+          : "STATE_DERIVED",
+        confidence: expectedMainConversationId && convId === expectedMainConversationId ? "HIGH" : "MEDIUM",
         actorId: convId,
         agentProfile: "flash-orchestrator",
         model: payload.modelName || "gemini-3.8-flash-medium",
@@ -279,10 +404,8 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
     }
   }
 
-  // 3. Fallback: If conversationId is present, no pending subagents exist yet, and role-bindings has no main,
-  // this is the initial main agent conversation (Flash Orchestrator)
   if (convId && !roleBindings.mainConversationId && (!Array.isArray(roleBindings.pendingSubagents) || roleBindings.pendingSubagents.length === 0)) {
-    if (stateRole && isOrchestratorRole(stateRole)) {
+    if (stateRole === "ORCHESTRATOR" || stateRole === "FLASH_ORCHESTRATOR") {
       roleBindings.mainConversationId = convId;
       if (!roleBindings.bindings) roleBindings.bindings = {};
       if (!roleBindings.conversations) roleBindings.conversations = {};
@@ -291,12 +414,11 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         profile: "flash-orchestrator",
         model: payload.modelName || "gemini-3.8-flash-medium",
         source: "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
       };
       roleBindings.bindings[convId] = orchRecord;
       roleBindings.conversations[convId] = orchRecord;
-      if (roleBindingsPath) {
-        saveRoleBindings(roleBindingsPath, roleBindings);
-      }
+      if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
       return {
         role: "ORCHESTRATOR",
         source: "CONVERSATION_BOUND_IDENTITY",
@@ -315,207 +437,6 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
     actorId: convId,
   };
 }
-
-export function isMatchingInvestigationCompletion(inFlight, payload = {}, toolName = "", toolArgs = {}, fallbackConv = "") {
-  if (!inFlight || typeof inFlight !== "object") return false;
-
-  // 1. Hard identity dimensions on inFlight
-  const inFlightToolCall = inFlight.toolCallId || inFlight.tool_call_id || null;
-  const inFlightExecId = inFlight.executionId || inFlight.execution_id || null;
-  const inFlightChildId = inFlight.childConversationId || inFlight.child_conversation_id || inFlight.subagentId || inFlight.subagent_id || null;
-  const inFlightCorrKey = inFlight.correlationKey || inFlight.correlation_key || null;
-
-  // Additional context dimensions on inFlight
-  const inFlightConv = inFlight.conversationId || inFlight.conversation_id || null;
-  const inFlightParentConv = inFlight.parentConversationId || inFlight.parent_conversation_id || null;
-  const inFlightRole = String(inFlight.subagentRole || inFlight.subagent_role || "").toLowerCase() || null;
-  const inFlightProfile = String(inFlight.subagentProfile || inFlight.subagent_profile || "").toLowerCase() || null;
-  const inFlightStepIdx = inFlight.stepIdx ?? inFlight.step_idx ?? null;
-
-  // 2. Incoming identifiers from payload/args
-  const currentConv = payload.conversationId || fallbackConv || null;
-  const currentParentConv = payload.parentConversationId || null;
-  const currentStepIdx = payload.stepIdx ?? null;
-  const currentToolCall = payload.toolCall?.id || payload.toolCallId || toolArgs.toolCallId || null;
-  const currentExecId = payload.executionId || payload.toolResult?.executionId || payload.result?.executionId || toolArgs.executionId || null;
-  const currentCorrKey = payload.correlationKey || toolArgs.correlationKey || null;
-
-  if (toolName === "invoke_subagent") {
-    // In invoke_subagent: require shared causal identity (toolCallId / executionId).
-    const matchedHard = [];
-
-    if (inFlightToolCall && currentToolCall) {
-      if (inFlightToolCall === currentToolCall) {
-        matchedHard.push("toolCallId");
-      } else {
-        return false;
-      }
-    }
-
-    if (inFlightExecId && currentExecId) {
-      if (inFlightExecId === currentExecId) {
-        matchedHard.push("executionId");
-      } else {
-        return false;
-      }
-    }
-
-    if (inFlightCorrKey && currentCorrKey) {
-      if (inFlightCorrKey === currentCorrKey) {
-        matchedHard.push("correlationKey");
-      } else {
-        return false;
-      }
-    }
-
-    // Candidate child identity if present on both sides
-    const candidateChild = payload.result?.conversationId || payload.result?.subagentId || payload.subagentId || payload.childConversationId || null;
-    if (inFlightChildId && candidateChild) {
-      if (inFlightChildId === candidateChild) {
-        matchedHard.push("childId");
-      } else {
-        return false;
-      }
-    }
-
-    // Condition A: At least one verifiable HARD IDENTITY present on BOTH sides
-    if (matchedHard.length === 0) {
-      return false;
-    }
-
-    // Condition C: Any additional identity dimensions on both sides do not conflict
-    if (inFlightConv && currentConv && inFlightConv !== currentConv) {
-      return false;
-    }
-    if (inFlightParentConv && currentParentConv && inFlightParentConv !== currentParentConv) {
-      return false;
-    }
-    if (inFlightStepIdx !== null && currentStepIdx !== null && inFlightStepIdx !== currentStepIdx) {
-      return false;
-    }
-
-    const incomingRole = String(
-      toolArgs.Role
-      || toolArgs.Subagents?.[0]?.Role
-      || payload.result?.role
-      || payload.result?.subagentRole
-      || ""
-    ).toLowerCase();
-    if (incomingRole && inFlightRole && incomingRole !== inFlightRole) {
-      return false;
-    }
-
-    const incomingProfile = String(
-      toolArgs.TypeName
-      || toolArgs.Subagents?.[0]?.TypeName
-      || payload.result?.profile
-      || payload.result?.subagentProfile
-      || ""
-    ).toLowerCase();
-    if (incomingProfile && inFlightProfile && incomingProfile !== inFlightProfile) {
-      return false;
-    }
-
-    return true;
-  }
-
-  if (toolName === "manage_subagents") {
-    // In manage_subagents: require exact child identity (childConversationId / subagentId / executionId).
-    // Role/profile alone NEVER matches.
-    let candidateChildId = null;
-    let isAmbiguous = false;
-
-    if (payload.result?.subagentId) {
-      candidateChildId = payload.result.subagentId;
-    } else if (payload.result?.conversationId) {
-      candidateChildId = payload.result.conversationId;
-    } else if (payload.subagentId) {
-      candidateChildId = payload.subagentId;
-    } else if (payload.childConversationId) {
-      candidateChildId = payload.childConversationId;
-    } else if (toolArgs.ConversationId) {
-      candidateChildId = toolArgs.ConversationId;
-    } else if (toolArgs.subagentId) {
-      candidateChildId = toolArgs.subagentId;
-    } else if (Array.isArray(toolArgs.ConversationIds)) {
-      if (toolArgs.ConversationIds.length === 1) {
-        candidateChildId = toolArgs.ConversationIds[0];
-      } else if (toolArgs.ConversationIds.length > 1) {
-        isAmbiguous = true;
-      }
-    }
-
-    if (isAmbiguous) {
-      return false;
-    }
-
-    const matchedHard = [];
-
-    if (inFlightChildId && candidateChildId) {
-      if (inFlightChildId === candidateChildId) {
-        matchedHard.push("childId");
-      } else {
-        return false;
-      }
-    }
-
-    if (inFlightExecId && currentExecId) {
-      if (inFlightExecId === currentExecId) {
-        matchedHard.push("executionId");
-      } else {
-        return false;
-      }
-    }
-
-    // Shared causal toolCallId / corrKey if explicitly passed
-    const candidateToolCall = toolArgs.toolCallId || payload.toolCallId || null;
-    if (inFlightToolCall && candidateToolCall) {
-      if (inFlightToolCall === candidateToolCall) {
-        matchedHard.push("toolCallId");
-      } else {
-        return false;
-      }
-    }
-    if (inFlightCorrKey && currentCorrKey) {
-      if (inFlightCorrKey === currentCorrKey) {
-        matchedHard.push("correlationKey");
-      } else {
-        return false;
-      }
-    }
-
-    // Condition A: At least one verifiable HARD IDENTITY present on BOTH sides
-    if (matchedHard.length === 0) {
-      return false;
-    }
-
-    // Condition C: Additional identity dimensions do not conflict
-    const inFlightParent = inFlightParentConv || inFlightConv;
-    const currentParent = currentParentConv || currentConv;
-    if (inFlightParent && currentParent && inFlightParent !== currentParent) {
-      return false;
-    }
-
-    const candidateRole = String(toolArgs.Role || payload.result?.role || payload.result?.subagentRole || "").toLowerCase();
-    if (candidateRole) {
-      if (inFlightRole && candidateRole !== inFlightRole && !candidateRole.includes("investig")) {
-        return false;
-      }
-    }
-
-    const candidateProfile = String(toolArgs.TypeName || payload.result?.profile || payload.result?.subagentProfile || "").toLowerCase();
-    if (candidateProfile) {
-      if (inFlightProfile && candidateProfile !== inFlightProfile) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  return false;
-}
-
 function main() {
   const rawInput = readStdin();
   if (!rawInput.trim()) {
@@ -536,11 +457,22 @@ function main() {
     mkdirSync(dirname(telemetryPath), { recursive: true });
 
     let activeState = {};
-    if (existsSync(statePath)) {
+    const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");
+    if (!stateLoad.ok) {
       try {
-        activeState = JSON.parse(readFileSync(statePath, "utf-8"));
+        appendFileSync(telemetryPath, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "GOVERNANCE_STATE_CORRUPT",
+          phase: "POST_TOOL",
+          reason: stateLoad.reason,
+          conversationId: payload.conversationId || null,
+          toolName: payload.toolName ?? payload.toolCall?.name ?? null,
+        }) + "\n", "utf-8");
       } catch {}
+      console.log(JSON.stringify({}));
+      return;
     }
+    if (stateLoad.exists) activeState = stateLoad.value;
 
     if (!activeState.toolMix) {
       activeState.toolMix = createInitialToolMix();
@@ -602,6 +534,20 @@ function main() {
 
     // Track tool mix and mutations
     const roleBindings = loadRoleBindings(roleBindingsPath);
+    if (roleBindings.__governanceLoadError) {
+      try {
+        appendFileSync(telemetryPath, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "GOVERNANCE_STATE_CORRUPT",
+          phase: "POST_TOOL",
+          reason: roleBindings.__governanceLoadError,
+          conversationId: payload.conversationId || null,
+          toolName: payload.toolName ?? payload.toolCall?.name ?? null,
+        }) + "\n", "utf-8");
+      } catch {}
+      console.log(JSON.stringify({}));
+      return;
+    }
     const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot);
 
     const toolName = payload.toolName ?? payload.toolCall?.name ?? null;
@@ -618,7 +564,7 @@ function main() {
       }
     }
 
-    const nativeTools = ["view_file", "grep_search", "find_by_name", "replace_file_content", "write_to_file", "list_dir", "ask_question"];
+    const nativeTools = ["view_file", "grep_search", "find_by_name", "replace_file_content", "write_to_file", "edit_file", "create_file", "list_dir", "ask_question"];
     if (nativeTools.includes(toolName)) {
       activeState.native_tool_calls = (activeState.native_tool_calls || 0) + 1;
     }
@@ -649,11 +595,11 @@ function main() {
     } else if (toolName === "list_dir") {
       activeState.read_tool_calls = (activeState.read_tool_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
-    } else if (toolName === "replace_file_content" || toolName === "write_to_file") {
+    } else if (["replace_file_content", "write_to_file", "edit_file", "create_file"].includes(toolName)) {
       activeState.write_tool_calls = (activeState.write_tool_calls || 0) + 1;
       activeState.toolMix.native_edit_calls = (activeState.toolMix.native_edit_calls || 0) + 1;
       activeState.consecutiveFileReads = 0;
-      const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || null;
+      const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.FilePath || toolArgs.filePath || toolArgs.path || null;
       if (rawTarget) {
         const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
         const isCP = isControlPlanePath(relTarget);
@@ -670,7 +616,7 @@ function main() {
         }
         recordMutation(activeState, {
           paths: [relTarget],
-          type: toolName === "write_to_file" ? "CREATE" : "EDIT",
+          type: (toolName === "write_to_file" || toolName === "create_file") ? "CREATE" : "EDIT",
           tool: toolName,
           actorRole: actor.role,
           actorId: actor.actorId || conversationId || null,
@@ -881,12 +827,6 @@ function main() {
         inFlight &&
         (!inFlightParentConversationId || inFlightParentConversationId === conversationId)
       );
-      // Potential ACK is intentionally conservative: if runtime omits toolCallId,
-      // do not let a successful invoke result close/teach the investigation outcome.
-      const isPotentialInvestigationAck = Boolean(
-        sameInvestigationParent &&
-        (!ackToolCallId || !inFlightToolCallId || inFlightToolCallId === ackToolCallId)
-      );
       // State-changing dispatch failure and child-id enrichment require exact causal identity.
       const isInvestigationAck = Boolean(
         sameInvestigationParent &&
@@ -917,56 +857,23 @@ function main() {
         }
       }
 
-      // Phase 1 Dream Record-Only Adapter: Record DECISION_OUTCOME for matching pending decisions.
-      // Investigation decisions stay pending across a successful dispatch ACK and close only at
-      // factual child termination. A factual dispatch failure may close as failure here.
-      try {
-        const branchCount = Math.max(1, subagents.length);
-        const toolCallId = payload.toolCall?.id || payload.toolCallId || "";
-        const stepIdx = payload.stepIdx ?? 0;
+      // invoke_subagent PostToolUse is dispatch acknowledgement, not delegated-work completion.
+      // Successful ACKs NEVER close Dream outcomes. Only a factual dispatch failure with
+      // exact causal identity may close the corresponding pending decision here.
+      if (invocationFailed && ackToolCallId) {
+        try {
+          const branchCount = Math.max(1, subagents.length);
+          const stepIdx = payload.stepIdx ?? 0;
 
-        for (let idx = 0; idx < branchCount; idx++) {
-          let corrKey = dreamCorrelationKey({
-            conversationId,
-            stepIdx,
-            toolCallId,
-            branchOrdinal: idx,
-          });
-
-          let pendingCheck = getPendingDecision({ repoRoot, correlationKey: corrKey });
-
-          // Fallback resolution: scan pending-decisions dir for matching conversation_id and step_idx / tool_call_id
-          if (!pendingCheck.ok) {
-            const pendingDir = resolve(repoRoot, ".agents/state/dream/pending-decisions");
-            if (existsSync(pendingDir)) {
-              try {
-                const entries = readdirSync(pendingDir).filter(f => f.endsWith(".json"));
-                for (const f of entries) {
-                  const candidateKey = f.slice(0, -5);
-                  const pRes = getPendingDecision({ repoRoot, correlationKey: candidateKey });
-                  if (pRes.ok && pRes.pending) {
-                    if (
-                      pRes.pending.conversation_id === conversationId &&
-                      (pRes.pending.step_idx === stepIdx || pRes.pending.tool_call_id === toolCallId)
-                    ) {
-                      corrKey = candidateKey;
-                      pendingCheck = pRes;
-                      break;
-                    }
-                  }
-                }
-              } catch {}
-            }
-          }
-
-          if (pendingCheck.ok && (!isPotentialInvestigationAck || (isInvestigationAck && invocationFailed))) {
-            const outcomeResultStr = typeof payload.toolResult === "string"
-              ? payload.toolResult
-              : (payload.toolResult
-                  ? JSON.stringify(payload.toolResult)
-                  : (typeof payload.result === "string"
-                      ? payload.result
-                      : (payload.result ? JSON.stringify(payload.result) : (payload.error ? "FAILED" : "SUCCESS"))));
+          for (let idx = 0; idx < branchCount; idx++) {
+            const corrKey = dreamCorrelationKey({
+              conversationId,
+              stepIdx,
+              toolCallId: ackToolCallId,
+              branchOrdinal: idx,
+            });
+            const pendingCheck = getPendingDecision({ repoRoot, correlationKey: corrKey });
+            if (!pendingCheck.ok) continue;
 
             const evidenceSummary = activeState.evidenceSummary || activeState.evidence || {
               tests: activeState.workerValidationVerified ? "PASS" : (activeState.workerValidationExitCode !== null && activeState.workerValidationExitCode !== 0 ? "FAIL" : "UNKNOWN"),
@@ -976,45 +883,36 @@ function main() {
               scope_check: "UNKNOWN",
             };
 
-            const retryState = {
-              attempt: activeState.attempt || 0,
-              retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
-              retry_reason: activeState.retryReason || activeState.retry_reason || null,
-            };
-
-            const costMetrics = {
-              tool_calls: activeState.tool_calls || 1,
-              context_proxy_bytes: activeState.context_proxy_bytes || 0,
-              worker_packet_bytes: activeState.toolMix?.worker_packet_bytes || activeState.worker_packet_bytes || 0,
-              duration_ms: payload.durationMs ?? 0,
-            };
-
-            const terminalState = payload.error
-              ? "FAILED"
-              : (activeState.state === "ACCEPTED"
-                  ? "ACCEPTED"
-                  : (activeState.state === "HUMAN_GATE"
-                      ? "HUMAN_GATE"
-                      : "UNKNOWN"));
-
-            const outcomeInput = {
-              result: outcomeResultStr,
-              evidence_summary: evidenceSummary,
-              mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
-              retry_state: retryState,
-              cost_metrics: costMetrics,
-              terminal_state: terminalState,
-            };
-
             recordDecisionOutcome({
               repoRoot,
               correlationKey: corrKey,
-              outcome: outcomeInput,
+              outcome: {
+                result: {
+                  status: payload.cancelled || payload.result?.cancelled || payload.result?.status === "CANCELLED"
+                    ? "CANCELLED"
+                    : "DISPATCH_FAILED",
+                  error: payload.error || payload.toolResult?.error || null,
+                },
+                evidence_summary: evidenceSummary,
+                mutation_seq: activeState.mutationSeq || activeState.mutation_seq || 0,
+                retry_state: {
+                  attempt: activeState.attempt || 0,
+                  retry_remaining: activeState.retry_remaining ?? activeState.remainingAttempts ?? 0,
+                  retry_reason: activeState.retryReason || activeState.retry_reason || null,
+                },
+                cost_metrics: {
+                  tool_calls: activeState.tool_calls || 1,
+                  context_proxy_bytes: activeState.context_proxy_bytes || 0,
+                  worker_packet_bytes: activeState.toolMix?.worker_packet_bytes || activeState.worker_packet_bytes || 0,
+                  duration_ms: payload.durationMs ?? 0,
+                },
+                terminal_state: "FAILED",
+              },
             });
           }
+        } catch {
+          // Fail-open: Dream telemetry must never break runtime execution.
         }
-      } catch (dreamOutcomeErr) {
-        // Fail-open: NEVER throw on Dream error
       }
 
       // Only a factual invocation failure may terminate the attempt here.
@@ -1040,6 +938,11 @@ function main() {
     } else if (toolName === "send_message") {
       activeState.send_message_calls = (activeState.send_message_calls || 0) + 1;
       const msg = toolArgs.Message || "";
+      const isFactualImplementationWorker =
+        isWorkerRole(actor.role) &&
+        actor.confidence === "HIGH" &&
+        actor.source === "RUNTIME_IDENTITY" &&
+        actor.delegationKind === "WORK";
       if (msg) {
         const pBytes = Buffer.byteLength(String(msg), "utf-8");
         activeState.toolMix.worker_packet_chars = (activeState.toolMix.worker_packet_chars || 0) + msg.length;
@@ -1048,14 +951,35 @@ function main() {
         activeState.handoffObserved = true;
         activeState.handoffBytes = (activeState.handoffBytes || 0) + pBytes;
         activeState.handoffStatus = "MESSAGE_DELIVERED";
-        if (actor.role === "WORKER" || actor.role === "FLASH" || actor.role === "FLASH_WORKER" || actor.role === "FLASH_LOW_WORKER" || actor.role === "FLASH_MEDIUM_WORKER") {
+        if (isFactualImplementationWorker) {
           activeState.workerConversationId = conversationId;
         }
         const msgStr = typeof msg === "string" ? msg : JSON.stringify(msg);
         if (msgStr.includes("IMPLEMENTATION_COMPLETE")) {
-          activeState.workerCompletionClaimed = true;
-          activeState.workerCompletionClaimTimestamp = new Date().toISOString();
-          activeState.implementationComplete = true;
+          if (isFactualImplementationWorker) {
+            activeState.workerCompletionClaimed = true;
+            activeState.workerCompletionClaimFactual = true;
+            activeState.workerCompletionClaimTimestamp = new Date().toISOString();
+            activeState.workerCompletionClaimIdentity = {
+              actorId: actor.actorId || conversationId || null,
+              source: actor.source,
+              confidence: actor.confidence,
+              delegationKind: actor.delegationKind,
+              attempt: Number.isInteger(actor.attempt) ? actor.attempt : 0,
+            };
+            activeState.implementationComplete = true;
+          } else {
+            activeState.nonFactualCompletionClaims = (activeState.nonFactualCompletionClaims || 0) + 1;
+            activeState.lastNonFactualCompletionClaim = {
+              actorId: actor.actorId || conversationId || null,
+              role: actor.role || "UNKNOWN",
+              source: actor.source || "UNRESOLVED",
+              confidence: actor.confidence || "LOW",
+              delegationKind: actor.delegationKind || null,
+              attempt: Number.isInteger(actor.attempt) ? actor.attempt : null,
+              timestamp: new Date().toISOString(),
+            };
+          }
 
           const matchCmd = msgStr.match(/(?:verified with\s+)?(node\s+--test|npm\s+test|pnpm\s+test|pytest|cargo\s+test|vitest|jest)[^\n\r\]]*/i);
           if (matchCmd) {
@@ -1074,8 +998,7 @@ function main() {
     }
 
     // Sequence mutation tracking: before first mutation vs after last mutation
-    const isMutationStep = toolName === "write_to_file"
-      || toolName === "replace_file_content"
+    const isMutationStep = ["write_to_file", "replace_file_content", "edit_file", "create_file"].includes(toolName)
       || (shellMutation && shellMutation.isMutation);
 
     if (!activeState.first_mutation_occurred) {
@@ -1119,6 +1042,8 @@ function main() {
         recordedEvidence.conversationId = conversationId || null;
         recordedEvidence.confidence = actor.confidence || "LOW";
         recordedEvidence.evidenceSource = actor.source || "EXECUTION_HOOK";
+        recordedEvidence.delegationKind = actor.delegationKind || null;
+        recordedEvidence.attempt = Number.isInteger(actor.attempt) ? actor.attempt : null;
 
         const existingIdx = activeState.evidenceLedger.findIndex(
           (e) => e && e.command === recordedEvidence.command && e.type === recordedEvidence.type && e.scope === recordedEvidence.scope

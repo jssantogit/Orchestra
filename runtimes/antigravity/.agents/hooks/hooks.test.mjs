@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, readdirSync } from "node:fs";
+import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync, readdirSync, symlinkSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 
 import { executeGitOperation } from "./git-operation.mjs";
+import { factualSubagentMatchesPending } from "./child-identity.mjs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -28,11 +29,63 @@ function cleanState() {
   try { rmSync("scratch", { recursive: true, force: true }); } catch {}
 }
 
+function seedFactualWorkerIdentity(conversationId = "factual-worker-test", options = {}) {
+  mkdirSync(".agents/state", { recursive: true });
+  const parentConversationId = options.parentConversationId || "orchestrator-test";
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: parentConversationId,
+    bindings: {
+      [parentConversationId]: {
+        conversationId: parentConversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+      [conversationId]: {
+        conversationId,
+        role: "WORKER",
+        profile: options.profile || "flash-worker",
+        parentConversationId,
+        delegationKind: options.delegationKind || "WORK",
+        originToolCallId: options.originToolCallId || "test-worker-origin",
+        confidence: "HIGH",
+        source: "RUNTIME_IDENTITY",
+        factualIdentityAt: new Date().toISOString(),
+        consumed: true,
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf8");
+  return conversationId;
+}
+
+
+function seedFactualOrchestratorIdentity(conversationId = "orchestrator-test") {
+  mkdirSync(".agents/state", { recursive: true });
+  writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+    mainConversationId: conversationId,
+    bindings: {
+      [conversationId]: {
+        conversationId,
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        confidence: "HIGH",
+        source: "CONVERSATION_BOUND_IDENTITY",
+      },
+    },
+    conversations: {},
+    pendingSubagents: [],
+  }, null, 2), "utf8");
+  return conversationId;
+}
+
 test.after(() => {
   cleanState();
 });
 
-test("pre-tool hook: allows legitimate control plane writes", () => {
+test("pre-tool hook: orchestrator cannot directly mutate hook-owned governance state", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -44,7 +97,8 @@ test("pre-tool hook: allows legitimate control plane writes", () => {
       }
     });
     const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
-    assert.equal(output.decision, "allow");
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
   } finally {
     cleanState();
   }
@@ -95,6 +149,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("scope-worker");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       taskDomain: "UI",
       allowedPaths: ["apps/web/**"],
@@ -103,6 +158,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
 
     // Allowed
     const allowedInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("apps/web/src/components/Plot.tsx") }
@@ -112,6 +168,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
 
     // Forbidden path
     const forbiddenInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "replace_file_content",
         args: { TargetFile: resolve("packages/core/src/dsp.ts") }
@@ -123,6 +180,7 @@ test("pre-tool hook: enforces scope contract allowed and forbidden paths", () =>
 
     // Outside allowed path
     const outsideInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("docs/specs/test.md") }
@@ -330,12 +388,14 @@ test("pre-tool hook: allows Flash worker to use shell write inside allowedPaths"
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-in");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["packages/core/src/**"],
       forbiddenPaths: ["apps/**"]
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "echo 'export const x = 1;' > packages/core/src/calc.ts" }
@@ -353,12 +413,14 @@ test("pre-tool hook: blocks Flash worker from using shell write outside allowedP
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-out");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["packages/core/src/**"],
       forbiddenPaths: []
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "echo 'export const x = 1;' > apps/web/src/calc.ts" }
@@ -377,12 +439,14 @@ test("pre-tool hook: blocks Flash worker from shell file removal in forbiddenPat
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-forbidden");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["packages/core/**"],
       forbiddenPaths: ["packages/core/src/dsp.ts"]
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "rm packages/core/src/dsp.ts" }
@@ -446,12 +510,19 @@ test("pre-tool hook: allows legitimate JS arrow functions and comparisons withou
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("parser-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }));
 
     // Arrow function
     const arrowInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
-        args: { CommandLine: 'node -e "const f = (a, b) => a + b; console.log(f(1, 2))"' }
+        args: { CommandLine: 'node --test --test-name-pattern="a => b"' }
       }
     });
     const arrowRes = JSON.parse(execFileSync("node", [preToolScript], { input: arrowInput }));
@@ -459,9 +530,10 @@ test("pre-tool hook: allows legitimate JS arrow functions and comparisons withou
 
     // Relational comparisons
     const compInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
-        args: { CommandLine: 'node -e "const elapsed = 10; if (elapsed >= 5 && elapsed <= 20) process.exit(0);"' }
+        args: { CommandLine: 'node --test --test-name-pattern="elapsed >= 5 && elapsed <= 20"' }
       }
     });
     const compRes = JSON.parse(execFileSync("node", [preToolScript], { input: compInput }));
@@ -506,12 +578,14 @@ test("pre-tool hook: anti-obfuscation blocks base64 decoding write to product co
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("shell-worker-obfuscation");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       allowedPaths: ["scratch/**"],
       forbiddenPaths: ["packages/**"]
     }));
 
     const input = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "run_command",
         args: { CommandLine: "echo 'dmFyIHggPSAx' | base64 -d > packages/core/src/index.ts" }
@@ -530,10 +604,12 @@ test("pre-tool hook: large file guard blocks dumping large files into context", 
   const testLargeFile = resolve("scratch/test-large.json");
   try {
     mkdirSync("scratch", { recursive: true });
+    seedFactualOrchestratorIdentity("large-file-orch");
     writeFileSync(testLargeFile, "x".repeat(250000), "utf-8"); // 250 KB
 
     // cat large file -> blocked
     const catInput = JSON.stringify({
+      conversationId: "large-file-orch",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "cat scratch/test-large.json" }
@@ -545,6 +621,7 @@ test("pre-tool hook: large file guard blocks dumping large files into context", 
 
     // jq '.' large file -> blocked
     const jqInput = JSON.stringify({
+      conversationId: "large-file-orch",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "jq '.' scratch/test-large.json" }
@@ -556,6 +633,7 @@ test("pre-tool hook: large file guard blocks dumping large files into context", 
 
     // head large file -> allowed (filtered inspection)
     const headInput = JSON.stringify({
+      conversationId: "large-file-orch",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "head -n 20 scratch/test-large.json" }
@@ -573,10 +651,15 @@ test("pre-tool hook: enforces polling budget and backoff on manage_task status",
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
-    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "polling-orchestrator",
+    }));
+    seedFactualOrchestratorIdentity("polling-orchestrator");
 
     // 1st poll -> allowed
     const poll1 = JSON.stringify({
+      conversationId: "polling-orchestrator",
       toolCall: {
         name: "manage_task",
         args: { Action: "status", TaskId: "task-100" }
@@ -592,7 +675,8 @@ test("pre-tool hook: enforces polling budget and backoff on manage_task status",
 
     // Over budget (> 3 polls)
     writeFileSync(".agents/state/active-state.json", JSON.stringify({
-      activeRole: "WORKER",
+      activeRole: "ORCHESTRATOR",
+      conversationId: "polling-orchestrator",
       pollingTracker: {
         taskId: "task-100",
         pollCount: 3,
@@ -1494,6 +1578,54 @@ test("v5: post-tool telemetry preserves mutationSeq for git status, add, commit,
   }
 });
 
+test("v5: git-operation resolves root transaction state from nested cwd", () => {
+  const fixtureDir = resolve("scratch/git-fixture-root-state-" + Date.now());
+  const nestedDir = resolve(fixtureDir, "src/nested");
+  try {
+    mkdirSync(nestedDir, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "README.md"), "# Fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "initial fixture"], { cwd: fixtureDir });
+
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+    const stateDir = resolve(fixtureDir, ".agents/state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(resolve(stateDir, "active-state.json"), JSON.stringify({
+      gitTransaction: {
+        action: "commit",
+        commitCreated: true,
+        commitHash: head,
+        message: "candidate already committed",
+        files: null,
+        remote: "origin",
+        branch: "main",
+        pushSucceeded: false,
+      },
+    }, null, 2), "utf-8");
+
+    const res = executeGitOperation({
+      cwd: nestedDir,
+      action: "commit",
+      message: "candidate already committed",
+    });
+
+    assert.equal(res.success, true);
+    assert.equal(res.action, "commit");
+    assert.equal(res.commit, head, "Nested invocation must reuse transaction state from repository root");
+    assert.equal(
+      existsSync(resolve(nestedDir, ".git/active-state.json")),
+      false,
+      "Nested cwd must never create or depend on a local .git/active-state.json"
+    );
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
 test("v5: git-operation runner executes status and diff_summary", () => {
   const fixtureDir = resolve("scratch/git-fixture-status-" + Date.now());
   try {
@@ -1773,22 +1905,18 @@ test("pre-tool hook: blocks orchestrator workspace writes across the full layout
   }
 });
 
-test("pre-tool hook: allows orchestrator control plane writes (.agents/**, scratch/**) but blocks AGENTS.md", () => {
+test("pre-tool hook: orchestrator may write scratch but not hook-owned .agents or AGENTS.md", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
 
-    // Allowed control-plane paths
-    const allowed = [
-      ".agents/state/active-state.json",
-      ".agents/state/active-contract.json",
-      ".agents/evidence/ledger.json",
+    const allowedScratch = [
       "scratch/experiment.py",
       "scratch/debug-notes.txt",
     ];
 
-    for (const relPath of allowed) {
+    for (const relPath of allowedScratch) {
       const input = JSON.stringify({
         toolCall: {
           name: "write_to_file",
@@ -1796,10 +1924,26 @@ test("pre-tool hook: allows orchestrator control plane writes (.agents/**, scrat
         },
       });
       const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
-      assert.equal(output.decision, "allow", `Orchestrator write to ${relPath} should be allowed`);
+      assert.equal(output.decision, "allow", `Orchestrator scratch write to ${relPath} should be allowed`);
     }
 
-    // AGENTS.md is strictly protected constitution
+    const hookOwned = [
+      ".agents/state/active-state.json",
+      ".agents/state/active-contract.json",
+      ".agents/evidence/ledger.json",
+    ];
+    for (const relPath of hookOwned) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: resolve(relPath) },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "deny", `Orchestrator direct write to ${relPath} must be denied`);
+      assert.match(output.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
+    }
+
     const agentsMdInput = JSON.stringify({
       toolCall: {
         name: "write_to_file",
@@ -1840,6 +1984,27 @@ test("pre-tool hook: blocks orchestrator shell mutations but permits read-only c
       assert(output.reason.includes("ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED"));
     }
 
+    // Commands that look read-only by prefix but have side effects or shell escape surfaces.
+    const deceptiveReadOnlyCommands = [
+      "git branch audit-bypass",
+      "git branch -D audit-bypass",
+      "git diff --output=audit.patch",
+      "find src -delete",
+      "git status $(python -c \"from pathlib import Path; Path('pwned').write_text('x')\")",
+    ];
+
+    for (const cmd of deceptiveReadOnlyCommands) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: cmd },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "deny", `Deceptive read-only command '${cmd}' must fail closed`);
+      assert.match(output.reason, /ORCHESTRATOR_UNVERIFIED_COMMAND_PROHIBITED|ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED/);
+    }
+
     // Read-only shell commands
     const readOnlyCommands = [
       "git status",
@@ -1863,13 +2028,16 @@ test("pre-tool hook: blocks orchestrator shell mutations but permits read-only c
   }
 });
 
-test("pre-tool hook: tracks subagent invocations and binds child conversation ID to worker role", () => {
+test("pre-tool hook: pending uniqueness is not factual identity; brain record upgrades provisional child", () => {
   cleanState();
+  const brainBaseDir = resolve("scratch/identity-brain");
   try {
-    // 1. invoke_subagent call records pending subagent
+    seedFactualOrchestratorIdentity("parent-conv-1");
     const invokeInput = JSON.stringify({
       conversationId: "parent-conv-1",
+      stepIdx: 6,
       toolCall: {
+        id: "call-worker-identity",
         name: "invoke_subagent",
         args: {
           Subagents: [
@@ -1886,33 +2054,134 @@ test("pre-tool hook: tracks subagent invocations and binds child conversation ID
     const invokeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: invokeInput }));
     assert.equal(invokeOutput.decision, "allow");
 
-    // Verify role-bindings.json has pending binding
     const bindingsPath = resolve(".agents/state/role-bindings.json");
-    assert.ok(existsSync(bindingsPath), "role-bindings.json must exist after invoke_subagent");
-    const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.ok(bindings.pendingSubagents.length > 0, "pendingSubagents must be populated");
+    let bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.pendingSubagents.length, 1);
     assert.equal(bindings.pendingSubagents[0].role, "WORKER");
+    assert.equal(bindings.pendingSubagents[0].originStepIdx, 6);
+    assert.equal(bindings.pendingSubagents[0].model, "gemini-3.8-flash-low", "Pending identity stores canonical runtime model, not flash_lite alias");
 
-    // 2. Authorize scope contract for worker
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({
       taskDomain: "CODE",
       allowedPaths: ["src/**"],
     }));
 
-    // 3. Child conversation calls tool -> automatically bound to WORKER and allowed within scope
-    const childInput = JSON.stringify({
+    // A single pending delegation is not proof of child identity.
+    const noProofInput = JSON.stringify({
       conversationId: "child-conv-42",
+      parentConversationId: "parent-conv-1",
       toolCall: {
+        id: "call-child-no-proof",
         name: "write_to_file",
         args: { TargetFile: resolve("src/formatter.js") },
       },
     });
-    const childOutput = JSON.parse(execFileSync("node", [preToolScript], { input: childInput }));
-    assert.equal(childOutput.decision, "allow", "Bound worker must be allowed to write product file");
+    const noProofOutput = JSON.parse(execFileSync("node", [preToolScript], { input: noProofInput }));
+    assert.equal(noProofOutput.decision, "deny");
+    assert.match(noProofOutput.reason, /ROLE_IDENTITY_UNRESOLVED/);
 
-    // Verify bindings now map child-conv-42 to WORKER
-    const updatedBindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(updatedBindings.conversations["child-conv-42"].role, "WORKER");
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.pendingSubagents[0].consumed, false);
+    assert.equal(bindings.bindings["child-conv-42"], undefined);
+
+    // Runtime hook metadata may provisionally correlate the child for authorization,
+    // but it must remain MEDIUM and must not claim factual runtime identity.
+    const provisionalInput = JSON.stringify({
+      conversationId: "child-conv-42",
+      parentConversationId: "parent-conv-1",
+      agentRole: "WORKER",
+      agentProfile: "flash-low-worker",
+      modelName: "gemini-3.8-flash-low",
+      toolCall: {
+        id: "call-child-provisional",
+        name: "view_file",
+        args: { AbsolutePath: resolve("package.json") },
+      },
+    });
+    const provisionalOutput = JSON.parse(execFileSync("node", [preToolScript], { input: provisionalInput }));
+    assert.equal(provisionalOutput.decision, "allow");
+
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.bindings["child-conv-42"], undefined, "Provisional hook metadata must not create durable child identity");
+    assert.equal(bindings.pendingSubagents[0].consumed, false, "Provisional authorization must not consume the pending factual identity slot");
+
+    const provisionalWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        agentRole: "WORKER",
+        agentProfile: "flash-low-worker",
+        toolCall: {
+          id: "call-child-provisional-write",
+          name: "write_to_file",
+          args: { TargetFile: resolve("src/formatter.js"), CodeContent: "export const provisional = true;" },
+        },
+      }),
+    }));
+    assert.equal(provisionalWrite.decision, "deny");
+    assert.match(provisionalWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL/);
+
+    const provisionalShellWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        agentRole: "WORKER",
+        agentProfile: "flash-low-worker",
+        toolCall: {
+          id: "call-child-provisional-shell",
+          name: "run_command",
+          args: { CommandLine: "touch src/provisional-created.js" },
+        },
+      }),
+    }));
+    assert.equal(provisionalShellWrite.decision, "deny");
+    assert.match(provisionalShellWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL/);
+
+    // The factual Antigravity brain record for the exact child creates the
+    // durable HIGH/RUNTIME_IDENTITY binding.
+    const subagentsDir = resolve(brainBaseDir, "parent-conv-1/.system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(resolve(subagentsDir, "child-conv-42.json"), JSON.stringify({
+      conversationId: "child-conv-42",
+      subagentDescriptor: {
+        typeName: "flash-low-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 6,
+    }, null, 2), "utf-8");
+
+    const factualOutput = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        toolCall: {
+          id: "call-child-factual",
+          name: "view_file",
+          args: { AbsolutePath: resolve("package.json") },
+        },
+      }),
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }));
+    assert.equal(factualOutput.decision, "allow");
+
+    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+    assert.equal(bindings.bindings["child-conv-42"].confidence, "HIGH");
+    assert.equal(bindings.bindings["child-conv-42"].source, "RUNTIME_IDENTITY");
+    assert.ok(bindings.bindings["child-conv-42"].factualIdentityAt);
+
+    const factualWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "child-conv-42",
+        parentConversationId: "parent-conv-1",
+        toolCall: {
+          id: "call-child-factual-write",
+          name: "write_to_file",
+          args: { TargetFile: resolve("src/formatter.js"), CodeContent: "export const factual = true;" },
+        },
+      }),
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }));
+    assert.equal(factualWrite.decision, "allow", "Factual runtime identity restores worker mutation authority within Scope Contract");
   } finally {
     cleanState();
   }
@@ -1923,6 +2192,7 @@ test("pre-tool hook: allows worker to write within scope contract but denies out
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("scope-contract-worker");
     writeFileSync(
       ".agents/state/active-contract.json",
       JSON.stringify({
@@ -1934,6 +2204,7 @@ test("pre-tool hook: allows worker to write within scope contract but denies out
 
     // In-scope write
     const inScopeInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("src/formatter.js") },
@@ -1944,6 +2215,7 @@ test("pre-tool hook: allows worker to write within scope contract but denies out
 
     // Out-of-scope write
     const outOfScopeInput = JSON.stringify({
+      conversationId: workerConv,
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("packages/core/secret.ts") },
@@ -2004,7 +2276,7 @@ test("pre-tool hook: UNKNOWN actor writing to control plane .agents/state/foo.js
   }
 });
 
-test("pre-tool hook: ORCHESTRATOR writing to control plane .agents/state/foo.json is ALLOWED", () => {
+test("pre-tool hook: ORCHESTRATOR direct write to .agents/state/foo.json is DENIED", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -2020,87 +2292,115 @@ test("pre-tool hook: ORCHESTRATOR writing to control plane .agents/state/foo.jso
       },
     });
     const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
-    assert.equal(output.decision, "allow");
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
   } finally {
     cleanState();
   }
 });
 
-test("pre-tool hook: two pending subagents are consumed sequentially and cannot be reused", () => {
+test("pre-tool hook: ambiguous identical workers fail closed instead of FIFO binding", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
-    // Write scope contract
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "ambiguous-workers",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "ambiguous-parent",
+      bindings: {
+        "ambiguous-parent": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [
+        {
+          seq: 1,
+          parentConversationId: "ambiguous-parent",
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          model: "gemini-3.8-flash-medium",
+          delegationKind: "WORK",
+          consumed: false,
+          decisionCorrelationKey: "corr-worker-a",
+        },
+        {
+          seq: 2,
+          parentConversationId: "ambiguous-parent",
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          model: "gemini-3.8-flash-medium",
+          delegationKind: "WORK",
+          consumed: false,
+          decisionCorrelationKey: "corr-worker-b",
+        },
+      ],
+    }, null, 2), "utf-8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "ambiguous-child",
+        parentConversationId: "ambiguous-parent",
+        toolCall: {
+          id: "ambiguous-write",
+          name: "write_to_file",
+          args: { TargetFile: "src/ambiguous.ts", CodeContent: "export const x = 1;" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ROLE_IDENTITY_UNRESOLVED/);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf-8"));
+    assert.equal(bindings.pendingSubagents.filter(p => p.consumed).length, 0, "Ambiguous workers must not be consumed FIFO");
+    assert.equal(bindings.bindings["ambiguous-child"], undefined, "Ambiguous child must not receive a guessed worker binding");
+  } finally {
+    cleanState();
+  }
+});
+
+test("pre-tool hook: multi-worker batch fails closed to prevent scope-contract aliasing", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("orch-main");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({ allowedPaths: ["src/**"] }));
 
-    // Orchestrator invokes two subagents
     const invokeInput = JSON.stringify({
       conversationId: "orch-main",
       toolCall: {
         name: "invoke_subagent",
         args: {
           Subagents: [
-            { TypeName: "flash-low-worker", Role: "Worker 1", Model: "flash_lite", Prompt: "Task 1" },
-            { TypeName: "flash-worker", Role: "Worker 2", Model: "pro", Prompt: "Task 2" },
+            { TypeName: "flash-low-worker", Role: "Worker 1", Model: "flash_lite", Prompt: "Task 1. allowedPaths: [src/a/**]" },
+            { TypeName: "flash-worker", Role: "Worker 2", Model: "pro", Prompt: "Task 2. allowedPaths: [src/b/**]" },
           ],
         },
       },
     });
+
     const invokeOutput = JSON.parse(execFileSync("node", [preToolScript], { input: invokeInput }));
-    assert.equal(invokeOutput.decision, "allow");
+    assert.equal(invokeOutput.decision, "deny");
+    assert.match(invokeOutput.reason, /PARALLEL_MUTATING_SUBAGENTS_UNSUPPORTED/);
 
     const bindingsPath = resolve(".agents/state/role-bindings.json");
-    let bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.pendingSubagents.length, 2);
-    assert.equal(bindings.pendingSubagents[0].consumed, false);
-    assert.equal(bindings.pendingSubagents[1].consumed, false);
-
-    // Child 1 calls tool with distinguishing profile
-    const child1Input = JSON.stringify({
-      conversationId: "child-conv-1",
-      agentProfile: "flash-low-worker",
-      toolCall: {
-        name: "write_to_file",
-        args: { TargetFile: resolve("src/formatter.js") },
-      },
-    });
-    const child1Output = JSON.parse(execFileSync("node", [preToolScript], { input: child1Input }));
-    assert.equal(child1Output.decision, "allow");
-
-    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.pendingSubagents[0].consumed, true);
-    assert.equal(bindings.pendingSubagents[0].consumedBy, "child-conv-1");
-    assert.equal(bindings.pendingSubagents[1].consumed, false);
-    assert.equal(bindings.bindings["child-conv-1"].profile, "flash-low-worker");
-
-    // Child 2 calls tool with second profile
-    const child2Input = JSON.stringify({
-      conversationId: "child-conv-2",
-      agentProfile: "flash-worker",
-      toolCall: {
-        name: "write_to_file",
-        args: { TargetFile: resolve("src/formatter.js") },
-      },
-    });
-    const child2Output = JSON.parse(execFileSync("node", [preToolScript], { input: child2Input }));
-    assert.equal(child2Output.decision, "allow");
-
-    bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.pendingSubagents[1].consumed, true);
-    assert.equal(bindings.pendingSubagents[1].consumedBy, "child-conv-2");
-    assert.equal(bindings.bindings["child-conv-2"].profile, "flash-worker");
-
-    // Child 3 calls tool -> NO unconsumed pending subagents remain!
-    const child3Input = JSON.stringify({
-      conversationId: "child-conv-3",
-      toolCall: {
-        name: "write_to_file",
-        args: { TargetFile: resolve("src/formatter.js") },
-      },
-    });
-    const child3Output = JSON.parse(execFileSync("node", [preToolScript], { input: child3Input }));
-    assert.equal(child3Output.decision, "deny", "Child 3 cannot bind already consumed pending subagents");
-    assert(child3Output.reason.includes("ROLE_IDENTITY_UNRESOLVED"));
+    if (existsSync(bindingsPath)) {
+      const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+      assert.equal(bindings.pendingSubagents?.length ?? 0, 0, "Denied batch must not create pending worker identities");
+    }
   } finally {
     cleanState();
   }
@@ -2110,6 +2410,7 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("orch-main");
     writeFileSync(".agents/state/active-contract.json", JSON.stringify({ allowedPaths: ["src/**"] }));
 
     // Orchestrator invokes two Two-Key reviewers
@@ -2131,6 +2432,10 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
     // Reviewer A calls write_to_file -> must be DENIED as Reviewer
     const revAInput = JSON.stringify({
       conversationId: "rev-conv-a",
+      parentConversationId: "orch-main",
+      agentRole: "REVIEWER",
+      agentProfile: "flash-reviewer",
+      modelName: "gemini-3.8-flash-high",
       toolCall: {
         name: "write_to_file",
         args: { TargetFile: resolve("src/formatter.js") },
@@ -2143,6 +2448,10 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
     // Reviewer B calls run_command -> must be DENIED as Reviewer
     const revBInput = JSON.stringify({
       conversationId: "rev-conv-b",
+      parentConversationId: "orch-main",
+      agentRole: "REVIEWER",
+      agentProfile: "flash-reviewer",
+      modelName: "gemini-3.8-flash-high",
       toolCall: {
         name: "run_command",
         args: { CommandLine: "node --test test/formatter.test.js" },
@@ -2152,11 +2461,15 @@ test("pre-tool hook: reviewer pending binds REVIEWER role and remains strictly r
     assert.equal(revBOutput.decision, "deny");
     assert(revBOutput.reason.includes("Reviewer is strictly read-only"));
 
-    // Verify bindings confirm both received REVIEWER role
+    // Provisional reviewer hook metadata is sufficient to apply the conservative
+    // read-only policy, but must not create durable identity or consume a factual slot.
     const bindingsPath = resolve(".agents/state/role-bindings.json");
     const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
-    assert.equal(bindings.bindings["rev-conv-a"].role, "REVIEWER");
-    assert.equal(bindings.bindings["rev-conv-b"].role, "REVIEWER");
+    assert.equal(bindings.bindings["rev-conv-a"], undefined);
+    assert.equal(bindings.bindings["rev-conv-b"], undefined);
+    assert.equal(bindings.pendingSubagents.length, 2);
+    assert.equal(bindings.pendingSubagents[0].consumed, false);
+    assert.equal(bindings.pendingSubagents[1].consumed, false);
   } finally {
     cleanState();
   }
@@ -2210,6 +2523,2053 @@ test("pre-tool hook: arbitrary orchestrator command is denied in normal mode and
     });
     const directScriptOutput = JSON.parse(execFileSync("node", [preToolScript], { input: directScriptInput }));
     assert.equal(directScriptOutput.decision, "allow");
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("v5: git-operation explicit files blocks unrelated pre-staged paths", () => {
+  cleanState();
+  const fixtureDir = resolve("scratch/git-fixture-prestaged-" + Date.now());
+  try {
+    mkdirSync(fixtureDir, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "init.txt"), "init\n");
+    execFileSync("git", ["add", "init.txt"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: fixtureDir });
+    const beforeHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+
+    writeFileSync(resolve(fixtureDir, "target.ts"), "export const target = true;\n");
+    writeFileSync(resolve(fixtureDir, "unrelated.ts"), "export const unrelated = true;\n");
+    execFileSync("git", ["add", "unrelated.ts"], { cwd: fixtureDir });
+
+    const res = executeGitOperation({
+      cwd: fixtureDir,
+      action: "commit",
+      files: ["target.ts"],
+      message: "feat: target only",
+    });
+
+    assert.equal(res.success, false);
+    assert.equal(res.blocked, true);
+    assert.equal(res.reason, "unexpected_staged_paths");
+    assert.deepEqual(res.unexpectedFiles, ["unrelated.ts"]);
+
+    const afterHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+    assert.equal(afterHead, beforeHead, "Blocked scoped commit must not create a commit");
+
+    const staged = execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: fixtureDir, encoding: "utf-8" }).trim();
+    assert.equal(staged, "unrelated.ts", "Existing staged work must remain untouched, not silently committed");
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+    cleanState();
+  }
+});
+
+test("v5: git-operation stages repo-relative explicit files from nested cwd", () => {
+  cleanState();
+  const fixtureDir = resolve("scratch/git-fixture-nested-stage-" + Date.now());
+  const nestedDir = resolve(fixtureDir, "src/nested");
+  try {
+    mkdirSync(nestedDir, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "init.txt"), "init\n");
+    execFileSync("git", ["add", "init.txt"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "src/target.ts"), "export const nested = true;\n");
+
+    const res = executeGitOperation({
+      cwd: nestedDir,
+      action: "commit",
+      files: ["src/target.ts"],
+      message: "feat: nested scoped commit",
+    });
+
+    assert.equal(res.success, true);
+    const changed = execFileSync("git", ["show", "--pretty=", "--name-only", "HEAD"], {
+      cwd: fixtureDir,
+      encoding: "utf-8",
+    }).trim();
+    assert.equal(changed, "src/target.ts");
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+    cleanState();
+  }
+});
+
+
+
+test("v5: git-operation does not reuse stale transaction state for a new commit", () => {
+  cleanState();
+  const fixtureDir = resolve("scratch/git-fixture-stale-tx-" + Date.now());
+  try {
+    mkdirSync(resolve(fixtureDir, ".agents/state"), { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.name", "AutoEQ Test"], { cwd: fixtureDir });
+    execFileSync("git", ["config", "user.email", "test@autoeq.local"], { cwd: fixtureDir });
+
+    writeFileSync(resolve(fixtureDir, "init.txt"), "init\n");
+    execFileSync("git", ["add", "init.txt"], { cwd: fixtureDir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: fixtureDir });
+    const oldHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf8" }).trim();
+
+    writeFileSync(resolve(fixtureDir, ".agents/state/active-state.json"), JSON.stringify({
+      gitTransaction: {
+        action: "commit",
+        commitCreated: true,
+        commitHash: oldHead,
+        message: "feat: old transaction",
+        files: ["old.ts"],
+        remote: "origin",
+        branch: "main",
+        pushSucceeded: false,
+      },
+    }, null, 2), "utf8");
+
+    writeFileSync(resolve(fixtureDir, "target.ts"), "export const target = 2;\n");
+
+    const res = executeGitOperation({
+      cwd: fixtureDir,
+      action: "commit",
+      files: ["target.ts"],
+      message: "feat: new transaction",
+    });
+
+    assert.equal(res.success, true);
+    const newHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixtureDir, encoding: "utf8" }).trim();
+    assert.notEqual(newHead, oldHead, "Stale transaction state must not suppress a new commit");
+    assert.equal(res.commit, newHead, "Result must report the newly-created factual HEAD");
+
+    const changed = execFileSync("git", ["show", "--pretty=", "--name-only", "HEAD"], {
+      cwd: fixtureDir,
+      encoding: "utf8",
+    }).trim();
+    assert.equal(changed, "target.ts");
+  } finally {
+    try { rmSync(fixtureDir, { recursive: true, force: true }); } catch {}
+    cleanState();
+  }
+});
+
+test("pre-tool hook: factual INVESTIGATION delegation is strictly read-only", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      taskAction: "IMPLEMENT",
+      taskDomain: "CODE",
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      contractId: "investigator-read-only",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: [],
+    }, null, 2), "utf-8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "investigator-parent",
+      bindings: {
+        "investigator-parent": {
+          conversationId: "investigator-parent",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        "investigator-child": {
+          conversationId: "investigator-child",
+          role: "WORKER",
+          profile: "flash-worker",
+          parentConversationId: "investigator-parent",
+          delegationKind: "INVESTIGATION",
+          originToolCallId: "call-investigator",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          consumed: true,
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf-8");
+
+    const write = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-write",
+          name: "write_to_file",
+          args: { TargetFile: "src/investigator.ts", CodeContent: "export const bad = true;" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(write.decision, "deny");
+    assert.match(write.reason, /INVESTIGATOR_READ_ONLY/);
+
+    const shellMutation = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-shell-write",
+          name: "run_command",
+          args: { CommandLine: "touch src/investigator-created.ts" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(shellMutation.decision, "deny");
+    assert.match(shellMutation.reason, /INVESTIGATOR_READ_ONLY/);
+
+    const read = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-read",
+          name: "view_file",
+          args: { AbsolutePath: resolve("package.json") },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(read.decision, "allow");
+
+    const gitStatus = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-git-status",
+          name: "run_command",
+          args: { CommandLine: "git status --short" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(gitStatus.decision, "allow");
+
+    const testCommand = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-test",
+          name: "run_command",
+          args: { CommandLine: "node --test test/example.test.js" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(testCommand.decision, "allow", "Read-only validation is permitted for investigation");
+
+    const buildCommand = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "investigator-child",
+        parentConversationId: "investigator-parent",
+        toolCall: {
+          id: "investigator-build",
+          name: "run_command",
+          args: { CommandLine: "npm run build" },
+        },
+      }),
+      encoding: "utf-8",
+    }).trim());
+    assert.equal(buildCommand.decision, "deny", "Build is workspace-mutating and forbidden to investigator");
+    assert.match(buildCommand.reason, /INVESTIGATOR_READ_ONLY/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: native write aliases are intercepted, scoped, and tracked", () => {
+  cleanState();
+  try {
+    const hooksConfig = JSON.parse(readFileSync(resolve(__dirname, "../hooks.json"), "utf8"));
+    const matcher = hooksConfig["scope-enforcer"].PreToolUse[0].matcher;
+    assert.match(matcher, /(?:^|\|)edit_file(?:\||$)/);
+    assert.match(matcher, /(?:^|\|)create_file(?:\||$)/);
+
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "WORKER",
+      taskAction: "IMPLEMENT",
+      mutationSeq: 1,
+    }, null, 2), "utf8");
+    const workerConv = seedFactualWorkerIdentity("alias-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }, null, 2), "utf8");
+
+    const createAllowed = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          id: "alias-create",
+          name: "create_file",
+          args: { path: "src/alias-created.js", content: "export const x = 1;" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(createAllowed.decision, "allow");
+
+    const editDenied = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          id: "alias-edit",
+          name: "edit_file",
+          args: { path: "docs/outside.md", content: "nope" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(editDenied.decision, "deny");
+    assert.match(editDenied.reason, /SCOPE_VIOLATION/);
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolName: "create_file",
+        toolCall: {
+          id: "alias-create",
+          name: "create_file",
+          args: { path: "src/alias-created.js", content: "export const x = 1;" },
+        },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.write_tool_calls, 1);
+    assert.equal(state.workerWorkspaceWrites, 1);
+    assert.ok(Array.isArray(state.mutations));
+    assert.ok(state.mutations.some((m) => Array.isArray(m.paths) && m.paths.includes("src/alias-created.js")));
+    assert.ok(state.mutationEvents.some((m) => m.path === "src/alias-created.js" && m.tool === "create_file"));
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: state-derived worker role cannot grant mutation authority", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const nativeWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unbound-worker-conv",
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: "src/state-derived.js", CodeContent: "export const bad = true;" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(nativeWrite.decision, "deny");
+    assert.match(nativeWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL|ROLE_IDENTITY_UNRESOLVED/);
+
+    const shellWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unbound-worker-conv",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch src/state-derived-shell.js" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(shellWrite.decision, "deny");
+    assert.match(shellWrite.reason, /ROLE_IDENTITY_NOT_FACTUAL|ROLE_IDENTITY_UNRESOLVED/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: factual worker cannot execute unclassified arbitrary shell", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER" }));
+    const workerConv = seedFactualWorkerIdentity("factual-arbitrary-shell-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "node scripts/custom-mutation.js" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /WORKER_UNVERIFIED_SHELL_COMMAND/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: unresolved actor cannot execute validation shell", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unknown-validation-actor",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "npm test" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ROLE_IDENTITY_UNRESOLVED/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: child Stop cannot inherit orchestrator acceptance authority", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "stop-parent-orchestrator",
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerCompletionClaimFactual: true,
+      workerCompletionClaimIdentity: {
+        actorId: "two-key-worker",
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+      },
+      workerValidationObserved: true,
+      workerValidationVerified: true,
+      workerValidationFresh: true,
+      evidenceLedger: [{
+        executionId: "child-stop-evidence",
+        command: "node --test test/example.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "stop-parent-orchestrator",
+      bindings: {
+        "stop-parent-orchestrator": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "unbound-child-stop",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "stop", "A terminal child Stop must close the child without finalizing parent acceptance");
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.notEqual(state.acceptanceState, "ACCEPTED");
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: factual child descriptor conflicts fail closed", () => {
+  const pending = {
+    profile: "flash-low-worker",
+    role: "WORKER",
+    originStepIdx: 7,
+  };
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-low-worker", role: "worker" },
+    spawnStepIndex: 7,
+  }, pending), true);
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-worker", role: "worker" },
+    spawnStepIndex: 7,
+  }, pending), false, "Matching role must not override a conflicting factual profile");
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-low-worker", role: "reviewer" },
+    spawnStepIndex: 7,
+  }, pending), false, "Matching profile must not override a conflicting factual role");
+
+  assert.equal(factualSubagentMatchesPending({
+    subagentDescriptor: { typeName: "flash-low-worker", role: "worker" },
+    spawnStepIndex: 8,
+  }, pending), false, "Spawn-step mismatch must remain fail-closed");
+});
+
+
+test("governance: binding loss cannot promote a child conversation to orchestrator", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "known-main-conversation",
+    }, null, 2), "utf8");
+
+    execFileSync("node", [preInvocationScript], {
+      input: JSON.stringify({
+        conversationId: "unexpected-child-conversation",
+        modelName: "gemini-3.8-flash-high",
+      }),
+      encoding: "utf8",
+    });
+
+    const stateAfterInvocation = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(stateAfterInvocation.conversationId, "known-main-conversation");
+    assert.equal(stateAfterInvocation.identityBootstrapRejected?.reason, "KNOWN_MAIN_MISMATCH");
+
+    const bindingsPath = ".agents/state/role-bindings.json";
+    if (existsSync(bindingsPath)) {
+      const bindings = JSON.parse(readFileSync(bindingsPath, "utf8"));
+      assert.notEqual(bindings.mainConversationId, "unexpected-child-conversation");
+      assert.equal(bindings.bindings?.["unexpected-child-conversation"], undefined);
+    }
+
+    const childControlPlaneWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unexpected-child-conversation",
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: ".agents/state/child-escalation.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(childControlPlaneWrite.decision, "deny");
+    assert.match(childControlPlaneWrite.reason, /ROLE_IDENTITY_UNRESOLVED/);
+
+    const mainControlPlaneWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "known-main-conversation",
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: ".agents/state/main-control-plane.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(mainControlPlaneWrite.decision, "deny");
+    assert.match(mainControlPlaneWrite.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
+
+    const mainScratchWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "known-main-conversation",
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "scratch/main-authorized.txt",
+            CodeContent: "ok",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(mainScratchWrite.decision, "allow", "Known main conversation retains orchestrator scratch authority");
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: post-tool telemetry does not attribute unbound child writes to orchestrator", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "telemetry-main",
+    }, null, 2), "utf8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "telemetry-unbound-child",
+        toolName: "write_to_file",
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: "src/unbound-child.js" },
+        },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.orchestratorWorkspaceWrites || 0, 0);
+    assert.equal(state.unknownWorkspaceWrites, 1);
+    assert.ok(state.mutations.some((m) =>
+      Array.isArray(m.paths) &&
+      m.paths.includes("src/unbound-child.js") &&
+      m.authorRole === "UNKNOWN" &&
+      m.confidence === "LOW"
+    ));
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: normal worker child Stop binds from authoritative parent brain", () => {
+  cleanState();
+  const brainBaseDir = resolve("scratch/normal-child-stop-brain");
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "normal-stop-parent",
+      state: "DELEGATED",
+      taskAction: "IMPLEMENT",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "normal-stop-parent",
+      bindings: {
+        "normal-stop-parent": {
+          conversationId: "normal-stop-parent",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [{
+        seq: 1,
+        parentConversationId: "normal-stop-parent",
+        profile: "flash-low-worker",
+        role: "WORKER",
+        model: "gemini-3.8-flash-low",
+        originToolCallId: "normal-stop-dispatch",
+        originStepIdx: 4,
+        delegationKind: "WORK",
+        consumed: false,
+      }],
+    }, null, 2), "utf8");
+
+    const subagentsDir = resolve(brainBaseDir, "normal-stop-parent/.system_generated/subagents");
+    mkdirSync(subagentsDir, { recursive: true });
+    writeFileSync(resolve(subagentsDir, "normal-stop-child.json"), JSON.stringify({
+      conversationId: "normal-stop-child",
+      subagentDescriptor: {
+        typeName: "flash-low-worker",
+        role: "Worker",
+      },
+      spawnStepIndex: 4,
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "normal-stop-child",
+        fullyIdle: true,
+        terminationReason: "end_turn",
+      }),
+      encoding: "utf8",
+      env: { ...process.env, AGY_BRAIN_DIR: brainBaseDir },
+    }));
+    assert.equal(output.decision, "stop");
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    const child = bindings.bindings["normal-stop-child"];
+    assert.ok(child, "Child Stop must be able to bind from parent brain without an earlier child tool call");
+    assert.equal(child.role, "WORKER");
+    assert.equal(child.source, "RUNTIME_IDENTITY");
+    assert.equal(child.confidence, "HIGH");
+    assert.equal(child.parentConversationId, "normal-stop-parent");
+    assert.equal(bindings.pendingSubagents[0].consumed, true);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: scope checks canonicalize dot-dot traversal before native writes", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("traversal-native-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [],
+    }));
+
+    const controlPlaneTraversal = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "src/../.agents/state/pwn.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(controlPlaneTraversal.decision, "deny");
+    assert.match(controlPlaneTraversal.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
+
+    const outsideWorkspace = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "src/../../outside-workspace.js",
+            CodeContent: "bad",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(outsideWorkspace.decision, "deny");
+    assert.match(outsideWorkspace.reason, /WORKSPACE_ESCAPE/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: scope checks canonicalize dot-dot traversal in worker shell mutations", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("traversal-shell-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const controlPlaneTraversal = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch src/../.agents/state/pwn-shell.json" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(controlPlaneTraversal.decision, "deny");
+    assert.match(controlPlaneTraversal.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
+
+    const outsideWorkspace = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch src/../../outside-shell.js" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(outsideWorkspace.decision, "deny");
+    assert.match(outsideWorkspace.reason, /WORKSPACE_ESCAPE/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: worker scope follows physical symlink destination", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    mkdirSync("scratch/allowed", { recursive: true });
+    symlinkSync(resolve(".agents/state"), resolve("scratch/allowed/control-plane-link"), "dir");
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("symlink-scope-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: ["scratch/allowed/**"],
+      forbiddenPaths: [".agents/**"],
+    }));
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "scratch/allowed/control-plane-link/pwn.json",
+            CodeContent: "{}",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
+    assert.equal(existsSync(".agents/state/pwn.json"), false);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: worker can never mutate .agents even when Scope Contract permits it", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "WORKER", mutationSeq: 1 }));
+    const workerConv = seedFactualWorkerIdentity("control-plane-worker");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify({
+      allowedPaths: [".agents/**", "src/**"],
+      forbiddenPaths: [],
+    }));
+
+    const nativeWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: ".agents/state/worker-pwn.json", CodeContent: "{}" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(nativeWrite.decision, "deny");
+    assert.match(nativeWrite.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
+
+    const shellWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: workerConv,
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "touch .agents/state/worker-pwn-shell.json" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(shellWrite.decision, "deny");
+    assert.match(shellWrite.reason, /CONTROL_PLANE_WRITE_PROHIBITED/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: AGENTS.md constitution is immutable through shell as well as native writes", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "constitution-orchestrator",
+    }));
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "constitution-orchestrator",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "echo hacked > AGENTS.md" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /AGENTS\.md is the provider-neutral repository constitution/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: critical task cannot auto-accept without factual Two-Key review", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "critical-parent",
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      criticality: "CRITICAL",
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerValidationObserved: true,
+      workerValidationVerified: true,
+      workerValidationFresh: true,
+      evidenceLedger: [{
+        executionId: "critical-evidence",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "critical-parent",
+      bindings: {
+        "critical-parent": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "critical-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /TWO_KEY_REVIEW_MISSING|Two-Key|two factual independent reviewer approvals/i);
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.notEqual(state.acceptanceState, "ACCEPTED");
+    assert.equal(state.twoKeyReviewGate.required, true);
+    assert.equal(state.twoKeyReviewGate.satisfied, false);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: reviewer batch cardinality is exactly two", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "cardinality-parent",
+      state: "ACCEPTANCE",
+      taskAction: "REVIEW",
+      criticality: "CRITICAL",
+    }, null, 2), "utf8");
+
+    const out = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "cardinality-parent",
+        toolCall: {
+          id: "three-reviewers",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [
+              { TypeName: "flash-reviewer", Role: "Reviewer A", Prompt: "Review A" },
+              { TypeName: "flash-reviewer", Role: "Reviewer B", Prompt: "Review B" },
+              { TypeName: "flash-reviewer", Role: "Reviewer C", Prompt: "Review C" },
+            ],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /TWO_KEY_REVIEW_CARDINALITY/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: two factual reviewer approvals unlock only the exact reviewed candidate", () => {
+  cleanState();
+  try {
+    const candidateHead = execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+
+    mkdirSync(".agents/state", { recursive: true });
+    const baseState = {
+      activeRole: "ORCHESTRATOR",
+      conversationId: "two-key-parent",
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      criticality: "CRITICAL",
+      mutationSeq: 0,
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerCompletionClaimFactual: true,
+      workerCompletionClaimIdentity: {
+        actorId: "two-key-worker",
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
+      },
+      workerValidationObserved: true,
+      workerValidationVerified: true,
+      workerValidationFresh: true,
+      evidenceLedger: [{
+        executionId: "two-key-worker-evidence",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+      twoKeyReview: {
+        status: "EVIDENCE_READY",
+        reviewBatchId: "review-batch-1",
+        candidateHead,
+        candidateMutationSeq: 0,
+        expectedReviewerCount: 2,
+        reviewerConversationIds: ["reviewer-a", "reviewer-b"],
+        reviews: {
+          "reviewer-a": {
+            conversationId: "reviewer-a",
+            verdict: "ACCEPT",
+            reviewBatchId: "review-batch-1",
+            candidateHead,
+            candidateMutationSeq: 0,
+            completionHead: candidateHead,
+            completionMutationSeq: 0,
+            readOnlyViolation: false,
+          },
+          "reviewer-b": {
+            conversationId: "reviewer-b",
+            verdict: "ACCEPT_WITH_NOTES",
+            reviewBatchId: "review-batch-1",
+            candidateHead,
+            candidateMutationSeq: 0,
+            completionHead: candidateHead,
+            completionMutationSeq: 0,
+            readOnlyViolation: false,
+          },
+        },
+      },
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(baseState, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "two-key-parent",
+      bindings: {
+        "two-key-parent": {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          confidence: "HIGH",
+          source: "CONVERSATION_BOUND_IDENTITY",
+        },
+        "reviewer-a": {
+          role: "REVIEWER",
+          profile: "flash-reviewer",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          delegationKind: "REVIEW",
+        },
+        "reviewer-b": {
+          role: "REVIEWER",
+          profile: "flash-reviewer",
+          confidence: "HIGH",
+          source: "RUNTIME_IDENTITY",
+          delegationKind: "REVIEW",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const accepted = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "two-key-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(accepted.decision, "stop");
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.state, "DONE");
+    assert.equal(state.acceptanceState, "ACCEPTED");
+    assert.equal(state.twoKeyReviewGate.satisfied, true);
+    assert.equal(state.twoKeyReviewConsensus, "ACCEPT_WITH_NOTES");
+
+    // Same approvals cannot authorize a newer mutation.
+    const staleState = {
+      ...baseState,
+      state: "EVIDENCE_READY",
+      acceptanceState: "PENDING",
+      mutationSeq: 1,
+      evidenceLedger: [{
+        executionId: "two-key-worker-evidence-new",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 1,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        timestamp: new Date().toISOString(),
+      }],
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(staleState, null, 2), "utf8");
+
+    const stale = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "two-key-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(stale.decision, "continue");
+    assert.match(stale.reason, /TWO_KEY_REVIEW_STALE|two factual independent reviewer approvals/i);
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.equal(state.twoKeyReviewGate.satisfied, false);
+    assert.equal(state.twoKeyReviewGate.reason, "TWO_KEY_REVIEW_STALE");
+
+    // A retry attempt invalidates the same approvals even when HEAD and mutationSeq did not change.
+    const retryState = {
+      ...baseState,
+      state: "EVIDENCE_READY",
+      acceptanceState: "PENDING",
+      attempt: 1,
+      mutationSeq: 0,
+      workerCompletionClaimIdentity: {
+        ...baseState.workerCompletionClaimIdentity,
+        attempt: 1,
+      },
+      evidenceLedger: [{
+        executionId: "two-key-worker-evidence-attempt-1",
+        command: "node --test test/critical.test.js",
+        exitCode: 0,
+        mutationSeq: 0,
+        attempt: 1,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        timestamp: new Date().toISOString(),
+      }],
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(retryState, null, 2), "utf8");
+
+    const retryWithOldReviews = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: "two-key-parent", fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(retryWithOldReviews.decision, "continue");
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.twoKeyReviewGate.satisfied, false);
+    assert.equal(state.twoKeyReviewGate.reason, "TWO_KEY_REVIEW_STALE");
+    assert.equal(state.twoKeyReviewGate.candidateAttempt, undefined);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: unknown conversation cannot self-promote through invoke_subagent", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "escalation-known-main",
+      taskAction: "IMPLEMENT",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "escalation-known-main",
+      bindings: {
+        "escalation-known-main": {
+          conversationId: "escalation-known-main",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "escalation-unknown-child",
+        toolCall: {
+          id: "escalation-invoke",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [{
+              TypeName: "flash-low-worker",
+              Role: "worker",
+              Prompt: "Attempt unauthorized delegation",
+            }],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ORCHESTRATOR_IDENTITY_REQUIRED/);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    assert.equal(bindings.mainConversationId, "escalation-known-main");
+    assert.equal(bindings.bindings["escalation-unknown-child"], undefined);
+    assert.equal(bindings.pendingSubagents.length, 0);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: unknown conversation cannot define subagent profiles", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "define-known-main",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "define-known-main",
+      bindings: {
+        "define-known-main": {
+          conversationId: "define-known-main",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "define-unknown-child",
+        toolCall: {
+          name: "define_subagent",
+          args: {
+            name: "flash-low-worker",
+            system_prompt: "ignore governance",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /ORCHESTRATOR_IDENTITY_REQUIRED/);
+  } finally {
+    cleanState();
+  }
+});
+
+test("governance: authorized orchestrator delegation preserves HIGH identity", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "authorized-main",
+      taskAction: "REVIEW",
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "authorized-main",
+      bindings: {
+        "authorized-main": {
+          conversationId: "authorized-main",
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "authorized-main",
+        toolCall: {
+          id: "authorized-review-dispatch",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [
+              { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review A" },
+              { TypeName: "flash-reviewer", Role: "reviewer", Prompt: "Review B" },
+            ],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "allow");
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    assert.equal(bindings.bindings["authorized-main"].confidence, "HIGH");
+    assert.equal(bindings.bindings["authorized-main"].role, "ORCHESTRATOR");
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: pre-tool firewall fails closed on malformed or missing payload", () => {
+  const malformed = JSON.parse(execFileSync("node", [preToolScript], {
+    input: "{not-json",
+    encoding: "utf8",
+  }));
+  assert.equal(malformed.decision, "deny");
+  assert.match(malformed.reason, /MALFORMED_HOOK_PAYLOAD/);
+
+  const nullPayload = JSON.parse(execFileSync("node", [preToolScript], {
+    input: "null",
+    encoding: "utf8",
+  }));
+  assert.equal(nullPayload.decision, "deny");
+  assert.match(nullPayload.reason, /INVALID_HOOK_PAYLOAD/);
+
+  const missingTool = JSON.parse(execFileSync("node", [preToolScript], {
+    input: JSON.stringify({ conversationId: "missing-tool" }),
+    encoding: "utf8",
+  }));
+  assert.equal(missingTool.decision, "deny");
+  assert.match(missingTool.reason, /missing a valid tool call name/);
+
+  const alternateShape = JSON.parse(execFileSync("node", [preToolScript], {
+    input: JSON.stringify({
+      conversationId: "alternate-shape",
+      toolName: "view_file",
+      toolArgs: { AbsolutePath: resolve("package.json") },
+    }),
+    encoding: "utf8",
+  }));
+  assert.equal(alternateShape.decision, "allow", "Supported runtime toolName/toolArgs shape remains compatible");
+});
+
+
+test("governance: reviewer scope contracts cannot overwrite implementation acceptance contract", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("scope-isolation-parent");
+
+    const implementationContract = {
+      contractId: "implementation-contract-stable",
+      taskId: "scope-isolation-task",
+      targetAgent: "flash-medium-worker",
+      delegationKind: "WORK",
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["npm test"],
+      createdAt: "2026-09-18T00:00:00.000Z",
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "scope-isolation-parent",
+      taskAction: "REVIEW",
+      taskId: "scope-isolation-task",
+      scopeContract: implementationContract,
+      mutationSeq: 4,
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify(implementationContract, null, 2), "utf8");
+
+    const output = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "scope-isolation-parent",
+        toolCall: {
+          id: "review-contract-isolation",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [
+              {
+                TypeName: "flash-reviewer",
+                Role: "reviewer",
+                Prompt: "Review A. allowedPaths: [docs/**] testsRequired: [\"npm run reviewer-only-a\"]",
+              },
+              {
+                TypeName: "flash-reviewer",
+                Role: "reviewer",
+                Prompt: "Review B. allowedPaths: [test/**] testsRequired: [\"npm run reviewer-only-b\"]",
+              },
+            ],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    assert.equal(output.decision, "allow");
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    const diskContract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf8"));
+    assert.deepEqual(state.scopeContract, implementationContract);
+    assert.deepEqual(diskContract, implementationContract);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    const reviewPending = bindings.pendingSubagents.filter((p) => p.delegationKind === "REVIEW");
+    assert.equal(reviewPending.length, 2);
+    assert.deepEqual(reviewPending[0].scopeContract.allowedPaths, ["docs/**"]);
+    assert.deepEqual(reviewPending[0].scopeContract.testsRequired, ["npm run reviewer-only-a"]);
+    assert.deepEqual(reviewPending[1].scopeContract.allowedPaths, ["test/**"]);
+    assert.deepEqual(reviewPending[1].scopeContract.testsRequired, ["npm run reviewer-only-b"]);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: retry acceptance requires completion claim from current attempt", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    const parent = "retry-accept-parent";
+    const worker = "retry-accept-worker";
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: parent,
+      state: "EVIDENCE_READY",
+      taskAction: "IMPLEMENT",
+      attempt: 1,
+      mutationSeq: 0,
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+      workerCompletionClaimFactual: true,
+      workerCompletionClaimIdentity: {
+        actorId: worker,
+        source: "RUNTIME_IDENTITY",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 0,
+      },
+      scopeContract: {
+        allowedPaths: ["src/**"],
+        forbiddenPaths: [".agents/**"],
+        testsRequired: ["npm test"],
+      },
+      evidenceLedger: [{
+        executionId: "retry-attempt-1-test",
+        type: "TEST_RUN",
+        command: "npm test",
+        exitCode: 0,
+        mutationSeq: 0,
+        actorRole: "WORKER",
+        confidence: "HIGH",
+        delegationKind: "WORK",
+        attempt: 1,
+        timestamp: new Date().toISOString(),
+      }],
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: parent,
+      bindings: {
+        [parent]: {
+          conversationId: parent,
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          source: "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        },
+        [worker]: {
+          conversationId: worker,
+          role: "WORKER",
+          profile: "flash-medium-worker",
+          parentConversationId: parent,
+          delegationKind: "WORK",
+          attempt: 1,
+          source: "RUNTIME_IDENTITY",
+          confidence: "HIGH",
+        },
+      },
+      conversations: {},
+      pendingSubagents: [],
+    }, null, 2), "utf8");
+
+    const staleClaim = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: parent, fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(staleClaim.decision, "continue");
+    let state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.notEqual(state.state, "DONE");
+    assert.notEqual(state.acceptanceState, "ACCEPTED");
+    assert.equal(state.completionClaimRejectedReason, "ATTEMPT_MISMATCH");
+    assert.equal(state.workerValidationVerified, true);
+
+    state.workerCompletionClaimIdentity.attempt = 1;
+    writeFileSync(".agents/state/active-state.json", JSON.stringify(state, null, 2), "utf8");
+
+    const currentClaim = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({ conversationId: parent, fullyIdle: true }),
+      encoding: "utf8",
+    }));
+    assert.equal(currentClaim.decision, "stop");
+    state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.state, "DONE");
+    assert.equal(state.acceptanceState, "ACCEPTED");
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: only factual main orchestrator can control scheduler and task lifecycle", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "coord-parent",
+      state: "PLANNED",
+    }, null, 2), "utf8");
+    seedFactualWorkerIdentity("coord-worker", {
+      parentConversationId: "coord-parent",
+      profile: "flash-medium-worker",
+      delegationKind: "WORK",
+    });
+
+    const workerKill = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-worker",
+        toolCall: {
+          name: "manage_task",
+          args: { Action: "kill", TaskId: "task-1" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(workerKill.decision, "deny");
+    assert.match(workerKill.reason, /COORDINATION_AUTHORITY_REQUIRED/);
+
+    const unknownKillAll = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-unknown",
+        toolCall: {
+          name: "manage_subagents",
+          args: { Action: "kill_all" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(unknownKillAll.decision, "deny");
+    assert.match(unknownKillAll.reason, /COORDINATION_AUTHORITY_REQUIRED/);
+
+    const workerSchedule = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-worker",
+        toolCall: {
+          name: "schedule",
+          args: { DurationSeconds: 30, Prompt: "side quest" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(workerSchedule.decision, "deny");
+    assert.match(workerSchedule.reason, /COORDINATION_AUTHORITY_REQUIRED/);
+
+    const orchestratorKill = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-parent",
+        toolCall: {
+          name: "manage_task",
+          args: { Action: "kill", TaskId: "task-1" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(orchestratorKill.decision, "allow");
+
+    const orchestratorKillAll = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-parent",
+        toolCall: {
+          name: "manage_subagents",
+          args: { Action: "kill_all" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(orchestratorKillAll.decision, "allow");
+
+    const orchestratorSchedule = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "coord-parent",
+        toolCall: {
+          name: "schedule",
+          args: { DurationSeconds: 30, Prompt: "authorized recovery timer" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(orchestratorSchedule.decision, "allow");
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: send_message enforces factual parent-child isolation", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "message-parent",
+      state: "PLANNED",
+    }, null, 2), "utf8");
+    seedFactualWorkerIdentity("message-worker", {
+      parentConversationId: "message-parent",
+      profile: "flash-medium-worker",
+      delegationKind: "WORK",
+    });
+
+    const toParent = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-worker",
+        toolCall: {
+          name: "send_message",
+          args: {
+            Recipient: "message-parent",
+            Message: "STATUS: IMPLEMENTATION_COMPLETE",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(toParent.decision, "allow");
+
+    const crossTalk = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-worker",
+        toolCall: {
+          name: "send_message",
+          args: {
+            Recipient: "another-child",
+            Message: "share hidden context",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(crossTalk.decision, "deny");
+    assert.match(crossTalk.reason, /CROSS_AGENT_MESSAGE_PROHIBITED/);
+
+    const unknown = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-unknown",
+        toolCall: {
+          name: "send_message",
+          args: { Recipient: "message-parent", Message: "spoof" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(unknown.decision, "deny");
+    assert.match(unknown.reason, /MESSAGE_IDENTITY_REQUIRED/);
+
+    const bindings = JSON.parse(readFileSync(".agents/state/role-bindings.json", "utf8"));
+    bindings.bindings["message-reviewer"] = {
+      conversationId: "message-reviewer",
+      role: "REVIEWER",
+      profile: "flash-reviewer",
+      parentConversationId: "message-parent",
+      delegationKind: "REVIEW",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+    };
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify(bindings, null, 2), "utf8");
+
+    const reviewerMessage = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "message-reviewer",
+        toolCall: {
+          name: "send_message",
+          args: { Recipient: "message-parent", Message: "VERDICT: ACCEPT" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(reviewerMessage.decision, "deny");
+    assert.match(reviewerMessage.reason, /REVIEWER_MESSAGE_PROHIBITED/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: WORK delegation preserves contract criticality for later Two-Key acceptance", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    seedFactualOrchestratorIdentity("criticality-parent");
+
+    const originalContract = {
+      contractId: "criticality-contract",
+      taskId: "criticality-task",
+      targetAgent: null,
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".agents/**"],
+      testsRequired: ["npm test"],
+      acceptanceCriteria: ["behavior preserved", "no regression"],
+      retryBudget: { maxAttempts: 2, attempt: 0, remainingAttempts: 2 },
+      stopConditions: ["tests pass", "scope clean"],
+      dependencies: ["src/dependency.js"],
+      implementationPlan: ["edit implementation", "run focused test"],
+      rootCauseDecision: "known-root-cause",
+      criticality: "CRITICAL",
+      createdAt: "2026-09-18T00:00:00.000Z",
+    };
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "criticality-parent",
+      taskAction: "IMPLEMENT",
+      taskId: "criticality-task",
+      mutationSeq: 0,
+    }, null, 2), "utf8");
+    writeFileSync(".agents/state/active-contract.json", JSON.stringify(originalContract, null, 2), "utf8");
+
+    const delegated = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "criticality-parent",
+        toolCall: {
+          id: "criticality-worker-dispatch",
+          name: "invoke_subagent",
+          args: {
+            Subagents: [{
+              TypeName: "flash-medium-worker",
+              Role: "worker",
+              Prompt: "Implement within allowedPaths: [src/**] testsRequired: [\"npm test\"]",
+            }],
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(delegated.decision, "allow");
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    const contract = JSON.parse(readFileSync(".agents/state/active-contract.json", "utf8"));
+    assert.equal(state.scopeContract.criticality, "CRITICAL");
+    assert.equal(contract.criticality, "CRITICAL");
+    assert.deepEqual(contract.acceptanceCriteria, originalContract.acceptanceCriteria);
+    assert.deepEqual(contract.retryBudget, originalContract.retryBudget);
+    assert.deepEqual(contract.stopConditions, originalContract.stopConditions);
+    assert.deepEqual(contract.dependencies, originalContract.dependencies);
+    assert.deepEqual(contract.implementationPlan, originalContract.implementationPlan);
+    assert.equal(contract.rootCauseDecision, originalContract.rootCauseDecision);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: corrupted authority state fails closed before tool authorization", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    const runRead = () => JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-state-parent",
+        toolCall: {
+          name: "view_file",
+          args: { AbsolutePath: resolve("README.md") },
+        },
+      }),
+      encoding: "utf8",
+    }));
+
+    writeFileSync(".agents/state/active-state.json", "{broken-json", "utf8");
+    let out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ACTIVE_STATE_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "corrupt-state-parent",
+    }), "utf8");
+    writeFileSync(".agents/state/active-contract.json", "[]", "utf8");
+    out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ACTIVE_CONTRACT_INVALID_SHAPE/);
+
+    unlinkSync(".agents/state/active-contract.json");
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "corrupt-state-parent",
+      bindings: [],
+      pendingSubagents: [],
+    }), "utf8");
+    out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_INVALID_SHAPE/);
+
+    writeFileSync(".agents/state/role-bindings.json", "{still-broken", "utf8");
+    out = runRead();
+    assert.equal(out.decision, "deny");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_MALFORMED_JSON/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: stop guard cannot finalize with corrupted authority state", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    writeFileSync(".agents/state/active-state.json", "{broken-stop-state", "utf8");
+    let out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-stop-parent",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ACTIVE_STATE_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "corrupt-stop-parent",
+      state: "EVIDENCE_READY",
+      implementationComplete: true,
+      workerCompletionClaimed: true,
+    }), "utf8");
+    writeFileSync(".agents/state/role-bindings.json", "{broken-stop-bindings", "utf8");
+
+    out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-stop-parent",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/role-bindings.json", JSON.stringify({
+      mainConversationId: "corrupt-stop-parent",
+      bindings: [],
+    }), "utf8");
+    out = JSON.parse(execFileSync("node", [stopScript], {
+      input: JSON.stringify({
+        conversationId: "corrupt-stop-parent",
+        fullyIdle: true,
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(out.decision, "continue");
+    assert.match(out.reason, /GOVERNANCE_STATE_INVALID.*ROLE_BINDINGS_INVALID_SHAPE/);
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: post-tool telemetry never overwrites corrupted authority state", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    const brokenState = "{broken-post-state";
+    writeFileSync(".agents/state/active-state.json", brokenState, "utf8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "post-corrupt-parent",
+        toolCall: { name: "view_file", args: { AbsolutePath: resolve("README.md") } },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    assert.equal(readFileSync(".agents/state/active-state.json", "utf8"), brokenState);
+    let events = readFileSync(".agents/telemetry/events.jsonl", "utf8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((e) =>
+      e.type === "GOVERNANCE_STATE_CORRUPT" &&
+      e.phase === "POST_TOOL" &&
+      e.reason === "ACTIVE_STATE_MALFORMED_JSON"
+    ));
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "post-corrupt-parent",
+    }), "utf8");
+    const brokenBindings = "{broken-post-bindings";
+    writeFileSync(".agents/state/role-bindings.json", brokenBindings, "utf8");
+
+    execFileSync("node", [postToolScript], {
+      input: JSON.stringify({
+        conversationId: "post-corrupt-parent",
+        toolCall: { name: "view_file", args: { AbsolutePath: resolve("README.md") } },
+        result: { status: "SUCCESS" },
+      }),
+      encoding: "utf8",
+    });
+
+    assert.equal(readFileSync(".agents/state/role-bindings.json", "utf8"), brokenBindings);
+    events = readFileSync(".agents/telemetry/events.jsonl", "utf8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((e) =>
+      e.type === "GOVERNANCE_STATE_CORRUPT" &&
+      e.phase === "POST_TOOL" &&
+      e.reason === "ROLE_BINDINGS_MALFORMED_JSON"
+    ));
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: pre-invocation preserves corrupted authority state and injects warning", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+
+    const brokenState = "{broken-preinv-state";
+    writeFileSync(".agents/state/active-state.json", brokenState, "utf8");
+    let out = JSON.parse(execFileSync("node", [preInvocationScript], {
+      input: JSON.stringify({ conversationId: "preinv-corrupt-parent" }),
+      encoding: "utf8",
+    }));
+    assert.equal(readFileSync(".agents/state/active-state.json", "utf8"), brokenState);
+    assert.equal(out.injectSteps.length, 1);
+    assert.match(out.injectSteps[0].ephemeralMessage, /GOVERNANCE STATE INVALID.*ACTIVE_STATE_MALFORMED_JSON/);
+
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "preinv-corrupt-parent",
+    }), "utf8");
+    const brokenBindings = "{broken-preinv-bindings";
+    writeFileSync(".agents/state/role-bindings.json", brokenBindings, "utf8");
+
+    out = JSON.parse(execFileSync("node", [preInvocationScript], {
+      input: JSON.stringify({ conversationId: "preinv-corrupt-parent" }),
+      encoding: "utf8",
+    }));
+    assert.equal(readFileSync(".agents/state/role-bindings.json", "utf8"), brokenBindings);
+    assert.equal(out.injectSteps.length, 1);
+    assert.match(out.injectSteps[0].ephemeralMessage, /GOVERNANCE STATE INVALID.*ROLE_BINDINGS_MALFORMED_JSON/);
+
+    const events = readFileSync(".agents/telemetry/events.jsonl", "utf8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((e) => e.type === "GOVERNANCE_STATE_CORRUPT" && e.phase === "PRE_INVOCATION"));
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: unresolved actor never receives shell authority", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "UNKNOWN",
+      state: "PLANNED",
+    }), "utf8");
+
+    const readonlyShell = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unknown-shell-actor",
+        toolCall: {
+          name: "run_command",
+          args: { CommandLine: "git status" },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(readonlyShell.decision, "deny");
+    assert.match(readonlyShell.reason, /ROLE_IDENTITY_UNRESOLVED.*Shell execution is prohibited/);
+
+    const nativeRead = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "unknown-shell-actor",
+        toolCall: {
+          name: "view_file",
+          args: { AbsolutePath: resolve("README.md") },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(nativeRead.decision, "allow", "Native read-only inspection remains available without shell authority");
+  } finally {
+    cleanState();
+  }
+});
+
+
+test("governance: stop guard fails closed on malformed or missing runtime payload", () => {
+  cleanState();
+  try {
+    mkdirSync(".agents/state", { recursive: true });
+    writeFileSync(".agents/state/active-state.json", JSON.stringify({
+      activeRole: "ORCHESTRATOR",
+      conversationId: "stop-payload-parent",
+      state: "DONE",
+      acceptanceState: "ACCEPTED",
+    }), "utf8");
+
+    const empty = JSON.parse(execFileSync("node", [stopScript], {
+      input: "",
+      encoding: "utf8",
+    }));
+    assert.equal(empty.decision, "continue");
+    assert.match(empty.reason, /INVALID_STOP_PAYLOAD/);
+
+    const malformed = JSON.parse(execFileSync("node", [stopScript], {
+      input: "{broken",
+      encoding: "utf8",
+    }));
+    assert.equal(malformed.decision, "continue");
+    assert.match(malformed.reason, /MALFORMED_STOP_PAYLOAD/);
+
+    const nonObject = JSON.parse(execFileSync("node", [stopScript], {
+      input: "[]",
+      encoding: "utf8",
+    }));
+    assert.equal(nonObject.decision, "continue");
+    assert.match(nonObject.reason, /INVALID_STOP_PAYLOAD/);
+
+    const state = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
+    assert.equal(state.state, "DONE");
+    assert.equal(state.acceptanceState, "ACCEPTED");
   } finally {
     cleanState();
   }

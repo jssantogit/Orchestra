@@ -402,17 +402,27 @@ export function sealWorld({
     worldId ||
     `world-${world_manifest_hash.slice(7, 23)}`;
 
+  // Detach the sealed world from caller-owned event objects. Events are the
+  // factual source of truth; decisions/outcomes are materialized projections.
+  const sealedEvents = orderedEvents.map((event) => structuredClone(event));
+  const sealedDecisions = sealedEvents
+    .filter((event) => event?.type === "DECISION" || event?.schema === DREAM_SCHEMAS.DECISION)
+    .map((event) => structuredClone(event));
+  const sealedOutcomes = sealedEvents
+    .filter((event) => event?.type === "DECISION_OUTCOME" || event?.schema === DREAM_SCHEMAS.OUTCOME)
+    .map((event) => structuredClone(event));
+
   const world = {
     schema: DREAM_SCHEMAS.WORLD,
     world_id: generatedWorldId,
     root_snapshot_id: resolvedRootSnapshotId,
-    runtime_fingerprint: resolvedRuntimeFp,
-    event_hashes,
+    runtime_fingerprint: structuredClone(resolvedRuntimeFp),
+    event_hashes: [...event_hashes],
     world_manifest_hash,
     status: "SEALED",
-    decisions: orderedDecisions,
-    outcomes: orderedOutcomes,
-    events: orderedEvents,
+    decisions: sealedDecisions,
+    outcomes: sealedOutcomes,
+    events: sealedEvents,
     created_at: new Date().toISOString(),
   };
 
@@ -454,6 +464,8 @@ export function validateWorld(world) {
     };
   }
 
+  const errors = [];
+
   const expectedManifestHash = sha256Canonical({
     schema: DREAM_SCHEMAS.WORLD,
     root_snapshot_id: world.root_snapshot_id,
@@ -462,15 +474,135 @@ export function validateWorld(world) {
   });
 
   if (world.world_manifest_hash !== expectedManifestHash) {
-    return {
-      valid: false,
-      errors: [
-        `WORLD_MANIFEST_HASH_MISMATCH: expected "${expectedManifestHash}", got "${world.world_manifest_hash}"`,
-      ],
-    };
+    errors.push(
+      `WORLD_MANIFEST_HASH_MISMATCH: expected "${expectedManifestHash}", got "${world.world_manifest_hash}"`
+    );
   }
 
-  return { valid: true, errors: [] };
+  const events = Array.isArray(world.events) ? world.events : [];
+  const decisions = Array.isArray(world.decisions) ? world.decisions : [];
+  const outcomes = Array.isArray(world.outcomes) ? world.outcomes : [];
+  const manifestEventHashes = Array.isArray(world.event_hashes) ? world.event_hashes : [];
+
+  if (events.length !== manifestEventHashes.length) {
+    errors.push(
+      `WORLD_EVENT_COUNT_MISMATCH: events=${events.length}, event_hashes=${manifestEventHashes.length}`
+    );
+  }
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    if (!verifyEventHash(event)) {
+      errors.push(`TAMPERED_WORLD_EVENT_HASH: index=${i}`);
+      continue;
+    }
+    if (manifestEventHashes[i] !== event.event_hash) {
+      errors.push(
+        `WORLD_EVENT_HASH_ORDER_MISMATCH: index=${i}, expected="${manifestEventHashes[i]}", got="${event.event_hash}"`
+      );
+    }
+  }
+
+  const eventDecisions = events.filter(
+    (ev) => ev?.type === "DECISION" || ev?.schema === DREAM_SCHEMAS.DECISION
+  );
+  const eventOutcomes = events.filter(
+    (ev) => ev?.type === "DECISION_OUTCOME" || ev?.schema === DREAM_SCHEMAS.OUTCOME
+  );
+
+  // Revalidate semantic event integrity on every world load. Hashes prove
+  // content addressing, not that the addressed content still obeys Dream rules.
+  const decisionIds = new Set();
+  const outcomeDecisionIds = new Set();
+
+  for (const decision of eventDecisions) {
+    const validation = validateDreamRecord(DREAM_SCHEMAS.DECISION, decision);
+    if (!validation.valid) {
+      errors.push(...validation.errors.map((err) => `WORLD_DECISION_INVALID: ${err}`));
+    }
+    if (!isFactualActorIdentity(decision.actor_identity)) {
+      errors.push(`WORLD_DECISION_ACTOR_UNRESOLVED: ${decision.decision_id || "unknown"}`);
+    }
+    if (!decision.decision_id || decisionIds.has(decision.decision_id)) {
+      errors.push(`WORLD_DUPLICATE_DECISION_ID: ${decision.decision_id || "missing"}`);
+    } else {
+      decisionIds.add(decision.decision_id);
+    }
+  }
+
+  for (const outcome of eventOutcomes) {
+    const validation = validateDreamRecord(DREAM_SCHEMAS.OUTCOME, outcome);
+    if (!validation.valid) {
+      errors.push(...validation.errors.map((err) => `WORLD_OUTCOME_INVALID: ${err}`));
+    }
+    if (!outcome.decision_id || !decisionIds.has(outcome.decision_id)) {
+      errors.push(`WORLD_ORPHAN_OUTCOME: ${outcome.decision_id || "missing"}`);
+    }
+    if (outcomeDecisionIds.has(outcome.decision_id)) {
+      errors.push(`WORLD_DUPLICATE_OUTCOME_FOR_DECISION: ${outcome.decision_id}`);
+    } else if (outcome.decision_id) {
+      outcomeDecisionIds.add(outcome.decision_id);
+    }
+  }
+
+  for (const decisionId of decisionIds) {
+    if (!outcomeDecisionIds.has(decisionId)) {
+      errors.push(`WORLD_OPEN_DECISION_WITHOUT_OUTCOME: ${decisionId}`);
+    }
+  }
+
+  // sealWorld emits exact causal pairs. Preserve that order so replay cannot
+  // silently reinterpret a reordered event stream.
+  for (let i = 0; i < events.length; i += 2) {
+    const decision = events[i];
+    const outcome = events[i + 1];
+    if (
+      !decision ||
+      !(decision.type === "DECISION" || decision.schema === DREAM_SCHEMAS.DECISION) ||
+      !outcome ||
+      !(outcome.type === "DECISION_OUTCOME" || outcome.schema === DREAM_SCHEMAS.OUTCOME) ||
+      outcome.decision_id !== decision.decision_id
+    ) {
+      errors.push(`WORLD_CAUSAL_EVENT_ORDER_INVALID: pair_index=${Math.floor(i / 2)}`);
+    }
+  }
+
+  const hasDecisionProjection = Object.prototype.hasOwnProperty.call(world, "decisions");
+  const hasOutcomeProjection = Object.prototype.hasOwnProperty.call(world, "outcomes");
+
+  if (hasDecisionProjection && decisions.length !== eventDecisions.length) {
+    errors.push(
+      `WORLD_DECISION_PROJECTION_COUNT_MISMATCH: decisions=${decisions.length}, event_decisions=${eventDecisions.length}`
+    );
+  }
+  if (hasOutcomeProjection && outcomes.length !== eventOutcomes.length) {
+    errors.push(
+      `WORLD_OUTCOME_PROJECTION_COUNT_MISMATCH: outcomes=${outcomes.length}, event_outcomes=${eventOutcomes.length}`
+    );
+  }
+
+  const compareProjection = (projection, projectedEvents, label) => {
+    const count = Math.min(projection.length, projectedEvents.length);
+    for (let i = 0; i < count; i++) {
+      const record = projection[i];
+      const event = projectedEvents[i];
+      if (!verifyEventHash(record)) {
+        errors.push(`TAMPERED_WORLD_${label}_HASH: index=${i}`);
+        continue;
+      }
+      if (
+        record.event_hash !== event.event_hash ||
+        sha256Canonical(record) !== sha256Canonical(event)
+      ) {
+        errors.push(`WORLD_${label}_PROJECTION_MISMATCH: index=${i}`);
+      }
+    }
+  };
+
+  if (hasDecisionProjection) compareProjection(decisions, eventDecisions, "DECISION");
+  if (hasOutcomeProjection) compareProjection(outcomes, eventOutcomes, "OUTCOME");
+
+  return { valid: errors.length === 0, errors };
 }
 
 /**

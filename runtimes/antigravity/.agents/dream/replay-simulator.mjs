@@ -36,6 +36,19 @@ function mergeCostMetrics(acc, next) {
   return merged;
 }
 
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) {
+    deepFreeze(child);
+  }
+  return Object.freeze(value);
+}
+
+function defensiveClone(value) {
+  if (value === undefined) return undefined;
+  return structuredClone(value);
+}
+
 /**
  * Replays a policy callback over a sealed factual world record.
  * Operates purely locally with zero model calls, prefix-only visibility,
@@ -127,7 +140,7 @@ export function replayExact({ world, chooseAction, maxTrajectories = 10000 }) {
   const tree = buildDiscoveryTree(world);
 
   // Index decisions by snapshot_id (preserving factual order)
-  let decisions = Array.isArray(world.decisions) ? world.decisions : [];
+  let decisions = Array.isArray(world.decisions) ? [...world.decisions] : [];
   if (decisions.length === 0 && Array.isArray(world.events)) {
     for (const ev of world.events) {
       if (ev?.type === "DECISION" || ev?.schema === "orchestra.decision.v1") {
@@ -177,7 +190,7 @@ export function replayExact({ world, chooseAction, maxTrajectories = 10000 }) {
 
     const reconstructed = {
       decision_type: primaryDec.decision_type,
-      state: primaryDec.state,
+      state: deepFreeze(defensiveClone(primaryDec.state || {})),
       available_actions: Object.freeze(Array.from(availableActionsSet)),
       state_hash: stateHash,
     };
@@ -227,28 +240,42 @@ export function replayExact({ world, chooseAction, maxTrajectories = 10000 }) {
 
     // Construct prefix: strictly past steps traversed so far in THIS trajectory branch.
     // Immutable frozen array without future or sibling observation data.
-    const prefix = Object.freeze(
-      currentTraj.steps.map((s) =>
-        Object.freeze({
-          snapshot_id: s.snapshot_id,
-          decision_type: s.decision_type,
-          chosen_action: s.chosen_action,
-          observation_id: s.observation_id,
-          result: s.result,
-          resulting_snapshot_id: s.resulting_snapshot_id,
-          terminal_state: s.terminal_state,
-        })
-      )
+    const prefix = deepFreeze(
+      currentTraj.steps.map((s) => ({
+        snapshot_id: s.snapshot_id,
+        decision_type: s.decision_type,
+        chosen_action: s.chosen_action,
+        observation_id: s.observation_id,
+        result: defensiveClone(s.result),
+        resulting_snapshot_id: s.resulting_snapshot_id,
+        terminal_state: s.terminal_state,
+      }))
     );
 
-    // Zero-model-call pure callback invocation
-    const chosenAction = chooseAction({
-      decisionType: decisionNode.decision_type,
-      state: decisionNode.state,
-      availableActions: [...decisionNode.available_actions],
-      snapshotId: currentSnapshotId,
-      prefix,
-    });
+    // Zero-model-call pure callback invocation. All factual inputs exposed to
+    // the policy callback are defensive frozen copies so replay cannot mutate
+    // the sealed world or contaminate sibling trajectories.
+    let chosenAction;
+    try {
+      chosenAction = chooseAction(Object.freeze({
+        decisionType: decisionNode.decision_type,
+        state: decisionNode.state,
+        availableActions: Object.freeze([...decisionNode.available_actions]),
+        snapshotId: currentSnapshotId,
+        prefix,
+      }));
+    } catch {
+      completedTrajectories.push({
+        status: REPLAY_STATUS.POLICY_INVALID_ACTION,
+        steps: currentTraj.steps,
+        terminal_state: null,
+        cost_metrics: currentTraj.cost_metrics,
+        branch_type: currentTraj.has_multi_obs
+          ? REPLAY_STATUS.REPLAY_EXACT_MULTI_OBSERVATION
+          : REPLAY_STATUS.REPLAY_EXACT_SINGLE,
+      });
+      continue;
+    }
 
     // Validate action legality against governance available_actions
     if (

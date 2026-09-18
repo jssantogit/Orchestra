@@ -54,24 +54,79 @@ function getWorkspacePaths(payload = {}) {
   };
 }
 
+function readGovernanceObject(path, label) {
+  if (!existsSync(path)) return { ok: true, exists: false, value: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return { ok: false, exists: true, value: null, reason: `${label}_MALFORMED_JSON` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, exists: true, value: null, reason: `${label}_INVALID_SHAPE` };
+  }
+  return { ok: true, exists: true, value: parsed };
+}
+
+function validRoleBindingsShape(roleBindings) {
+  if (!roleBindings || typeof roleBindings !== "object" || Array.isArray(roleBindings)) return false;
+  if (
+    roleBindings.mainConversationId !== undefined &&
+    roleBindings.mainConversationId !== null &&
+    typeof roleBindings.mainConversationId !== "string"
+  ) return false;
+  if (
+    roleBindings.bindings !== undefined &&
+    (!roleBindings.bindings || typeof roleBindings.bindings !== "object" || Array.isArray(roleBindings.bindings))
+  ) return false;
+  if (
+    roleBindings.conversations !== undefined &&
+    (!roleBindings.conversations || typeof roleBindings.conversations !== "object" || Array.isArray(roleBindings.conversations))
+  ) return false;
+  if (roleBindings.pendingSubagents !== undefined && !Array.isArray(roleBindings.pendingSubagents)) return false;
+  return true;
+}
+
 function main() {
   const rawInput = readStdin();
   let payload = {};
   if (rawInput.trim()) {
     try {
       payload = JSON.parse(rawInput);
-    } catch {}
+    } catch {
+      console.log(JSON.stringify({
+        injectSteps: [{
+          ephemeralMessage: "GOVERNANCE STATE WARNING: PreInvocation payload was malformed. No authority state was modified; tool execution will fail closed until the runtime provides a valid payload."
+        }]
+      }));
+      return;
+    }
   }
 
   const { statePath, telemetryPath } = getWorkspacePaths(payload);
   const injectSteps = [];
 
   let state = {};
-  if (existsSync(statePath)) {
+  const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");
+  if (!stateLoad.ok) {
     try {
-      state = JSON.parse(readFileSync(statePath, "utf-8"));
+      mkdirSync(dirname(telemetryPath), { recursive: true });
+      appendFileSync(telemetryPath, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "GOVERNANCE_STATE_CORRUPT",
+        phase: "PRE_INVOCATION",
+        reason: stateLoad.reason,
+        conversationId: payload.conversationId || null,
+      }) + "\n", "utf-8");
     } catch {}
+    console.log(JSON.stringify({
+      injectSteps: [{
+        ephemeralMessage: `GOVERNANCE STATE INVALID: ${stateLoad.reason}. Authority state was preserved unchanged. Do not execute tools until governance state is repaired.`
+      }]
+    }));
+    return;
   }
+  if (stateLoad.exists) state = stateLoad.value;
 
   const benchmarkRunId = process.env.BENCHMARK_RUN_ID || payload.benchmarkRunId || state.benchmarkRunId || null;
   const taskId = process.env.BENCHMARK_TASK_ID || payload.taskId || state.taskId || null;
@@ -81,27 +136,64 @@ function main() {
   // Bootstrap role-bindings for root orchestrator if not yet initialized
   const roleBindingsPath = resolve(dirname(statePath), "role-bindings.json");
   let roleBindings = { mainConversationId: null, bindings: {}, conversations: {}, pendingSubagents: [] };
-  if (existsSync(roleBindingsPath)) {
-    try { roleBindings = JSON.parse(readFileSync(roleBindingsPath, "utf-8")); } catch {}
+  const roleBindingsLoad = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
+  if (!roleBindingsLoad.ok || (roleBindingsLoad.exists && !validRoleBindingsShape(roleBindingsLoad.value))) {
+    const reason = roleBindingsLoad.ok ? "ROLE_BINDINGS_INVALID_SHAPE" : roleBindingsLoad.reason;
+    try {
+      mkdirSync(dirname(telemetryPath), { recursive: true });
+      appendFileSync(telemetryPath, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "GOVERNANCE_STATE_CORRUPT",
+        phase: "PRE_INVOCATION",
+        reason,
+        conversationId: payload.conversationId || null,
+      }) + "\n", "utf-8");
+    } catch {}
+    console.log(JSON.stringify({
+      injectSteps: [{
+        ephemeralMessage: `GOVERNANCE STATE INVALID: ${reason}. Role identity state was preserved unchanged. Do not execute tools until governance state is repaired.`
+      }]
+    }));
+    return;
   }
+  if (roleBindingsLoad.exists) roleBindings = roleBindingsLoad.value;
 
   const convId = payload.conversationId || null;
+  const knownMainConversationId = roleBindings.mainConversationId || state.conversationId || null;
+  const hasPendingDelegations = Array.isArray(roleBindings.pendingSubagents)
+    && roleBindings.pendingSubagents.some((p) => !p?.consumed);
+
   if (convId && !roleBindings.mainConversationId) {
-    roleBindings.mainConversationId = convId;
-    if (!roleBindings.bindings) roleBindings.bindings = {};
-    if (!roleBindings.conversations) roleBindings.conversations = {};
-    const orchRecord = {
-      role: "ORCHESTRATOR",
-      profile: "flash-orchestrator",
-      model: payload.modelName || "gemini-3.8-flash-medium",
-      source: "RUNTIME_BOOTSTRAP",
-    };
-    roleBindings.bindings[convId] = orchRecord;
-    roleBindings.conversations[convId] = orchRecord;
-    try {
-      mkdirSync(dirname(roleBindingsPath), { recursive: true });
-      writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
-    } catch {}
+    const conflictsWithKnownMain = Boolean(
+      knownMainConversationId && convId !== knownMainConversationId
+    );
+
+    if (!conflictsWithKnownMain && !hasPendingDelegations) {
+      roleBindings.mainConversationId = convId;
+      if (!roleBindings.bindings) roleBindings.bindings = {};
+      if (!roleBindings.conversations) roleBindings.conversations = {};
+      const orchRecord = {
+        role: "ORCHESTRATOR",
+        profile: "flash-orchestrator",
+        model: payload.modelName || "gemini-3.8-flash-medium",
+        source: "RUNTIME_BOOTSTRAP",
+        confidence: "HIGH",
+      };
+      roleBindings.bindings[convId] = orchRecord;
+      roleBindings.conversations[convId] = orchRecord;
+      state.conversationId = state.conversationId || convId;
+      try {
+        mkdirSync(dirname(roleBindingsPath), { recursive: true });
+        writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
+      } catch {}
+    } else {
+      state.identityBootstrapRejected = {
+        conversationId: convId,
+        knownMainConversationId,
+        reason: conflictsWithKnownMain ? "KNOWN_MAIN_MISMATCH" : "PENDING_DELEGATIONS_EXIST",
+        timestamp: new Date().toISOString(),
+      };
+    }
   }
 
   if (!state.activeRole && !state.role) {

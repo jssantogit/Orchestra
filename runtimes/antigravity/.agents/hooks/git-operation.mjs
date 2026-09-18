@@ -1,17 +1,29 @@
 import { execSync, execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, relative } from "node:path";
 
 function getWorkspacePaths(cwdOverride, customStatePath) {
   const cwd = cwdOverride || process.cwd();
-  const repoRoot = existsSync(resolve(cwd, "packages"))
-    ? cwd
-    : (existsSync(resolve(cwd, "../packages")) ? resolve(cwd, "..") : cwd);
+
+  // Git is the authoritative workspace boundary for git-operation. This avoids
+  // resolving nested invocation directories as independent repositories and
+  // guarantees that transaction state always lives under the actual repo root.
+  const gitRootRes = runGit(["rev-parse", "--show-toplevel"], { cwd });
+  let repoRoot;
+  if (gitRootRes.status === 0 && gitRootRes.stdout) {
+    repoRoot = resolve(gitRootRes.stdout);
+  } else if (existsSync(resolve(cwd, "packages"))) {
+    repoRoot = cwd;
+  } else if (existsSync(resolve(cwd, "../packages"))) {
+    repoRoot = resolve(cwd, "..");
+  } else {
+    repoRoot = cwd;
+  }
+
   const statePath = customStatePath
-    ? customStatePath
-    : (cwdOverride && cwdOverride !== repoRoot
-        ? resolve(cwdOverride, ".git/active-state.json")
-        : resolve(repoRoot, ".agents/state/active-state.json"));
+    ? resolve(cwd, customStatePath)
+    : resolve(repoRoot, ".agents/state/active-state.json");
+
   return {
     repoRoot,
     statePath,
@@ -95,6 +107,7 @@ function isDangerousOrSecretPath(filePath) {
 export function executeGitOperation(options = {}) {
   const cwd = options.cwd || process.cwd();
   const { repoRoot, statePath } = getWorkspacePaths(options.cwd, options.statePath);
+  const gitCwd = repoRoot;
   const action = (options.action || "commit_push").toLowerCase();
   const expectedFiles = Array.isArray(options.files)
     ? options.files.map((f) => String(f).replace(/\\/g, "/").replace(/^\.\//, ""))
@@ -114,18 +127,18 @@ export function executeGitOperation(options = {}) {
 
   // Determine current branch if not provided
   if (!branch) {
-    const branchRes = runGit(["branch", "--show-current"], { cwd });
+    const branchRes = runGit(["branch", "--show-current"], { cwd: gitCwd });
     if (branchRes.status === 0 && branchRes.stdout) {
       branch = branchRes.stdout;
     } else {
-      const revRes = runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd });
+      const revRes = runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: gitCwd });
       branch = revRes.status === 0 ? revRes.stdout : "unknown";
     }
   }
 
   // 1. STATUS
   if (action === "status") {
-    const res = runGit(["status", "--porcelain=v1"], { cwd });
+    const res = runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd: gitCwd });
     const parsed = parseGitStatus(res.stdout);
     const compactOutput = [
       "GIT_OPERATION_SUCCESS",
@@ -149,8 +162,8 @@ export function executeGitOperation(options = {}) {
 
   // 2. DIFF_SUMMARY
   if (action === "diff_summary") {
-    const statRes = runGit(["diff", "--stat"], { cwd });
-    const stagedStatRes = runGit(["diff", "--cached", "--stat"], { cwd });
+    const statRes = runGit(["diff", "--stat"], { cwd: gitCwd });
+    const stagedStatRes = runGit(["diff", "--cached", "--stat"], { cwd: gitCwd });
     const summaryLines = [
       "GIT_OPERATION_SUCCESS",
       `action: diff_summary`,
@@ -172,24 +185,57 @@ export function executeGitOperation(options = {}) {
   // 3. COMMIT or COMMIT_PUSH
   if (action === "commit" || action === "commit_push") {
     // Check compact git status first
-    const statusRes = runGit(["status", "--porcelain=v1"], { cwd });
+    const statusRes = runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd: gitCwd });
     const parsedStatus = parseGitStatus(statusRes.stdout);
 
     // Idempotency check: if transaction already committed and clean, or commitCreated: true
-    const currentHeadCommitRes = runGit(["rev-parse", "--short", "HEAD"], { cwd });
+    const currentHeadCommitRes = runGit(["rev-parse", "HEAD"], { cwd: gitCwd });
     const currentHeadHash = currentHeadCommitRes.status === 0 ? currentHeadCommitRes.stdout : null;
-    const lastHeadMsgRes = runGit(["log", "-1", "--pretty=%B"], { cwd });
+    const lastHeadMsgRes = runGit(["log", "-1", "--pretty=%B"], { cwd: gitCwd });
     const lastHeadMsg = lastHeadMsgRes.status === 0 ? lastHeadMsgRes.stdout.trim() : "";
+    const requestedMessage = message && message.trim()
+      ? message.trim()
+      : (activeState.changeSummary || "chore: automated direct action commit");
+    const normalizedExpectedFiles = expectedFiles
+      ? [...new Set(expectedFiles)].sort()
+      : null;
+    const transactionStateRel = String(relative(repoRoot, statePath)).replace(/\\/g, "/");
+    const isTransactionStateOnlyDirty = parsedStatus.allDirty.length > 0
+      && parsedStatus.allDirty.every((p) => p === transactionStateRel);
+    const idempotencyTreeClean = parsedStatus.isClean || isTransactionStateOnlyDirty;
 
     let commitAlreadyCreated = false;
     let existingCommitHash = null;
 
-    if (activeState.gitTransaction && activeState.gitTransaction.commitCreated) {
-      if (activeState.gitTransaction.commitHash) {
+    const tx = activeState.gitTransaction;
+    if (tx && tx.commitCreated && tx.commitHash) {
+      const txFiles = Array.isArray(tx.files) ? [...new Set(tx.files)].sort() : null;
+      const sameFiles = JSON.stringify(txFiles) === JSON.stringify(normalizedExpectedFiles);
+      const sameHead = Boolean(
+        currentHeadHash &&
+        (currentHeadHash === tx.commitHash ||
+          currentHeadHash.startsWith(tx.commitHash) ||
+          String(tx.commitHash).startsWith(currentHeadHash))
+      );
+      const sameIntent =
+        tx.action === action &&
+        tx.branch === branch &&
+        tx.remote === remote &&
+        tx.message === requestedMessage &&
+        sameFiles;
+
+      // A prior transaction is reusable only when it is exactly the operation
+      // being retried and the repository has not changed since that commit.
+      if (sameIntent && sameHead && idempotencyTreeClean) {
         commitAlreadyCreated = true;
-        existingCommitHash = activeState.gitTransaction.commitHash;
+        existingCommitHash = currentHeadHash;
       }
-    } else if (message && lastHeadMsg.startsWith(message.trim()) && parsedStatus.isClean) {
+    }
+
+    // Crash recovery when control-plane transaction state was lost after commit:
+    // exact message + clean tree is enough to reuse the current HEAD, but prefix
+    // matches are intentionally rejected.
+    if (!commitAlreadyCreated && lastHeadMsg === requestedMessage && idempotencyTreeClean) {
       commitAlreadyCreated = true;
       existingCommitHash = currentHeadHash;
     }
@@ -200,10 +246,33 @@ export function executeGitOperation(options = {}) {
     if (!commitAlreadyCreated) {
       // Step 2: Validate allowed files & scope
       if (expectedFiles && expectedFiles.length > 0) {
+        const isExpectedPath = (path) =>
+          expectedFiles.includes(path) || expectedFiles.some((ef) => path.startsWith(ef + "/"));
+
+        // Pre-existing staged files are part of the next commit regardless of what
+        // we stage now. If any staged path is outside the explicit allowlist, fail
+        // closed rather than silently committing unrelated work.
+        const unexpectedStaged = parsedStatus.staged
+          .map((entry) => entry.path)
+          .filter((path) => !isExpectedPath(path));
+        if (unexpectedStaged.length > 0) {
+          return {
+            success: false,
+            blocked: true,
+            action,
+            reason: "unexpected_staged_paths",
+            unexpectedFiles: unexpectedStaged,
+            output: [
+              "DIRECT_ACTION_BLOCKED",
+              "reason: pre-existing staged paths detected outside explicit commit scope",
+              `unexpected_files: [${unexpectedStaged.join(", ")}]`,
+              "recommended next action: Unstage unrelated paths or include them explicitly.",
+            ].join("\n"),
+          };
+        }
+
         // Verify if any unexpected dirty files exist
-        const unexpected = parsedStatus.allDirty.filter(
-          (path) => !expectedFiles.includes(path) && !expectedFiles.some((ef) => path.startsWith(ef + "/"))
-        );
+        const unexpected = parsedStatus.allDirty.filter((path) => !isExpectedPath(path));
 
         // If dangerous files or secrets are present among unexpected files, block immediately
         const dangerousUnexpected = unexpected.filter(isDangerousOrSecretPath);
@@ -227,8 +296,8 @@ export function executeGitOperation(options = {}) {
 
         // Stage ONLY the intended files
         for (const file of expectedFiles) {
-          if (parsedStatus.allDirty.includes(file) || existsSync(resolve(cwd, file))) {
-            const addRes = runGit(["add", file], { cwd });
+          if (parsedStatus.allDirty.includes(file) || existsSync(resolve(repoRoot, file))) {
+            const addRes = runGit(["add", file], { cwd: gitCwd });
             if (addRes.status !== 0) {
               return {
                 success: false,
@@ -263,14 +332,14 @@ export function executeGitOperation(options = {}) {
         if (parsedStatus.staged.length === 0 && parsedStatus.unstaged.length > 0) {
           // If files were not staged yet, stage unstaged (excluding untracked to be safe)
           for (const u of parsedStatus.unstaged) {
-            runGit(["add", u.path], { cwd });
+            runGit(["add", u.path], { cwd: gitCwd });
           }
         }
         stagedCount = parsedStatus.staged.length + parsedStatus.unstaged.length;
       }
 
       // Check if anything is staged for commit
-      const postStageStatusRes = runGit(["status", "--porcelain=v1"], { cwd });
+      const postStageStatusRes = runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd: gitCwd });
       const postStageParsed = parseGitStatus(postStageStatusRes.stdout);
       if (postStageParsed.staged.length === 0) {
         return {
@@ -283,12 +352,10 @@ export function executeGitOperation(options = {}) {
       }
 
       // Determine commit message
-      const finalMessage = message && message.trim()
-        ? message.trim()
-        : (activeState.changeSummary || "chore: automated direct action commit");
+      const finalMessage = requestedMessage;
 
       // Execute commit
-      const commitRes = runGit(["commit", "-m", finalMessage], { cwd });
+      const commitRes = runGit(["commit", "-m", finalMessage], { cwd: gitCwd });
       if (commitRes.status !== 0) {
         // Handle pre-commit hook failure or other commit failure
         const hookExcerpt = (commitRes.stderr || commitRes.stdout || "").split("\n").slice(0, 8).join("\n");
@@ -309,7 +376,7 @@ export function executeGitOperation(options = {}) {
       }
 
       // Capture commit hash
-      const hashRes = runGit(["rev-parse", "--short", "HEAD"], { cwd });
+      const hashRes = runGit(["rev-parse", "HEAD"], { cwd: gitCwd });
       commitHash = hashRes.status === 0 ? hashRes.stdout : "unknown";
 
       // Update state idempotency tracking
@@ -318,6 +385,7 @@ export function executeGitOperation(options = {}) {
         commitCreated: true,
         commitHash,
         message: finalMessage,
+        files: normalizedExpectedFiles,
         remote,
         branch,
         pushSucceeded: false,
@@ -349,7 +417,7 @@ export function executeGitOperation(options = {}) {
     if (dryRun) pushArgs.push("--dry-run");
     if (remote) pushArgs.push(remote);
     if (branch && branch !== "unknown") {
-      const curBranchRes = runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd });
+      const curBranchRes = runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: gitCwd });
       const currentLocalBranch = curBranchRes.status === 0 ? curBranchRes.stdout : null;
       if (currentLocalBranch && currentLocalBranch !== branch && currentLocalBranch !== "HEAD") {
         pushArgs.push(`${currentLocalBranch}:${branch}`);
@@ -358,7 +426,7 @@ export function executeGitOperation(options = {}) {
       }
     }
 
-    const pushRes = runGit(pushArgs, { cwd });
+    const pushRes = runGit(pushArgs, { cwd: gitCwd });
     if (pushRes.status !== 0) {
       // Partial failure: commit succeeded, push failed
       if (activeState.gitTransaction) {
@@ -423,7 +491,7 @@ export function executeGitOperation(options = {}) {
     if (dryRun) pushArgs.push("--dry-run");
     if (remote) pushArgs.push(remote);
     if (branch && branch !== "unknown") {
-      const curBranchRes = runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd });
+      const curBranchRes = runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: gitCwd });
       const currentLocalBranch = curBranchRes.status === 0 ? curBranchRes.stdout : null;
       if (currentLocalBranch && currentLocalBranch !== branch && currentLocalBranch !== "HEAD") {
         pushArgs.push(`${currentLocalBranch}:${branch}`);
@@ -432,7 +500,7 @@ export function executeGitOperation(options = {}) {
       }
     }
 
-    const pushRes = runGit(pushArgs, { cwd });
+    const pushRes = runGit(pushArgs, { cwd: gitCwd });
     if (pushRes.status !== 0) {
       const pushErrExcerpt = (pushRes.stderr || pushRes.stdout || "").split("\n").slice(0, 6).join("\n");
       return {

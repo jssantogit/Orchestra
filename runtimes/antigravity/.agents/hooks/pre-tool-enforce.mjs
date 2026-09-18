@@ -1,5 +1,6 @@
-import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve, relative, dirname, basename, sep } from "node:path";
+import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { resolve, relative, dirname, basename, sep, isAbsolute } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   extractRealShellRedirections,
@@ -9,6 +10,7 @@ import {
   isControlPlanePath,
   classifyScopeSpecificity,
   isConcretePath,
+  classifyShellMutation,
   isHealthyDelegatedExecution,
   isOrchestratorRole,
   checkValidationCompletionLock,
@@ -30,6 +32,12 @@ import {
   computePolicyId,
   validatePolicy,
 } from "../dream/policy-engine.mjs";
+import {
+  factualSubagentMatchesPending,
+  filterFactualPendingCandidates,
+  findFactualSubagentRecord,
+  isSymmetricReviewerSet,
+} from "./child-identity.mjs";
 
 const WORKER_ACTION_TO_PROFILE = Object.freeze({
   FLASH_LOW: "flash-low-worker",
@@ -223,99 +231,6 @@ export function startPendingInvestigationRequirement({ activeState, statePath, r
   }
 }
 
-export function completeInvestigation({ activeState, statePath, success = true }) {
-  if (!activeState.investigationInFlight) return;
-  if (success) {
-    activeState.post_investigation = true;
-    activeState.postInvestigation = true;
-  } else {
-    activeState.post_investigation = false;
-    activeState.postInvestigation = false;
-  }
-  delete activeState.investigationInFlight;
-  if (statePath) {
-    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-  }
-}
-
-export function executeReplanTransition({ activeState, statePath, repoRoot, payload, toolCall, activeRole, activeContract }) {
-
-  const currentState = activeState.state || "EXECUTING";
-  const transitionCheck = validateStateTransition(currentState, "PLANNED", {
-    retry: true,
-    retry_reason: activeState.retryReason || activeState.retry_reason,
-  });
-  if (!transitionCheck.valid) {
-    return { ok: false, reason: transitionCheck.reason || "INVALID_STATE_TRANSITION" };
-  }
-
-  const taskObj = {
-    spec: activeState.taskSpec || "Replan execution",
-    task_action: activeState.taskAction || activeState.task_action || "IMPLEMENT",
-    task_domain: activeState.taskDomain || activeState.task_domain || "CODE",
-    criticality: activeState.criticality || "NORMAL",
-  };
-
-  const snapRes = buildSnapshot({
-    repoRoot,
-    task: taskObj,
-    contract: activeContract || { allowed_paths: [], forbidden_paths: [".agents/**"], criticality: "NORMAL" },
-    runtime: { node_version: process.version, platform: process.platform, arch: process.arch, schema_version: DREAM_SCHEMAS.SNAPSHOT },
-    executionState: {
-      step_sequence: payload?.stepIdx ?? 0,
-      attempt: activeState.attempt || 0,
-      retry_remaining: activeState.retry_remaining ?? 0,
-      mutation_seq: activeState.mutationSeq || 0,
-    },
-    evidence: activeState.evidenceSummary || activeState.evidence || {
-      tests: "UNKNOWN",
-      typecheck: "UNKNOWN",
-      build: "UNKNOWN",
-      validation_fresh: false,
-      scope_check: "UNKNOWN",
-    },
-  });
-
-  if (snapRes.ok) {
-    const corrKey = dreamCorrelationKey({
-      conversationId: payload?.conversationId || activeState.conversationId || "default",
-      stepIdx: payload?.stepIdx ?? 0,
-      toolCallId: toolCall?.id || payload?.toolCallId || "",
-      branchOrdinal: 0,
-    });
-    const decState = deriveDecisionState(taskObj, activeState, activeState.evidenceSummary || activeState.evidence || {});
-    const availableActions = deriveAvailableActions(req.decision_type || DECISION_TYPES.RETRY_ACTION, decState);
-    recordDecision({
-      repoRoot,
-      snapshot: snapRes.snapshot,
-      decision: {
-        decision_type: req.decision_type || DECISION_TYPES.RETRY_ACTION,
-        state: decState,
-        available_actions: availableActions.length > 0 ? availableActions : ["REPLAN"],
-        chosen_action: "REPLAN",
-        policy_source: req.policy_source || "STATIC_POLICY_V1",
-        policy_id: req.policy_id || null,
-        baseline_action: req.baseline_action || "REPLAN",
-        policy_diagnostic: req.policy_diagnostic || null,
-        actor_identity: activeRole || "ORCHESTRATOR",
-        conversation_id: payload?.conversationId || activeState.conversationId || "default",
-        step_idx: payload?.stepIdx ?? 0,
-        tool_call_id: toolCall?.id || payload?.toolCallId || "",
-        branch_ordinal: 0,
-      },
-      correlationKey: corrKey,
-    });
-  }
-
-  // Authoritative state transition to PLANNED
-  activeState.state = "PLANNED";
-  delete activeState.pendingPolicyRequirement;
-  if (statePath) {
-    try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}
-  }
-  return { ok: true, state: "PLANNED" };
-}
-
 function readStdin() {
   try {
     return readFileSync(0, "utf-8");
@@ -333,6 +248,89 @@ function normalizePath(p) {
     .replace(/^\/+/, "")
     .replace(/^(\.\/)+/, "")
     .replace(/\/+$/, "");
+}
+
+function canonicalizeWorkspaceTarget(rawTarget, repoRoot) {
+  const raw = String(rawTarget || "").trim().replace(/^["']|["']$/g, "");
+  const lexicalAbsolutePath = resolve(repoRoot, raw);
+
+  let physicalRepoRoot = resolve(repoRoot);
+  try { physicalRepoRoot = realpathSync(repoRoot); } catch {}
+
+  // Resolve symlinks in the deepest existing ancestor, then append any
+  // non-existing suffix. This protects create_file/write_to_file targets too.
+  let ancestor = lexicalAbsolutePath;
+  const suffix = [];
+  while (!existsSync(ancestor)) {
+    const parent = dirname(ancestor);
+    if (parent === ancestor) break;
+    suffix.unshift(basename(ancestor));
+    ancestor = parent;
+  }
+
+  let physicalAncestor = ancestor;
+  try {
+    if (existsSync(ancestor)) physicalAncestor = realpathSync(ancestor);
+  } catch {}
+
+  const physicalAbsolutePath = suffix.length > 0
+    ? resolve(physicalAncestor, ...suffix)
+    : physicalAncestor;
+  const rel = relative(physicalRepoRoot, physicalAbsolutePath);
+  const outsideWorkspace = Boolean(
+    rel === ".." ||
+    rel.startsWith(`..${sep}`) ||
+    isAbsolute(rel)
+  );
+
+  return {
+    path: normalizePath(rel),
+    absolutePath: physicalAbsolutePath,
+    lexicalAbsolutePath,
+    outsideWorkspace,
+  };
+}
+
+function isWorkspaceEscapePath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === ".." || norm.startsWith("../") || /^[A-Za-z]:\//.test(norm);
+}
+
+function isAgentControlPlanePath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === ".agents" || norm.startsWith(".agents/");
+}
+
+function isOrchestratorScratchPath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === "scratch" ||
+    norm.startsWith("scratch/") ||
+    norm === ".scratch" ||
+    norm.startsWith(".scratch/");
+}
+
+function isRepositoryConstitutionPath(relPath) {
+  const norm = normalizePath(relPath);
+  return norm === "AGENTS.md" || norm.endsWith("/AGENTS.md");
+}
+
+function readGitHead(repoRoot) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function isReviewerSubagentDescriptor(sub = {}) {
+  const typeName = String(sub.TypeName || sub.name || "");
+  const roleStr = String(sub.Role || sub.role || typeName).toLowerCase();
+  return roleStr.includes("reviewer") || typeName === "flash-reviewer";
 }
 
 function pathMatchesPattern(filePath, pattern) {
@@ -392,13 +390,63 @@ function getWorkspacePaths(payload = {}) {
   };
 }
 
-function loadRoleBindings(roleBindingsPath) {
-  if (existsSync(roleBindingsPath)) {
-    try {
-      return JSON.parse(readFileSync(roleBindingsPath, "utf-8"));
-    } catch {}
+function readGovernanceObject(path, label) {
+  if (!existsSync(path)) {
+    return { ok: true, exists: false, value: null };
   }
-  return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return { ok: false, exists: true, value: null, reason: `${label}_MALFORMED_JSON` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, exists: true, value: null, reason: `${label}_INVALID_SHAPE` };
+  }
+  return { ok: true, exists: true, value: parsed };
+}
+
+function validateRoleBindingsShape(roleBindings) {
+  if (!roleBindings || typeof roleBindings !== "object" || Array.isArray(roleBindings)) return false;
+  if (
+    roleBindings.mainConversationId !== undefined &&
+    roleBindings.mainConversationId !== null &&
+    typeof roleBindings.mainConversationId !== "string"
+  ) return false;
+  if (
+    roleBindings.bindings !== undefined &&
+    (!roleBindings.bindings || typeof roleBindings.bindings !== "object" || Array.isArray(roleBindings.bindings))
+  ) return false;
+  if (
+    roleBindings.conversations !== undefined &&
+    (!roleBindings.conversations || typeof roleBindings.conversations !== "object" || Array.isArray(roleBindings.conversations))
+  ) return false;
+  if (roleBindings.pendingSubagents !== undefined && !Array.isArray(roleBindings.pendingSubagents)) return false;
+  return true;
+}
+
+function loadRoleBindings(roleBindingsPath) {
+  const loaded = readGovernanceObject(roleBindingsPath, "ROLE_BINDINGS");
+  if (!loaded.ok) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: loaded.reason,
+    };
+  }
+  if (!loaded.exists) {
+    return { mainConversationId: null, bindings: {}, pendingSubagents: [] };
+  }
+  if (!validateRoleBindingsShape(loaded.value)) {
+    return {
+      mainConversationId: null,
+      bindings: {},
+      pendingSubagents: [],
+      __governanceLoadError: "ROLE_BINDINGS_INVALID_SHAPE",
+    };
+  }
+  return loaded.value;
 }
 
 function saveRoleBindings(roleBindingsPath, data) {
@@ -427,22 +475,48 @@ function recordDeniedAttempt(activeState, statePath, toolName, toolArgs, reason)
 function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {}, repoRoot = "", roleBindingsPath = "") {
   const convId = payload.conversationId || null;
 
-  // 1. Check exact conversationId in role-bindings
   if (convId) {
     const existing = (roleBindings.bindings && roleBindings.bindings[convId])
       || (roleBindings.conversations && roleBindings.conversations[convId]);
+
     if (existing) {
+      // Provisional hook correlation may later be upgraded by the factual Antigravity
+      // brain record for this exact child conversation.
+      if (existing.source !== "RUNTIME_IDENTITY") {
+        const parentConversationId = existing.parentConversationId
+          || roleBindings.mainConversationId
+          || payload.parentConversationId
+          || activeState.parentConversationId
+          || null;
+        const factualRecord = findFactualSubagentRecord({
+          parentConversationId,
+          childConversationId: convId,
+        });
+        const pending = Array.isArray(roleBindings.pendingSubagents)
+          ? roleBindings.pendingSubagents.find((p) => p.seq === existing.pendingSeq)
+          : null;
+        if (factualRecord && pending && factualSubagentMatchesPending(factualRecord, pending)) {
+          existing.confidence = "HIGH";
+          existing.source = "RUNTIME_IDENTITY";
+          existing.factualIdentityAt = new Date().toISOString();
+          if (roleBindings.bindings) roleBindings.bindings[convId] = existing;
+          if (roleBindings.conversations) roleBindings.conversations[convId] = existing;
+          if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
+        }
+      }
+
       return {
         role: existing.role,
         source: existing.source || "CONVERSATION_BOUND_IDENTITY",
-        confidence: "HIGH",
+        confidence: existing.confidence || (existing.source === "RUNTIME_IDENTITY" ? "HIGH" : "MEDIUM"),
         actorId: convId,
         agentProfile: existing.profile || null,
         model: existing.model || payload.modelName || null,
+        delegationKind: existing.delegationKind || null,
+        attempt: Number.isInteger(existing.attempt) ? existing.attempt : 0,
       };
     }
 
-    // Matches main conversation ID
     if (roleBindings.mainConversationId && convId === roleBindings.mainConversationId) {
       return {
         role: "ORCHESTRATOR",
@@ -454,59 +528,110 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
 
-    // Different conversationId than main -> child subagent correlation
-    if ((roleBindings.mainConversationId && convId !== roleBindings.mainConversationId) || (Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0)) {
+    if ((roleBindings.mainConversationId && convId !== roleBindings.mainConversationId)
+      || (Array.isArray(roleBindings.pendingSubagents) && roleBindings.pendingSubagents.length > 0)) {
       const pendingList = Array.isArray(roleBindings.pendingSubagents) ? roleBindings.pendingSubagents : [];
       const unconsumed = pendingList.filter((p) => !p.consumed);
 
       if (unconsumed.length > 0) {
-        let matched = null;
-
-        // Try to distinguish based on available evidence from payload
-        const reqRole = (payload.agentRole || payload.role || "").toUpperCase();
-        const reqProfile = payload.agentProfile || payload.typeName || payload.profile || "";
-        const reqModel = payload.modelName || "";
-
-        let candidates = unconsumed;
-        // Filter by parent/task/run context before matching role/profile:
-        const parentConvId = payload.parentConversationId || activeState.parentConversationId || roleBindings.mainConversationId || null;
-        if (parentConvId) {
-          candidates = candidates.filter((c) => c.parentConversationId && c.parentConversationId === parentConvId);
-        }
+        const parentConversationId = payload.parentConversationId
+          || roleBindings.mainConversationId
+          || activeState.parentConversationId
+          || null;
         const activeTaskId = payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null;
-        if (activeTaskId) {
-          candidates = candidates.filter((c) => (c.taskIdentifier || c.taskId) && (c.taskIdentifier || c.taskId) === activeTaskId);
-        }
         const activeRunId = payload.benchmarkRunId || activeState.benchmarkRunId || process.env.BENCHMARK_RUN_ID || null;
-        if (activeRunId) {
-          candidates = candidates.filter((c) => c.benchmarkRunId && c.benchmarkRunId === activeRunId);
-        }
 
-        if (reqRole) {
-          candidates = candidates.filter((c) => c.role && c.role.toUpperCase() === reqRole);
-        }
-        if (reqProfile) {
-          candidates = candidates.filter((c) => c.profile === reqProfile || c.typeName === reqProfile);
-        }
-        if (reqModel) {
-          candidates = candidates.filter((c) => c.model === reqModel || (c.model && reqModel.includes(c.model)));
-        }
+        let matched = null;
+        let source = "UNRESOLVED";
+        let confidence = "LOW";
+        let slotAssignment = null;
 
-        if (candidates.length === 1) {
-          matched = candidates[0];
-        } else if (candidates.length > 1) {
-          // If multiple candidates share the exact same role and profile (e.g. Two-Key reviewers), safe to bind FIFO
-          const firstRole = candidates[0].role;
-          const firstProfile = candidates[0].profile;
-          const allSameRoleAndProfile = candidates.every((c) => c.role === firstRole && c.profile === firstProfile);
-          if (allSameRoleAndProfile) {
-            matched = candidates[0];
-          } else {
-            // Ambiguous candidates with different roles/profiles fail closed
-            matched = null;
+        // Preferred path: exact child conversation found in Antigravity's factual
+        // parent brain metadata, then correlated to a pending delegation.
+        const factualRecord = findFactualSubagentRecord({
+          parentConversationId,
+          childConversationId: convId,
+        });
+        if (factualRecord) {
+          const factualCandidates = filterFactualPendingCandidates({
+            pendingSubagents: pendingList,
+            record: factualRecord,
+            parentConversationId,
+            taskId: activeTaskId,
+            benchmarkRunId: activeRunId,
+            attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
+          });
+          if (factualCandidates.length === 1) {
+            matched = factualCandidates[0];
+          } else if (isSymmetricReviewerSet(factualCandidates)) {
+            // Two-Key reviewer slots are intentionally symmetric: either factual
+            // reviewer child may occupy either identical read-only slot.
+            matched = factualCandidates.slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0];
+            slotAssignment = "SYMMETRIC_REVIEW_SLOT";
           }
-        } else {
-          matched = null;
+          if (matched) {
+            source = "RUNTIME_IDENTITY";
+            confidence = "HIGH";
+          }
+        }
+
+        // Fallback for early child hooks before brain metadata is durable.
+        // This may authorize the correlated role, but it is explicitly provisional
+        // and can never satisfy factual completion gates.
+        if (!matched) {
+          const reqRole = (payload.agentRole || payload.role || "").toUpperCase();
+          const reqProfile = payload.agentProfile || payload.typeName || payload.profile || "";
+          const reqModel = payload.modelName || "";
+          const hasRuntimeDiscriminator = Boolean(reqRole || reqProfile);
+
+          if (hasRuntimeDiscriminator) {
+            let candidates = unconsumed;
+            if (parentConversationId) {
+              candidates = candidates.filter((p) => p.parentConversationId === parentConversationId);
+            }
+            if (activeTaskId) {
+              candidates = candidates.filter((p) => (p.taskIdentifier || p.taskId) === activeTaskId);
+            }
+            if (activeRunId) {
+              candidates = candidates.filter((p) => p.benchmarkRunId === activeRunId);
+            }
+            if (reqRole) {
+              candidates = candidates.filter((p) => p.role && p.role.toUpperCase() === reqRole);
+            }
+            if (reqProfile) {
+              candidates = candidates.filter((p) => p.profile === reqProfile || p.typeName === reqProfile);
+            }
+            if (reqModel) {
+              candidates = candidates.filter((p) => p.model === reqModel || (p.model && reqModel.includes(p.model)));
+            }
+
+            if (candidates.length === 1) {
+              matched = candidates[0];
+            } else if (isSymmetricReviewerSet(candidates)) {
+              matched = candidates.slice().sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))[0];
+              slotAssignment = "SYMMETRIC_REVIEW_SLOT";
+            }
+
+            if (matched) {
+              source = "HOOK_PAYLOAD_CORRELATION";
+              confidence = "MEDIUM";
+            }
+          }
+        }
+
+        if (matched && source === "HOOK_PAYLOAD_CORRELATION") {
+          // Hook payload is useful for applying a conservative role policy, but is
+          // not durable child identity. Do not consume/reserve the pending slot.
+          return {
+            role: matched.role || "UNKNOWN",
+            source,
+            confidence,
+            actorId: convId,
+            agentProfile: matched.profile || matched.typeName || null,
+            model: matched.model || payload.modelName || null,
+            delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
+          };
         }
 
         if (matched) {
@@ -519,10 +644,6 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           const childProfile = matched.profile || matched.typeName || null;
           const childModel = matched.model || payload.modelName || (childRole === "REVIEWER" ? "gemini-3.8-flash-high" : null);
 
-          const isFactualIdentity = Boolean(childRole && childProfile);
-          const confidence = isFactualIdentity ? "HIGH" : "LOW";
-          const source = isFactualIdentity ? "RUNTIME_IDENTITY" : "UNRESOLVED";
-
           if (!roleBindings.bindings) roleBindings.bindings = {};
           if (!roleBindings.conversations) roleBindings.conversations = {};
           const record = {
@@ -533,39 +654,41 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
             parentConversationId: matched.parentConversationId || roleBindings.mainConversationId || null,
             taskIdentifier: matched.taskIdentifier || activeTaskId || null,
             benchmarkRunId: matched.benchmarkRunId || activeRunId || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
+            originToolCallId: matched.originToolCallId || matched.toolCallId || null,
+            originStepIdx: matched.originStepIdx ?? null,
+            pendingSeq: matched.seq ?? null,
+            delegationKind: matched.delegationKind || null,
+            decisionCorrelationKey: matched.decisionCorrelationKey || null,
+            decisionType: matched.decisionType || null,
+            decisionBranchOrdinal: matched.decisionBranchOrdinal ?? null,
             confidence,
             source,
+            slotAssignment,
+            factualIdentityAt: new Date().toISOString(),
             consumed: true,
             consumedBy: convId,
             consumedAt,
           };
           roleBindings.bindings[convId] = record;
           roleBindings.conversations[convId] = record;
-          if (roleBindingsPath) {
-            saveRoleBindings(roleBindingsPath, roleBindings);
-          }
-          if (!isFactualIdentity) {
-            return {
-              role: "UNKNOWN",
-              source: "UNRESOLVED",
-              confidence: "LOW",
-              actorId: convId,
-            };
-          }
+          if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
+
           return {
-            role: childRole,
-            source: "RUNTIME_IDENTITY",
-            confidence: "HIGH",
+            role: childRole || "UNKNOWN",
+            source,
+            confidence,
             actorId: convId,
             agentProfile: childProfile,
             model: childModel,
+            delegationKind: matched.delegationKind || null,
+            attempt: Number.isInteger(matched.attempt) ? matched.attempt : 0,
           };
         }
       }
     }
   }
 
-  // 2. State-derived role
   const stateRole = String(activeState.activeRole || activeState.role || "").toUpperCase();
   if (stateRole) {
     if (isReviewerRole(stateRole)) {
@@ -579,7 +702,17 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
       };
     }
     if (isOrchestratorRole(stateRole)) {
-      if (roleBindings.mainConversationId && convId && convId !== roleBindings.mainConversationId) {
+      const expectedMainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
+      const hasPendingDelegations = Array.isArray(roleBindings.pendingSubagents)
+        && roleBindings.pendingSubagents.some((p) => !p?.consumed);
+
+      if (
+        convId &&
+        (
+          (expectedMainConversationId && convId !== expectedMainConversationId) ||
+          (!expectedMainConversationId && hasPendingDelegations)
+        )
+      ) {
         return {
           role: "UNKNOWN",
           source: "UNRESOLVED",
@@ -587,10 +720,37 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
           actorId: convId,
         };
       }
+
+      if (convId && !roleBindings.mainConversationId && !hasPendingDelegations) {
+        roleBindings.mainConversationId = convId;
+        if (!roleBindings.bindings) roleBindings.bindings = {};
+        if (!roleBindings.conversations) roleBindings.conversations = {};
+        const orchRecord = {
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          model: payload.modelName || "gemini-3.8-flash-medium",
+          source: "RUNTIME_BOOTSTRAP",
+          confidence: "HIGH",
+        };
+        roleBindings.bindings[convId] = orchRecord;
+        roleBindings.conversations[convId] = orchRecord;
+        if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
+        return {
+          role: "ORCHESTRATOR",
+          source: "RUNTIME_BOOTSTRAP",
+          confidence: "HIGH",
+          actorId: convId,
+          agentProfile: "flash-orchestrator",
+          model: orchRecord.model,
+        };
+      }
+
       return {
         role: "ORCHESTRATOR",
-        source: "STATE_DERIVED",
-        confidence: "MEDIUM",
+        source: expectedMainConversationId && convId === expectedMainConversationId
+          ? "CONVERSATION_BOUND_IDENTITY"
+          : "STATE_DERIVED",
+        confidence: expectedMainConversationId && convId === expectedMainConversationId ? "HIGH" : "MEDIUM",
         actorId: convId,
         agentProfile: "flash-orchestrator",
         model: payload.modelName || "gemini-3.8-flash-medium",
@@ -608,8 +768,6 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
     }
   }
 
-  // 3. Fallback: If conversationId is present, no pending subagents exist yet, and role-bindings has no main,
-  // this is the initial main agent conversation (Flash Orchestrator)
   if (convId && !roleBindings.mainConversationId && (!Array.isArray(roleBindings.pendingSubagents) || roleBindings.pendingSubagents.length === 0)) {
     if (stateRole && isOrchestratorRole(stateRole)) {
       roleBindings.mainConversationId = convId;
@@ -620,12 +778,11 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
         profile: "flash-orchestrator",
         model: payload.modelName || "gemini-3.8-flash-medium",
         source: "CONVERSATION_BOUND_IDENTITY",
+        confidence: "HIGH",
       };
       roleBindings.bindings[convId] = orchRecord;
       roleBindings.conversations[convId] = orchRecord;
-      if (roleBindingsPath) {
-        saveRoleBindings(roleBindingsPath, roleBindings);
-      }
+      if (roleBindingsPath) saveRoleBindings(roleBindingsPath, roleBindings);
       return {
         role: "ORCHESTRATOR",
         source: "CONVERSATION_BOUND_IDENTITY",
@@ -644,7 +801,6 @@ function resolveActorIdentity(payload = {}, activeState = {}, roleBindings = {},
     actorId: convId,
   };
 }
-
 function checkLargeFileGuard(cmd, repoRoot) {
   const trimmed = cmd.trim();
   const dumpPatterns = [
@@ -700,8 +856,8 @@ function extractTargetPaths(commandLine, repoRoot) {
     }
   }
 
-  // 3. rm, mv, cp, touch, truncate
-  const fileOpRegex = /\b(rm|mv|cp|touch|truncate)\s+([^;&|]+)/g;
+  // 3. rm, mv, cp, touch, truncate, mkdir
+  const fileOpRegex = /\b(rm|mv|cp|touch|truncate|mkdir)\s+([^;&|]+)/g;
   let match;
   while ((match = fileOpRegex.exec(cmd)) !== null) {
     const op = match[1];
@@ -728,14 +884,15 @@ function extractTargetPaths(commandLine, repoRoot) {
     targets.add(match[1]);
   }
 
-  // Normalize targets relative to repoRoot
+  // Canonicalize lexical targets relative to repoRoot before scope checks.
+  // This collapses "." / ".." so "src/../.agents/x" cannot masquerade as src/**.
   const result = [];
   for (const t of targets) {
-    let p = t;
-    if (p.startsWith(repoRoot)) {
-      p = relative(repoRoot, p);
-    }
-    result.push(normalizePath(p));
+    const canonical = canonicalizeWorkspaceTarget(t, repoRoot);
+    const normalized = canonical.outsideWorkspace
+      ? normalizePath(relative(repoRoot, canonical.absolutePath))
+      : canonical.path;
+    result.push(normalized);
   }
   return result;
 }
@@ -746,7 +903,25 @@ function isReadOnlyCommand(cmd) {
   const redir = extractRealShellRedirections(cmd);
   if (redir.targets.length > 0) return false;
 
+  // Prefix whitelisting is only sound for a single simple command. Shell
+  // composition/substitution can execute arbitrary side effects behind an
+  // otherwise read-only-looking prefix.
+  if (/[;|&`]/.test(trimmed) || /\$\(/.test(trimmed) || /[\r\n]/.test(trimmed)) {
+    return false;
+  }
+
   if (/\b(sed\s+-[a-zA-Z]*i|rm\s+|mv\s+|cp\s+|touch\s+|truncate\s+|tee\s+|writeFileSync|open\(.+["'][wa])\b/.test(cmd)) {
+    return false;
+  }
+
+  // Git read commands with --output write files; git branch is mutating for
+  // creation/deletion/rename and therefore is not generically read-only.
+  if (/^git\s+(?:diff|log|show|grep|status|rev-parse)\b.*(?:^|\s)--output(?:=|\s)/.test(trimmed)) {
+    return false;
+  }
+
+  // find becomes mutating as soon as action forms are present.
+  if (/^find\b/.test(trimmed) && /(?:^|\s)-(?:delete|exec|execdir|ok|okdir)(?:\s|$)/.test(trimmed)) {
     return false;
   }
 
@@ -756,9 +931,8 @@ function isReadOnlyCommand(cmd) {
     trimmed.startsWith("git log") ||
     trimmed.startsWith("git show") ||
     trimmed.startsWith("git grep") ||
-    trimmed.startsWith("git branch") ||
     trimmed.startsWith("git rev-parse") ||
-    trimmed.startsWith("ls") ||
+    trimmed === "ls" || trimmed.startsWith("ls ") ||
     trimmed.startsWith("cat ") ||
     trimmed.startsWith("head ") ||
     trimmed.startsWith("tail ") ||
@@ -767,7 +941,7 @@ function isReadOnlyCommand(cmd) {
     trimmed.startsWith("find ") ||
     trimmed.startsWith("which ") ||
     trimmed.startsWith("whereis ") ||
-    trimmed.startsWith("pwd") ||
+    trimmed === "pwd" ||
     trimmed.startsWith("echo ") ||
     trimmed.startsWith("printf ") ||
     trimmed.startsWith("wc ") ||
@@ -775,17 +949,16 @@ function isReadOnlyCommand(cmd) {
     trimmed.startsWith("file ") ||
     trimmed.startsWith("du ") ||
     trimmed.startsWith("df ") ||
-    trimmed.startsWith("node -v") ||
-    trimmed.startsWith("node --version") ||
-    trimmed.startsWith("npm -v") ||
-    trimmed.startsWith("npm --version") ||
-    trimmed.startsWith("pnpm -v") ||
-    trimmed.startsWith("pnpm --version") ||
-    trimmed.startsWith("yarn -v") ||
-    trimmed.startsWith("yarn --version") ||
-    trimmed.startsWith("python3 --version") ||
-    trimmed.startsWith("python --version") ||
-    trimmed.startsWith("agy ")
+    trimmed === "node -v" ||
+    trimmed === "node --version" ||
+    trimmed === "npm -v" ||
+    trimmed === "npm --version" ||
+    trimmed === "pnpm -v" ||
+    trimmed === "pnpm --version" ||
+    trimmed === "yarn -v" ||
+    trimmed === "yarn --version" ||
+    trimmed === "python3 --version" ||
+    trimmed === "python --version"
   );
 }
 
@@ -886,7 +1059,10 @@ export function isValidAgentName(name) {
 function main() {
   const rawInput = readStdin();
   if (!rawInput.trim()) {
-    console.log(JSON.stringify({ decision: "allow" }));
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "INVALID_HOOK_PAYLOAD: PreToolUse received no authorization payload."
+    }));
     return;
   }
 
@@ -894,36 +1070,94 @@ function main() {
   try {
     payload = JSON.parse(rawInput);
   } catch {
-    console.log(JSON.stringify({ decision: "allow" }));
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "MALFORMED_HOOK_PAYLOAD: PreToolUse payload is not valid JSON."
+    }));
     return;
   }
 
-  const toolCall = payload.toolCall || {};
-  const toolName = toolCall.name || "";
-  const toolArgs = toolCall.args || {};
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "INVALID_HOOK_PAYLOAD: PreToolUse payload must be a JSON object."
+    }));
+    return;
+  }
+
+  const toolCall = payload.toolCall && typeof payload.toolCall === "object" && !Array.isArray(payload.toolCall)
+    ? payload.toolCall
+    : (
+      typeof payload.toolName === "string" && payload.toolName.trim()
+        ? { name: payload.toolName, args: payload.toolArgs || payload.args || {} }
+        : null
+    );
+
+  if (!toolCall || typeof toolCall.name !== "string" || !toolCall.name.trim()) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "INVALID_HOOK_PAYLOAD: PreToolUse payload is missing a valid tool call name."
+    }));
+    return;
+  }
+
+  const toolName = toolCall.name.trim();
+  const toolArgs = toolCall.args && typeof toolCall.args === "object" && !Array.isArray(toolCall.args)
+    ? toolCall.args
+    : {};
 
   const { repoRoot, statePath, contractPath, roleBindingsPath, pendingExecutionsDir } = getWorkspacePaths(payload);
 
   let activeState = {};
   let activeContract = null;
 
-  if (existsSync(statePath)) {
-    try {
-      activeState = JSON.parse(readFileSync(statePath, "utf-8"));
-    } catch {}
+  const stateLoad = readGovernanceObject(statePath, "ACTIVE_STATE");
+  if (!stateLoad.ok) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `GOVERNANCE_STATE_INVALID: ${stateLoad.reason}. Existing governance state must be repaired before tool execution.`
+    }));
+    return;
   }
+  if (stateLoad.exists) activeState = stateLoad.value;
 
-  if (existsSync(contractPath)) {
-    try {
-      activeContract = JSON.parse(readFileSync(contractPath, "utf-8"));
-    } catch {}
+  const contractLoad = readGovernanceObject(contractPath, "ACTIVE_CONTRACT");
+  if (!contractLoad.ok) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `GOVERNANCE_STATE_INVALID: ${contractLoad.reason}. Existing scope contract must be repaired before tool execution.`
+    }));
+    return;
+  }
+  if (contractLoad.exists) {
+    activeContract = contractLoad.value;
   } else if (activeState.scopeContract) {
+    if (!activeState.scopeContract || typeof activeState.scopeContract !== "object" || Array.isArray(activeState.scopeContract)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "GOVERNANCE_STATE_INVALID: ACTIVE_STATE_SCOPE_CONTRACT_INVALID_SHAPE."
+      }));
+      return;
+    }
     activeContract = activeState.scopeContract;
   }
 
   const roleBindings = loadRoleBindings(roleBindingsPath);
+  if (roleBindings.__governanceLoadError) {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: `GOVERNANCE_STATE_INVALID: ${roleBindings.__governanceLoadError}. Role identity state must be repaired before tool execution.`
+    }));
+    return;
+  }
   const actor = resolveActorIdentity(payload, activeState, roleBindings, repoRoot, roleBindingsPath);
   const activeRole = actor.role;
+  const actorDelegationKind = actor.delegationKind || null;
+  const actorIdentityIsProvisional = actor.source === "HOOK_PAYLOAD_CORRELATION";
+  const actorIdentityIsFactual = actor.source === "RUNTIME_IDENTITY" && actor.confidence === "HIGH";
+  const actorHasFactualWorkerAuthority = isWorkerRole(actor.role) && actorIdentityIsFactual;
+  const actorHasOrchestratorAuthority = isOrchestratorRole(actor.role) && actor.confidence === "HIGH";
+  const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
   // Check 1: Worker or Reviewer spawning subagents, OR any subagent during DIRECT_ACTION
@@ -942,6 +1176,14 @@ function main() {
       console.log(JSON.stringify({
         decision: "deny",
         reason: "Hierarchy violation: Workers and Reviewers cannot spawn or coordinate subagents. All cross-worker coordination must route through Orchestrator."
+      }));
+      return;
+    }
+
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "ORCHESTRATOR_IDENTITY_REQUIRED: Subagent definition and invocation require HIGH-confidence orchestrator identity bound to the active main conversation."
       }));
       return;
     }
@@ -996,17 +1238,23 @@ function main() {
       activeState.conversationId = roleBindings.mainConversationId || convId;
       activeState.activeRole = "ORCHESTRATOR";
 
-      // Ensure orchestrator binding exists
+      // Ensure the already-authorized orchestrator binding exists without
+      // downgrading or overwriting stronger identity established earlier.
       if (!roleBindings.bindings) roleBindings.bindings = {};
       if (!roleBindings.conversations) roleBindings.conversations = {};
-      const orchRecord = {
-        role: "ORCHESTRATOR",
-        profile: "flash-orchestrator",
-        model: payload.modelName || "gemini-3.8-flash-medium",
-        source: "CONVERSATION_BOUND_IDENTITY",
-      };
-      roleBindings.bindings[convId] = orchRecord;
-      roleBindings.conversations[convId] = orchRecord;
+      const existingOrchestratorBinding = roleBindings.bindings[convId] || roleBindings.conversations[convId] || null;
+      if (!existingOrchestratorBinding) {
+        const orchRecord = {
+          conversationId: convId,
+          role: "ORCHESTRATOR",
+          profile: "flash-orchestrator",
+          model: payload.modelName || "gemini-3.8-flash-medium",
+          source: actor.source || "CONVERSATION_BOUND_IDENTITY",
+          confidence: "HIGH",
+        };
+        roleBindings.bindings[convId] = orchRecord;
+        roleBindings.conversations[convId] = orchRecord;
+      }
 
       if (!Array.isArray(roleBindings.pendingSubagents)) {
         roleBindings.pendingSubagents = [];
@@ -1019,18 +1267,81 @@ function main() {
         } catch {}
       }
 
-      // Check retry budget monotonicity
+      const reviewerSubagents = subagents.filter(isReviewerSubagentDescriptor);
+      const isReviewerBatch = reviewerSubagents.length > 0;
+      const isTwoKeyBatch = subagents.length === 2 && reviewerSubagents.length === 2;
+      const isCriticalTask = String(activeState.criticality || activeContract?.criticality || "").toUpperCase() === "CRITICAL";
+
+      if (subagents.length > 1 && reviewerSubagents.length !== subagents.length) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "PARALLEL_MUTATING_SUBAGENTS_UNSUPPORTED: Multi-subagent batches are reserved for the read-only Two-Key reviewer pair. Delegate workers/investigators one at a time so scope contracts and causal identity remain unambiguous.",
+        }));
+        return;
+      }
+
+      if (isReviewerBatch && subagents.length !== 2) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "TWO_KEY_REVIEW_CARDINALITY: Reviewer dispatch must contain exactly two independent reviewers in one batch. Third-vote and single-reviewer critical consensus are prohibited.",
+        }));
+        return;
+      }
+
+      if (isCriticalTask && isReviewerBatch && !isTwoKeyBatch) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "TWO_KEY_REVIEW_REQUIRED: CRITICAL review requires exactly two independent reviewers.",
+        }));
+        return;
+      }
+
+      const reviewCandidateHead = isTwoKeyBatch ? readGitHead(repoRoot) : null;
+      const reviewCandidateMutationSeq = isTwoKeyBatch
+        ? (activeState.mutationSeq || activeState.mutation_seq || 0)
+        : null;
+      const reviewCandidateAttempt = isTwoKeyBatch
+        ? (Number.isInteger(activeState.attempt) ? activeState.attempt : 0)
+        : null;
+      const reviewOriginToolCallId = isTwoKeyBatch ? (toolCall.id || payload.toolCallId || null) : null;
+
+      if (isTwoKeyBatch && !reviewCandidateHead) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "TWO_KEY_CANDIDATE_IDENTITY_UNRESOLVED: Cannot dispatch critical reviewers without a factual Git HEAD for the candidate.",
+        }));
+        return;
+      }
+
+      // Check retry budget monotonicity using factual state only.
+      // Never manufacture a retry attempt or remaining budget when the control-plane state is incomplete.
       if (activeState.retry || (activeState.attempt && activeState.attempt > 0) || activeState.retryReason || activeState.retry_reason) {
+        const attempt = activeState.attempt;
         const prevRemaining = activeState.prevRemainingAttempts ?? activeState.remainingAttempts ?? activeState.retry_remaining;
         const currentRemaining = toolArgs.remainingAttempts ?? activeState.remainingAttempts ?? activeState.retry_remaining;
-        if (prevRemaining !== undefined && currentRemaining !== undefined && currentRemaining > prevRemaining) {
+
+        if (!Number.isInteger(attempt) || attempt < 1) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: "RETRY_STATE_UNRESOLVED: Retry execution requires a factual attempt >= 1.",
+          }));
+          return;
+        }
+        if (!Number.isInteger(prevRemaining) || !Number.isInteger(currentRemaining)) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: "RETRY_BUDGET_UNRESOLVED: Retry execution requires factual previous and current remaining-attempt budgets.",
+          }));
+          return;
+        }
+        if (currentRemaining > prevRemaining) {
           console.log(JSON.stringify({
             decision: "deny",
             reason: `RETRY_BUDGET_VIOLATION: Retry budget cannot increase (attempted ${currentRemaining} > previous ${prevRemaining}).`,
           }));
           return;
         }
-        if ((prevRemaining !== undefined && prevRemaining <= 0) || (currentRemaining !== undefined && currentRemaining <= 0)) {
+        if (prevRemaining <= 0 || currentRemaining <= 0) {
           console.log(JSON.stringify({
             decision: "deny",
             reason: "RETRY_BUDGET_EXHAUSTED: Maximum retries exceeded. No remaining retry budget.",
@@ -1065,13 +1376,39 @@ function main() {
             profile = isReviewer ? "flash-reviewer" : (activeState.requested_agent || "flash-worker");
           }
         }
-        let modelStr = sub.Model || null;
-        if (!modelStr || modelStr === "inherit" || modelStr === "pro" || modelStr === "high") {
+        const rawModel = String(sub.Model || "").trim();
+        const normalizedModel = rawModel.toLowerCase();
+        let modelStr = rawModel || null;
+
+        if (
+          !normalizedModel ||
+          normalizedModel === "inherit" ||
+          normalizedModel === "low" ||
+          normalizedModel === "flash_lite" ||
+          normalizedModel === "flash-lite" ||
+          normalizedModel === "medium" ||
+          normalizedModel === "flash" ||
+          normalizedModel === "flash_medium" ||
+          normalizedModel === "flash-medium" ||
+          normalizedModel === "pro" ||
+          normalizedModel === "high"
+        ) {
           if (isReviewer) {
             modelStr = "gemini-3.8-flash-high";
-          } else if (profile === "flash-low-worker") {
+          } else if (
+            normalizedModel === "low" ||
+            normalizedModel === "flash_lite" ||
+            normalizedModel === "flash-lite" ||
+            profile === "flash-low-worker"
+          ) {
             modelStr = "gemini-3.8-flash-low";
-          } else if (profile === "flash-medium-worker") {
+          } else if (
+            normalizedModel === "medium" ||
+            normalizedModel === "flash" ||
+            normalizedModel === "flash_medium" ||
+            normalizedModel === "flash-medium" ||
+            profile === "flash-medium-worker"
+          ) {
             modelStr = "gemini-3.8-flash-medium";
           } else {
             modelStr = "gemini-3.8-flash-high";
@@ -1092,10 +1429,15 @@ function main() {
           model: modelStr,
           taskIdentifier: taskId,
           benchmarkRunId,
+          attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
           toolCallId,
           originToolCallId: toolCallId,
           originStepIdx: payload.stepIdx ?? null,
           delegationKind,
+          reviewBatchId: isReviewer ? reviewOriginToolCallId : null,
+          reviewCandidateHead: isReviewer ? reviewCandidateHead : null,
+          reviewCandidateMutationSeq: isReviewer ? reviewCandidateMutationSeq : null,
+          reviewCandidateAttempt: isReviewer ? reviewCandidateAttempt : null,
           creationOrder: idx,
           timestamp: new Date().toISOString(),
           consumed: false,
@@ -1128,7 +1470,7 @@ function main() {
             complexity: activeState.complexity || "NORMAL",
             retry: isRetry,
             attempt: activeState.attempt || 0,
-            remainingAttempts: activeState.remainingAttempts ?? activeState.retry_remaining ?? 2,
+            remainingAttempts: activeState.remainingAttempts ?? activeState.retry_remaining ?? 0,
             retryReason,
             isDirectAction: false,
           };
@@ -1368,19 +1710,34 @@ function main() {
             }
             if (evalResult.action === "ESCALATE_WORKER") {
               const profileTiers = { "flash-low-worker": 0, "flash-medium-worker": 1, "flash-worker": 2 };
-              const lastTier = profileTiers[activeState.lastWorkerProfile] ?? 1;
-              const currentTier = profileTiers[profile] ?? -1;
-              if (currentTier <= lastTier && lastTier < 2) {
+              const lastProfile = activeState.lastWorkerProfile || null;
+              if (!lastProfile || profileTiers[lastProfile] === undefined) {
                 console.log(JSON.stringify({
                   decision: "deny",
-                  reason: `POLICY_MISMATCH: Retry policy selected ESCALATE_WORKER for retry reason "${retryReason}" but requested "${profile}". Execution blocked.`,
+                  reason: "RETRY_IDENTITY_UNRESOLVED: ESCALATE_WORKER requires a factual previous implementation worker profile.",
+                }));
+                return;
+              }
+              const lastTier = profileTiers[lastProfile];
+              const currentTier = profileTiers[profile] ?? -1;
+              if (currentTier <= lastTier || lastTier >= 2) {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: `POLICY_MISMATCH: Retry policy selected ESCALATE_WORKER for retry reason "${retryReason}" but requested "${profile}" after "${lastProfile}". Execution blocked.`,
                 }));
                 return;
               }
             }
             if (evalResult.action === "RETRY_SAME") {
-              const lastProfile = activeState.lastWorkerProfile;
-              if (lastProfile && profile !== lastProfile) {
+              const lastProfile = activeState.lastWorkerProfile || null;
+              if (!lastProfile) {
+                console.log(JSON.stringify({
+                  decision: "deny",
+                  reason: "RETRY_IDENTITY_UNRESOLVED: RETRY_SAME requires a factual previous implementation worker profile.",
+                }));
+                return;
+              }
+              if (profile !== lastProfile) {
                 console.log(JSON.stringify({
                   decision: "deny",
                   reason: `POLICY_MISMATCH: Retry policy selected RETRY_SAME for retry reason "${retryReason}" but requested worker "${profile}" does not match previous worker "${lastProfile}". Execution blocked.`,
@@ -1396,6 +1753,10 @@ function main() {
             toolCallId: toolCall.id || payload.toolCallId || "",
             branchOrdinal: idx,
           });
+
+          candidatePending[idx].decisionCorrelationKey = corrKey;
+          candidatePending[idx].decisionType = decisionType;
+          candidatePending[idx].decisionBranchOrdinal = idx;
 
           const decRecordInput = {
             decision_type: decisionType,
@@ -1422,38 +1783,73 @@ function main() {
         }
       }
 
-      // All subagents approved: commit state, bindings, and record decisions
+      // All subagents approved: commit state, bindings, and record decisions.
+      // A Two-Key batch is bound to the exact candidate version visible at dispatch.
+      if (isTwoKeyBatch) {
+        activeState.twoKeyReview = {
+          status: "IN_FLIGHT",
+          reviewBatchId: reviewOriginToolCallId,
+          candidateHead: reviewCandidateHead,
+          candidateMutationSeq: reviewCandidateMutationSeq,
+          candidateAttempt: reviewCandidateAttempt,
+          expectedReviewerCount: 2,
+          reviewerConversationIds: [],
+          reviews: {},
+          startedAt: new Date().toISOString(),
+        };
+        activeState.twoKeyReviewConsensus = null;
+      }
+
       roleBindings.pendingSubagents.push(...candidatePending);
       roleBindings.pendingSeq = seq;
       saveRoleBindings(roleBindingsPath, roleBindings);
 
-      // Auto-persist Scope Contract from invoke_subagent payload/prompt
-      for (const sub of subagents) {
+      // Build a delegation-local Scope Contract for every child, but only
+      // implementation WORK may replace the active acceptance contract.
+      // REVIEW/INVESTIGATION prompts must never redefine implementation tests/paths.
+      for (let subIdx = 0; subIdx < subagents.length; subIdx++) {
+        const sub = subagents[subIdx];
+        const pending = candidatePending[subIdx];
         const promptText = sub.Prompt || "";
         const extracted = extractScopeContractFromPrompt(promptText, sub);
-        const allowedPaths = extracted.allowedPaths.length > 0
-          ? extracted.allowedPaths
-          : (activeContract?.allowedPaths || []);
-        const testsRequired = extracted.testsRequired.length > 0
-          ? extracted.testsRequired
-          : (activeContract?.testsRequired || []);
+        const baseAllowedPaths = activeContract?.allowedPaths || [];
+        const baseForbiddenPaths = activeContract?.forbiddenPaths || [".agents/**"];
+        const baseTestsRequired = activeContract?.testsRequired || [];
 
-        const contract = {
-          contractId: activeContract?.contractId || `contract-${Date.now()}`,
-          taskId: activeState.taskId || activeState.taskKey || null,
-          targetAgent: sub.TypeName || (sub.Role && String(sub.Role).toLowerCase().includes("reviewer") ? "flash-reviewer" : "flash-low-worker"),
-          allowedPaths,
-          forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : (activeContract?.forbiddenPaths || [".agents/**"]),
-          testsRequired,
-          createdAt: activeContract?.createdAt || new Date().toISOString(),
+        const delegationContract = {
+          ...(activeContract && typeof activeContract === "object" ? activeContract : {}),
+          contractId: `delegation-contract-${toolCall.id || payload.toolCallId || "unknown"}-${subIdx}`,
+          taskId: activeState.taskId || activeState.taskKey || activeContract?.taskId || null,
+          targetAgent: sub.TypeName || (pending?.role === "REVIEWER" ? "flash-reviewer" : "flash-low-worker"),
+          delegationKind: pending?.delegationKind || null,
+          criticality: String(activeState.criticality || activeContract?.criticality || "NORMAL").toUpperCase(),
+          allowedPaths: extracted.allowedPaths.length > 0 ? extracted.allowedPaths : baseAllowedPaths,
+          forbiddenPaths: extracted.forbiddenPaths.length > 0 ? extracted.forbiddenPaths : baseForbiddenPaths,
+          testsRequired: extracted.testsRequired.length > 0 ? extracted.testsRequired : baseTestsRequired,
+          createdAt: new Date().toISOString(),
         };
-        activeContract = contract;
-        activeState.scopeContract = contract;
-        try {
-          mkdirSync(dirname(contractPath), { recursive: true });
-          writeFileSync(contractPath, JSON.stringify(contract, null, 2), "utf-8");
-        } catch {}
+
+        if (pending) {
+          pending.scopeContract = delegationContract;
+        }
+
+        if (pending?.delegationKind === "WORK") {
+          const implementationContract = {
+            ...delegationContract,
+            contractId: activeContract?.contractId || `contract-${Date.now()}`,
+            createdAt: activeContract?.createdAt || delegationContract.createdAt,
+          };
+          activeContract = implementationContract;
+          activeState.scopeContract = implementationContract;
+          try {
+            mkdirSync(dirname(contractPath), { recursive: true });
+            writeFileSync(contractPath, JSON.stringify(implementationContract, null, 2), "utf-8");
+          } catch {}
+        }
       }
+
+      // Persist pending records again after attaching delegation-local contracts.
+      saveRoleBindings(roleBindingsPath, roleBindings);
 
       // Update state machine deterministically
       activeState.state = "DELEGATED";
@@ -1461,8 +1857,9 @@ function main() {
       activeState.taskDomain = activeState.taskDomain || "CODE";
       activeState.handoffObserved = true;
       activeState.handoffStatus = "MESSAGE_DELIVERED";
-      if (candidatePending.length > 0) {
-        activeState.lastWorkerProfile = candidatePending[candidatePending.length - 1].profile;
+      const implementationDelegations = candidatePending.filter((pending) => pending.delegationKind === "WORK");
+      if (implementationDelegations.length > 0) {
+        activeState.lastWorkerProfile = implementationDelegations[implementationDelegations.length - 1].profile;
       }
       try {
         mkdirSync(dirname(statePath), { recursive: true });
@@ -1525,8 +1922,101 @@ function main() {
     console.log(JSON.stringify({ decision: "allow" }));
   }
 
+  // Check 1: agent-to-agent messaging is parent/child only and identity-bound.
+  if (toolName === "send_message") {
+    const recipient = String(
+      toolArgs.Recipient || toolArgs.recipient || toolArgs.ConversationId || toolArgs.conversationId || ""
+    ).trim();
+
+    if (!recipient) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "MESSAGE_RECIPIENT_REQUIRED: send_message requires an explicit recipient conversationId."
+      }));
+      return;
+    }
+
+    if (isReviewerRole(activeRole)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "REVIEWER_MESSAGE_PROHIBITED: Two-Key reviewers are isolated and cannot send agent-to-agent messages."
+      }));
+      return;
+    }
+
+    if (isWorkerRole(activeRole)) {
+      if (!(actor.source === "RUNTIME_IDENTITY" && actor.confidence === "HIGH")) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "MESSAGE_IDENTITY_REQUIRED: Worker/investigator messaging requires factual HIGH runtime identity."
+        }));
+        return;
+      }
+      const actorBinding = roleBindings.bindings?.[actor.actorId]
+        || roleBindings.conversations?.[actor.actorId]
+        || null;
+      const expectedParent = actorBinding?.parentConversationId || null;
+      if (!expectedParent || recipient !== expectedParent) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "CROSS_AGENT_MESSAGE_PROHIBITED: Subagents may send messages only to their factual parent Orchestrator."
+        }));
+        return;
+      }
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
+    }
+
+    if (isOrchestratorRole(activeRole)) {
+      if (!actorHasOrchestratorAuthority) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "MESSAGE_IDENTITY_REQUIRED: Orchestrator messaging requires HIGH main-conversation identity."
+        }));
+        return;
+      }
+      if (isHealthyDelegatedExecution(activeState, activeRole)) {
+        const reason = "Reactive Wakeup policy: Orchestrator send_message is prohibited during healthy delegated execution. Yield and await child completion.";
+        recordDeniedAttempt(activeState, statePath, "send_message", toolArgs, reason);
+        console.log(JSON.stringify({ decision: "deny", reason }));
+        return;
+      }
+
+      const recipientBinding = roleBindings.bindings?.[recipient]
+        || roleBindings.conversations?.[recipient]
+        || null;
+      if (
+        !recipientBinding ||
+        recipientBinding.parentConversationId !== actor.actorId ||
+        recipientBinding.source !== "RUNTIME_IDENTITY" ||
+        recipientBinding.confidence !== "HIGH"
+      ) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "CROSS_AGENT_MESSAGE_PROHIBITED: Orchestrator may message only a factual child bound to this main conversation."
+        }));
+        return;
+      }
+      console.log(JSON.stringify({ decision: "allow" }));
+      return;
+    }
+
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "MESSAGE_IDENTITY_REQUIRED: Unresolved actors cannot send agent-to-agent messages."
+    }));
+    return;
+  }
+
   // Check 1a: schedule / timer policy during delegated execution
   if (toolName === "schedule") {
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "COORDINATION_AUTHORITY_REQUIRED: schedule is reserved for the HIGH-confidence main Orchestrator."
+      }));
+      return;
+    }
     if (isHealthyDelegatedExecution(activeState, activeRole)) {
       const reason = "Reactive Wakeup policy: Routine schedule/timer calls are prohibited for Orchestrator during healthy delegated execution. TERMINAL DELEGATION PROTOCOL: Yield immediately with ZERO tools. Do NOT call schedule, timers, or polls; Antigravity will automatically wake you upon child completion.";
       recordDeniedAttempt(activeState, statePath, "schedule", toolArgs, reason);
@@ -1542,6 +2032,13 @@ function main() {
 
   // Check 1b: manage_task polling budget and delegation lock
   if (toolName === "manage_task") {
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "COORDINATION_AUTHORITY_REQUIRED: manage_task is reserved for the HIGH-confidence main Orchestrator."
+      }));
+      return;
+    }
     const action = String(toolArgs.Action || toolArgs.action || "");
     const isCancellation = action === "kill";
     if (isCancellation) {
@@ -1585,6 +2082,13 @@ function main() {
 
   // Check 1c: manage_subagents polling policy
   if (toolName === "manage_subagents") {
+    if (!actorHasOrchestratorAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "COORDINATION_AUTHORITY_REQUIRED: manage_subagents is reserved for the HIGH-confidence main Orchestrator."
+      }));
+      return;
+    }
     const action = String(toolArgs.Action || toolArgs.action || "list").toLowerCase();
     const isCancellation = action === "kill" || action === "kill_all";
     const isDiagnosedStalled = Boolean(activeState.stalled || activeState.circuitBreakerType === "STALLED");
@@ -1654,15 +2158,53 @@ function main() {
     const nonControlRedir = redir.targets.filter(t => !isControlPlanePath(t));
     const hasWorkspaceMutationTargets = nonControlTargets.length > 0 || nonControlRedir.length > 0;
 
-    // Unknown role: read-only/validation without workspace redirections is safe; mutating commands fail closed!
-    if (!activeRole || activeRole === "UNKNOWN") {
-      if ((isReadOnly || isValidation) && !hasWorkspaceMutationTargets && redir.targets.length === 0 && targets.length === 0) {
+    if (targets.some(isRepositoryConstitutionPath) || redir.targets.some(isRepositoryConstitutionPath)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "AGENTS.md is the provider-neutral repository constitution and is strictly read-only for all agents."
+      }));
+      return;
+    }
+
+    if (
+      isOrchestratorRole(activeRole) &&
+      (targets.some(isAgentControlPlanePath) || redir.targets.some(isAgentControlPlanePath))
+    ) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "HOOK_OWNED_GOVERNANCE_STATE: .agents/** is runtime-hook-owned. Orchestrator may inspect it but cannot mutate governance state directly."
+      }));
+      return;
+    }
+
+    // Investigator is a specialist read-only plane even though it reuses the
+    // flash-worker profile/model. Delegation purpose, not profile, controls authority.
+    if (isInvestigatorActor) {
+      const mutation = classifyShellMutation(cmd);
+      const safeInvestigationCommand =
+        !hasWorkspaceMutationTargets &&
+        redir.targets.length === 0 &&
+        (
+          isReadOnly ||
+          (actorIdentityIsFactual && isValidation && mutation.isMutation === false)
+        );
+      if (safeInvestigationCommand) {
         allowCommand(cmd);
         return;
       }
       console.log(JSON.stringify({
         decision: "deny",
-        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Workspace mutations are prohibited for unresolved roles."
+        reason: "INVESTIGATOR_READ_ONLY: Investigation delegation is strictly non-mutating. Return findings to Orchestrator; implementation must be delegated separately."
+      }));
+      return;
+    }
+
+    // Unknown role: shell is privileged even when the command looks read-only.
+    // Unresolved actors may use native inspection tools, but never receive terminal authority.
+    if (!activeRole || activeRole === "UNKNOWN") {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "ROLE_IDENTITY_UNRESOLVED: Actor identity could not be verified by runtime evidence. Shell execution is prohibited for unresolved roles."
       }));
       return;
     }
@@ -1731,9 +2273,9 @@ function main() {
         return;
       }
 
-      const allControlPlane = (targets.length > 0 || redir.targets.length > 0) &&
-        targets.every(isControlPlanePath) && redir.targets.every(isControlPlanePath);
-      if (allControlPlane) {
+      const allScratchTargets = (targets.length > 0 || redir.targets.length > 0) &&
+        targets.every(isOrchestratorScratchPath) && redir.targets.every(isOrchestratorScratchPath);
+      if (allScratchTargets) {
         allowCommand(cmd);
         return;
       }
@@ -1745,10 +2287,26 @@ function main() {
       return;
     }
 
-    // 2c. Worker (Flash): validate mutating commands against Scope Contract
+    // 2c. Worker (Flash): shell authority requires factual child identity.
     if (isWorkerRole(activeRole)) {
       if (isReadOnly) {
         allowCommand(cmd);
+        return;
+      }
+
+      if (!actorHasFactualWorkerAuthority) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "ROLE_IDENTITY_NOT_FACTUAL: Worker shell execution beyond read-only inspection requires HIGH RUNTIME_IDENTITY."
+        }));
+        return;
+      }
+
+      if (!activeContract) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "SCOPE_VIOLATION: Worker shell execution beyond read-only inspection requires an active Scope Contract."
+        }));
         return;
       }
 
@@ -1771,83 +2329,119 @@ function main() {
         return;
       }
 
+      const mutation = classifyShellMutation(cmd);
+      if (!mutation.isMutation) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "WORKER_UNVERIFIED_SHELL_COMMAND: Non-validation shell command is neither read-only nor a deterministically classified mutation. Use native tools or an explicitly scoped mutation command."
+        }));
+        return;
+      }
 
-      if (activeContract) {
-        const allowed = Array.isArray(activeContract.allowedPaths) ? activeContract.allowedPaths : [];
-        const forbidden = Array.isArray(activeContract.forbiddenPaths) ? activeContract.forbiddenPaths : [];
-
-        // Check forbiddenPaths
-        for (const t of targets) {
-          for (const pattern of forbidden) {
-            if (pathMatchesPattern(t, pattern)) {
-              console.log(JSON.stringify({
-                decision: "deny",
-                reason: `Scope contract violation: shell command targets forbidden path "${t}" matching "${pattern}".`
-              }));
-              return;
-            }
-          }
+      const effectiveTargets = [...targets];
+      if (mutation.targetPath) {
+        const normalizedMutationTarget = normalizePath(
+          String(mutation.targetPath).startsWith(repoRoot)
+            ? relative(repoRoot, String(mutation.targetPath))
+            : String(mutation.targetPath)
+        );
+        if (normalizedMutationTarget && !effectiveTargets.includes(normalizedMutationTarget)) {
+          effectiveTargets.push(normalizedMutationTarget);
         }
+      }
 
-        // Check allowedPaths
-        if (allowed.length > 0) {
-          for (const t of targets) {
-            const isAllowed = allowed.some((pattern) => pathMatchesPattern(t, pattern));
-            if (!isAllowed) {
-              console.log(JSON.stringify({
-                decision: "deny",
-                reason: `Scope contract violation: shell command targets path "${t}" outside allowedPaths [${allowed.join(", ")}]. If required, return CROSS_DOMAIN_REQUEST to Orchestrator.`
-              }));
-              return;
-            }
-          }
-        }
+      if (effectiveTargets.some(isWorkspaceEscapePath)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "WORKSPACE_ESCAPE: Mutating worker shell command resolves a target outside the repository workspace."
+        }));
+        return;
+      }
 
-        // Fallback check on forbidden keywords in command string
+      if (effectiveTargets.some(isAgentControlPlanePath)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** regardless of Scope Contract."
+        }));
+        return;
+      }
+
+      if (effectiveTargets.length === 0 || (mutation.unknownScope && !mutation.targetPath && targets.length === 0)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "SCOPE_UNRESOLVED: Mutating worker shell command has no deterministic target path. Use a native file tool or provide an explicitly scoped command."
+        }));
+        return;
+      }
+
+      const allowed = Array.isArray(activeContract.allowedPaths) ? activeContract.allowedPaths : [];
+      const forbidden = Array.isArray(activeContract.forbiddenPaths) ? activeContract.forbiddenPaths : [];
+
+      if (allowed.length === 0) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "SCOPE_VIOLATION: Worker has no allowedPaths specified in active Scope Contract."
+        }));
+        return;
+      }
+
+      for (const t of effectiveTargets) {
         for (const pattern of forbidden) {
-          const rawPatternPrefix = pattern.replace(/\/\*\*?$/, "");
-          if (cmd.includes(rawPatternPrefix) && (/\b(rm|sed\s+-[a-zA-Z]*i|mv|cp|touch)\b/.test(cmd) || redir.targets.some(t => t.includes(rawPatternPrefix)))) {
+          if (pathMatchesPattern(t, pattern)) {
             console.log(JSON.stringify({
               decision: "deny",
-              reason: `Scope contract violation: shell command references forbidden path "${rawPatternPrefix}".`
+              reason: `Scope contract violation: shell command targets forbidden path "${t}" matching "${pattern}".`
             }));
             return;
           }
         }
 
-        // Anti-obfuscation check: if decoding used to target files, scope must be respected
-        if (/\b(base64\s+(?:-[a-zA-Z]*d|--decode)|xxd\s+-r)\b/.test(cmd)) {
-          for (const t of targets) {
-            const isAllowed = allowed.some((pattern) => pathMatchesPattern(t, pattern));
-            if (!isAllowed) {
-              console.log(JSON.stringify({
-                decision: "deny",
-                reason: `Scope contract violation: encoded write targets path "${t}" outside allowedPaths. Reformulate using supported safe mechanism within authorized scope.`
-              }));
-              return;
-            }
-          }
+        const isAllowed = allowed.some((pattern) => pathMatchesPattern(t, pattern));
+        if (!isAllowed) {
+          console.log(JSON.stringify({
+            decision: "deny",
+            reason: `Scope contract violation: shell command targets path "${t}" outside allowedPaths [${allowed.join(", ")}]. If required, return CROSS_DOMAIN_REQUEST to Orchestrator.`
+          }));
+          return;
         }
       }
 
       allowCommand(cmd);
       return;
     }
-
     allowCommand(cmd);
     return;
   }
 
-  // Check 3: write_to_file and replace_file_content
-  if (toolName === "write_to_file" || toolName === "replace_file_content") {
-    const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.path || "";
-    const relTarget = normalizePath(rawTarget.startsWith(repoRoot) ? relative(repoRoot, rawTarget) : rawTarget);
+  // Check 3: native file mutation tools
+  if (["write_to_file", "replace_file_content", "edit_file", "create_file"].includes(toolName)) {
+    const rawTarget = toolArgs.TargetFile || toolArgs.targetFile || toolArgs.FilePath || toolArgs.filePath || toolArgs.path || "";
+    const canonicalTarget = canonicalizeWorkspaceTarget(rawTarget, repoRoot);
+    const relTarget = canonicalTarget.path;
+
+    if (canonicalTarget.outsideWorkspace) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `WORKSPACE_ESCAPE: File mutation target "${rawTarget}" resolves outside the repository workspace.`
+      }));
+      return;
+    }
 
     // 0. Constitution protection: AGENTS.md is strictly immutable across all agents
     if (relTarget === "AGENTS.md" || relTarget.endsWith("/AGENTS.md")) {
       console.log(JSON.stringify({
         decision: "deny",
         reason: "AGENTS.md is the provider-neutral repository constitution and is strictly read-only for all agents."
+      }));
+      return;
+    }
+
+    // Investigator: strictly read-only. Reusing a flash-worker model/profile
+    // never grants implementation authority to an INVESTIGATION delegation.
+    if (isInvestigatorActor) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `INVESTIGATOR_READ_ONLY: Investigation delegation cannot modify files ("${relTarget}"). Return findings to Orchestrator for a separate implementation handoff.`
       }));
       return;
     }
@@ -1870,7 +2464,25 @@ function main() {
       return;
     }
 
+    // Worker mutation authority is granted only by factual runtime child identity.
+    // STATE_DERIVED and HOOK_PAYLOAD_CORRELATION may restrict behavior but cannot authorize writes.
+    if (isWorkerRole(activeRole) && !actorHasFactualWorkerAuthority) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: "ROLE_IDENTITY_NOT_FACTUAL: Worker mutation requires HIGH RUNTIME_IDENTITY. State-derived or hook-payload roles are not write authorization."
+      }));
+      return;
+    }
+
     const isControlPlane = isControlPlanePath(relTarget);
+
+    if (isWorkerRole(activeRole) && isAgentControlPlanePath(relTarget)) {
+      console.log(JSON.stringify({
+        decision: "deny",
+        reason: `CONTROL_PLANE_WRITE_PROHIBITED: Workers cannot modify .agents/** ("${relTarget}") regardless of Scope Contract.`
+      }));
+      return;
+    }
 
     // 3. Target is a non-control-plane workspace file: check DIRECT_ACTION
     if (!isControlPlane && isDirectAction) {
@@ -1884,15 +2496,23 @@ function main() {
       return;
     }
 
-    // 4. Orchestrator: only control-plane allowed; product code / workspace writes prohibited
+    // 4. Orchestrator: runtime governance state is hook-owned. The only writable
+    // workspace surface for the orchestrator is scratch/ for ephemeral analysis.
     if (isOrchestratorRole(activeRole)) {
-      if (isControlPlane) {
+      if (isOrchestratorScratchPath(relTarget)) {
         console.log(JSON.stringify({ decision: "allow" }));
+        return;
+      }
+      if (isAgentControlPlanePath(relTarget)) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: `HOOK_OWNED_GOVERNANCE_STATE: .agents/** ("${relTarget}") is runtime-hook-owned. Orchestrator may inspect governance state but cannot write it directly.`
+        }));
         return;
       }
       console.log(JSON.stringify({
         decision: "deny",
-        reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from directly writing product code or workspace files ("${relTarget}"). Orchestrator writes are denied by default except for control-plane paths. Delegate implementation to Gemini Flash.`
+        reason: `ORCHESTRATOR_WORKSPACE_WRITE_PROHIBITED: Separation of duties violation: Orchestrator is forbidden from directly writing product code or workspace files ("${relTarget}"). Delegate implementation to Gemini Flash.`
       }));
       return;
     }
@@ -1996,7 +2616,7 @@ function main() {
                 toolCallId: toolCall.id || payload.toolCallId || "",
                 branchOrdinal: 0,
               });
-              recordDecision({
+              const directDecision = recordDecision({
                 repoRoot,
                 snapshot: snapRes.snapshot,
                 decision: {
@@ -2016,6 +2636,18 @@ function main() {
                 },
                 correlationKey: corrKey,
               });
+              if (directDecision.recorded) {
+                activeState.directInvestigationDecisionInFlight = {
+                  correlationKey: corrKey,
+                  childConversationId: payload.conversationId || null,
+                  originToolCallId: toolCall.id || payload.toolCallId || null,
+                  decisionType: DECISION_TYPES.INVESTIGATION_STRATEGY,
+                  chosenAction: "IMPLEMENT_DIRECT",
+                  startedAt: new Date().toISOString(),
+                };
+              } else {
+                activeState.dreamRecordingError = directDecision.reason || directDecision.error_code || "DIRECT_INVESTIGATION_DECISION_RECORD_FAILED";
+              }
             }
             activeState.investigationStrategyEvaluated = true;
             try { writeFileSync(statePath, JSON.stringify(activeState, null, 2), "utf-8"); } catch {}

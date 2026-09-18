@@ -74,6 +74,7 @@ import {
   isPathApp,
   checkEvidenceFreshness,
   findReusableEvidence,
+  verifyWorkerValidation,
   recordNativeToolFallback,
   WORKER_PACKET_LIMITS,
   validateWorkerPacket,
@@ -1429,4 +1430,142 @@ test("dream routing parity matrix: preserves 100% routing parity across comprehe
       );
     }
   }
+});
+
+
+test("scope validator canonicalizes dot-dot traversal before authorization", () => {
+  const contract = {
+    allowedPaths: ["src/**"],
+    forbiddenPaths: [".agents/**"],
+  };
+
+  const intoControlPlane = validateScopeContract(contract, ["src/../.agents/state/pwn.json"]);
+  assert.equal(intoControlPlane.valid, false);
+  assert.ok(intoControlPlane.violations.some((v) =>
+    v.path === ".agents/state/pwn.json" && v.reason === "forbidden-path"
+  ));
+
+  const outsideWorkspace = validateScopeContract(contract, ["src/../../outside.js"]);
+  assert.equal(outsideWorkspace.valid, false);
+  assert.ok(outsideWorkspace.violations.some((v) => v.reason === "workspace-escape"));
+});
+
+
+test("validation authority: MEDIUM or missing worker identity confidence cannot satisfy acceptance", () => {
+  const base = {
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+  };
+
+  const medium = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "medium-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+      confidence: "MEDIUM",
+    }],
+  });
+  assert.equal(medium.verified, false);
+  assert.match(medium.reason, /IDENTITY_NOT_FACTUAL/);
+
+  const missing = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "missing-confidence-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+    }],
+  });
+  assert.equal(missing.verified, false);
+  assert.match(missing.reason, /IDENTITY_NOT_FACTUAL/);
+
+  const investigator = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "investigator-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+      confidence: "HIGH",
+      delegationKind: "INVESTIGATION",
+    }],
+  });
+  assert.equal(investigator.verified, false);
+  assert.match(investigator.reason, /INVALID_DELEGATION/);
+
+  const factual = verifyWorkerValidation({
+    ...base,
+    evidenceLedger: [{
+      executionId: "high-ev",
+      type: "TEST_RUN",
+      command: "npm test",
+      exitCode: 0,
+      mutationSeq: 0,
+      actorRole: "WORKER",
+      confidence: "HIGH",
+      delegationKind: "WORK",
+    }],
+  });
+  assert.equal(factual.verified, true);
+});
+
+
+test("validation authority: retry attempts cannot reuse prior-attempt evidence", () => {
+  const previousAttemptEvidence = {
+    executionId: "attempt-0-test",
+    type: "TEST_RUN",
+    command: "npm test",
+    exitCode: 0,
+    mutationSeq: 0,
+    actorRole: "WORKER",
+    confidence: "HIGH",
+    delegationKind: "WORK",
+    attempt: 0,
+  };
+
+  const retryWithoutNewEvidence = verifyWorkerValidation({
+    attempt: 1,
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+    evidenceLedger: [previousAttemptEvidence],
+  });
+  assert.equal(retryWithoutNewEvidence.verified, false);
+  assert.match(retryWithoutNewEvidence.reason, /ATTEMPT_MISMATCH/);
+
+  const retryWithCurrentEvidence = verifyWorkerValidation({
+    attempt: 1,
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+    evidenceLedger: [
+      previousAttemptEvidence,
+      {
+        ...previousAttemptEvidence,
+        executionId: "attempt-1-test",
+        attempt: 1,
+      },
+    ],
+  });
+  assert.equal(retryWithCurrentEvidence.verified, true);
+  assert.equal(retryWithCurrentEvidence.evidence.attempt, 1);
+
+  const initialLegacyEvidence = verifyWorkerValidation({
+    attempt: 0,
+    mutationSeq: 0,
+    scopeContract: { testsRequired: ["npm test"] },
+    evidenceLedger: [{
+      ...previousAttemptEvidence,
+      executionId: "legacy-attempt-zero",
+      attempt: undefined,
+    }],
+  });
+  assert.equal(initialLegacyEvidence.verified, true, "Legacy missing attempt is compatible only with initial attempt 0");
 });
