@@ -90,5 +90,7 @@ export function evaluateRankingAgainstFutureUse({
     critical_reference_recall: Number(criticalRecall.toFixed(6)),
     false_low_relevance: Number(falseLowRate.toFixed(6)),
     future_used_total: futureUsedTotal,
+    critical_reference_total: criticalTotal,
+    future_event_count: futureEvents.length,
   };
 }
