@@ -10,6 +10,7 @@ import {
   runArtifactRankingShadow,
   readShadowTelemetry,
   labelShadowRun,
+  labelShadowRunFromProjectTelemetry,
 } from "../../experiments/jev/shadow-runner.mjs";
 import { scoreRedundancyShadow } from "../../experiments/jev/redundancy-shadow.mjs";
 import { annotateDreamDirectory } from "../../experiments/jev/dream-analyzer.mjs";
@@ -79,6 +80,43 @@ test("artifact ranking shadow writes telemetry and never changes packet behavior
     assert.equal(telemetry.length, 2);
     assert.equal(telemetry[0].schema, "orchestra.jev-shadow-report.v1");
     assert.equal(telemetry[1].schema, "orchestra.jev-shadow-label.v1");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("promotable Shadow labels are derived only from timestamped project runtime telemetry", async () => {
+  const root = fixture();
+  try {
+    const client = createFakeJevClient(() => 0.5);
+    const result = await runArtifactRankingShadow({
+      projectRoot: root,
+      client,
+      goal: "fix auth test",
+      task: { task_id: "task-shadow", task_category: "investigation" },
+      live: true,
+      env: { ORCHESTRA_JEV_ALLOW_PROJECT_EGRESS: "1" },
+      mandatoryCore: { goal: "fix auth test" },
+    });
+
+    const runtimeTelemetry = resolve(root, ".agents/telemetry/events.jsonl");
+    mkdirSync(resolve(root, ".agents/telemetry"), { recursive: true });
+    writeFileSync(runtimeTelemetry, [
+      JSON.stringify({ type: "OLD_EVENT", evidenceId: "ev-1" }),
+      JSON.stringify({
+        timestamp: new Date(Date.now() + 1000).toISOString(),
+        type: "ACCEPTANCE",
+        evidenceId: "ev-1",
+      }),
+    ].join("\n")+"\n");
+
+    const label = labelShadowRunFromProjectTelemetry({
+      projectRoot: root,
+      shadowId: result.event.shadow_id,
+    });
+    assert.equal(label.label_source, "PROJECT_RUNTIME_TELEMETRY");
+    assert.equal(label.future_event_count, 1);
+    assert.equal(label.comparative_outcome_verified, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
