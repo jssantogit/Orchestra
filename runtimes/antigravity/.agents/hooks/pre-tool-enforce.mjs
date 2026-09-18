@@ -9,6 +9,7 @@ import {
   isControlPlanePath,
   classifyScopeSpecificity,
   isConcretePath,
+  classifyShellMutation,
   isHealthyDelegatedExecution,
   isOrchestratorRole,
   checkValidationCompletionLock,
