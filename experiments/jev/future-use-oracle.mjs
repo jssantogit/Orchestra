@@ -1,7 +1,19 @@
 import { JEV_AUTHORITY, JEV_SCHEMAS, contentId } from "./schemas.mjs";
 
-function eventText(event) {
-  try { return JSON.stringify(event).toLowerCase(); } catch { return ""; }
+function scalarValues(value, out = new Set()) {
+  if (value === null || value === undefined) return out;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    out.add(String(value).toLowerCase());
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) scalarValues(item, out);
+    return out;
+  }
+  if (typeof value === "object") {
+    for (const item of Object.values(value)) scalarValues(item, out);
+  }
+  return out;
 }
 
 export function deriveFutureUseLabels({
@@ -10,7 +22,7 @@ export function deriveFutureUseLabels({
   criticalIds = [],
 } = {}) {
   const critical = new Set(criticalIds || []);
-  const eventsText = (futureEvents || []).map(eventText);
+  const eventScalars = (futureEvents || []).map((event) => scalarValues(event));
   return (candidates || []).map((candidate) => {
     const needles = [
       candidate.id,
@@ -19,14 +31,11 @@ export function deriveFutureUseLabels({
       candidate.relative_path,
     ].filter(Boolean).map((value) => String(value).toLowerCase());
 
-    const used = needles.length > 0 && eventsText.some((text) => needles.some((needle) => text.includes(needle)));
-    const causallyUseful = used && eventsText.some((text) => (
-      text.includes("evidence")
-      || text.includes("accept")
-      || text.includes("feedback")
-      || text.includes("retry")
-      || text.includes("review")
-    ));
+    const used = needles.length > 0 && eventScalars.some((values) => needles.some((needle) => values.has(needle)));
+    const causallyUseful = used && (futureEvents || []).some((event) => {
+      const type = String(event?.type || "").toLowerCase();
+      return /evidence|accept|feedback|retry|review/.test(type);
+    });
     return {
       id: candidate.id,
       future_used: used,
