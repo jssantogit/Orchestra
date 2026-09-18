@@ -28,6 +28,7 @@ Return **JSON only**, with this exact top-level shape:
 
 ```json
 {
+  "packet_id": "packet-... (echo the input packet_id exactly)",
   "candidates": [
     { "...": "orchestra.exploration-policy.v1 candidate" }
   ]
@@ -36,12 +37,13 @@ Return **JSON only**, with this exact top-level shape:
 
 Rules:
 
-1. Return at most 4 candidates.
-2. Candidate policies must use schema `orchestra.exploration-policy.v1`.
-3. Omit `policy_id`; the deterministic Policy Lab computes it.
-4. Omit `created_at`; candidate identity must be deterministic.
-5. Do not add fields outside the existing policy schema.
-6. A candidate may specialize or override routing behavior, but must not encode new authority, budgets, tools, permissions, safety exceptions, or execution mechanisms.
-7. Prefer the smallest policy changes that address the aggregate evidence.
-8. If deterministic replay feedback says `NEEDS_EXPLORATION`, do not pretend the candidate is proven. You may revise it to stay within supported branches.
-9. If evidence does not justify a candidate, return `{"candidates":[]}`.
+1. Echo the input `packet_id` exactly. It binds this response to the reserved designer call.
+2. Return at most 4 candidates.
+3. Candidate policies must use schema `orchestra.exploration-policy.v1`.
+4. Omit `policy_id`; the deterministic Policy Lab computes it.
+5. Omit `created_at`; candidate identity must be deterministic.
+6. Do not add fields outside the existing policy schema.
+7. A candidate may specialize or override routing behavior, but must not encode new authority, budgets, tools, permissions, safety exceptions, or execution mechanisms.
+8. Prefer the smallest policy changes that address the aggregate evidence.
+9. If deterministic replay feedback says `NEEDS_EXPLORATION`, do not pretend the candidate is proven. You may revise it to stay within supported branches.
+10. If evidence does not justify a candidate, return the same `packet_id` with an empty `candidates` array.
