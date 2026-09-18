@@ -65,7 +65,7 @@ test.after(() => {
   cleanState();
 });
 
-test("pre-tool hook: allows legitimate control plane writes", () => {
+test("pre-tool hook: orchestrator cannot directly mutate hook-owned governance state", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -77,7 +77,8 @@ test("pre-tool hook: allows legitimate control plane writes", () => {
       }
     });
     const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
-    assert.equal(output.decision, "allow");
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
   } finally {
     cleanState();
   }
@@ -1874,22 +1875,18 @@ test("pre-tool hook: blocks orchestrator workspace writes across the full layout
   }
 });
 
-test("pre-tool hook: allows orchestrator control plane writes (.agents/**, scratch/**) but blocks AGENTS.md", () => {
+test("pre-tool hook: orchestrator may write scratch but not hook-owned .agents or AGENTS.md", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
     writeFileSync(".agents/state/active-state.json", JSON.stringify({ activeRole: "ORCHESTRATOR" }));
 
-    // Allowed control-plane paths
-    const allowed = [
-      ".agents/state/active-state.json",
-      ".agents/state/active-contract.json",
-      ".agents/evidence/ledger.json",
+    const allowedScratch = [
       "scratch/experiment.py",
       "scratch/debug-notes.txt",
     ];
 
-    for (const relPath of allowed) {
+    for (const relPath of allowedScratch) {
       const input = JSON.stringify({
         toolCall: {
           name: "write_to_file",
@@ -1897,10 +1894,26 @@ test("pre-tool hook: allows orchestrator control plane writes (.agents/**, scrat
         },
       });
       const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
-      assert.equal(output.decision, "allow", `Orchestrator write to ${relPath} should be allowed`);
+      assert.equal(output.decision, "allow", `Orchestrator scratch write to ${relPath} should be allowed`);
     }
 
-    // AGENTS.md is strictly protected constitution
+    const hookOwned = [
+      ".agents/state/active-state.json",
+      ".agents/state/active-contract.json",
+      ".agents/evidence/ledger.json",
+    ];
+    for (const relPath of hookOwned) {
+      const input = JSON.stringify({
+        toolCall: {
+          name: "write_to_file",
+          args: { TargetFile: resolve(relPath) },
+        },
+      });
+      const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
+      assert.equal(output.decision, "deny", `Orchestrator direct write to ${relPath} must be denied`);
+      assert.match(output.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
+    }
+
     const agentsMdInput = JSON.stringify({
       toolCall: {
         name: "write_to_file",
@@ -2232,7 +2245,7 @@ test("pre-tool hook: UNKNOWN actor writing to control plane .agents/state/foo.js
   }
 });
 
-test("pre-tool hook: ORCHESTRATOR writing to control plane .agents/state/foo.json is ALLOWED", () => {
+test("pre-tool hook: ORCHESTRATOR direct write to .agents/state/foo.json is DENIED", () => {
   cleanState();
   try {
     mkdirSync(".agents/state", { recursive: true });
@@ -2248,7 +2261,8 @@ test("pre-tool hook: ORCHESTRATOR writing to control plane .agents/state/foo.jso
       },
     });
     const output = JSON.parse(execFileSync("node", [preToolScript], { input }));
-    assert.equal(output.decision, "allow");
+    assert.equal(output.decision, "deny");
+    assert.match(output.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
   } finally {
     cleanState();
   }
@@ -3051,7 +3065,23 @@ test("governance: binding loss cannot promote a child conversation to orchestrat
       }),
       encoding: "utf8",
     }));
-    assert.equal(mainControlPlaneWrite.decision, "allow");
+    assert.equal(mainControlPlaneWrite.decision, "deny");
+    assert.match(mainControlPlaneWrite.reason, /HOOK_OWNED_GOVERNANCE_STATE/);
+
+    const mainScratchWrite = JSON.parse(execFileSync("node", [preToolScript], {
+      input: JSON.stringify({
+        conversationId: "known-main-conversation",
+        toolCall: {
+          name: "write_to_file",
+          args: {
+            TargetFile: "scratch/main-authorized.txt",
+            CodeContent: "ok",
+          },
+        },
+      }),
+      encoding: "utf8",
+    }));
+    assert.equal(mainScratchWrite.decision, "allow", "Known main conversation retains orchestrator scratch authority");
   } finally {
     cleanState();
   }
