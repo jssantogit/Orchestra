@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 
 import { explainEvidenceContract } from "./evidence-contract.mjs";
 import { readEvidenceGitContext } from "./evidence-federation.mjs";
+import { summarizeEvidenceWatches } from "./evidence-watch.mjs";
 
 function readJson(path, fallback = null) {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return fallback; }
@@ -68,6 +69,7 @@ export function inspectProjectEvidence(targetDir) {
       evidenceFailure: activeState.evidenceFailure || null,
       evidenceStale: activeState.evidenceStale || null,
       ciWait: activeState.ciWait || null,
+      evidenceWatches: summarizeEvidenceWatches(activeState),
       lastStopBlockedReason: activeState.lastStopBlockedReason || null,
       stopBlockedCount: activeState.stopBlockedCount || 0,
       humanGateReason: activeState.humanGateReason || null,
@@ -143,6 +145,19 @@ export function formatEvidenceInspection(report) {
     lines.push("");
   }
 
+  if (report.runtimeSignals.evidenceWatches?.count > 0) {
+    lines.push("Evidence watches:");
+    for (const watch of report.runtimeSignals.evidenceWatches.watches) {
+      lines.push(
+        "  " + watch.requirementId
+        + " provider=" + watch.provider
+        + " status=" + watch.status
+        + " polls=" + watch.pollCount
+        + " next=" + (watch.nextPollAt || "-")
+        + " deadline=" + (watch.deadlineAt || "-")
+      );
+    }
+  }
   if (report.runtimeSignals.ciWait) {
     lines.push("CI_WAIT: " + JSON.stringify(report.runtimeSignals.ciWait));
   }
