@@ -38,6 +38,11 @@ import {
   resolveExplorationPolicyOverlay,
 } from "../dream/exploration-lab.mjs";
 import {
+  evaluateCanaryPolicyOverlay,
+  isCanaryExternalSideEffect,
+  rollbackSelectedCanaryTask,
+} from "../dream/canary-mode.mjs";
+import {
   factualSubagentMatchesPending,
   filterFactualPendingCandidates,
   findFactualSubagentRecord,
@@ -91,7 +96,16 @@ function loadActivePolicy() {
   return { policy: parsed, diagnostic: null };
 }
 
-function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableActions, baselineAction }) {
+function evaluatePolicyWithFallback({
+  repoRoot,
+  decisionType,
+  state,
+  availableActions,
+  baselineAction,
+  activeState = {},
+  activeContract = {},
+  taskId = null,
+}) {
   const safeBaseline = typeof baselineAction === "string" ? baselineAction : "";
   const exploration = resolveExplorationPolicyOverlay({
     repoRoot,
@@ -114,6 +128,7 @@ function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableAc
     }
     return exploration;
   }
+
   const loaded = loadActivePolicy();
   if (loaded.diagnostic) {
     return {
@@ -125,6 +140,7 @@ function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableAc
       policy_diagnostic: loaded.diagnostic,
     };
   }
+
   try {
     const evalRes = evaluatePolicy({
       policy: loaded.policy,
@@ -133,8 +149,10 @@ function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableAc
       availableActions,
       baselineAction: safeBaseline,
     });
+
+    let staticResult;
     if (evalRes.ok) {
-      return {
+      staticResult = {
         ok: true,
         action: evalRes.action,
         source: "STATIC_POLICY_V1",
@@ -142,20 +160,51 @@ function evaluatePolicyWithFallback({ repoRoot, decisionType, state, availableAc
         baseline_action: safeBaseline,
         policy_diagnostic: null,
       };
+    } else {
+      let diag = "INTERPRETER_EXCEPTION";
+      if (evalRes.diagnostic?.includes("POLICY_CONFLICT")) diag = "POLICY_CONFLICT";
+      else if (evalRes.diagnostic?.includes("POLICY_INVALID_ACTION")) diag = "POLICY_INVALID_ACTION";
+      else if (evalRes.diagnostic?.includes("NO_MATCHING_RULE")) diag = "NO_MATCHING_RULE";
+      else if (evalRes.diagnostic?.includes("INVALID_POLICY")) diag = "INVALID_POLICY";
+      staticResult = {
+        ok: false,
+        action: evalRes.action || safeBaseline,
+        source: "STATIC_ROUTING_FALLBACK",
+        policy_id: evalRes.policy_id || loaded.policy?.policy_id || null,
+        baseline_action: safeBaseline,
+        policy_diagnostic: diag,
+      };
     }
-    let diag = "INTERPRETER_EXCEPTION";
-    if (evalRes.diagnostic?.includes("POLICY_CONFLICT")) diag = "POLICY_CONFLICT";
-    else if (evalRes.diagnostic?.includes("POLICY_INVALID_ACTION")) diag = "POLICY_INVALID_ACTION";
-    else if (evalRes.diagnostic?.includes("NO_MATCHING_RULE")) diag = "NO_MATCHING_RULE";
-    else if (evalRes.diagnostic?.includes("INVALID_POLICY")) diag = "INVALID_POLICY";
-    return {
-      ok: false,
-      action: evalRes.action || safeBaseline,
-      source: "STATIC_ROUTING_FALLBACK",
-      policy_id: evalRes.policy_id || loaded.policy?.policy_id || null,
-      baseline_action: safeBaseline,
-      policy_diagnostic: diag,
-    };
+
+    // Canary may only overlay a healthy current baseline. Any Canary failure
+    // rolls the session back internally and this exact decision remains static.
+    if (staticResult.ok) {
+      const canary = evaluateCanaryPolicyOverlay({
+        repoRoot,
+        taskId,
+        decisionType,
+        state,
+        availableActions,
+        baselineAction: staticResult.action,
+        baselinePolicyId: loaded.policy.policy_id,
+        activeState,
+        activeContract,
+      });
+      if (canary?.active) {
+        return {
+          ok: true,
+          action: canary.action,
+          source: canary.source,
+          policy_id: canary.policy_id,
+          baseline_action: staticResult.action,
+          policy_diagnostic: canary.policy_diagnostic || null,
+          canary_session_id: canary.canary_session_id,
+          canary_bucket: canary.canary_bucket,
+        };
+      }
+    }
+
+    return staticResult;
   } catch {
     return {
       ok: false,
@@ -1630,6 +1679,9 @@ function main() {
                 state: decisionState,
                 availableActions: invAvailable,
                 baselineAction: invBaseline,
+                activeState,
+                activeContract: contractObj,
+                taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
               });
               if (invEval.block_execution) {
                 console.log(JSON.stringify({
@@ -1674,6 +1726,9 @@ function main() {
             state: decisionState,
             availableActions,
             baselineAction,
+            activeState,
+            activeContract: contractObj,
+            taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
           });
           if (evalResult.block_execution) {
             console.log(JSON.stringify({
@@ -2684,6 +2739,9 @@ function main() {
             state: invState,
             availableActions: invAvailable,
             baselineAction: invBaseline,
+            activeState,
+            activeContract,
+            taskId: payload.taskId || payload.taskIdentifier || activeState.taskId || activeState.taskKey || process.env.BENCHMARK_TASK_ID || null,
           });
           if (invRes.block_execution) {
             console.log(JSON.stringify({
