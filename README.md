@@ -254,3 +254,22 @@ Parity means equivalent governance guarantees, not identical engine hooks.
 Codex does not import Antigravity operational code and does not emulate
 Antigravity's hook runtime. See
 `docs/superpowers/specs/2026-09-18-codex-runtime-parity.md`.
+
+
+### Orchestrator Session Handoff (0.9)
+
+Antigravity can now transfer factual root-orchestrator authority between fresh
+conversations without manual role-binding edits.
+
+When the user explicitly closes a milestone and chooses to continue in a new
+chat, the current root arms a single-use project lease. The next root
+conversation claims it automatically on first PreInvocation. The predecessor
+is demoted to `FORMER_ORCHESTRATOR` and loses project-tool authority.
+
+The default `MILESTONE_BOUNDARY` mode is a true context boundary: prior active
+task ID, Scope Contract, Evidence Ledger and provider transcript are not active
+authority in the new conversation; the runtime re-enters `INTAKE`. An
+explicit `LIVE_CONTINUATION` mode exists for bounded mid-task context resets.
+
+See
+`docs/superpowers/specs/2026-09-19-orchestrator-session-handoff.md`.
