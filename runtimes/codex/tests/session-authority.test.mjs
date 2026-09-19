@@ -148,6 +148,27 @@ test("Codex claim lock serializes simultaneous candidates", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("Codex claim recovers an orphaned lock left by a dead process", () => {
+  const root = project();
+  try {
+    bootstrapCodexSessionAuthority(root, { sessionId: "root-a" });
+    state(root, { taskId: "done", state: "DONE" });
+    prepareCodexSessionHandoff(root);
+    const lock = join(root, ".codex", "orchestra-state", "session-handoff.claim.lock");
+    writeFileSync(lock, JSON.stringify({
+      schema: "orchestra.codex-session-claim-lock.v1",
+      pid: 2147483647,
+      candidate_session_id: "crashed-root",
+      created_at: new Date().toISOString(),
+    }) + "\n");
+
+    const claim = claimCodexSessionHandoff(root, { candidateSessionId: "root-b" });
+    assert.equal(claim.claimed, true);
+    assert.equal(claim.authority.main_session_id, "root-b");
+    assert.equal(existsSync(lock), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("Codex TRANSFERRING state fails closed and resumes only for reserved candidate", () => {
   const root = project();
   try {
