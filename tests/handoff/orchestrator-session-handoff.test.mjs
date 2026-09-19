@@ -28,6 +28,9 @@ import {
 import {
   verifyEvidenceContract,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs";
+import {
+  createContinuationCapsule,
+} from "../../runtimes/antigravity/.agents/skills/orchestra/trust-boundary.mjs";
 
 const __dirname = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -293,6 +296,19 @@ test("handoff: PreInvocation automatically transfers root authority exactly once
   const root = makeProject();
   try {
     seedBoundary(root);
+    const historicalBindings = JSON.parse(readFileSync(bindingsPath(root), "utf8"));
+    historicalBindings.bindings["old-worker"] = {
+      conversationId: "old-worker",
+      role: "WORKER",
+      profile: "flash-worker",
+      source: "RUNTIME_IDENTITY",
+      confidence: "HIGH",
+      parentConversationId: "old-root",
+      delegationKind: "WORK",
+    };
+    historicalBindings.conversations["old-worker"] = historicalBindings.bindings["old-worker"];
+    writeFileSync(bindingsPath(root), JSON.stringify(historicalBindings, null, 2));
+
     const prepared = prepareProjectOrchestratorHandoff(root, {
       label: "M1 -> M2",
     });
@@ -313,6 +329,18 @@ test("handoff: PreInvocation automatically transfers root authority exactly once
     assert.equal(bindings.bindings["old-root"].role, "FORMER_ORCHESTRATOR");
     assert.equal(bindings.bindings["old-root"].authorityStatus, "TRANSFERRED");
     assert.equal(bindings.bindings["old-root"].supersededBy, "new-root");
+    assert.equal(bindings.bindings["old-worker"], undefined);
+    assert.equal(bindings.conversations["old-worker"], undefined);
+    assert.equal(Object.keys(bindings.bindings).length, 2);
+
+    const capsule = createContinuationCapsule({
+      activeState: state,
+      activeContract: {},
+      roleBindings: bindings,
+    });
+    assert.deepEqual(Object.keys(capsule.identities), ["new-root"]);
+    assert.equal(capsule.identity_count, 1);
+
     assert.equal(state.conversationId, "new-root");
     assert.equal(state.orchestratorGeneration, 1);
     assert.equal(state.lastOrchestratorHandoff.handoffId, prepared.record.handoff_id);
