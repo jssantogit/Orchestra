@@ -61,6 +61,7 @@ REQUIRED_CODEX_FILES=(
   "runtimes/codex/.codex/astra-orchestra/codex-runtime-cli.mjs"
   "runtimes/codex/tests/parity.test.mjs"
   "scripts/orchestra-codex-project.mjs"
+  "scripts/install-codex.mjs"
   "runtimes/codex/.codex/agents/luna-high.toml"
   "runtimes/codex/.codex/agents/luna-medium.toml"
   "runtimes/codex/.codex/agents/luna-max.toml"
