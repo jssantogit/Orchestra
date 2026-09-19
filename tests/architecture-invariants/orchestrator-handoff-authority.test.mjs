@@ -116,8 +116,12 @@ test("ARCH-N05: model-visible handoff control cannot manually claim or inject sh
 
 test("ARCH-N06: handoff provenance is root-only evidence authority", () => {
   assert.match(evidence, /\["RUNTIME_IDENTITY", "CONVERSATION_BOUND_IDENTITY", "ORCHESTRATOR_HANDOFF"\]/);
-  assert.match(evidence, /delegatedValidation[\s\S]*producer\.source\s*===\s*"RUNTIME_IDENTITY"/);
-  assert.doesNotMatch(evidence, /delegatedValidation[\s\S]{0,300}ORCHESTRATOR_HANDOFF/);
+  const delegatedStart = evidence.indexOf("const delegatedValidation");
+  const parentStart = evidence.indexOf("const parentValidation", delegatedStart);
+  assert.ok(delegatedStart >= 0 && parentStart > delegatedStart);
+  const delegatedBlock = evidence.slice(delegatedStart, parentStart);
+  assert.match(delegatedBlock, /producer\.source\s*===\s*"RUNTIME_IDENTITY"/);
+  assert.doesNotMatch(delegatedBlock, /ORCHESTRATOR_HANDOFF/);
 });
 
 test("ARCH-N07: Codex runtime does not gain fake conversation handoff authority", () => {
