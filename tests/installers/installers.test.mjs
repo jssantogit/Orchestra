@@ -22,6 +22,11 @@ test("installer: installs Codex runtime cleanly into empty project", () => {
     assert.equal(existsSync(join(tempProject, ".codex/config.toml")), true);
     assert.equal(existsSync(join(tempProject, ".codex/astra-orchestra/INSTRUCTIONS.md")), true);
     assert.equal(existsSync(join(tempProject, ".codex/agents/luna-high.toml")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-runtime.json")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/.gitkeep")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic/.gitkeep")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/active-state.json")), false);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-telemetry/events.jsonl")), false);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
   }
