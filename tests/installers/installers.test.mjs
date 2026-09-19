@@ -20,6 +20,7 @@ test("installer: installs Codex runtime cleanly into empty project", () => {
     const output = runInstaller(installCodexScript, [tempProject], { encoding: "utf8" });
     assert(output.includes("successfully installed"));
     assert.equal(existsSync(join(tempProject, ".codex/config.toml")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/hooks.json")), true);
     assert.equal(existsSync(join(tempProject, ".codex/astra-orchestra/INSTRUCTIONS.md")), true);
     assert.equal(existsSync(join(tempProject, ".codex/agents/luna-high.toml")), true);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-runtime.json")), true);
