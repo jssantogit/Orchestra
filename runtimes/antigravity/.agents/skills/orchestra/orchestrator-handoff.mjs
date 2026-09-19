@@ -469,36 +469,20 @@ export function evaluateOrchestratorHandoffClaim({
 }
 
 function resetMilestoneBoundaryActiveState(activeState = {}, record = {}) {
-  const next = structuredClone(activeState || {});
   const preservedBoundary = structuredClone(record.capsule?.previous_task || {});
 
-  const taskScopedKeys = [
-    "taskId", "taskKey", "taskAction", "task_action", "taskDomain", "task_domain",
-    "criticality", "complexity", "scopeContract", "requiredEvidence", "testsRequired",
-    "evidenceLedger", "evidenceSummary", "evidence", "evidenceCandidateHead",
-    "pendingPolicyRequirement", "investigationInFlight", "directInvestigationDecisionInFlight",
-    "delegatedDecisionInFlight", "criticalReviewInFlight", "ciWait", "twoKeyReview",
-    "workerCompletionClaimed", "workerCompletionClaimFactual", "workerCompletionClaimTimestamp",
-    "workerCompletionClaimIdentity", "implementationComplete", "workerConversationId",
-    "workerValidationObserved", "workerValidationCommand", "workerValidationActor",
-    "workerValidationActorConfidence", "workerValidationExecutionId", "workerValidationExitCode",
-    "workerValidationMutationSeq", "orchestratorValidationObserved",
-    "orchestratorValidationCommand", "orchestratorValidationExitCode",
-    "acceptanceResult", "acceptanceActor", "claimCompleted", "blockers",
-    "humanGateReason", "retryReason", "retry_reason", "retry_remaining", "remainingAttempts",
-    "mutations", "modifiedPaths", "mechanicalFastPath", "pollingTracker",
-    "stalled", "circuitBreakerType", "circuitBreakerTripped", "circuitBreaker",
-    "userRequestedStatus", "reactiveWakeupDisabled",
-  ];
-  for (const key of taskScopedKeys) delete next[key];
-
-  next.state = "INTAKE";
-  next.acceptanceState = null;
-  next.attempt = 0;
-  next.mutationSeq = 0;
-  next.previousMilestoneBoundary = preservedBoundary;
-  next.milestoneBoundaryFreshContext = true;
-  return next;
+  // Fresh milestone means fresh *active* task authority. Do not carry a
+  // denylist of historical fields forward: rebuilding from a minimal allowlist
+  // prevents future task-scoped counters/flags from silently contaminating the
+  // next conversation as the runtime evolves.
+  return {
+    state: "INTAKE",
+    acceptanceState: null,
+    attempt: 0,
+    mutationSeq: 0,
+    previousMilestoneBoundary: preservedBoundary,
+    milestoneBoundaryFreshContext: true,
+  };
 }
 
 export function applyOrchestratorHandoffClaim({
