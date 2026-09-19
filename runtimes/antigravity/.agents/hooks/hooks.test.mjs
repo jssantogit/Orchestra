@@ -3117,18 +3117,24 @@ test("governance: binding loss cannot promote a child conversation to orchestrat
       activeRole: "ORCHESTRATOR",
       conversationId: "known-main-conversation",
     }, null, 2), "utf8");
+    const stateBeforeInvocation = readFileSync(".agents/state/active-state.json", "utf8");
 
-    execFileSync("node", [preInvocationScript], {
+    const invocation = JSON.parse(execFileSync("node", [preInvocationScript], {
       input: JSON.stringify({
         conversationId: "unexpected-child-conversation",
         modelName: "gemini-3.8-flash-high",
       }),
       encoding: "utf8",
-    });
+    }));
 
-    const stateAfterInvocation = JSON.parse(readFileSync(".agents/state/active-state.json", "utf8"));
-    assert.equal(stateAfterInvocation.conversationId, "known-main-conversation");
-    assert.equal(stateAfterInvocation.identityBootstrapRejected?.reason, "KNOWN_MAIN_MISMATCH");
+    assert.equal(
+      readFileSync(".agents/state/active-state.json", "utf8"),
+      stateBeforeInvocation,
+      "Unbound/mismatched conversations must not mutate the factual main state"
+    );
+    assert.equal(invocation.injectSteps.length, 1);
+    assert.match(invocation.injectSteps[0].ephemeralMessage, /ORCHESTRATOR HANDOFF REQUIRED/);
+    assert.doesNotMatch(invocation.injectSteps[0].ephemeralMessage, /known-main-conversation/);
 
     const bindingsPath = ".agents/state/role-bindings.json";
     if (existsSync(bindingsPath)) {
