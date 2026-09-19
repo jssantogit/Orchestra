@@ -228,6 +228,32 @@ function main() {
   const hasPendingDelegations = Array.isArray(roleBindings.pendingSubagents)
     && roleBindings.pendingSubagents.some((p) => !p?.consumed);
 
+  const freshRootMainMismatch = Boolean(
+    convId && knownMainConversationId && convId !== knownMainConversationId
+  );
+  if (freshRootMainMismatch) {
+    state.identityBootstrapRejected = {
+      conversationId: convId,
+      knownMainConversationId,
+      reason: "KNOWN_MAIN_MISMATCH",
+      timestamp: new Date().toISOString(),
+    };
+    const alreadyGuided = injectSteps.some((step) =>
+      String(step?.ephemeralMessage || "").includes("ORCHESTRATOR HANDOFF REQUIRED")
+    );
+    if (!alreadyGuided) {
+      const handoffReason = state.orchestratorHandoffClaimRejected?.reason || "NO_ARMED_HANDOFF";
+      injectSteps.push({
+        ephemeralMessage:
+          "ORCHESTRATOR HANDOFF REQUIRED: this fresh root conversation does not currently own project orchestration authority. "
+          + "The factual main conversation is still " + knownMainConversationId + ". "
+          + "Do not attempt development tools and do not ask the user to edit role-bindings.json, copy conversation IDs, or run a Node repair command. "
+          + "Ask the user to return to the previous main chat and say that they want to continue in a fresh chat; that orchestrator must arm the managed session handoff itself. "
+          + "Then this conversation can be reopened/continued and will claim automatically. Handoff status: " + handoffReason + ".",
+      });
+    }
+  }
+
   if (convId && !roleBindings.mainConversationId) {
     const conflictsWithKnownMain = Boolean(
       knownMainConversationId && convId !== knownMainConversationId
@@ -259,17 +285,6 @@ function main() {
         reason: rejectionReason,
         timestamp: new Date().toISOString(),
       };
-      if (conflictsWithKnownMain) {
-        const handoffReason = state.orchestratorHandoffClaimRejected?.reason || "NO_ARMED_HANDOFF";
-        injectSteps.push({
-          ephemeralMessage:
-            "ORCHESTRATOR HANDOFF REQUIRED: this fresh root conversation does not currently own project orchestration authority. "
-            + "The factual main conversation is still " + knownMainConversationId + ". "
-            + "Do not attempt development tools and do not ask the user to edit role-bindings.json, copy conversation IDs, or run a Node repair command. "
-            + "Ask the user to return to the previous main chat and say that they want to continue in a fresh chat; that orchestrator must arm the managed session handoff itself. "
-            + "Then this conversation can be reopened/continued and will claim automatically. Handoff status: " + handoffReason + ".",
-        });
-      }
     }
   }
 
