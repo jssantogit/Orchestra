@@ -28,6 +28,10 @@ jobs:
         run: |
           node --test runtimes/codex/tests/routing-policy.test.mjs
 
+      - name: Run Codex Parity Tests
+        run: |
+          node --test runtimes/codex/tests/parity.test.mjs
+
       - name: Run Antigravity Policy Tests
         run: |
           node --test runtimes/antigravity/tests/routing-policy.test.mjs
