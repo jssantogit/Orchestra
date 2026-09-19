@@ -161,7 +161,7 @@ node scripts/orchestra-codex-project.mjs version /path/to/project
 node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
 ```
 
-The Codex manager replaces only `.codex/config.toml`, `.codex/agents/`, and
+The Codex manager replaces only `.codex/config.toml`, `.codex/hooks.json`, `.codex/agents/`, and
 `.codex/astra-orchestra/`; project-owned Codex state is preserved.
 
 ### For Antigravity (Gemini):
@@ -273,3 +273,23 @@ explicit `LIVE_CONTINUATION` mode exists for bounded mid-task context resets.
 
 See
 `docs/superpowers/specs/2026-09-19-orchestrator-session-handoff.md`.
+
+### Codex Root Session Authority (0.10)
+
+Milestone O adds the corresponding provider-native root authority boundary to
+Codex without inventing a synthetic conversation identity. Orchestra binds
+authority to Codex's factual hook `session_id`, manages project hooks through
+`.codex/hooks.json`, and preserves the authority/lease records under
+project-owned `.codex/orchestra-state/`.
+
+At an explicit completed-milestone boundary, the current Terra root arms a
+single-use lease. A fresh root claims it automatically on `SessionStart`,
+returns task authority to `INTAKE`, and leaves prior Scope Contract, Evidence
+Ledger, workers, retries, transcript, prompts, and hidden reasoning behind.
+The former root is blocked before future prompts and denied supported project
+tools.
+
+The transfer is workspace/state-bound and fail-closed through
+`ACTIVE -> TRANSFERRING -> ACTIVE`. Codex project hooks remain subject to the
+provider's normal hook-trust review. Orchestra 0.10 intentionally does not add
+a Codex `LIVE_CONTINUATION` mode.
