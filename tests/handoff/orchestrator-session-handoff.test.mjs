@@ -340,6 +340,39 @@ test("handoff: PreInvocation automatically transfers root authority exactly once
   }
 });
 
+
+test("handoff: exclusive claim lock prevents simultaneous fresh roots", () => {
+  const root = makeProject();
+  try {
+    seedBoundary(root);
+    prepareProjectOrchestratorHandoff(root);
+
+    const lockPath = join(root, ".agents", "state", "orchestrator-handoff.claim.lock");
+    writeFileSync(lockPath, "{\"pid\":999999,\"acquiredAt\":\"now\"}\n");
+
+    const blocked = claimProjectOrchestratorHandoff(root, {
+      candidateConversationId: "root-a",
+    });
+    assert.equal(blocked.claimed, false);
+    assert.equal(blocked.reason, "ORCHESTRATOR_HANDOFF_CLAIM_IN_PROGRESS");
+    assert.equal(readProjectOrchestratorHandoff(root).record.status, "ARMED");
+
+    rmSync(lockPath, { force: true });
+    const winner = claimProjectOrchestratorHandoff(root, {
+      candidateConversationId: "root-a",
+    });
+    assert.equal(winner.claimed, true);
+
+    const loser = claimProjectOrchestratorHandoff(root, {
+      candidateConversationId: "root-b",
+    });
+    assert.equal(loser.claimed, false);
+    assert.equal(loser.reason, "ORCHESTRATOR_HANDOFF_NOT_ARMED");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("handoff: former orchestrator loses all tool authority after claim", () => {
   const root = makeProject();
   try {
