@@ -19,7 +19,7 @@ Orchestra hosts two independent multi-agent runtimes:
 To permanently prevent accidental provider mixing, Orchestra maintains automated firewall tests in `tests/cross-runtime/cross-runtime-firewall.test.mjs` and `scripts/contamination-check.mjs`:
 
 - **Codex Active Runtime Scan**:
-  - Scans `.codex/config.toml`, `.codex/astra-orchestra/INSTRUCTIONS.md`, every active `.codex/astra-orchestra/*.mjs` module, and `.codex/agents/*.toml`.
+  - Scans `.codex/config.toml`, `.codex/hooks.json`, `.codex/astra-orchestra/INSTRUCTIONS.md`, every active `.codex/astra-orchestra/*.mjs` module, and `.codex/agents/*.toml`.
   - Asserts zero active imports or routes matching `gemini-`, `flash-worker`, `flash-orchestrator`, or `ALL-GEMINI`.
 - **Antigravity Active Runtime Scan**:
   - Scans active routing definitions in `.agents/skills/orchestra/routing-policy.mjs` and agent definitions in `.agents/agents/*.md`.
