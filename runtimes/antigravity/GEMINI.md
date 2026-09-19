@@ -114,3 +114,19 @@ Target Economy: `parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`.
 - Routine operational requests ("git status", "git diff", "run tests", "commit", "push") bypass worker delegation.
 - Orchestrator executes directly with 0 subagents (`subagentsAllowed: false`).
 - Exact Intent Boundary: strictly no unsolicited file modifications, whitespace cleanups, or repository side quests.
+
+
+### 8. Orchestrator Session Handoff / Fresh Milestone Context
+- A completed milestone may intentionally continue in a **new root conversation** so stale milestone context does not contaminate the next development phase.
+- When the user explicitly says they are switching to a new chat/conversation, asks to prepare a new orchestrator chat, or closes the milestone and says the next milestone will happen in a new chat, the current main Orchestrator MUST arm the transfer itself.
+- For a completed/closed milestone, run:
+  ```bash
+  node .agents/skills/orchestra/orchestrator-handoff-cli.mjs prepare --boundary
+  ```
+- Do **not** ask the user to run Node, edit `.agents/state/role-bindings.json`, copy a conversation ID, or repair governance manually during the normal flow.
+- Do **not** arm handoff on every `DONE`; user intent to change chat is required.
+- After successful preparation, tell the user they can open the fresh root chat in the same project. Its first PreInvocation automatically consumes the single-use lease and becomes the factual `mainConversationId`.
+- Boundary handoff means a truly fresh milestone: old task ID, active Scope Contract, Evidence Ledger, validation state and transcript context are not active authority in the new chat. Runtime enters `INTAKE`.
+- If the user explicitly wants to continue the *same unfinished task* in a fresh chat, use `prepare --live` instead. Never use live mode implicitly.
+- Handoff is forbidden while a worker/reviewer/investigator/CI operation is still in flight. Never bypass this by mutating governance state manually.
+- After claim, the old chat is `FORMER_ORCHESTRATOR` and loses all tool authority.
