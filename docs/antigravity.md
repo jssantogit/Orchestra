@@ -42,6 +42,7 @@ The Antigravity runtime registers lifecycle hooks in `.agents/hooks.json`:
 3. **`pre-invocation-guard.mjs` (`PreInvocation`)**:
    - Injects pending advisory notices (e.g. `NATIVE_TOOLS_FIRST`).
    - Activates circuit breakers upon detecting loops, stalls, or excessive coordination overhead.
+   - Claims a valid single-use orchestrator handoff when a fresh root conversation opens after the previous factual main explicitly armed a transfer.
 
 4. **`stop-guard.mjs` (`Stop`)**:
    - Prevents the agent from declaring a task complete unless required verification evidence is fresh and recorded in the Evidence Ledger.
@@ -65,7 +66,41 @@ Every validation evidence record carries the `mutationSeq` at the time of execut
 
 ---
 
-## 4. Verification & Tests
+## 4. Orchestrator Session Handoff
+
+Antigravity binds root orchestration authority to the factual
+`mainConversationId`. Milestone N makes changing that root conversation a
+governed transition instead of a manual state repair.
+
+At the end of a milestone, when the user explicitly says development will
+continue in a fresh chat, the current orchestrator executes:
+
+```bash
+node .agents/skills/orchestra/orchestrator-handoff-cli.mjs prepare --boundary
+```
+
+The next **root** conversation in the same project claims automatically on its
+first PreInvocation. No conversation ID needs to be copied by the user.
+
+Boundary mode is intentionally a clean context break. It records a minimal
+factual previous-milestone capsule, then removes the old active Scope Contract,
+Evidence Ledger and task identity and returns active governance state to
+`INTAKE`. Provider transcript/history is never migrated.
+
+For an explicit mid-task context reset, `prepare --live` preserves the
+current bounded Runtime Continuation Capsule. It is rejected while delegated
+or other in-flight work exists.
+
+The lease is hash-bound and single-use. State changes after preparation make it
+stale. Children cannot claim it. After a successful claim the old conversation
+becomes `FORMER_ORCHESTRATOR` and loses tool authority.
+
+Manual `claim` exists only as recovery/debug tooling; it is not exposed as a
+model-authorized control command.
+
+---
+
+## 5. Verification & Tests
 
 Run the Antigravity test suites:
 
@@ -75,4 +110,7 @@ node --test runtimes/antigravity/tests/routing-policy.test.mjs
 
 # Lifecycle hook tests (always run with concurrency 1)
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+
+# Root chat authority transfer
+npm run test:handoff
 ```
