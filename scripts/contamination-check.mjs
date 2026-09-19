@@ -12,6 +12,7 @@ export function runContaminationCheck(rootDir = root) {
   const codexDir = join(rootDir, "runtimes/codex/.codex");
   const codexFiles = [
     join(codexDir, "config.toml"),
+    join(codexDir, "hooks.json"),
     join(codexDir, "astra-orchestra/INSTRUCTIONS.md"),
   ];
 
