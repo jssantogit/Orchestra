@@ -1,6 +1,11 @@
 # Orchestra Project Runtime Management
 
-The Antigravity runtime includes a first-class project lifecycle manager. It replaces manual runtime copying with deterministic update, doctor, version, diff, backup, and rollback operations.
+Orchestra provides independent lifecycle managers for both active provider
+runtimes. They replace manual runtime copying with deterministic update,
+doctor, version, diff, backup, rollback, and quiescence checks while preserving
+each runtime's project-owned state.
+
+## Antigravity runtime
 
 ## Ownership boundary
 
@@ -106,3 +111,54 @@ Local edits/corruption under runtime-owned paths are reported as runtime drift i
 ## Semantic project state
 
 `.agents/semantic` is project-owned and preserved across runtime updates. It may contain local Jev Retrieval Assist approval artifacts; these are never shipped from the Orchestra source runtime.
+
+---
+
+## Codex runtime
+
+Milestone M adds the same lifecycle guarantees to the independent Codex
+runtime without importing or modifying Antigravity state.
+
+### Ownership boundary
+
+Codex-managed paths are exactly:
+
+- `.codex/config.toml`
+- `.codex/agents/`
+- `.codex/astra-orchestra/`
+
+Codex project-owned paths are preserved across update and rollback:
+
+- `.codex/orchestra-state/`
+- `.codex/orchestra-telemetry/`
+- `.codex/orchestra-artifacts/`
+- `.codex/orchestra-semantic/`
+- `.codex/runtime-management/`
+
+Metadata lives at `.codex/orchestra-runtime.json`. The manifest covers only
+the managed paths, so project state cannot become runtime-owned by accident.
+
+### Source CLI
+
+From an Orchestra checkout:
+
+```bash
+node scripts/orchestra-codex-project.mjs install /path/to/project
+node scripts/orchestra-codex-project.mjs update /path/to/project --dry-run
+node scripts/orchestra-codex-project.mjs update /path/to/project
+node scripts/orchestra-codex-project.mjs doctor /path/to/project
+node scripts/orchestra-codex-project.mjs version /path/to/project
+node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
+node scripts/orchestra-codex-project.mjs backups /path/to/project
+node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
+```
+
+A pre-Milestone-M project that already contains an unmanaged `.codex` tree
+can be adopted with `update`: Orchestra backs it up first, installs only the
+managed Codex paths, writes metadata, and preserves any existing
+`.codex/orchestra-*/` project data.
+
+The Codex quiescence guard reads
+`.codex/orchestra-state/active-state.json`. `DONE`, `BLOCKED`, and
+`HUMAN_GATE` are update-safe; active execution states fail closed unless the
+operator explicitly supplies `--force`.
