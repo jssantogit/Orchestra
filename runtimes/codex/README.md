@@ -26,7 +26,14 @@ TERRA MEDIUM (Global Control Plane)
 
 - `.codex/config.toml` — Project-scoped Codex configuration file. Defines models, multi-agent flags, and default subagent reasoning.
 - `.codex/astra-orchestra/INSTRUCTIONS.md` — Core instructions loaded into the session control plane.
-- `.codex/astra-orchestra/routing-policy.mjs` — Deterministic routing policy, scope validation, and evidence truthfulness logic.
+- `.codex/astra-orchestra/routing-policy.mjs` — Deterministic routing policy, scope validation, and Terra acceptance.
+- `.codex/astra-orchestra/evidence-*.mjs` — First-class factual evidence, federation, provider registry, and explicit watch steps.
+- `.codex/astra-orchestra/feedback-plane.mjs` — Attributable hypotheses/experiments with zero acceptance authority.
+- `.codex/astra-orchestra/trust-boundary.mjs` — Context authority and side-effect capability enforcement.
+- `.codex/astra-orchestra/mechanical-fast-path.mjs` — Bounded Luna Medium mechanical support.
+- `.codex/astra-orchestra/context-packet.mjs` — Mandatory-core worker packets, reference budgets, output gate, and search-to-window.
+- `.codex/astra-orchestra/dream-lab.mjs` — Isolated zero-authority replay/shadow lab with human-only Canary approval.
+- `.codex/astra-orchestra/codex-runtime-manager.mjs` — Install/update/doctor/diff/backup/rollback lifecycle for project-local `.codex`.
 - `.codex/agents/*.toml` — 9 specialized agent profiles:
   - `terra-high.toml`, `terra-xhigh.toml`, `terra-max.toml` (Investigation & decision escalation)
   - `luna-high.toml`, `luna-medium.toml`, `luna-max.toml` (Implementation workers)
@@ -83,17 +90,66 @@ A failed, missing, or blocked tool execution evaluates strictly to `UNKNOWN` or 
 
 ---
 
-## 8. Validation & Testing
+## 8. First-Class Evidence, Trust & Context Diet
 
-Run the deterministic policy test suite:
+`requiredEvidence` is part of the Scope Contract. Factual evidence is
+attempt/mutation-bound and may be federated from delegated Luna validation into
+Terra acceptance. Model prose and Feedback Plane declarations are never
+evidence.
+
+Remote/public side effects are default-deny unless an explicit Scope Contract
+capability permits them. Worker packets preserve the governance core and bound
+auxiliary context to references; raw transcripts/reasoning and large stdout are
+not packet inputs.
+
+The Codex Dream Lab is intentionally offline/shadow. It can replay bounded
+policy candidates and create human-approved Canary records, but it cannot
+rewrite routing source or activate itself.
+
+---
+
+## 9. Project Runtime Lifecycle
+
+Existing Codex projects should use the source runtime manager instead of
+manually replacing `.codex`:
 
 ```bash
-node --test runtimes/codex/tests/routing-policy.test.mjs
+node scripts/orchestra-codex-project.mjs update /path/to/project --dry-run
+node scripts/orchestra-codex-project.mjs update /path/to/project
+node scripts/orchestra-codex-project.mjs doctor /path/to/project
+node scripts/orchestra-codex-project.mjs version /path/to/project
+node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
+node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
+```
+
+Managed code is limited to `.codex/config.toml`, `.codex/agents/`, and
+`.codex/astra-orchestra/`. Project-owned state under
+`.codex/orchestra-state/`, `.codex/orchestra-telemetry/`,
+`.codex/orchestra-artifacts/`, `.codex/orchestra-semantic/`, and
+`.codex/runtime-management/` survives update and rollback.
+
+---
+
+## 10. Validation & Testing
+
+Run the complete Codex suite:
+
+```bash
+npm run test:codex
+node --test tests/installers/codex-project-runtime-manager.test.mjs
+node --test tests/architecture-invariants/codex-parity-authority.test.mjs
 ```
 
 ---
 
-## 9. Limitations
+## 11. Limitations
 
-- Does not support simultaneous parallel writers in the same workspace (1 concurrent subagent per session recommended).
+- Does not support simultaneous parallel writers in the same workspace; the
+  Codex Dream exploration budget therefore hard-caps active parallel branches
+  at one.
+- Codex does not emulate Antigravity engine hooks. Equivalent guarantees are
+  exposed as deterministic native decision boundaries that the control plane
+  consults.
+- Remote-CI watching advances through explicit factual provider observations;
+  the Codex runtime does not create a background credential-owning daemon.
 - Requires OpenAI models with reasoning effort configuration support.
