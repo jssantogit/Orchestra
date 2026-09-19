@@ -195,15 +195,25 @@ function evidenceRefs(activeState = {}) {
 
 function authorityRoleBindings(roleBindings = {}) {
   const source = roleBindings.bindings || roleBindings.conversations || {};
-  return Object.fromEntries(Object.entries(source).sort(([a], [b]) => a.localeCompare(b)).slice(-16).map(([id, record]) => [id, {
-    role: record?.role || null,
-    profile: record?.profile || null,
-    model: record?.model || null,
-    source: record?.source || null,
-    confidence: record?.confidence || null,
-    parentConversationId: record?.parentConversationId || null,
-    delegationKind: record?.delegationKind || null,
-  }]));
+  return Object.fromEntries(
+    Object.entries(source)
+      .filter(([, record]) => {
+        const role = String(record?.role || "").toUpperCase();
+        const authorityStatus = String(record?.authorityStatus || "").toUpperCase();
+        return role !== "FORMER_ORCHESTRATOR" && authorityStatus !== "TRANSFERRED";
+      })
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-16)
+      .map(([id, record]) => [id, {
+        role: record?.role || null,
+        profile: record?.profile || null,
+        model: record?.model || null,
+        source: record?.source || null,
+        confidence: record?.confidence || null,
+        parentConversationId: record?.parentConversationId || null,
+        delegationKind: record?.delegationKind || null,
+      }])
+  );
 }
 
 export function createContinuationCapsule({
@@ -212,6 +222,7 @@ export function createContinuationCapsule({
   roleBindings = {},
 } = {}) {
   const contract = activeContract || activeState.scopeContract || {};
+  const identities = authorityRoleBindings(roleBindings);
   const body = {
     schema: TRUST_SCHEMA,
     trust_class: TRUST_CLASSES.RUNTIME_AUTHORITY,
@@ -234,8 +245,8 @@ export function createContinuationCapsule({
       required_evidence: Array.isArray(contract.requiredEvidence) ? stable(contract.requiredEvidence) : [],
       side_effect_capabilities: [...normalizedCaps(contract)].sort(),
     },
-    identities: authorityRoleBindings(roleBindings),
-    identity_count: Object.keys(roleBindings.bindings || roleBindings.conversations || {}).length,
+    identities,
+    identity_count: Object.keys(identities).length,
     evidence_refs: evidenceRefs(activeState),
     evidence_ref_count: Array.isArray(activeState.evidenceLedger) ? activeState.evidenceLedger.length : 0,
     pending: {
