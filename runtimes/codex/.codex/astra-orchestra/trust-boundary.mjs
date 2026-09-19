@@ -157,7 +157,7 @@ export function authorizeToolCapability({
   const capability = classified.capability;
   const explicit = normalizedCaps(activeContract);
   const taskAction = clean(activeState.taskAction).toUpperCase();
-  const directType = clean(activeState.directActionType).toUpperCase();
+  const directType = clean(activeState.directActionType || activeState.operation || activeState.directAction).toUpperCase();
 
   if (!REMOTE_SENSITIVE.has(capability)) {
     return { allowed: true, explicit: explicit.has(capability), ...classified };
