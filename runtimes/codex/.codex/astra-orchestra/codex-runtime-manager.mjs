@@ -33,7 +33,7 @@ export const CODEX_PRESERVED_PROJECT_PATHS = Object.freeze([
   ".codex/runtime-management",
 ]);
 
-const QUIESCENT_STATES = new Set(["DONE", "BLOCKED", "HUMAN_GATE"]);
+const QUIESCENT_STATES = new Set(["INTAKE", "DONE", "BLOCKED", "HUMAN_GATE"]);
 const ACTIVE_STATES = new Set([
   "CLASSIFIED", "DIRECT_ACTION", "PLANNED", "DELEGATED", "EXECUTING",
   "EVIDENCE_READY", "CI_WAIT", "ACCEPTANCE", "INTEGRATING", "CRITICAL_REVIEW",
