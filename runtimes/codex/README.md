@@ -27,7 +27,7 @@ TERRA MEDIUM (Global Control Plane)
 - `.codex/config.toml` — Project-scoped Codex configuration file. Defines models, multi-agent flags, and default subagent reasoning.
 - `.codex/astra-orchestra/INSTRUCTIONS.md` — Core instructions loaded into the session control plane.
 - `.codex/astra-orchestra/routing-policy.mjs` — Deterministic routing policy, scope validation, and Terra acceptance.
-- `.codex/astra-orchestra/evidence-*.mjs` — First-class factual evidence, federation, provider registry, and explicit watch steps.
+- `.codex/astra-orchestra/evidence-*.mjs` — First-class factual evidence, federation, read-only inspection, provider registry, and explicit watch steps.
 - `.codex/astra-orchestra/feedback-plane.mjs` — Attributable hypotheses/experiments with zero acceptance authority.
 - `.codex/astra-orchestra/trust-boundary.mjs` — Context authority and side-effect capability enforcement.
 - `.codex/astra-orchestra/mechanical-fast-path.mjs` — Bounded Luna Medium mechanical support.
@@ -119,6 +119,7 @@ node scripts/orchestra-codex-project.mjs update /path/to/project
 node scripts/orchestra-codex-project.mjs doctor /path/to/project
 node scripts/orchestra-codex-project.mjs version /path/to/project
 node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
+node scripts/orchestra-codex-project.mjs evidence /path/to/project
 node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
 ```
 
