@@ -82,6 +82,7 @@ test("Codex project runtime clean install is managed and healthy", () => {
     const installed = installCodexProjectRuntime({ sourceRuntimeRoot: realSource, targetDir: project });
     assert.equal(installed.operation, "install");
     assert.equal(existsSync(join(project, ".codex/config.toml")), true);
+    assert.equal(existsSync(join(project, ".codex/hooks.json")), true);
     assert.equal(existsSync(join(project, ".codex/astra-orchestra/codex-runtime-manager.mjs")), true);
     assert.equal(existsSync(join(project, ".codex/orchestra-runtime.json")), true);
 
