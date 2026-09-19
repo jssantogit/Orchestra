@@ -170,7 +170,7 @@ export function authorizeToolCapability({
   if (
     capability === SIDE_EFFECT_CAPABILITIES.VCS_REMOTE_WRITE &&
     taskAction === "DIRECT_ACTION" &&
-    ["GIT_PUSH", "GIT_COMMIT_PUSH"].includes(directType)
+    ["PUSH", "COMMIT_PUSH", "GIT_PUSH", "GIT_COMMIT_PUSH"].includes(directType)
   ) {
     return { allowed: true, explicit: true, authority: "DIRECT_ACTION_CLASSIFICATION", ...classified };
   }
