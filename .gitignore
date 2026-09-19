@@ -28,6 +28,24 @@ lerna-debug.log*
 active-state.json
 active-contract.json
 
+
+# Codex project-owned runtime state (managed source under runtimes/codex is not affected)
+.codex/orchestra-runtime.json
+.codex/orchestra-state/*
+!.codex/orchestra-state/.gitkeep
+!.codex/orchestra-state/dream/
+.codex/orchestra-state/dream/*
+!.codex/orchestra-state/dream/.gitkeep
+.codex/orchestra-telemetry/*
+!.codex/orchestra-telemetry/.gitkeep
+.codex/orchestra-artifacts/*
+!.codex/orchestra-artifacts/.gitkeep
+.codex/orchestra-artifacts/outputs/*
+!.codex/orchestra-artifacts/outputs/.gitkeep
+.codex/orchestra-semantic/*
+!.codex/orchestra-semantic/.gitkeep
+.codex/runtime-management/*
+
 # Raw session logs & transcripts
 *.jsonl
 raw-before/
