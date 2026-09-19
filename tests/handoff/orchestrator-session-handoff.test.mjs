@@ -152,6 +152,27 @@ function runPreTool(root, conversationId, toolName, args = {}) {
   }));
 }
 
+
+test("handoff: unauthorized fresh root receives managed recovery guidance instead of silent dead-end", () => {
+  const root = makeProject();
+  try {
+    seedBoundary(root);
+    const output = runPreInvocation(root, "fresh-without-lease");
+    const message = output.injectSteps
+      .map((step) => String(step.ephemeralMessage || ""))
+      .find((value) => value.includes("ORCHESTRATOR HANDOFF REQUIRED"));
+    assert.ok(message);
+    assert.match(message, /do not ask the user to edit role-bindings\.json/i);
+    assert.match(message, /previous main chat/i);
+
+    const bindings = JSON.parse(readFileSync(bindingsPath(root), "utf8"));
+    assert.equal(bindings.mainConversationId, "old-root");
+    assert.equal(bindings.bindings["fresh-without-lease"], undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("handoff: boundary preparation is compact, transcript-free, and idempotent", () => {
   const root = makeProject();
   try {
