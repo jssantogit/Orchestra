@@ -1324,8 +1324,23 @@ function main() {
   const actorIdentityIsProvisional = actor.source === "HOOK_PAYLOAD_CORRELATION";
   const actorIdentityIsFactual = actor.source === "RUNTIME_IDENTITY" && actor.confidence === "HIGH";
   const actorHasFactualWorkerAuthority = isWorkerRole(actor.role) && actorIdentityIsFactual;
-  const actorHasOrchestratorAuthority = isOrchestratorRole(actor.role) && actor.confidence === "HIGH";
+  const actorIsCurrentMain = Boolean(
+    actor.actorId
+    && roleBindings.mainConversationId
+    && actor.actorId === roleBindings.mainConversationId
+  );
+  const actorHasOrchestratorAuthority = isOrchestratorRole(actor.role)
+    && actor.confidence === "HIGH"
+    && actorIsCurrentMain;
   const isInvestigatorActor = actorDelegationKind === "INVESTIGATION";
+
+  if (String(activeRole || "").toUpperCase() === "FORMER_ORCHESTRATOR") {
+    console.log(JSON.stringify({
+      decision: "deny",
+      reason: "ORCHESTRATOR_AUTHORITY_TRANSFERRED: This conversation handed off root authority to a newer orchestrator session. It is historical/read-only context and may not execute project tools. Continue in the current main Orchestrator conversation."
+    }));
+    return;
+  }
   const isDirectAction = activeState.taskAction === "DIRECT_ACTION" || activeState.isDirectAction === true;
 
   const sideEffectAuth = authorizeToolCapability({
