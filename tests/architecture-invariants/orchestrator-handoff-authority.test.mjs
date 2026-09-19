@@ -126,5 +126,8 @@ test("ARCH-N06: handoff provenance is root-only evidence authority", () => {
 
 test("ARCH-N07: Codex runtime does not gain fake conversation handoff authority", () => {
   assert.doesNotMatch(codexPolicy, /ORCHESTRATOR_HANDOFF|mainConversationId|orchestrator-handoff\.json/);
-  assert.doesNotMatch(handoff, /\.codex\/|runtimes\/codex/);
+  assert.doesNotMatch(handoff, /runtimes[\\/]codex|(?:from|import|require)\s+["'][^"']*\.codex/i);
+  // Mentioning project-local .codex state in Git fingerprint exclusions is
+  // hygiene only; it must never become a provider route or authority import.
+  assert.doesNotMatch(handoff, /gpt-5\.6-|gpt-6-astra|CODEX_MODELS|codex-runtime-manager/i);
 });
