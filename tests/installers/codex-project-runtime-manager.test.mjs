@@ -82,6 +82,7 @@ test("Codex project runtime clean install is managed and healthy", () => {
     const installed = installCodexProjectRuntime({ sourceRuntimeRoot: realSource, targetDir: project });
     assert.equal(installed.operation, "install");
     assert.equal(existsSync(join(project, ".codex/config.toml")), true);
+    assert.equal(existsSync(join(project, ".codex/hooks.json")), true);
     assert.equal(existsSync(join(project, ".codex/astra-orchestra/codex-runtime-manager.mjs")), true);
     assert.equal(existsSync(join(project, ".codex/orchestra-runtime.json")), true);
 
@@ -206,6 +207,19 @@ test("Codex active task blocks runtime update", () => {
     writeState(project, "EXECUTING");
     assert.equal(checkCodexRuntimeQuiescence(project).safe, false);
     assert.throws(() => updateCodexProjectRuntime({ sourceRuntimeRoot: realSource, targetDir: project }), /CODEX_RUNTIME_NOT_QUIESCENT/);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("Codex INTAKE boundary state is quiescent for runtime maintenance", () => {
+  const project = makeProject();
+  try {
+    installCodexProjectRuntime({ sourceRuntimeRoot: realSource, targetDir: project });
+    writeState(project, "INTAKE");
+    const quiescence = checkCodexRuntimeQuiescence(project);
+    assert.equal(quiescence.safe, true);
+    assert.equal(quiescence.reason, "QUIESCENT_INTAKE");
   } finally {
     rmSync(project, { recursive: true, force: true });
   }

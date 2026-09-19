@@ -124,6 +124,7 @@ runtime without importing or modifying Antigravity state.
 Codex-managed paths are exactly:
 
 - `.codex/config.toml`
+- `.codex/hooks.json`
 - `.codex/agents/`
 - `.codex/astra-orchestra/`
 
@@ -175,10 +176,15 @@ that must be adopted on its first update.
 ## Orchestrator handoff state
 
 Antigravity session-transfer state lives at
-`.agents/state/orchestrator-handoff.json`. Because `.agents/state/` is
-project-owned, an armed/claimed/cancelled handoff record and orchestrator
-lineage survive Orchestra runtime updates and rollback.
+`.agents/state/orchestrator-handoff.json`. Codex session authority and handoff
+state live at `.codex/orchestra-state/session-authority.json` and
+`.codex/orchestra-state/session-handoff.json`.
 
-The runtime manager never manufactures, deletes, or claims a handoff as part of
-an upgrade. Session authority transition is owned by the Antigravity handoff
-state machine and its PreInvocation boundary.
+Those namespaces are project-owned, so lineage and armed/claimed/cancelled
+handoff records survive Orchestra runtime updates and rollback. Codex
+`.codex/hooks.json` is different: it is managed runtime code and therefore is
+versioned, backed up, diffed, and restored with the Codex runtime.
+
+Runtime managers never manufacture, delete, or claim a handoff as part of an
+upgrade. Authority transition is owned by each provider-native handoff state
+machine at its invocation/session boundary.

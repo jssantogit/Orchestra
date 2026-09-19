@@ -25,11 +25,15 @@ TERRA MEDIUM (Global Control Plane)
 ## 2. Directory Structure
 
 - `.codex/config.toml` — Project-scoped Codex configuration file. Defines models, multi-agent flags, and default subagent reasoning.
+- `.codex/hooks.json` — Provider-native `SessionStart`, `UserPromptSubmit`, and `PreToolUse` enforcement for factual root-session authority.
 - `.codex/astra-orchestra/INSTRUCTIONS.md` — Core instructions loaded into the session control plane.
 - `.codex/astra-orchestra/routing-policy.mjs` — Deterministic routing policy, scope validation, and Terra acceptance.
 - `.codex/astra-orchestra/evidence-*.mjs` — First-class factual evidence, federation, read-only inspection, provider registry, and explicit watch steps.
 - `.codex/astra-orchestra/feedback-plane.mjs` — Attributable hypotheses/experiments with zero acceptance authority.
 - `.codex/astra-orchestra/trust-boundary.mjs` — Context authority and side-effect capability enforcement.
+- `.codex/astra-orchestra/session-authority.mjs` — Factual Codex root authority, single-use milestone-boundary lease, workspace/state binding, and fail-closed transfer transaction.
+- `.codex/astra-orchestra/session-hook.mjs` — Hook runner that bootstraps/claims authority and blocks former/non-authoritative roots.
+- `.codex/astra-orchestra/session-handoff-cli.mjs` — Managed boundary prepare/status/cancel entrypoint used by the authoritative Terra root.
 - `.codex/astra-orchestra/mechanical-fast-path.mjs` — Bounded Luna Medium mechanical support.
 - `.codex/astra-orchestra/context-packet.mjs` — Mandatory-core worker packets, reference budgets, output gate, and search-to-window.
 - `.codex/astra-orchestra/dream-lab.mjs` — Isolated zero-authority replay/shadow lab with human-only Canary approval.
@@ -123,7 +127,7 @@ node scripts/orchestra-codex-project.mjs evidence /path/to/project
 node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
 ```
 
-Managed code is limited to `.codex/config.toml`, `.codex/agents/`, and
+Managed code is limited to `.codex/config.toml`, `.codex/hooks.json`, `.codex/agents/`, and
 `.codex/astra-orchestra/`. Project-owned state under
 `.codex/orchestra-state/`, `.codex/orchestra-telemetry/`,
 `.codex/orchestra-artifacts/`, `.codex/orchestra-semantic/`, and
@@ -131,26 +135,55 @@ Managed code is limited to `.codex/config.toml`, `.codex/agents/`, and
 
 ---
 
-## 10. Validation & Testing
+## 10. Root Session Authority & Boundary Handoff
+
+The factual `session_id` delivered by Codex hooks is the only root-session
+identity source. Orchestra does not manufacture a conversation identifier.
+
+When the user explicitly closes a milestone and chooses a fresh chat, the
+current authoritative Terra root prepares a boundary lease:
+
+```bash
+node .codex/astra-orchestra/session-handoff-cli.mjs prepare --boundary
+```
+
+The next fresh trusted `SessionStart` claims it automatically. Claim is
+single-use, revalidates state and actual dirty workspace bytes, and transitions
+authority through `ACTIVE -> TRANSFERRING -> ACTIVE`. During
+`TRANSFERRING`, project tool authority fails closed.
+
+A successful boundary returns task state to `INTAKE`, removes the previous
+active Scope Contract, and does not transfer the prior Evidence Ledger,
+workers, retries, transcript, prompts, or hidden reasoning. The former root is
+blocked at `UserPromptSubmit` and denied supported local/MCP/function tools
+through `PreToolUse`.
+
+Project-local Codex hooks remain subject to Codex's normal hook-trust review.
+Do not use a trust bypass as the normal Orchestra workflow. Milestone O does
+not implement Orchestra `LIVE_CONTINUATION` for Codex.
+
+---
+
+## 11. Validation & Testing
 
 Run the complete Codex suite:
 
 ```bash
 npm run test:codex
 node --test tests/installers/codex-project-runtime-manager.test.mjs
-node --test tests/architecture-invariants/codex-parity-authority.test.mjs
+node --test tests/architecture-invariants/codex-parity-authority.test.mjs tests/architecture-invariants/codex-session-authority.test.mjs
 ```
 
 ---
 
-## 11. Limitations
+## 12. Limitations
 
 - Does not support simultaneous parallel writers in the same workspace; the
   Codex Dream exploration budget therefore hard-caps active parallel branches
   at one.
-- Codex does not emulate Antigravity engine hooks. Equivalent guarantees are
-  exposed as deterministic native decision boundaries that the control plane
-  consults.
+- Codex uses its own provider-native project hooks for session authority; it
+  does not import or emulate Antigravity hook code. Hook activation remains
+  subject to Codex's provider-owned hook-trust boundary.
 - Remote-CI watching advances through explicit factual provider observations;
   the Codex runtime does not create a background credential-owning daemon.
 - Requires OpenAI models with reasoning effort configuration support.

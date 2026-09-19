@@ -100,6 +100,7 @@ test("ARCH-M06: Codex exploration ceilings cannot exceed hard limits", () => {
 test("ARCH-M07: Codex runtime manager owns code and preserves state in disjoint namespaces", () => {
   assert.deepEqual(CODEX_MANAGED_RUNTIME_PATHS, [
     ".codex/config.toml",
+    ".codex/hooks.json",
     ".codex/agents",
     ".codex/astra-orchestra",
   ]);
