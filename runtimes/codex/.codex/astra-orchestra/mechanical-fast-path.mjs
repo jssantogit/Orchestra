@@ -21,6 +21,7 @@ const SAFE_FACTS = new Set(MECHANICAL_FAST_PATH_LOCAL_FACTS);
 const SENSITIVE_PATH_PATTERNS = Object.freeze([
   /^AGENTS\.md$/i,
   /^\.agents(?:\/|$)/i,
+  /^\.codex(?:\/|$)/i,
   /^\.github\/workflows(?:\/|$)/i,
   /^\.github\/actions(?:\/|$)/i,
   /(?:^|\/)(?:auth|security|credentials?|secrets?)(?:\/|\.|$)/i,
