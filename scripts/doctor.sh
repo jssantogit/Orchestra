@@ -137,6 +137,20 @@ done
 # 4. Syntax Checks on Node.js Scripts
 JS_FILES=(
   "runtimes/codex/.codex/astra-orchestra/routing-policy.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-provider-registry.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-watch.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-contract.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-federation.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-collectors.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-watch-runner.mjs"
+  "runtimes/codex/.codex/astra-orchestra/feedback-plane.mjs"
+  "runtimes/codex/.codex/astra-orchestra/trust-boundary.mjs"
+  "runtimes/codex/.codex/astra-orchestra/mechanical-fast-path.mjs"
+  "runtimes/codex/.codex/astra-orchestra/context-packet.mjs"
+  "runtimes/codex/.codex/astra-orchestra/dream-lab.mjs"
+  "runtimes/codex/.codex/astra-orchestra/codex-runtime-manager.mjs"
+  "runtimes/codex/.codex/astra-orchestra/codex-runtime-cli.mjs"
+  "scripts/orchestra-codex-project.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs"
@@ -225,6 +239,18 @@ if node --test "${ROOT_DIR}/runtimes/codex/tests/routing-policy.test.mjs" >/dev/
   report_pass "Codex deterministic routing policy tests passed"
 else
   report_fail "Codex routing policy tests failed"
+fi
+
+if node --test "${ROOT_DIR}/runtimes/codex/tests/parity.test.mjs" >/dev/null 2>&1; then
+  report_pass "Codex runtime parity tests passed"
+else
+  report_fail "Codex runtime parity tests failed"
+fi
+
+if node --test "${ROOT_DIR}/tests/installers/codex-project-runtime-manager.test.mjs" >/dev/null 2>&1; then
+  report_pass "Codex project runtime lifecycle tests passed"
+else
+  report_fail "Codex project runtime lifecycle tests failed"
 fi
 
 if node --test "${ROOT_DIR}/runtimes/antigravity/tests/routing-policy.test.mjs" >/dev/null 2>&1; then
