@@ -243,7 +243,7 @@ test("Codex remote side effects fail closed without explicit capability", () => 
   const direct = authorizeToolCapability({
     toolName: "exec_command",
     toolArgs: { command: "git push origin main" },
-    activeState: { taskAction: "DIRECT_ACTION", directActionType: "PUSH" },
+    activeState: { taskAction: "DIRECT_ACTION", operation: "PUSH" },
     activeContract: {},
   });
   assert.equal(direct.allowed, true);
