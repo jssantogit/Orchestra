@@ -49,6 +49,7 @@ REQUIRED_CODEX_FILES=(
   "runtimes/codex/.codex/astra-orchestra/evidence-watch.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-contract.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-federation.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-inspector.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-collectors.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-watch-runner.mjs"
   "runtimes/codex/.codex/astra-orchestra/feedback-plane.mjs"
@@ -156,6 +157,7 @@ JS_FILES=(
   "runtimes/codex/.codex/astra-orchestra/evidence-watch.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-contract.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-federation.mjs"
+  "runtimes/codex/.codex/astra-orchestra/evidence-inspector.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-collectors.mjs"
   "runtimes/codex/.codex/astra-orchestra/evidence-watch-runner.mjs"
   "runtimes/codex/.codex/astra-orchestra/feedback-plane.mjs"
@@ -256,10 +258,10 @@ else
   report_fail "Codex routing policy tests failed"
 fi
 
-if node --test "${ROOT_DIR}/runtimes/codex/tests/parity.test.mjs" >/dev/null 2>&1; then
-  report_pass "Codex runtime parity tests passed"
+if node --test "${ROOT_DIR}/runtimes/codex/tests/parity.test.mjs" "${ROOT_DIR}/runtimes/codex/tests/evidence-observability.test.mjs" >/dev/null 2>&1; then
+  report_pass "Codex runtime parity and evidence observability tests passed"
 else
-  report_fail "Codex runtime parity tests failed"
+  report_fail "Codex runtime parity/evidence observability tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/installers/codex-project-runtime-manager.test.mjs" >/dev/null 2>&1; then
