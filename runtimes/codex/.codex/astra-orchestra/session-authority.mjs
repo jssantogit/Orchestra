@@ -133,3 +133,138 @@ function gitOutput(root, args, { encoding = "utf8" } = {}) {
     maxBuffer: 16 * 1024 * 1024,
   });
 }
+
+function workspacePathspecs() {
+  return [
+    ".",
+    ":(exclude).agents/**",
+    ":(exclude).codex/orchestra-state/**",
+    ":(exclude).codex/orchestra-telemetry/**",
+    ":(exclude).codex/orchestra-artifacts/**",
+    ":(exclude).codex/orchestra-semantic/**",
+    ":(exclude).codex/runtime-management/**",
+    ":(exclude).codex/orchestra-runtime.json",
+  ];
+}
+
+function nulPaths(buffer) {
+  return String(buffer || "").split("\0").filter(Boolean);
+}
+
+function hashRegularFile(path) {
+  const h = createHash("sha256");
+  const fd = openSync(path, "r");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  try {
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      h.update(buffer.subarray(0, bytesRead));
+    }
+    return h.digest("hex");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function workingFileIdentity(root, relPath) {
+  const absolute = join(root, relPath);
+  try {
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink()) {
+      return { path: relPath, kind: "SYMLINK", mode: stat.mode & 0o7777, content_hash: digest(readlinkSync(absolute, "utf8")) };
+    }
+    if (stat.isFile()) {
+      return { path: relPath, kind: "FILE", mode: stat.mode & 0o7777, size: stat.size, content_hash: hashRegularFile(absolute) };
+    }
+    if (stat.isDirectory()) {
+      let nestedHead = null;
+      try { nestedHead = gitOutput(absolute, ["rev-parse", "HEAD"]).trim() || null; } catch {}
+      return { path: relPath, kind: "DIRECTORY", mode: stat.mode & 0o7777, nested_head: nestedHead };
+    }
+    return { path: relPath, kind: "OTHER", mode: stat.mode & 0o7777, size: stat.size };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { path: relPath, kind: "DELETED" };
+    throw error;
+  }
+}
+
+export function readCodexWorkspaceFingerprint(repoRoot) {
+  const root = resolve(repoRoot);
+  try {
+    const specs = workspacePathspecs();
+    const head = gitOutput(root, ["rev-parse", "HEAD"]).trim() || null;
+    const indexListing = gitOutput(root, ["ls-files", "-s", "-z", "--", ...specs], { encoding: "buffer" });
+    const indexHash = digest(indexListing);
+    const trackedDirty = nulPaths(gitOutput(root, ["diff", "--name-only", "-z", "HEAD", "--", ...specs], { encoding: "buffer" }));
+    const untracked = nulPaths(gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...specs], { encoding: "buffer" }));
+    const dirtyPaths = [...new Set([...trackedDirty, ...untracked])].sort();
+    const workingFiles = dirtyPaths.map((relPath) => workingFileIdentity(root, relPath));
+    const body = { head, index_hash: indexHash, working_files: workingFiles };
+    return {
+      available: true,
+      head,
+      index_hash: indexHash,
+      working_tree_hash: digest(workingFiles),
+      dirty_file_count: workingFiles.length,
+      fingerprint: digest(body),
+    };
+  } catch {
+    return {
+      available: false,
+      head: null,
+      index_hash: null,
+      working_tree_hash: null,
+      dirty_file_count: null,
+      fingerprint: digest({ git: "UNAVAILABLE" }),
+    };
+  }
+}
+
+function activeStateSnapshot(activeState = {}) {
+  return {
+    taskId: activeState.taskId || activeState.taskKey || null,
+    taskAction: activeState.taskAction || activeState.task_action || null,
+    taskDomain: activeState.taskDomain || activeState.task_domain || null,
+    state: activeState.state || null,
+    acceptanceState: activeState.acceptanceState || null,
+    attempt: Number.isInteger(activeState.attempt) ? activeState.attempt : 0,
+    mutationSeq: Number.isInteger(activeState.mutationSeq)
+      ? activeState.mutationSeq
+      : (Number.isInteger(activeState.mutation_seq) ? activeState.mutation_seq : 0),
+    candidateHead: activeState.evidenceCandidateHead || activeState.candidateHead || activeState.currentHead || null,
+    ciWait: activeState.ciWait && typeof activeState.ciWait === "object"
+      ? {
+          status: activeState.ciWait.status || activeState.ciWait.state || null,
+          watchId: activeState.ciWait.watchId || activeState.ciWait.watch_id || null,
+        }
+      : null,
+    evidenceWatchCount: activeState.evidenceWatches && typeof activeState.evidenceWatches === "object"
+      ? Object.values(activeState.evidenceWatches).filter((watch) => !String(watch?.status || "").startsWith("TERMINAL_") && watch?.status !== "TIMED_OUT").length
+      : 0,
+  };
+}
+
+export function codexActiveStateFingerprint(activeState = {}) {
+  return digest(activeStateSnapshot(activeState));
+}
+
+function boundaryReady(activeState = {}) {
+  if (!activeState || Object.keys(activeState).length === 0) return true;
+  const state = String(activeState.state || "INTAKE").toUpperCase();
+  if (!QUIESCENT_STATES.has(state)) return false;
+  if (activeStateSnapshot(activeState).evidenceWatchCount > 0) return false;
+  const ciStatus = String(activeState.ciWait?.status || activeState.ciWait?.state || "").toUpperCase();
+  if (ciStatus && !["DONE", "SUCCESS", "FAILED", "CANCELLED", "COMPLETE", "COMPLETED", "TIMED_OUT"].includes(ciStatus)) return false;
+  return true;
+}
+
+function boundaryCapsule(activeState = {}, authority = {}, reason = null, label = null) {
+  return sanitizeCapsule({
+    schema: "orchestra.codex-session-boundary-capsule.v1",
+    mode: CODEX_SESSION_HANDOFF_MODE,
+    lineage_id: authority.lineage_id,
+    previous_generation: authority.generation,
+    target_generation: authority.generation + 1,
+    previous_task: {
+      task_id: activeState.taskId || activeState.taskKey || null,
