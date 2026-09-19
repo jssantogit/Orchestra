@@ -94,5 +94,38 @@ integration only when boundaries cross; broad checks are for high risk, major
 integration, critical work, release, or explicit request. Do not repeat an
 exact successful validation absent relevant mutation. Prefer compact reporters
 and targeted git views (`status --short`, `diff --stat`, `diff --name-only`,
-path diff); preserve failure excerpts needed to diagnose. Do not create a
-telemetry/state/hook framework: use Codex JSONL/session data when available.
+path diff); preserve failure excerpts needed to diagnose.
+
+## Native parity boundaries
+
+Codex uses its own provider-native Orchestra modules under
+`.codex/astra-orchestra/`; never import Antigravity operational code from
+`.agents/**` or `runtimes/antigravity/**`.
+
+- `requiredEvidence` is first-class Scope Contract state. Only factual,
+  attempt/mutation-bound evidence may satisfy it. Worker prose and feedback
+  declarations never count as evidence.
+- `trust-boundary.mjs` classifies side effects. Remote repository writes,
+  network writes and publication are default-deny unless the Scope Contract
+  explicitly carries the matching capability or a narrowly classified Direct
+  Action grants it.
+- `context-packet.mjs` preserves the mandatory governance core and sends
+  bounded references for auxiliary context. Raw transcripts, prompts,
+  reasoning, stdout/stderr dumps, credentials and unrelated history are not
+  packet inputs.
+- `dream-lab.mjs` is offline/shadow only. Dream records have
+  `authority=NONE`; Canary requires explicit human approval and may not
+  rewrite routing source or activate itself.
+- `feedback-plane.mjs` records hypotheses/experiments as attributable
+  metadata. It cannot self-promote a model claim into factual evidence.
+- `mechanical-fast-path.mjs` permits only bounded Luna Medium support work
+  outside sensitive runtime/security paths.
+- `evidence-watch-runner.mjs` advances remote-CI watches from factual
+  provider observations supplied by the Codex session or connector. It does
+  not own credentials or create a background polling daemon.
+
+Provider-native transcript/context management remains provider-owned. Orchestra
+may persist bounded factual sidecars under `.codex/orchestra-state/`,
+`.codex/orchestra-telemetry/`, `.codex/orchestra-artifacts/`, and
+`.codex/orchestra-semantic/`; never copy raw provider transcripts or hidden
+reasoning into those stores.
