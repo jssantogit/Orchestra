@@ -403,3 +403,138 @@ export function prepareCodexSessionHandoff(repoRoot, { reason = null, label = nu
   const existing = readCodexSessionHandoff(repoRoot);
   if (
     existing.exists && existing.valid && existing.record.status === CODEX_SESSION_HANDOFF_STATUSES.ARMED
+    && existing.record.from_session_id === authority.main_session_id
+    && existing.record.authority_hash === authority.record_hash
+    && existing.record.state_fingerprint === stateFingerprint
+    && existing.record.workspace_fingerprint === workspace.fingerprint
+  ) {
+    return { operation: "prepare", changed: false, idempotent: true, record: existing.record, path: p.handoff };
+  }
+
+  const preparedAt = nowIso();
+  const capsule = boundaryCapsule(activeState, authority, reason, label);
+  const record = finalizeRecord({
+    schema: CODEX_SESSION_HANDOFF_SCHEMA,
+    handoff_id: `codex-handoff-${digest({ from: authority.main_session_id, generation: authority.generation + 1, preparedAt, workspace: workspace.fingerprint }).slice(0, 24)}`,
+    status: CODEX_SESSION_HANDOFF_STATUSES.ARMED,
+    mode: CODEX_SESSION_HANDOFF_MODE,
+    lineage_id: authority.lineage_id,
+    current_generation: authority.generation,
+    target_generation: authority.generation + 1,
+    from_session_id: authority.main_session_id,
+    authority_hash: authority.record_hash,
+    state_fingerprint: stateFingerprint,
+    workspace_fingerprint: workspace.fingerprint,
+    workspace_head: workspace.head,
+    index_hash: workspace.index_hash,
+    working_tree_hash: workspace.working_tree_hash,
+    dirty_file_count: workspace.dirty_file_count,
+    prepared_at: preparedAt,
+    reason: clean(reason) || null,
+    label: clean(label, 160) || null,
+    capsule,
+    claimed_at: null,
+    claimed_by: null,
+    cancelled_at: null,
+    cancel_reason: null,
+  });
+  writeJson(p.handoff, record);
+  appendTelemetry(p.telemetry, {
+    type: "CODEX_SESSION_HANDOFF_ARMED",
+    handoffId: record.handoff_id,
+    fromSessionId: record.from_session_id,
+    targetGeneration: record.target_generation,
+    workspaceHead: record.workspace_head,
+  });
+  return { operation: "prepare", changed: true, idempotent: false, record, path: p.handoff };
+}
+
+export function cancelCodexSessionHandoff(repoRoot, { reason = null } = {}) {
+  const p = paths(repoRoot);
+  const current = readCodexSessionHandoff(repoRoot);
+  if (!current.exists) return { operation: "cancel", changed: false, reason: "CODEX_SESSION_HANDOFF_NOT_FOUND" };
+  if (!current.valid) throw new Error(`CODEX_SESSION_HANDOFF_INVALID:${current.reason}`);
+  if (current.record.status !== CODEX_SESSION_HANDOFF_STATUSES.ARMED) {
+    return { operation: "cancel", changed: false, record: current.record };
+  }
+  const record = finalizeRecord({
+    ...recordBody(current.record),
+    status: CODEX_SESSION_HANDOFF_STATUSES.CANCELLED,
+    cancelled_at: nowIso(),
+    cancel_reason: clean(reason) || null,
+  });
+  writeJson(p.handoff, record);
+  appendTelemetry(p.telemetry, { type: "CODEX_SESSION_HANDOFF_CANCELLED", handoffId: record.handoff_id });
+  return { operation: "cancel", changed: true, record };
+}
+
+function resetBoundaryState(record) {
+  return {
+    state: "INTAKE",
+    acceptanceState: null,
+    attempt: 0,
+    mutationSeq: 0,
+    orchestratorLineageId: record.lineage_id,
+    orchestratorGeneration: record.target_generation,
+    lastCodexSessionHandoff: {
+      handoffId: record.handoff_id,
+      mode: record.mode,
+      fromSessionId: record.from_session_id,
+      targetGeneration: record.target_generation,
+      claimedAt: record.claimed_at,
+    },
+  };
+}
+
+function finishCodexSessionTransfer(repoRoot, { authority, handoff, candidateSessionId } = {}) {
+  const p = paths(repoRoot);
+  const sid = clean(candidateSessionId, 300);
+  if (!sid || !authority || !handoff) throw new Error("CODEX_SESSION_TRANSFER_INPUT_INVALID");
+
+  const claimedAt = handoff.claimed_at || nowIso();
+  const claimed = handoff.status === CODEX_SESSION_HANDOFF_STATUSES.CLAIMED
+    ? handoff
+    : finalizeRecord({
+        ...recordBody(handoff),
+        status: CODEX_SESSION_HANDOFF_STATUSES.CLAIMED,
+        claimed_at: claimedAt,
+        claimed_by: sid,
+      });
+
+  // Freeze authority first. PreToolUse denies every session while the record is
+  // TRANSFERRING, so a process interruption cannot expose a half-reset task.
+  const frozen = finalizeRecord({
+    ...recordBody(authority),
+    status: CODEX_SESSION_AUTHORITY_STATUSES.TRANSFERRING,
+    pending_session_id: sid,
+    pending_handoff_id: claimed.handoff_id,
+    updated_at: nowIso(),
+  });
+  writeAuthority(repoRoot, frozen);
+
+  writeJson(p.handoff, claimed);
+  writeJson(p.activeState, resetBoundaryState(claimed));
+  rmSync(p.activeContract, { force: true });
+
+  const nextAuthority = createAuthority({
+    sessionId: sid,
+    lineageId: authority.lineage_id,
+    generation: claimed.target_generation,
+    source: "SESSION_HANDOFF",
+    previousSessionId: authority.main_session_id,
+  });
+  writeAuthority(repoRoot, nextAuthority);
+  appendTelemetry(p.telemetry, {
+    type: "CODEX_SESSION_HANDOFF_CLAIMED",
+    handoffId: claimed.handoff_id,
+    fromSessionId: claimed.from_session_id,
+    toSessionId: sid,
+    generation: claimed.target_generation,
+  });
+
+  return {
+    claimed: true,
+    reason: null,
+    authority: nextAuthority,
+    record: claimed,
+    activeState: readJson(p.activeState, {}),
