@@ -98,7 +98,20 @@ function readWorkspaceFingerprint(repoRoot) {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000,
     }).trim() || null;
-    const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+    const status = execFileSync("git", [
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--",
+      ".",
+      ":(exclude).agents/**",
+      ":(exclude).codex/orchestra-state/**",
+      ":(exclude).codex/orchestra-telemetry/**",
+      ":(exclude).codex/orchestra-artifacts/**",
+      ":(exclude).codex/orchestra-semantic/**",
+      ":(exclude).codex/runtime-management/**",
+      ":(exclude).codex/orchestra-runtime.json",
+    ], {
       cwd: root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -409,6 +422,7 @@ export function prepareProjectOrchestratorHandoff(repoRoot, options = {}) {
 
   const existing = readProjectOrchestratorHandoff(paths.root);
   const currentFingerprint = authorityStateFingerprint(activeState, roleBindings);
+  const currentWorkspace = readWorkspaceFingerprint(paths.root);
   const requestedMode = String(options.mode || ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY).toUpperCase();
 
   if (
@@ -417,6 +431,7 @@ export function prepareProjectOrchestratorHandoff(repoRoot, options = {}) {
     && existing.record?.status === ORCHESTRATOR_HANDOFF_STATUSES.ARMED
     && existing.record.from_conversation_id === (roleBindings.mainConversationId || activeState.conversationId || null)
     && existing.record.state_fingerprint === currentFingerprint
+    && existing.record.workspace_fingerprint === currentWorkspace.fingerprint
     && existing.record.mode === requestedMode
   ) {
     return {
@@ -435,13 +450,12 @@ export function prepareProjectOrchestratorHandoff(repoRoot, options = {}) {
     ...options,
     mode: requestedMode,
   });
-  const workspace = readWorkspaceFingerprint(paths.root);
   const record = finalizeRecord({
     ...recordBody(baseRecord),
-    workspace_fingerprint: workspace.fingerprint,
-    workspace_head: workspace.head,
-    working_tree_hash: workspace.working_tree_hash,
-    workspace_git_available: workspace.available,
+    workspace_fingerprint: currentWorkspace.fingerprint,
+    workspace_head: currentWorkspace.head,
+    working_tree_hash: currentWorkspace.working_tree_hash,
+    workspace_git_available: currentWorkspace.available,
   });
   writeJson(paths.handoffPath, record);
   appendTelemetry(paths.telemetryPath, {
