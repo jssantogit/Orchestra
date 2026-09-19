@@ -139,6 +139,8 @@ REQUIRED_AGY_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/feedback-plane.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/trust-boundary.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff-cli.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/routing-policy.test.mjs"
   "runtimes/antigravity/GEMINI.md"
 )
@@ -178,6 +180,8 @@ JS_FILES=(
   "runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/feedback-plane.mjs"
   "runtimes/antigravity/.agents/skills/orchestra/trust-boundary.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff.mjs"
+  "runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff-cli.mjs"
   "scripts/orchestra-project.mjs"
   "scripts/install-antigravity.mjs"
   "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs"
@@ -293,6 +297,12 @@ if node --test "${ROOT_DIR}/tests/feedback/feedback-plane.test.mjs" "${ROOT_DIR}
   report_pass "Milestones I-J-K feedback, trust, and full-exploration tests passed"
 else
   report_fail "Milestones I-J-K tests failed"
+fi
+
+if node --test "${ROOT_DIR}/tests/handoff/orchestrator-session-handoff.test.mjs"; then
+  report_pass "Orchestrator session handoff tests passed"
+else
+  report_fail "Orchestrator session handoff tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/jev/jev-contract.test.mjs" "${ROOT_DIR}/tests/jev/jev-shadow.test.mjs" "${ROOT_DIR}/tests/jev/future-use-oracle.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-jev.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-metrics.test.mjs"; then

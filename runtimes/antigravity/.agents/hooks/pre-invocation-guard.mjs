@@ -9,6 +9,10 @@ import {
   createContinuationCapsule,
   formatContinuationCapsule,
 } from "../skills/orchestra/trust-boundary.mjs";
+import {
+  ORCHESTRATOR_HANDOFF_MODES,
+  claimProjectOrchestratorHandoff,
+} from "../skills/orchestra/orchestrator-handoff.mjs";
 
 function readStdin() {
   try {
@@ -109,7 +113,7 @@ function main() {
     }
   }
 
-  const { statePath, contractPath, roleBindingsPath, telemetryPath } = getWorkspacePaths(payload);
+  const { repoRoot, statePath, contractPath, roleBindingsPath, telemetryPath } = getWorkspacePaths(payload);
   const injectSteps = [];
 
   let state = {};
@@ -164,9 +168,97 @@ function main() {
   if (roleBindingsLoad.exists) roleBindings = roleBindingsLoad.value;
 
   const convId = payload.conversationId || null;
+
+  // Milestone N: a fresh root conversation may consume exactly one armed
+  // orchestrator handoff before the legacy main-conversation mismatch rule.
+  // Children never qualify: parentConversationId is fail-closed inside the
+  // handoff evaluator and pending/factual child bindings are rejected.
+  if (
+    convId
+    && roleBindings.mainConversationId
+    && convId !== roleBindings.mainConversationId
+  ) {
+    const handoffClaim = claimProjectOrchestratorHandoff(repoRoot, {
+      candidateConversationId: convId,
+      parentConversationId: payload.parentConversationId || null,
+      modelName: payload.modelName || null,
+      profile: "flash-orchestrator",
+    });
+    if (handoffClaim.claimed) {
+      state = handoffClaim.activeState;
+      roleBindings = handoffClaim.roleBindings;
+
+      const boundary = handoffClaim.record?.mode === ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY;
+      const capsule = JSON.stringify(handoffClaim.capsule || {});
+      injectSteps.push({
+        ephemeralMessage: boundary
+          ? (
+              "ORCHESTRATOR AUTHORITY HANDOFF CLAIMED [MILESTONE BOUNDARY]. "
+              + "This conversation is now the factual main Orchestrator for lineage "
+              + handoffClaim.lineageId + " generation " + handoffClaim.generation + ". "
+              + "The prior milestone is sealed. Previous Scope Contract, evidence ledger, "
+              + "model summaries, transcript and product-history context are NOT current-task authority. "
+              + "Start the next milestone from the user's new request. Boundary capsule: " + capsule
+            )
+          : (
+              "ORCHESTRATOR AUTHORITY HANDOFF CLAIMED [LIVE CONTINUATION]. "
+              + "This conversation is now the factual main Orchestrator for lineage "
+              + handoffClaim.lineageId + " generation " + handoffClaim.generation + ". "
+              + "Continue only from the bounded factual continuation capsule; prior transcript/model prose "
+              + "is non-authoritative. Continuation capsule: " + capsule
+            ),
+      });
+    } else if (
+      handoffClaim.reason
+      && ![
+        "ORCHESTRATOR_HANDOFF_NOT_FOUND",
+        "ORCHESTRATOR_HANDOFF_NOT_ARMED",
+        "ORCHESTRATOR_HANDOFF_SAME_CONVERSATION",
+      ].includes(handoffClaim.reason)
+    ) {
+      state.orchestratorHandoffClaimRejected = {
+        conversationId: convId,
+        reason: handoffClaim.reason,
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
   const knownMainConversationId = roleBindings.mainConversationId || state.conversationId || null;
   const hasPendingDelegations = Array.isArray(roleBindings.pendingSubagents)
     && roleBindings.pendingSubagents.some((p) => !p?.consumed);
+
+  const freshRootMainMismatch = Boolean(
+    convId && knownMainConversationId && convId !== knownMainConversationId
+  );
+  if (freshRootMainMismatch) {
+    const handoffReason = state.orchestratorHandoffClaimRejected?.reason || "NO_ARMED_HANDOFF";
+    injectSteps.push({
+      ephemeralMessage:
+        "ORCHESTRATOR HANDOFF REQUIRED: this conversation does not currently own project orchestration authority. "
+        + "A different factual main conversation is still active. "
+        + "Do not execute development tools and do not ask the user to edit role-bindings.json, copy conversation IDs, or run a Node repair command. "
+        + "Ask the user to return to the previous main chat and say that they want to continue in a fresh chat; that orchestrator must arm the managed session handoff itself. "
+        + "Then continue this conversation; its next invocation will claim automatically if the handoff is valid. Handoff status: " + handoffReason + ".",
+    });
+
+    // Context firewall: a non-authoritative root gets no active task capsule,
+    // scope, evidence, advisory state, worker identities, or current-milestone
+    // counters. It also must not mutate the factual main's active-state file.
+    try {
+      mkdirSync(dirname(telemetryPath), { recursive: true });
+      appendFileSync(telemetryPath, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "ORCHESTRATOR_HANDOFF_REQUIRED",
+        conversationId: convId,
+        currentMainConversationId: knownMainConversationId,
+        reason: handoffReason,
+      }) + "\n", "utf-8");
+    } catch {}
+
+    console.log(JSON.stringify({ injectSteps }));
+    return;
+  }
 
   if (convId && !roleBindings.mainConversationId) {
     const conflictsWithKnownMain = Boolean(
@@ -192,10 +284,11 @@ function main() {
         writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
       } catch {}
     } else {
+      const rejectionReason = conflictsWithKnownMain ? "KNOWN_MAIN_MISMATCH" : "PENDING_DELEGATIONS_EXIST";
       state.identityBootstrapRejected = {
         conversationId: convId,
         knownMainConversationId,
-        reason: conflictsWithKnownMain ? "KNOWN_MAIN_MISMATCH" : "PENDING_DELEGATIONS_EXIST",
+        reason: rejectionReason,
         timestamp: new Date().toISOString(),
       };
     }

@@ -1,11 +1,11 @@
 {
   "name": "orchestra",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Local multi-agent orchestration framework for coding agents",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
-    "test": "npm run test:codex && node --test runtimes/antigravity/tests/routing-policy.test.mjs && node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs && npm run test:dream && npm run test:evidence && npm run test:feedback && npm run test:trust && npm run test:jev && npm run test:mechanical && node --test tests/cross-runtime/cross-runtime-firewall.test.mjs && npm run test:installers && node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs && npm run test:architecture-invariants",
+    "test": "npm run test:codex && node --test runtimes/antigravity/tests/routing-policy.test.mjs && node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs && npm run test:dream && npm run test:evidence && npm run test:feedback && npm run test:trust && npm run test:handoff && npm run test:jev && npm run test:mechanical && node --test tests/cross-runtime/cross-runtime-firewall.test.mjs && npm run test:installers && node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs && npm run test:architecture-invariants",
     "test:codex": "node --test runtimes/codex/tests/routing-policy.test.mjs runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs",
     "test:antigravity": "node --test runtimes/antigravity/tests/routing-policy.test.mjs",
     "test:hooks": "node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs",
@@ -13,7 +13,7 @@
     "test:firewall": "node --test tests/cross-runtime/cross-runtime-firewall.test.mjs",
     "test:installers": "node --test tests/installers/installers.test.mjs tests/installers/project-runtime-manager.test.mjs tests/installers/codex-project-runtime-manager.test.mjs",
     "test:turn-economy": "node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs",
-    "test:architecture-invariants": "node --test tests/architecture-invariants/dream-authority.test.mjs tests/architecture-invariants/policy-lab-authority.test.mjs tests/architecture-invariants/shadow-authority.test.mjs tests/architecture-invariants/canary-authority.test.mjs tests/architecture-invariants/evidence-authority.test.mjs tests/architecture-invariants/project-runtime-authority.test.mjs tests/architecture-invariants/mechanical-fast-path-authority.test.mjs tests/architecture-invariants/evidence-provider-watch-authority.test.mjs tests/architecture-invariants/milestones-i-j-k-authority.test.mjs tests/architecture-invariants/jev-authority.test.mjs tests/architecture-invariants/codex-parity-authority.test.mjs",
+    "test:architecture-invariants": "node --test tests/architecture-invariants/dream-authority.test.mjs tests/architecture-invariants/policy-lab-authority.test.mjs tests/architecture-invariants/shadow-authority.test.mjs tests/architecture-invariants/canary-authority.test.mjs tests/architecture-invariants/evidence-authority.test.mjs tests/architecture-invariants/project-runtime-authority.test.mjs tests/architecture-invariants/mechanical-fast-path-authority.test.mjs tests/architecture-invariants/evidence-provider-watch-authority.test.mjs tests/architecture-invariants/milestones-i-j-k-authority.test.mjs tests/architecture-invariants/jev-authority.test.mjs tests/architecture-invariants/codex-parity-authority.test.mjs tests/architecture-invariants/orchestrator-handoff-authority.test.mjs",
     "check:contamination": "node scripts/contamination-check.mjs",
     "doctor": "./scripts/doctor.sh",
     "dream:explore": "node runtimes/antigravity/.agents/dream/exploration-cli.mjs",
@@ -31,6 +31,8 @@
     "jev:lab": "node experiments/jev/jev-cli.mjs",
     "benchmark:jev": "node benchmarks/turn-economy/jev-evaluation.mjs",
     "test:codex-parity": "node --test runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs",
-    "project:codex-runtime": "node scripts/orchestra-codex-project.mjs"
+    "project:codex-runtime": "node scripts/orchestra-codex-project.mjs",
+    "test:handoff": "node --test tests/handoff/orchestrator-session-handoff.test.mjs",
+    "handoff:orchestrator": "node runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff-cli.mjs"
   }
 }

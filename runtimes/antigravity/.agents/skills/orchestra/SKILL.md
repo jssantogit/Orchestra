@@ -62,3 +62,20 @@ Orchestra provides a 100% **ALL-GEMINI** local architecture in the Antigravity C
 - Operational requests ("git status", "git diff", "run tests", "commit", "push") bypass worker delegation.
 - Orchestrator executes directly with 0 subagents (`subagentsAllowed: false`).
 - Exact Intent Boundary: strictly no unsolicited refactoring or repo side quests.
+
+
+### 8. Orchestrator Session Handoff (Milestone N)
+- Orchestrator authority belongs to the project lineage, not permanently to one conversation ID.
+- **Explicit user intent only**: arm a handoff when the user says they are moving development to a fresh chat/conversation, closing the current milestone and continuing in another chat, or explicitly asks to prepare the next orchestrator chat.
+- **Do NOT arm a handoff merely because a task reaches `DONE`.**
+- When a milestone is closed, default to a clean boundary and execute this control-plane command yourself:
+  ```bash
+  node .agents/skills/orchestra/orchestrator-handoff-cli.mjs prepare --boundary
+  ```
+  The user must not be told to edit `role-bindings.json` or run a manual Node repair command.
+- After a successful prepare, tell the user only that they may open a fresh **root** chat in the same project. The first `PreInvocation` in that chat claims root authority automatically.
+- `MILESTONE_BOUNDARY` deliberately drops the previous active Scope Contract, Evidence Ledger and task authority from active state and returns the runtime to `INTAKE`. The old transcript/history is never injected.
+- Use `--live` only when the user explicitly wants to move an **unfinished active task** to a fresh chat. LIVE continuation is allowed only with no child/delegated/in-flight work and carries the bounded factual Runtime Continuation Capsule.
+- If preparation fails because work is delegated/in-flight, do not bypass the guard. Finish/cancel the factual child work first, then prepare the handoff.
+- Once claimed, the prior conversation becomes `FORMER_ORCHESTRATOR` and may not execute project tools. Continue only in the new factual main conversation.
+- The model-visible handoff control path permits only `prepare`, `status`, and `cancel`. Manual `claim` is recovery/operator tooling and must not be used by the model.

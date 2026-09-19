@@ -56,6 +56,10 @@ jobs:
         run: |
           npm run test:trust
 
+      - name: Run Orchestrator Session Handoff Tests
+        run: |
+          npm run test:handoff
+
       - name: Run Jev Semantic Shadow Tests
         run: |
           npm run test:jev

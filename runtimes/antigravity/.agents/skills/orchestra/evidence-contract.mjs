@@ -222,7 +222,7 @@ function validLocalCommandProvenance(ev, activeState) {
     && ["WORK", "VALIDATION"].includes(String(producer.delegationKind || "WORK").toUpperCase())
     && producer.source === "RUNTIME_IDENTITY";
   const parentValidation = ["ORCHESTRATOR", "FLASH_ORCHESTRATOR"].includes(producer.role)
-    && ["RUNTIME_IDENTITY", "CONVERSATION_BOUND_IDENTITY"].includes(producer.source)
+    && ["RUNTIME_IDENTITY", "CONVERSATION_BOUND_IDENTITY", "ORCHESTRATOR_HANDOFF"].includes(producer.source)
     && !producer.delegationKind;
   const parentMatches = !producer.parentConversationId
     || !activeState.conversationId

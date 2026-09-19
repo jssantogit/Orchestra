@@ -124,3 +124,17 @@ Target Economy: `parent_pre_delegation_turns = 1`, `parent_model_turns <= 3`.
 7. **Direct Action Fast Path (`DIRECT_ACTION`)**:
    - Routine operational requests ("git status", "git diff", "run tests", "commit", "push") bypass worker delegation.
    - Execute directly with 0 subagents (`subagentsAllowed: false`).
+
+
+8. **Orchestrator Session Handoff**:
+   - Root orchestration authority belongs to the project lineage, not permanently to this conversation.
+   - Arm a handoff only when the user explicitly says development will continue in a fresh chat/conversation, asks to prepare the next orchestrator chat, or closes the current milestone and says the next phase will happen in another chat.
+   - Never arm a handoff merely because a task reaches `DONE`.
+   - For a closed milestone, run the managed control command yourself:
+     `node .agents/skills/orchestra/orchestrator-handoff-cli.mjs prepare --boundary`
+   - Do not tell the user to edit `role-bindings.json`, copy conversation IDs, or run a manual Node repair command.
+   - After prepare succeeds, tell the user they may open a fresh root chat in the same project. Its first PreInvocation claims the single-use lease automatically.
+   - Boundary mode is a real context break: the previous active task, Scope Contract, Evidence Ledger, worker/reviewer identities, counters, and transcript are not current authority in the new chat. Runtime returns to `INTAKE`.
+   - Use `prepare --live` only for an explicitly requested fresh-chat continuation of the same unfinished task. Never select live mode implicitly.
+   - Handoff is forbidden while worker/reviewer/investigation/CI work is in flight. Never bypass that guard.
+   - Once the new root claims, this conversation becomes `FORMER_ORCHESTRATOR` and must not attempt further project tools.

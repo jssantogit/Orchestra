@@ -73,6 +73,7 @@ function seedPreservedProjectData(project) {
 
   writeFileSync(join(project, ".agents", "rules", "tsuzuki.md"), "project rule\n");
   writeFileSync(join(project, ".agents", "state", "custom-state.json"), "{\"keep\":true}\n");
+  writeFileSync(join(project, ".agents", "state", "orchestrator-handoff.json"), "{\"schema\":\"orchestra.orchestrator-session-handoff.v1\",\"status\":\"ARMED\",\"keep\":true}\n");
   writeFileSync(join(project, ".agents", "telemetry", "events.jsonl"), "{\"event\":\"keep\"}\n");
   writeFileSync(join(project, ".agents", "dream-data", "worlds", "history.json"), "{\"keep\":true}\n");
   writeFileSync(join(project, ".agents", "artifacts", "outputs", "artifact.txt"), "keep\n");
@@ -82,6 +83,10 @@ function seedPreservedProjectData(project) {
 function assertPreservedProjectData(project) {
   assert.equal(readFileSync(join(project, ".agents", "rules", "tsuzuki.md"), "utf8"), "project rule\n");
   assert.equal(readFileSync(join(project, ".agents", "state", "custom-state.json"), "utf8"), "{\"keep\":true}\n");
+  assert.equal(
+    readFileSync(join(project, ".agents", "state", "orchestrator-handoff.json"), "utf8"),
+    "{\"schema\":\"orchestra.orchestrator-session-handoff.v1\",\"status\":\"ARMED\",\"keep\":true}\n"
+  );
   assert.equal(readFileSync(join(project, ".agents", "telemetry", "events.jsonl"), "utf8"), "{\"event\":\"keep\"}\n");
   assert.equal(readFileSync(join(project, ".agents", "dream-data", "worlds", "history.json"), "utf8"), "{\"keep\":true}\n");
   assert.equal(readFileSync(join(project, ".agents", "artifacts", "outputs", "artifact.txt"), "utf8"), "keep\n");

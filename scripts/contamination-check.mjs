@@ -59,6 +59,8 @@ export function runContaminationCheck(rootDir = root) {
   const agyDir = join(rootDir, "runtimes/antigravity/.agents");
   const agyFiles = [
     join(agyDir, "skills/orchestra/routing-policy.mjs"),
+    join(agyDir, "skills/orchestra/orchestrator-handoff.mjs"),
+    join(agyDir, "skills/orchestra/orchestrator-handoff-cli.mjs"),
     join(agyDir, "hooks/pre-tool-enforce.mjs"),
     join(agyDir, "hooks/post-tool-telemetry.mjs"),
     join(agyDir, "hooks/pre-invocation-guard.mjs"),
@@ -164,6 +166,8 @@ export function runContaminationCheck(rootDir = root) {
 
   const agyOperationalFiles = [
     join(agyDir, "skills/orchestra/routing-policy.mjs"),
+    join(agyDir, "skills/orchestra/orchestrator-handoff.mjs"),
+    join(agyDir, "skills/orchestra/orchestrator-handoff-cli.mjs"),
     join(agyDir, "hooks/pre-tool-enforce.mjs"),
     join(agyDir, "hooks/post-tool-telemetry.mjs"),
     join(agyDir, "hooks/pre-invocation-guard.mjs"),

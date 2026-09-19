@@ -163,6 +163,7 @@ The Antigravity runtime incorporates the Orchestra Dream Layer (Milestones A–K
 - **Attributable Feedback Plane (Milestone I)**: Compact worker hypotheses/experiments remain claims until exact factual Evidence Ledger executions create observations. Runtime-only inference can mark supported/falsified/causally verified; feedback never satisfies acceptance.
 - **Context & Side-Effect Trust Boundary (Milestone J)**: Every PreInvocation receives a bounded Runtime Continuation Capsule reconstructed from factual authority. Remote/public write capabilities default deny; handoff/summary text cannot rewrite scope, roles, evidence requirements, retries, or Human Gates.
 - **Full Exploration Policy (Milestone K)**: A separate isolated controller governs branching, bounded 2-way parallelism, pruning, and stopping across Milestone-E siblings under immutable 3-branch / 6-call / 15-minute ceilings. Extra sibling slots require atomically reserved controller capability tokens, exact alternatives already present in sealed history are not re-explored, and stop/budget exhaustion waits for pending causal outcomes before a successor session can begin. K decisions use the normal policy store, Shadow/Canary lifecycle, and explicit human promotion.
+- **Orchestrator Session Handoff (Milestone N)**: A single-use, content-hashed project lease transfers factual root-orchestrator authority between Antigravity conversations. Boundary mode seals the completed milestone, resets active task authority to `INTAKE`, removes the old active Scope Contract/Evidence Ledger from current state, and injects no old transcript. The fresh root chat claims automatically on first PreInvocation; the predecessor becomes `FORMER_ORCHESTRATOR`. Live continuation is an explicit opt-in bounded capsule for unfinished work.
 
 For architecture and specification details, see [docs/dream-layer.md](../../docs/dream-layer.md).
 
@@ -199,6 +200,9 @@ npm run dream:explore-full -- help
 # Milestone I/J focused tests
 npm run test:feedback
 npm run test:trust
+
+# Milestone N root-orchestrator session transfer
+npm run test:handoff
 
 # Approve/report/advance/rollback/promote progressive Canary
 npm run dream:canary -- help
