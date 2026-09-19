@@ -239,6 +239,15 @@ test("Codex remote side effects fail closed without explicit capability", () => 
     activeContract: { sideEffectCapabilities: ["VCS_REMOTE_WRITE"] },
   });
   assert.equal(allowed.allowed, true);
+
+  const direct = authorizeToolCapability({
+    toolName: "exec_command",
+    toolArgs: { command: "git push origin main" },
+    activeState: { taskAction: "DIRECT_ACTION", directActionType: "PUSH" },
+    activeContract: {},
+  });
+  assert.equal(direct.allowed, true);
+  assert.equal(direct.authority, "DIRECT_ACTION_CLASSIFICATION");
 });
 
 test("Codex continuation capsule contains runtime authority only", () => {
