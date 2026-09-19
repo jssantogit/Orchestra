@@ -210,7 +210,14 @@ export async function runProjectRuntimeCli(argv = process.argv.slice(2), {
         console.log("Update dry-run:");
         console.log(line("Target:", target));
         console.log(line("Runtime state:", result.quiescence?.reason || "unknown"));
+        console.log(line("Metadata sync:", result.metadataChanged ? "required" : "no"));
         printDiff(result.diff);
+      } else if (result.operation === "metadata-sync") {
+        console.log("Orchestra runtime content already matched; metadata synchronized.");
+        console.log(line("Target:", target));
+        console.log(line("Version:", result.metadata?.orchestraVersion || "unknown"));
+        console.log(line("Source commit:", result.metadata?.sourceCommit || "unknown"));
+        console.log(line("Backup:", "not required"));
       } else if (result.changed === false) {
         console.log("Orchestra runtime already matches source.");
         console.log(line("Target:", target));

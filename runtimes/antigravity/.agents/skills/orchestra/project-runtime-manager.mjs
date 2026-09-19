@@ -578,6 +578,10 @@ export function updateProjectRuntime({
   const beforeMetadata = readInstalledRuntimeMetadata(target);
   const beforeManifest = buildRuntimeManifest(target);
   const diff = diffRuntimeManifests(source.manifest, beforeManifest);
+  const metadataChanged = Boolean(beforeMetadata) && (
+    beforeMetadata.orchestraVersion !== source.orchestraVersion
+    || beforeMetadata.sourceCommit !== source.sourceCommit
+  );
 
   if (dryRun) {
     return {
@@ -589,13 +593,41 @@ export function updateProjectRuntime({
       currentMetadata: beforeMetadata,
       sourceCommit: source.sourceCommit,
       orchestraVersion: source.orchestraVersion,
+      metadataChanged,
     };
   }
 
   if (diff.clean && beforeMetadata?.manifestHash === source.manifest.hash) {
+    if (metadataChanged) {
+      const metadata = writeRuntimeMetadata(target, source, {
+        operation: "metadata-sync",
+        previousBackupId: beforeMetadata?.previousBackupId || null,
+        installedAt: beforeMetadata?.installedAt || null,
+      });
+      appendHistory(target, {
+        eventType: "METADATA_SYNC",
+        fromCommit: beforeMetadata?.sourceCommit || null,
+        toCommit: source.sourceCommit,
+        fromVersion: beforeMetadata?.orchestraVersion || null,
+        orchestraVersion: source.orchestraVersion,
+        manifestHash: metadata.manifestHash,
+      });
+      return {
+        operation: "metadata-sync",
+        changed: true,
+        runtimeChanged: false,
+        metadataChanged: true,
+        targetDir: target,
+        quiescence,
+        metadata,
+        diff,
+      };
+    }
     return {
       operation: "update",
       changed: false,
+      runtimeChanged: false,
+      metadataChanged: false,
       targetDir: target,
       quiescence,
       metadata: beforeMetadata,
@@ -787,18 +819,23 @@ export function doctorProjectRuntime({
   if (sourceRuntimeRoot) {
     const source = getSourceRuntimeDescriptor(sourceRuntimeRoot);
     const diff = diffRuntimeManifests(source.manifest, manifest);
+    const metadataVersionMatches = metadata?.orchestraVersion === source.orchestraVersion;
+    const metadataCommitMatches = metadata?.sourceCommit === source.sourceCommit;
+    const upToDate = diff.clean && metadataVersionMatches && metadataCommitMatches;
     sourceComparison = {
       sourceCommit: source.sourceCommit,
       orchestraVersion: source.orchestraVersion,
-      upToDate: diff.clean,
+      upToDate,
+      metadataVersionMatches,
+      metadataCommitMatches,
       diff,
     };
     checks.push({
       id: "SOURCE_VERSION",
-      ok: diff.clean,
-      detail: diff.clean
-        ? "installed runtime matches current source"
-        : "installed runtime differs from current source",
+      ok: upToDate,
+      detail: upToDate
+        ? "installed runtime and metadata match current source"
+        : "installed runtime or metadata differs from current source",
     });
   }
 

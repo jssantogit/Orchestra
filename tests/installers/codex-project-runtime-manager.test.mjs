@@ -98,6 +98,44 @@ test("Codex project runtime clean install is managed and healthy", () => {
   }
 });
 
+
+test("Codex metadata-only source version advance syncs without runtime replacement or backup", () => {
+  const project = makeProject();
+  const v1 = makeSource("1.0.0", "same-runtime");
+  const v2 = makeSource("2.0.0", "same-runtime");
+  try {
+    installCodexProjectRuntime({ sourceRuntimeRoot: v1.runtime, targetDir: project });
+    writeState(project, "DONE");
+
+    const beforeManifest = buildCodexRuntimeManifest(project).hash;
+    const dry = updateCodexProjectRuntime({ sourceRuntimeRoot: v2.runtime, targetDir: project, dryRun: true });
+    assert.equal(dry.diff.clean, true);
+    assert.equal(dry.metadataChanged, true);
+    assert.equal(listCodexRuntimeBackups(project).length, 0);
+
+    const result = updateCodexProjectRuntime({ sourceRuntimeRoot: v2.runtime, targetDir: project });
+    assert.equal(result.operation, "metadata-sync");
+    assert.equal(result.changed, true);
+    assert.equal(result.runtimeChanged, false);
+    assert.equal(result.metadataChanged, true);
+    assert.equal(result.backup, undefined);
+    assert.equal(buildCodexRuntimeManifest(project).hash, beforeManifest);
+    assert.equal(listCodexRuntimeBackups(project).length, 0);
+
+    const version = getCodexProjectRuntimeVersion(project);
+    assert.equal(version.orchestraVersion, "2.0.0");
+    assert.equal(version.lastOperation, "metadata-sync");
+
+    const doctor = doctorCodexProjectRuntime({ targetDir: project, sourceRuntimeRoot: v2.runtime });
+    assert.equal(doctor.healthy, true);
+    assert.equal(doctor.sourceComparison.metadataVersionMatches, true);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(v1.root, { recursive: true, force: true });
+    rmSync(v2.root, { recursive: true, force: true });
+  }
+});
+
 test("Codex update preserves project-owned state and creates backup", () => {
   const project = makeProject();
   const v1 = makeSource("1.0.0", "v1");
