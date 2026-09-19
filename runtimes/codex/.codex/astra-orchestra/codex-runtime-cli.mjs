@@ -1,3 +1,4 @@
+import { inspectProjectEvidence, formatEvidenceInspection } from "./evidence-inspector.mjs";
 import {
   diffCodexProjectRuntime,
   doctorCodexProjectRuntime,
@@ -35,7 +36,7 @@ export async function runCodexProjectRuntimeCli(args, { defaultSourceRuntimeRoot
   const force = flag(args, "--force");
 
   if (!command || !targetDir) {
-    console.error("Usage: orchestra-codex-project <install|update|doctor|version|diff-runtime|backups|rollback> <project> [--dry-run] [--force] [--json]");
+    console.error("Usage: orchestra-codex-project <install|update|doctor|version|diff-runtime|backups|evidence|rollback> <project> [--dry-run] [--force] [--json]");
     return 2;
   }
 
@@ -58,6 +59,9 @@ export async function runCodexProjectRuntimeCli(args, { defaultSourceRuntimeRoot
       break;
     case "backups":
       result = listCodexRuntimeBackups(targetDir);
+      break;
+    case "evidence":
+      result = inspectProjectEvidence(targetDir);
       break;
     case "rollback": {
       const idx = args.indexOf("--backup");
@@ -117,6 +121,11 @@ export async function runCodexProjectRuntimeCli(args, { defaultSourceRuntimeRoot
   if (command === "backups") {
     for (const item of result) console.log(item.backupId + " " + (item.reason || ""));
     return 0;
+  }
+
+  if (command === "evidence") {
+    console.log(formatEvidenceInspection(result));
+    return result.available === false && result.status !== "NO_ACTIVE_STATE" ? 1 : 0;
   }
 
   if (command === "update" && result.dryRun) {
