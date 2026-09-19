@@ -117,18 +117,45 @@ node scripts/orchestra-codex-project.mjs evidence /path/to/project
 node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
 ```
 
-The manager owns only `.codex/config.toml`, `.codex/agents/`, and
+The manager owns only `.codex/config.toml`, `.codex/hooks.json`, `.codex/agents/`, and
 `.codex/astra-orchestra/`. State, telemetry, artifacts, semantic approval
 data, and runtime-management history remain project-owned and survive updates.
 
 ---
 
-## 8. Testing & Verification
+## 8. Root session authority and milestone handoff
+
+Orchestra 0.10 binds Codex project authority to the factual provider
+`session_id` delivered by project hooks. `SessionStart` establishes or claims
+root authority, `UserPromptSubmit` blocks future turns from a former root, and
+`PreToolUse` denies supported local/MCP/function tools to sessions that do not
+own the current authority record.
+
+At an explicit completed-milestone chat boundary, the current Terra root runs:
+
+```bash
+node .codex/astra-orchestra/session-handoff-cli.mjs prepare --boundary
+```
+
+The next fresh root claims the lease automatically. The transfer is single-use,
+workspace/state-bound, and fail-closed through
+`ACTIVE -> TRANSFERRING -> ACTIVE`. A boundary claim resets task state to
+`INTAKE` and removes the prior active Scope Contract instead of carrying
+scope, evidence, workers, retries, transcript, prompts, or reasoning forward.
+
+The normal user flow requires no copied session ID and no JSON edits. Project
+hooks are subject to Codex's normal hook-trust review; Orchestra does not use a
+trust bypass as part of normal operation. This milestone does not add an
+Orchestra `LIVE_CONTINUATION` mode for Codex.
+
+---
+
+## 9. Testing & Verification
 
 Run the complete deterministic Codex verification:
 
 ```bash
 npm run test:codex
 node --test tests/installers/codex-project-runtime-manager.test.mjs
-node --test tests/architecture-invariants/codex-parity-authority.test.mjs
+node --test tests/architecture-invariants/codex-parity-authority.test.mjs tests/architecture-invariants/codex-session-authority.test.mjs
 ```
