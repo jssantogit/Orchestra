@@ -1293,8 +1293,13 @@ export function scanCodexOperationalFiles(cwd = process.cwd()) {
   const files = [
     join(codexDir, "config.toml"),
     join(codexDir, "astra-orchestra", "INSTRUCTIONS.md"),
-    join(codexDir, "astra-orchestra", "routing-policy.mjs"),
   ];
+  const orchestraDir = join(codexDir, "astra-orchestra");
+  if (existsSync(orchestraDir)) {
+    for (const name of readdirSync(orchestraDir).filter((entry) => entry.endsWith(".mjs"))) {
+      files.push(join(orchestraDir, name));
+    }
+  }
   const agentsDir = join(codexDir, "agents");
   if (existsSync(agentsDir)) {
     for (const name of readdirSync(agentsDir).filter((entry) => entry.endsWith(".toml"))) files.push(join(agentsDir, name));
