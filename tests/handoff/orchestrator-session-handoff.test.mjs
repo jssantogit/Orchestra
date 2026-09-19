@@ -246,6 +246,51 @@ test("handoff: boundary preparation fails while work is active or child delegati
   }
 });
 
+
+test("handoff: preparation requires a HIGH authoritative current-main binding and consistent authority state", () => {
+  const missingBindingRoot = makeProject();
+  try {
+    const { activeState, roleBindings } = seedBoundary(missingBindingRoot);
+    roleBindings.bindings = {};
+    roleBindings.conversations = {};
+    writeFileSync(bindingsPath(missingBindingRoot), JSON.stringify(roleBindings, null, 2));
+    assert.throws(
+      () => prepareProjectOrchestratorHandoff(missingBindingRoot),
+      /ORCHESTRATOR_HANDOFF_MAIN_BINDING_REQUIRED/,
+    );
+  } finally {
+    rmSync(missingBindingRoot, { recursive: true, force: true });
+  }
+
+  const lowConfidenceRoot = makeProject();
+  try {
+    const { roleBindings } = seedBoundary(lowConfidenceRoot);
+    roleBindings.bindings["old-root"].confidence = "LOW";
+    roleBindings.conversations["old-root"].confidence = "LOW";
+    writeFileSync(bindingsPath(lowConfidenceRoot), JSON.stringify(roleBindings, null, 2));
+    assert.throws(
+      () => prepareProjectOrchestratorHandoff(lowConfidenceRoot),
+      /ORCHESTRATOR_HANDOFF_MAIN_BINDING_NOT_AUTHORITATIVE/,
+    );
+  } finally {
+    rmSync(lowConfidenceRoot, { recursive: true, force: true });
+  }
+
+  const mismatchRoot = makeProject();
+  try {
+    seedBoundary(mismatchRoot);
+    const state = JSON.parse(readFileSync(statePath(mismatchRoot), "utf8"));
+    state.conversationId = "different-root";
+    writeFileSync(statePath(mismatchRoot), JSON.stringify(state, null, 2));
+    assert.throws(
+      () => prepareProjectOrchestratorHandoff(mismatchRoot),
+      /ORCHESTRATOR_HANDOFF_AUTHORITY_STATE_MISMATCH/,
+    );
+  } finally {
+    rmSync(mismatchRoot, { recursive: true, force: true });
+  }
+});
+
 test("handoff: explicit live continuation carries bounded runtime authority but no raw transcript", () => {
   const root = makeProject();
   try {
