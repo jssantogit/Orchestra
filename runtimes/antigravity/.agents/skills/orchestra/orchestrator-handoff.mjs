@@ -1,9 +1,12 @@
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -73,6 +76,7 @@ function runtimePaths(repoRoot) {
     contractPath: join(root, ".agents", "state", "active-contract.json"),
     roleBindingsPath: join(root, ".agents", "state", "role-bindings.json"),
     handoffPath: join(root, ".agents", "state", "orchestrator-handoff.json"),
+    claimLockPath: join(root, ".agents", "state", "orchestrator-handoff.claim.lock"),
     telemetryPath: join(root, ".agents", "telemetry", "events.jsonl"),
   };
 }
@@ -599,6 +603,49 @@ export function applyOrchestratorHandoffClaim({
   };
 }
 
+function acquireClaimLock(lockPath) {
+  mkdirSync(dirname(lockPath), { recursive: true });
+
+  const attempt = () => {
+    try {
+      const fd = openSync(lockPath, "wx", 0o600);
+      writeFileSync(fd, JSON.stringify({
+        pid: process.pid,
+        acquiredAt: new Date().toISOString(),
+      }) + "\n", "utf8");
+      return { acquired: true, fd };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      return { acquired: false, fd: null };
+    }
+  };
+
+  let lock = attempt();
+  if (lock.acquired) return lock;
+
+  // Recover only an obviously abandoned claim lock. A healthy PreInvocation
+  // claim is tiny; 60s gives a large safety margin while avoiding a permanent
+  // deadlock after process termination.
+  try {
+    const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    if (ageMs > 60_000) {
+      rmSync(lockPath, { force: true });
+      lock = attempt();
+    }
+  } catch {}
+
+  return lock;
+}
+
+function releaseClaimLock(lockPath, lock) {
+  try {
+    if (lock?.fd !== null && lock?.fd !== undefined) closeSync(lock.fd);
+  } catch {}
+  if (lock?.acquired) {
+    try { rmSync(lockPath, { force: true }); } catch {}
+  }
+}
+
 export function claimProjectOrchestratorHandoff(repoRoot, {
   candidateConversationId,
   parentConversationId = null,
@@ -606,37 +653,48 @@ export function claimProjectOrchestratorHandoff(repoRoot, {
   profile = "flash-orchestrator",
 } = {}) {
   const paths = runtimePaths(repoRoot);
-  const loaded = readProjectOrchestratorHandoff(paths.root);
-  if (!loaded.exists) return { claimed: false, reason: "ORCHESTRATOR_HANDOFF_NOT_FOUND" };
-  if (!loaded.valid) return { claimed: false, reason: loaded.reason };
-
-  const activeState = readJson(paths.statePath, {});
-  const roleBindings = readJson(paths.roleBindingsPath, {
-    mainConversationId: activeState.conversationId || null,
-    bindings: {},
-    conversations: {},
-    pendingSubagents: [],
-  });
-
-  const result = applyOrchestratorHandoffClaim({
-    record: loaded.record,
-    activeState,
-    roleBindings,
-    candidateConversationId,
-    parentConversationId,
-    modelName,
-    profile,
-  });
-  if (!result.claimed) return result;
-
-  writeJson(paths.statePath, result.activeState);
-  writeJson(paths.roleBindingsPath, result.roleBindings);
-  if (result.record.mode === ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY) {
-    rmSync(paths.contractPath, { force: true });
+  const lock = acquireClaimLock(paths.claimLockPath);
+  if (!lock.acquired) {
+    return { claimed: false, reason: "ORCHESTRATOR_HANDOFF_CLAIM_IN_PROGRESS" };
   }
-  writeJson(paths.handoffPath, result.record);
-  appendTelemetry(paths.telemetryPath, result.telemetry);
-  return result;
+
+  try {
+    // Re-read all authority files *after* the exclusive lock. This is the
+    // single-use linearization point for competing fresh root conversations.
+    const loaded = readProjectOrchestratorHandoff(paths.root);
+    if (!loaded.exists) return { claimed: false, reason: "ORCHESTRATOR_HANDOFF_NOT_FOUND" };
+    if (!loaded.valid) return { claimed: false, reason: loaded.reason };
+
+    const activeState = readJson(paths.statePath, {});
+    const roleBindings = readJson(paths.roleBindingsPath, {
+      mainConversationId: activeState.conversationId || null,
+      bindings: {},
+      conversations: {},
+      pendingSubagents: [],
+    });
+
+    const result = applyOrchestratorHandoffClaim({
+      record: loaded.record,
+      activeState,
+      roleBindings,
+      candidateConversationId,
+      parentConversationId,
+      modelName,
+      profile,
+    });
+    if (!result.claimed) return result;
+
+    writeJson(paths.statePath, result.activeState);
+    writeJson(paths.roleBindingsPath, result.roleBindings);
+    if (result.record.mode === ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY) {
+      rmSync(paths.contractPath, { force: true });
+    }
+    writeJson(paths.handoffPath, result.record);
+    appendTelemetry(paths.telemetryPath, result.telemetry);
+    return result;
+  } finally {
+    releaseClaimLock(paths.claimLockPath, lock);
+  }
 }
 
 export function cancelProjectOrchestratorHandoff(repoRoot, reason = null) {
