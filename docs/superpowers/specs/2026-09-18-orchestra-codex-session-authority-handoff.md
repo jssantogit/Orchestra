@@ -71,7 +71,7 @@ Project-owned Orchestra state/telemetry/artifacts/semantic/runtime-management fi
 
 ### Claim
 
-A different root `SessionStart` attempts to claim an armed lease. Claim is serialized by an exclusive `wx` lock and revalidates authority, state, generation, and workspace fingerprints.
+A different root `SessionStart` attempts to claim an armed lease. Claim is serialized by an exclusive `wx` lock and revalidates authority, state, generation, and workspace fingerprints. The lock records its owner PID; a later claimant may recover it only when the recorded owner is factually gone. A malformed/uninitialized lock is never stolen while fresh and becomes recoverable only after a bounded stale interval.
 
 Successful boundary claim:
 
@@ -120,7 +120,7 @@ Project-local Codex hooks are subject to Codex hook trust. The user may need to 
 - unleased second root cannot use project tools;
 - boundary claim resets task authority to `INTAKE` and removes old scope/evidence;
 - former root prompt and tool authority are revoked;
-- lease is single-use and claim is lock-serialized;
+- lease is single-use, claim is lock-serialized, and dead-process orphan locks are recoverable without weakening live-lock exclusion;
 - dirty file content changes invalidate an armed lease even when porcelain status remains unchanged;
 - active CI/evidence watches block prepare;
 - partial transfer is fail-closed and resumable only by the reserved candidate;
