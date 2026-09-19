@@ -170,3 +170,15 @@ operator explicitly supplies `--force`.
 the same lifecycle manager. A fresh Codex installation therefore receives
 first-class runtime metadata immediately rather than becoming a legacy runtime
 that must be adopted on its first update.
+
+
+## Orchestrator handoff state
+
+Antigravity session-transfer state lives at
+`.agents/state/orchestrator-handoff.json`. Because `.agents/state/` is
+project-owned, an armed/claimed/cancelled handoff record and orchestrator
+lineage survive Orchestra runtime updates and rollback.
+
+The runtime manager never manufactures, deletes, or claims a handoff as part of
+an upgrade. Session authority transition is owned by the Antigravity handoff
+state machine and its PreInvocation boundary.
