@@ -25,6 +25,9 @@ import {
 import {
   classifyOrchestratorHandoffControlCommand,
 } from "../../runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs";
+import {
+  verifyEvidenceContract,
+} from "../../runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs";
 
 const __dirname = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -357,6 +360,67 @@ test("handoff: current main orchestrator may run bounded prepare control command
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("handoff: new root may produce factual parent evidence without granting workers handoff provenance", () => {
+  const requirement = {
+    id: "parent-check",
+    class: "LOCAL_TEST",
+    kind: "LOCAL_COMMAND",
+    command: "node --test parent.test.mjs",
+  };
+  const activeState = {
+    taskId: "next-milestone",
+    conversationId: "new-root",
+    attempt: 0,
+    mutationSeq: 1,
+  };
+  const rootEvidence = {
+    evidenceId: "root-validation",
+    command: requirement.command,
+    exitCode: 0,
+    failed: 0,
+    actorRole: "ORCHESTRATOR",
+    confidence: "HIGH",
+    evidenceSource: "ORCHESTRATOR_HANDOFF",
+    delegationKind: null,
+    producer: {
+      actorId: "new-root",
+      role: "ORCHESTRATOR",
+      confidence: "HIGH",
+      source: "ORCHESTRATOR_HANDOFF",
+      delegationKind: null,
+      parentConversationId: null,
+    },
+    binding: {
+      taskId: "next-milestone",
+      attempt: 0,
+      mutationSeq: 1,
+      commitSha: null,
+    },
+  };
+  const rootResult = verifyEvidenceContract({
+    activeState,
+    contract: { requiredEvidence: [requirement] },
+    evidenceLedger: [rootEvidence],
+  });
+  assert.equal(rootResult.verified, true);
+
+  const fakeWorker = structuredClone(rootEvidence);
+  fakeWorker.evidenceId = "worker-fake-handoff";
+  fakeWorker.actorRole = "WORKER";
+  fakeWorker.delegationKind = "WORK";
+  fakeWorker.producer.role = "WORKER";
+  fakeWorker.producer.delegationKind = "WORK";
+
+  const workerResult = verifyEvidenceContract({
+    activeState,
+    contract: { requiredEvidence: [requirement] },
+    evidenceLedger: [fakeWorker],
+  });
+  assert.equal(workerResult.verified, false);
+  assert.equal(workerResult.results[0].reason, "LOCAL_EVIDENCE_PRODUCER_NOT_AUTHORIZED");
 });
 
 test("handoff: cancel is single-record state and does not mutate orchestration authority", () => {
