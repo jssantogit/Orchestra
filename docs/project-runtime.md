@@ -150,6 +150,7 @@ node scripts/orchestra-codex-project.mjs doctor /path/to/project
 node scripts/orchestra-codex-project.mjs version /path/to/project
 node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
 node scripts/orchestra-codex-project.mjs backups /path/to/project
+node scripts/orchestra-codex-project.mjs evidence /path/to/project
 node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
 ```
 
@@ -162,3 +163,10 @@ The Codex quiescence guard reads
 `.codex/orchestra-state/active-state.json`. `DONE`, `BLOCKED`, and
 `HUMAN_GATE` are update-safe; active execution states fail closed unless the
 operator explicitly supplies `--force`.
+
+### Clean install behavior
+
+`scripts/install-codex.mjs` and `scripts/install-codex.sh` now route through
+the same lifecycle manager. A fresh Codex installation therefore receives
+first-class runtime metadata immediately rather than becoming a legacy runtime
+that must be adopted on its first update.
