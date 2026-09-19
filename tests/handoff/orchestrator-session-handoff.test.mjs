@@ -369,6 +369,48 @@ test("handoff: product workspace change after prepare invalidates the lease, gov
   }
 });
 
+
+test("handoff: workspace fingerprint catches content changes that keep the same dirty status", () => {
+  const trackedRoot = makeProject();
+  try {
+    initGitWorkspace(trackedRoot);
+    writeFileSync(join(trackedRoot, "product.txt"), "dirty-a\n");
+    seedBoundary(trackedRoot);
+    const prepared = prepareProjectOrchestratorHandoff(trackedRoot);
+    assert.equal(prepared.record.workspace_git_available, true);
+    assert.equal(prepared.record.dirty_file_count, 1);
+
+    // Still status " M product.txt", but content changed after prepare.
+    writeFileSync(join(trackedRoot, "product.txt"), "dirty-b\n");
+    const stale = claimProjectOrchestratorHandoff(trackedRoot, {
+      candidateConversationId: "new-root-dirty-content",
+    });
+    assert.equal(stale.claimed, false);
+    assert.equal(stale.reason, "ORCHESTRATOR_HANDOFF_STALE_WORKSPACE_CHANGED");
+  } finally {
+    rmSync(trackedRoot, { recursive: true, force: true });
+  }
+
+  const untrackedRoot = makeProject();
+  try {
+    initGitWorkspace(untrackedRoot);
+    writeFileSync(join(untrackedRoot, "draft-feature.txt"), "draft-a\n");
+    seedBoundary(untrackedRoot);
+    const prepared = prepareProjectOrchestratorHandoff(untrackedRoot);
+    assert.equal(prepared.record.dirty_file_count, 1);
+
+    // Still status "?? draft-feature.txt", but contents differ.
+    writeFileSync(join(untrackedRoot, "draft-feature.txt"), "draft-b\n");
+    const stale = claimProjectOrchestratorHandoff(untrackedRoot, {
+      candidateConversationId: "new-root-untracked-content",
+    });
+    assert.equal(stale.claimed, false);
+    assert.equal(stale.reason, "ORCHESTRATOR_HANDOFF_STALE_WORKSPACE_CHANGED");
+  } finally {
+    rmSync(untrackedRoot, { recursive: true, force: true });
+  }
+});
+
 test("handoff: PreInvocation automatically transfers root authority exactly once", () => {
   const root = makeProject();
   try {
