@@ -405,16 +405,55 @@ export function updateCodexProjectRuntime({
   const beforeMetadata = readInstalledCodexRuntimeMetadata(target);
   const beforeManifest = buildCodexRuntimeManifest(target);
   const diff = diffCodexRuntimeManifests(source.manifest, beforeManifest);
+  const metadataChanged = Boolean(beforeMetadata) && (
+    beforeMetadata.orchestraVersion !== source.orchestraVersion
+    || beforeMetadata.sourceCommit !== source.sourceCommit
+  );
 
   if (dryRun) {
     return {
       operation: "update", dryRun: true, targetDir: target, quiescence, diff,
       currentMetadata: beforeMetadata, sourceCommit: source.sourceCommit,
       orchestraVersion: source.orchestraVersion,
+      metadataChanged,
     };
   }
   if (diff.clean && beforeMetadata?.manifestHash === source.manifest.hash) {
-    return { operation: "update", changed: false, targetDir: target, quiescence, metadata: beforeMetadata, diff };
+    if (metadataChanged) {
+      const metadata = writeMetadata(target, source, {
+        operation: "metadata-sync",
+        previousBackupId: beforeMetadata?.previousBackupId || null,
+        installedAt: beforeMetadata?.installedAt || null,
+      });
+      appendHistory(target, {
+        eventType: "METADATA_SYNC",
+        fromCommit: beforeMetadata?.sourceCommit || null,
+        toCommit: source.sourceCommit,
+        fromVersion: beforeMetadata?.orchestraVersion || null,
+        orchestraVersion: source.orchestraVersion,
+        manifestHash: metadata.manifestHash,
+      });
+      return {
+        operation: "metadata-sync",
+        changed: true,
+        runtimeChanged: false,
+        metadataChanged: true,
+        targetDir: target,
+        quiescence,
+        metadata,
+        diff,
+      };
+    }
+    return {
+      operation: "update",
+      changed: false,
+      runtimeChanged: false,
+      metadataChanged: false,
+      targetDir: target,
+      quiescence,
+      metadata: beforeMetadata,
+      diff,
+    };
   }
 
   const backup = createCodexRuntimeBackup(target, { reason: beforeMetadata ? "pre-update" : "legacy-adoption" });
@@ -519,8 +558,24 @@ export function doctorCodexProjectRuntime({ targetDir, sourceRuntimeRoot = null 
   if (sourceRuntimeRoot) {
     const source = getCodexSourceRuntimeDescriptor(sourceRuntimeRoot);
     const diff = diffCodexRuntimeManifests(source.manifest, manifest);
-    sourceComparison = { sourceCommit: source.sourceCommit, orchestraVersion: source.orchestraVersion, upToDate: diff.clean, diff };
-    checks.push({ id: "SOURCE_VERSION", ok: diff.clean, detail: diff.clean ? "installed runtime matches current source" : "installed runtime differs from current source" });
+    const metadataVersionMatches = metadata?.orchestraVersion === source.orchestraVersion;
+    const metadataCommitMatches = metadata?.sourceCommit === source.sourceCommit;
+    const upToDate = diff.clean && metadataVersionMatches && metadataCommitMatches;
+    sourceComparison = {
+      sourceCommit: source.sourceCommit,
+      orchestraVersion: source.orchestraVersion,
+      upToDate,
+      metadataVersionMatches,
+      metadataCommitMatches,
+      diff,
+    };
+    checks.push({
+      id: "SOURCE_VERSION",
+      ok: upToDate,
+      detail: upToDate
+        ? "installed runtime and metadata match current source"
+        : "installed runtime or metadata differs from current source",
+    });
   }
 
   const healthy = checks.every((check) => check.ok);
