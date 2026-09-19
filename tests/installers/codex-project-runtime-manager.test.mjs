@@ -212,6 +212,19 @@ test("Codex active task blocks runtime update", () => {
   }
 });
 
+test("Codex INTAKE boundary state is quiescent for runtime maintenance", () => {
+  const project = makeProject();
+  try {
+    installCodexProjectRuntime({ sourceRuntimeRoot: realSource, targetDir: project });
+    writeState(project, "INTAKE");
+    const quiescence = checkCodexRuntimeQuiescence(project);
+    assert.equal(quiescence.safe, true);
+    assert.equal(quiescence.reason, "QUIESCENT_INTAKE");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
 test("Codex rollback restores managed runtime but not project state", () => {
   const project = makeProject();
   const v1 = makeSource("1.0.0", "v1");
