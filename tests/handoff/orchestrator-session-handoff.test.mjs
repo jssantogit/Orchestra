@@ -36,6 +36,7 @@ const __dirname = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const orchestraRoot = resolve(__dirname, "../..");
 const preInvocationScript = resolve(orchestraRoot, "runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs");
 const preToolScript = resolve(orchestraRoot, "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
+const postToolScript = resolve(orchestraRoot, "runtimes/antigravity/.agents/hooks/post-tool-telemetry.mjs");
 
 function makeProject() {
   const root = mkdtempSync(join(tmpdir(), "orchestra-handoff-"));
@@ -472,6 +473,53 @@ test("handoff: exclusive claim lock prevents simultaneous fresh roots", () => {
     });
     assert.equal(loser.claimed, false);
     assert.equal(loser.reason, "ORCHESTRATOR_HANDOFF_NOT_ARMED");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("handoff: normal engine sequence prepare then PostTool telemetry remains claimable", () => {
+  const root = makeProject();
+  try {
+    seedBoundary(root);
+    const command = "node .agents/skills/orchestra/orchestrator-handoff-cli.mjs prepare --boundary";
+
+    const pre = runPreTool(root, "old-root", "run_command", { CommandLine: command });
+    assert.equal(pre.decision, "allow");
+
+    // The CLI's state-machine effect, executed by the already-authorized root.
+    const prepared = prepareProjectOrchestratorHandoff(root, {
+      mode: ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY,
+    });
+    assert.equal(prepared.record.status, "ARMED");
+
+    // Antigravity now emits PostToolUse for the just-completed run_command.
+    execFileSync(process.execPath, [postToolScript], {
+      cwd: root,
+      input: JSON.stringify({
+        conversationId: "old-root",
+        workspacePaths: [root],
+        toolCall: {
+          id: "handoff-control-1",
+          name: "run_command",
+          args: { CommandLine: command },
+        },
+        exitCode: 0,
+        toolResult: { exitCode: 0, stdout: "Orchestrator handoff armed." },
+      }),
+      encoding: "utf8",
+    });
+
+    const output = runPreInvocation(root, "new-root-after-posttool");
+    assert.equal(
+      output.injectSteps.some((step) =>
+        String(step.ephemeralMessage || "").includes("ORCHESTRATOR AUTHORITY HANDOFF CLAIMED")
+      ),
+      true,
+    );
+    const bindings = JSON.parse(readFileSync(bindingsPath(root), "utf8"));
+    assert.equal(bindings.mainConversationId, "new-root-after-posttool");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
