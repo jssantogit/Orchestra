@@ -30,7 +30,7 @@ jobs:
 
       - name: Run Codex Parity Tests
         run: |
-          node --test runtimes/codex/tests/parity.test.mjs
+          npm run test:codex-parity
 
       - name: Run Antigravity Policy Tests
         run: |
