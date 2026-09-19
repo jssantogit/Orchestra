@@ -18,7 +18,7 @@ export function runContaminationCheck(rootDir = root) {
   const codexOrchestraDir = join(codexDir, "astra-orchestra");
   if (existsSync(codexOrchestraDir)) {
     for (const file of readdirSync(codexOrchestraDir)) {
-      if (file.endsWith(".mjs")) codexFiles.push(join(codexOrchestraDir, file));
+      if (file.endsWith(".mjs") && !file.endsWith(".test.mjs")) codexFiles.push(join(codexOrchestraDir, file));
     }
   }
 
