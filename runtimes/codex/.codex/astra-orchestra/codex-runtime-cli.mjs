@@ -132,11 +132,16 @@ export async function runCodexProjectRuntimeCli(args, { defaultSourceRuntimeRoot
     console.log("Codex update dry-run:");
     console.log("Target:               " + result.targetDir);
     console.log("Runtime state:        " + result.quiescence.reason);
+    console.log("Metadata sync:        " + (result.metadataChanged ? "required" : "no"));
     printDiff(result.diff);
     return 0;
   }
 
-  console.log("Orchestra Codex runtime " + (command === "rollback" ? "rolled back" : (result.changed === false ? "already up to date" : "updated")) + ".");
+  if (command === "update" && result.operation === "metadata-sync") {
+    console.log("Orchestra Codex runtime content already matched; metadata synchronized.");
+  } else {
+    console.log("Orchestra Codex runtime " + (command === "rollback" ? "rolled back" : (result.changed === false ? "already up to date" : "updated")) + ".");
+  }
   console.log("Target:               " + result.targetDir);
   const meta = result.metadata || {};
   if (meta.orchestraVersion) console.log("Version:              " + meta.orchestraVersion);
