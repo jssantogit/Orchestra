@@ -1048,6 +1048,37 @@ function isReadOnlyCommand(cmd) {
   );
 }
 
+export function classifyOrchestratorHandoffControlCommand(cmd = "") {
+  const trimmed = String(cmd || "").trim();
+  if (!trimmed) return null;
+  if (/[;|&`<>]/.test(trimmed) || /\$\(/.test(trimmed) || /[\r\n]/.test(trimmed)) return null;
+
+  const tokens = trimmed.match(/"[^"]*"|'[^']*'|\S+/g)?.map((token) => token.replace(/^["']|["']$/g, "")) || [];
+  if (tokens.length < 3 || tokens[0] !== "node") return null;
+
+  const script = tokens[1].replace(/\\/g, "/").replace(/^\.\//, "");
+  if (script !== ".agents/skills/orchestra/orchestrator-handoff-cli.mjs") return null;
+
+  const operation = String(tokens[2] || "").toLowerCase();
+  if (!["prepare", "status", "cancel"].includes(operation)) return null;
+
+  for (let i = 3; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (["--boundary", "--live", "--json"].includes(token)) continue;
+    if (["--reason", "--label"].includes(token)) {
+      if (i + 1 >= tokens.length) return null;
+      i += 1;
+      continue;
+    }
+    return null;
+  }
+
+  return {
+    operation,
+    runtimeControl: "ORCHESTRATOR_SESSION_HANDOFF",
+  };
+}
+
 function isWorkerRole(role) {
   return role === "WORKER" || role === "FLASH" || role === "FLASH_WORKER" || role === "FLASH_MEDIUM_WORKER" || role === "FLASH_LOW_WORKER";
 }
@@ -2466,6 +2497,29 @@ function main() {
   // Check 2: run_command enforcement
   if (toolName === "run_command") {
     const cmd = String(toolArgs.CommandLine || toolArgs.command || toolArgs.cmd || "");
+
+    const handoffControl = classifyOrchestratorHandoffControlCommand(cmd);
+    if (handoffControl) {
+      if (!actorHasOrchestratorAuthority) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "ORCHESTRATOR_HANDOFF_AUTHORITY_REQUIRED: Session handoff control commands require the HIGH-confidence current main Orchestrator."
+        }));
+        return;
+      }
+      if (
+        handoffControl.operation === "prepare"
+        && isHealthyDelegatedExecution(activeState, activeRole)
+      ) {
+        console.log(JSON.stringify({
+          decision: "deny",
+          reason: "ORCHESTRATOR_HANDOFF_DELEGATION_ACTIVE: Cannot arm a session handoff while delegated execution is healthy/in flight. Wait for Reactive Wakeup and close the delegation first."
+        }));
+        return;
+      }
+      allowCommand(cmd);
+      return;
+    }
 
     // 2a. Reviewer: strictly read-only, prohibited from executing shell commands
     if (isReviewerRole(activeRole)) {
