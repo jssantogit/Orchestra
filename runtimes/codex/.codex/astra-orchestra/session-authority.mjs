@@ -538,3 +538,121 @@ function finishCodexSessionTransfer(repoRoot, { authority, handoff, candidateSes
     authority: nextAuthority,
     record: claimed,
     activeState: readJson(p.activeState, {}),
+    capsule: sanitizeCapsule(claimed.capsule || {}),
+  };
+}
+
+function resumeCodexSessionTransfer(repoRoot, authority, sid) {
+  if (authority.status !== CODEX_SESSION_AUTHORITY_STATUSES.TRANSFERRING) return null;
+  if (authority.pending_session_id !== sid) {
+    return { claimed: false, reason: "CODEX_SESSION_AUTHORITY_TRANSFERRING", authority };
+  }
+  const handoffLoad = readCodexSessionHandoff(repoRoot);
+  if (!handoffLoad.exists || !handoffLoad.valid) {
+    return { claimed: false, reason: "CODEX_SESSION_TRANSFER_HANDOFF_INVALID", authority };
+  }
+  const handoff = handoffLoad.record;
+  if (handoff.handoff_id !== authority.pending_handoff_id) {
+    return { claimed: false, reason: "CODEX_SESSION_TRANSFER_HANDOFF_MISMATCH", authority, record: handoff };
+  }
+  if (![CODEX_SESSION_HANDOFF_STATUSES.ARMED, CODEX_SESSION_HANDOFF_STATUSES.CLAIMED].includes(handoff.status)) {
+    return { claimed: false, reason: "CODEX_SESSION_TRANSFER_HANDOFF_NOT_RESUMABLE", authority, record: handoff };
+  }
+  return finishCodexSessionTransfer(repoRoot, { authority, handoff, candidateSessionId: sid });
+}
+
+export function claimCodexSessionHandoff(repoRoot, { candidateSessionId } = {}) {
+  const sid = clean(candidateSessionId, 300);
+  if (!sid) return { claimed: false, reason: "CODEX_SESSION_ID_REQUIRED" };
+  const p = paths(repoRoot);
+  mkdirSync(dirname(p.claimLock), { recursive: true });
+  let lockFd;
+  try {
+    lockFd = openSync(p.claimLock, "wx", 0o600);
+  } catch (error) {
+    if (error?.code === "EEXIST") return { claimed: false, reason: "CODEX_SESSION_HANDOFF_CLAIM_BUSY" };
+    throw error;
+  }
+
+  try {
+    const authorityLoad = readCodexSessionAuthority(repoRoot);
+    if (!authorityLoad.exists) return { claimed: false, reason: "CODEX_SESSION_AUTHORITY_NOT_INITIALIZED" };
+    if (!authorityLoad.valid) return { claimed: false, reason: `CODEX_SESSION_AUTHORITY_INVALID:${authorityLoad.reason}` };
+    const authority = authorityLoad.record;
+    const resumed = resumeCodexSessionTransfer(repoRoot, authority, sid);
+    if (resumed) return resumed;
+    if (authority.main_session_id === sid) return { claimed: false, reason: "CODEX_SESSION_HANDOFF_SAME_SESSION", authority };
+
+    const handoffLoad = readCodexSessionHandoff(repoRoot);
+    if (!handoffLoad.exists) return { claimed: false, reason: "CODEX_SESSION_HANDOFF_NOT_FOUND", authority };
+    if (!handoffLoad.valid) return { claimed: false, reason: `CODEX_SESSION_HANDOFF_INVALID:${handoffLoad.reason}`, authority };
+    const handoff = handoffLoad.record;
+    if (handoff.status !== CODEX_SESSION_HANDOFF_STATUSES.ARMED) return { claimed: false, reason: "CODEX_SESSION_HANDOFF_NOT_ARMED", authority, record: handoff };
+    if (handoff.from_session_id !== authority.main_session_id) return { claimed: false, reason: "CODEX_SESSION_HANDOFF_AUTHORITY_MOVED", authority, record: handoff };
+    if (handoff.authority_hash !== authority.record_hash) return { claimed: false, reason: "CODEX_SESSION_HANDOFF_AUTHORITY_STALE", authority, record: handoff };
+    if (handoff.lineage_id !== authority.lineage_id || handoff.target_generation !== authority.generation + 1) {
+      return { claimed: false, reason: "CODEX_SESSION_HANDOFF_GENERATION_STALE", authority, record: handoff };
+    }
+
+    const activeState = readJson(p.activeState, {});
+    if (!boundaryReady(activeState)) return { claimed: false, reason: "CODEX_SESSION_HANDOFF_BOUNDARY_NOT_QUIESCENT", authority, record: handoff };
+    if (codexActiveStateFingerprint(activeState) !== handoff.state_fingerprint) {
+      return { claimed: false, reason: "CODEX_SESSION_HANDOFF_STATE_STALE", authority, record: handoff };
+    }
+    const workspace = readCodexWorkspaceFingerprint(repoRoot);
+    if (!workspace.available || workspace.fingerprint !== handoff.workspace_fingerprint) {
+      return { claimed: false, reason: "CODEX_SESSION_HANDOFF_WORKSPACE_STALE", authority, record: handoff };
+    }
+
+    return finishCodexSessionTransfer(repoRoot, {
+      authority,
+      handoff,
+      candidateSessionId: sid,
+    });
+  } finally {
+    try { if (lockFd !== undefined) closeSync(lockFd); } catch {}
+    rmSync(p.claimLock, { force: true });
+  }
+}
+
+export function enterCodexSession(repoRoot, { sessionId, source = null } = {}) {
+  const sid = clean(sessionId, 300);
+  if (!sid) return { authoritative: false, claimed: false, reason: "CODEX_SESSION_ID_REQUIRED" };
+  let authorityLoad = readCodexSessionAuthority(repoRoot);
+  if (!authorityLoad.exists) {
+    try {
+      const boot = bootstrapCodexSessionAuthority(repoRoot, { sessionId: sid });
+      return { authoritative: true, claimed: false, bootstrapped: boot.bootstrapped, reason: null, authority: boot.authority, source };
+    } catch (error) {
+      return { authoritative: false, claimed: false, reason: String(error.message || error), source };
+    }
+  }
+  if (!authorityLoad.valid) return { authoritative: false, claimed: false, reason: `CODEX_SESSION_AUTHORITY_INVALID:${authorityLoad.reason}`, source };
+  if (authorityLoad.record.status === CODEX_SESSION_AUTHORITY_STATUSES.TRANSFERRING) {
+    const claim = claimCodexSessionHandoff(repoRoot, { candidateSessionId: sid });
+    if (claim.claimed) return { authoritative: true, claimed: true, reason: null, ...claim, source };
+    return { authoritative: false, claimed: false, reason: claim.reason || "CODEX_SESSION_AUTHORITY_TRANSFERRING", authority: claim.authority || authorityLoad.record, source };
+  }
+  if (authorityLoad.record.main_session_id === sid) {
+    return { authoritative: true, claimed: false, bootstrapped: false, reason: null, authority: authorityLoad.record, source };
+  }
+  const claim = claimCodexSessionHandoff(repoRoot, { candidateSessionId: sid });
+  if (claim.claimed) return { authoritative: true, claimed: true, reason: null, ...claim, source };
+  authorityLoad = readCodexSessionAuthority(repoRoot);
+  return {
+    authoritative: Boolean(authorityLoad.valid && authorityLoad.record?.main_session_id === sid),
+    claimed: false,
+    reason: claim.reason || "CODEX_SESSION_NOT_MAIN",
+    authority: authorityLoad.record || null,
+    source,
+  };
+}
+
+export function codexSessionHandoffStatus(repoRoot) {
+  const authority = readCodexSessionAuthority(repoRoot);
+  const handoff = readCodexSessionHandoff(repoRoot);
+  return {
+    authority: authority.exists ? { valid: authority.valid, reason: authority.reason || null, record: authority.record } : null,
+    handoff: handoff.exists ? { valid: handoff.valid, reason: handoff.reason || null, record: handoff.record } : null,
+  };
+}
