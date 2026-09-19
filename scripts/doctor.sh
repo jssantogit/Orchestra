@@ -42,6 +42,7 @@ done
 # 2. Required Codex Runtime Files
 REQUIRED_CODEX_FILES=(
   "runtimes/codex/.codex/config.toml"
+  "runtimes/codex/.codex/hooks.json"
   "runtimes/codex/.codex/astra-orchestra/INSTRUCTIONS.md"
   "runtimes/codex/.codex/astra-orchestra/routing-policy.mjs"
   "runtimes/codex/.codex/astra-orchestra/routing-policy.test.mjs"
@@ -54,6 +55,9 @@ REQUIRED_CODEX_FILES=(
   "runtimes/codex/.codex/astra-orchestra/evidence-watch-runner.mjs"
   "runtimes/codex/.codex/astra-orchestra/feedback-plane.mjs"
   "runtimes/codex/.codex/astra-orchestra/trust-boundary.mjs"
+  "runtimes/codex/.codex/astra-orchestra/session-authority.mjs"
+  "runtimes/codex/.codex/astra-orchestra/session-hook.mjs"
+  "runtimes/codex/.codex/astra-orchestra/session-handoff-cli.mjs"
   "runtimes/codex/.codex/astra-orchestra/mechanical-fast-path.mjs"
   "runtimes/codex/.codex/astra-orchestra/context-packet.mjs"
   "runtimes/codex/.codex/astra-orchestra/dream-lab.mjs"
@@ -165,6 +169,9 @@ JS_FILES=(
   "runtimes/codex/.codex/astra-orchestra/evidence-watch-runner.mjs"
   "runtimes/codex/.codex/astra-orchestra/feedback-plane.mjs"
   "runtimes/codex/.codex/astra-orchestra/trust-boundary.mjs"
+  "runtimes/codex/.codex/astra-orchestra/session-authority.mjs"
+  "runtimes/codex/.codex/astra-orchestra/session-hook.mjs"
+  "runtimes/codex/.codex/astra-orchestra/session-handoff-cli.mjs"
   "runtimes/codex/.codex/astra-orchestra/mechanical-fast-path.mjs"
   "runtimes/codex/.codex/astra-orchestra/context-packet.mjs"
   "runtimes/codex/.codex/astra-orchestra/dream-lab.mjs"
@@ -263,10 +270,10 @@ else
   report_fail "Codex routing policy tests failed"
 fi
 
-if node --test "${ROOT_DIR}/runtimes/codex/tests/parity.test.mjs" "${ROOT_DIR}/runtimes/codex/tests/evidence-observability.test.mjs" >/dev/null 2>&1; then
-  report_pass "Codex runtime parity and evidence observability tests passed"
+if node --test "${ROOT_DIR}/runtimes/codex/tests/parity.test.mjs" "${ROOT_DIR}/runtimes/codex/tests/evidence-observability.test.mjs" "${ROOT_DIR}/runtimes/codex/tests/session-authority.test.mjs" "${ROOT_DIR}/runtimes/codex/tests/session-hook.test.mjs" >/dev/null 2>&1; then
+  report_pass "Codex runtime parity, evidence observability, and session-authority tests passed"
 else
-  report_fail "Codex runtime parity/evidence observability tests failed"
+  report_fail "Codex runtime parity/evidence/session-authority tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/installers/codex-project-runtime-manager.test.mjs" >/dev/null 2>&1; then
