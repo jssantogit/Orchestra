@@ -7,6 +7,7 @@ import {
   openSync,
   readFileSync,
   readlinkSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -117,8 +118,23 @@ function gitOutput(root, args, { encoding = "utf8" } = {}) {
 function nulPaths(buffer) {
   return String(buffer || "")
     .split("\0")
-    .map((value) => value.trim())
-    .filter(Boolean);
+    .filter((value) => value.length > 0);
+}
+
+function hashRegularFile(path) {
+  const digest = createHash("sha256");
+  const fd = openSync(path, "r");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  try {
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      digest.update(buffer.subarray(0, bytesRead));
+    }
+    return digest.digest("hex");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function workingFileIdentity(root, relPath) {
@@ -139,7 +155,7 @@ function workingFileIdentity(root, relPath) {
         kind: "FILE",
         mode: stat.mode & 0o7777,
         size: stat.size,
-        content_hash: hash(readFileSync(absolute)),
+        content_hash: hashRegularFile(absolute),
       };
     }
     if (stat.isDirectory()) {
