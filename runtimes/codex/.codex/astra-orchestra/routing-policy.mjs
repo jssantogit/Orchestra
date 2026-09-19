@@ -1,5 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { verifyEvidenceContract } from "./evidence-contract.mjs";
+import { createCodexWorkerPacket } from "./context-packet.mjs";
+import { classifyMechanicalFastPath } from "./mechanical-fast-path.mjs";
 
 /**
  * Deterministic routing policy for the project-local OpenAI/Codex Orchestra.
@@ -458,6 +461,29 @@ export function decideRoute(facts = {}) {
       return routeFor("LUNA_HIGH", { reason: "focused-test-execution", taskDomain: normalizeTaskDomain(facts) });
     case "MECHANICAL_FIX": {
       const domain = normalizeTaskDomain(facts);
+      const explicitFastPath = facts.mechanicalFastPath === true || facts.fastPath === true;
+      if (explicitFastPath) {
+        const fastPath = classifyMechanicalFastPath({
+          taskAction: "MECHANICAL_FIX",
+          criticality: normalizeCriticality(facts),
+          scopeContract: facts.scopeContract || {},
+          requestedProfile: "luna-medium",
+          attempt: Number.isInteger(facts.attempt) ? facts.attempt : 0,
+          retry: facts.retry === true,
+        });
+        if (fastPath.eligible) {
+          return routeFor("LUNA_MEDIUM", {
+            reason: "bounded-mechanical-fast-path",
+            taskDomain: domain,
+            mechanicalFastPath: fastPath,
+          });
+        }
+        return routeFor("LUNA_HIGH", {
+          reason: "mechanical-fast-path-denied",
+          taskDomain: domain,
+          mechanicalFastPath: fastPath,
+        });
+      }
       const supportOnly = facts.deterministicSupport === true
         && facts.productWork !== true
         && ["DOCS", "INFRA", "TESTING"].includes(domain);
@@ -609,6 +635,7 @@ export function createScopeContract(details = {}) {
     dependencies: Array.isArray(merged.dependencies) ? [...merged.dependencies] : [],
     acceptanceCriteria: Array.isArray(merged.acceptanceCriteria) ? [...merged.acceptanceCriteria] : [],
     testsRequired: Array.isArray(merged.testsRequired) ? [...merged.testsRequired] : [],
+    requiredEvidence: Array.isArray(merged.requiredEvidence) ? structuredClone(merged.requiredEvidence) : [],
     retryBudget: createRetryBudget(merged),
     stopConditions: Array.isArray(merged.stopConditions) ? [...merged.stopConditions] : [],
     doNotChange: Array.isArray(merged.doNotChange) ? [...merged.doNotChange] : [],
@@ -700,11 +727,32 @@ export function evaluateAcceptance(details = {}) {
   const workerResult = details.workerResult ?? {};
   const workerComplete = workerResult.status === "IMPLEMENTATION_COMPLETE" && workerResult.complete !== false;
   if (!workerComplete) return { accepted: false, result: "WORKER_INCOMPLETE", owner: "terra", workerComplete };
-  const requiredTests = Array.isArray(details.requiredTests) ? details.requiredTests : [];
+  const scopeContract = details.scopeContract ?? {};
+  const requiredTests = Array.isArray(details.requiredTests)
+    ? details.requiredTests
+    : (Array.isArray(scopeContract.testsRequired) ? scopeContract.testsRequired : []);
   const evidence = Array.isArray(details.evidence) ? details.evidence : [];
-  const evidenceComplete = requiredTests.every((command) => evidenceForCommand(evidence, command));
-  if (!evidenceComplete) return { accepted: false, result: "EVIDENCE_INCOMPLETE", owner: "terra", workerComplete, evidenceComplete };
-  const scope = validateScopeContract(details.scopeContract ?? {}, details.changedPaths ?? []);
+  let evidenceComplete;
+  let evidenceContract = null;
+  if (Array.isArray(scopeContract.requiredEvidence) && scopeContract.requiredEvidence.length > 0) {
+    const activeState = {
+      ...(details.activeState || {}),
+      taskId: details.activeState?.taskId || details.taskId || null,
+      attempt: Number.isInteger(details.activeState?.attempt) ? details.activeState.attempt : (Number.isInteger(details.attempt) ? details.attempt : 0),
+      mutationSeq: Number.isInteger(details.activeState?.mutationSeq) ? details.activeState.mutationSeq : (Number.isInteger(details.mutationSeq) ? details.mutationSeq : 0),
+      evidenceLedger: Array.isArray(details.evidenceLedger) ? details.evidenceLedger : evidence,
+    };
+    evidenceContract = verifyEvidenceContract({
+      activeState,
+      contract: scopeContract,
+      evidenceLedger: activeState.evidenceLedger,
+    });
+    evidenceComplete = evidenceContract.verified === true;
+  } else {
+    evidenceComplete = requiredTests.every((command) => evidenceForCommand(evidence, command));
+  }
+  if (!evidenceComplete) return { accepted: false, result: "EVIDENCE_INCOMPLETE", owner: "terra", workerComplete, evidenceComplete, evidenceContract };
+  const scope = validateScopeContract(scopeContract, details.changedPaths ?? []);
   if (!scope.valid) return { accepted: false, result: "SCOPE_VIOLATION", owner: "terra", workerComplete, evidenceComplete, scope };
   if (requiresIntegration(details) && details.integrated !== true) {
     return { accepted: false, result: "INTEGRATION_REQUIRED", owner: "terra", workerComplete, evidenceComplete, scope };
@@ -1188,6 +1236,17 @@ export function createImplementationHandoff(details = {}) {
     taskAction: "IMPLEMENT",
     taskDomain: details.taskDomain,
   });
+  const workerPacket = createCodexWorkerPacket({
+    task: {
+      taskId: details.taskId || details.activeState?.taskId || null,
+      taskAction: "IMPLEMENT",
+      taskDomain: scopeContract.taskDomain,
+      goal: details.goal ?? details.task ?? null,
+    },
+    scopeContract,
+    activeState: details.activeState || {},
+    auxiliaryRefs: Array.isArray(details.auxiliaryRefs) ? details.auxiliaryRefs : [],
+  });
   return {
     taskAction: "IMPLEMENT",
     taskDomain: scopeContract.taskDomain,
@@ -1198,7 +1257,7 @@ export function createImplementationHandoff(details = {}) {
     reasoningEffort: CODEX_MODELS.LUNA_MAX.reasoningEffort,
     task: details.task ?? null,
     goal: details.goal ?? null,
-    packetFormat: ["goal", "taskDomain", "allowedPaths", "forbiddenPaths", "decision", "acceptanceCriteria", "testsRequired", "stopConditions", "knownRisks"],
+    packetFormat: ["goal", "taskDomain", "allowedPaths", "forbiddenPaths", "decision", "acceptanceCriteria", "testsRequired", "requiredEvidence", "sideEffectCapabilities", "stopConditions", "knownRisks"],
     knownRisks: details.knownRisks ?? details.risks ?? [],
     rootCauseDecision: details.rootCauseDecision ?? details.decision ?? null,
     files: details.files ?? details.areas ?? [],
@@ -1206,8 +1265,11 @@ export function createImplementationHandoff(details = {}) {
     implementationPlan: details.implementationPlan ?? [],
     acceptanceCriteria: details.acceptanceCriteria ?? [],
     testsRequired: details.testsRequired ?? [],
+    requiredEvidence: details.requiredEvidence ?? [],
+    sideEffectCapabilities: details.sideEffectCapabilities ?? details.side_effect_capabilities ?? [],
     doNotChange: details.doNotChange ?? [],
     scopeContract,
+    workerPacket,
   };
 }
 
@@ -1268,8 +1330,13 @@ export function scanCodexOperationalFiles(cwd = process.cwd()) {
   const files = [
     join(codexDir, "config.toml"),
     join(codexDir, "astra-orchestra", "INSTRUCTIONS.md"),
-    join(codexDir, "astra-orchestra", "routing-policy.mjs"),
   ];
+  const orchestraDir = join(codexDir, "astra-orchestra");
+  if (existsSync(orchestraDir)) {
+    for (const name of readdirSync(orchestraDir).filter((entry) => entry.endsWith(".mjs") && !entry.endsWith(".test.mjs"))) {
+      files.push(join(orchestraDir, name));
+    }
+  }
   const agentsDir = join(codexDir, "agents");
   if (existsSync(agentsDir)) {
     for (const name of readdirSync(agentsDir).filter((entry) => entry.endsWith(".toml"))) files.push(join(agentsDir, name));

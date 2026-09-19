@@ -57,8 +57,9 @@ Every delegation to Luna or Terra includes:
 1. `taskDomain`: Canonical domain (`CODE`, `UI`, `DATA`, `INFRA`, `TESTING`, `DOCS`, `RESEARCH`, `GENERAL`).
 2. `scopeContract`: Explicit `allowedPaths` and `forbiddenPaths`.
 3. `acceptanceCriteria`: Measurable requirements.
-4. `requiredValidation`: Specific test/lint commands.
-5. `retryBudget`: Capped retry attempts (default 2).
+4. `testsRequired` and/or structured `requiredEvidence`.
+5. `sideEffectCapabilities`: Explicit capabilities for remote/public writes when needed.
+6. `retryBudget`: Capped retry attempts (default 2).
 
 ---
 
@@ -80,10 +81,54 @@ When the user requests routine operations (e.g. status, diff, running a named te
 
 ---
 
-## 6. Testing & Verification
+## 6. Native parity modules (0.8)
 
-Run the deterministic policy test suite:
+Milestone M adds provider-native Codex implementations for:
+
+- first-class Evidence Contract verification and delegated evidence federation;
+- read-only Evidence Inspector and explicit remote-CI watch steps;
+- Attributable Feedback Plane;
+- side-effect/context Trust Boundary;
+- bounded Luna Medium Mechanical Fast Path;
+- mandatory-core, bounded-reference Context Packet with output/search guards;
+- zero-authority Dream replay/shadow with explicit human Canary approval;
+- managed `.codex` install/update/doctor/diff/backup/rollback lifecycle.
+
+These modules live under `.codex/astra-orchestra/` and never import
+Antigravity operational code.
+
+Provider-native transcript management remains owned by Codex. Orchestra stores
+only bounded factual sidecars under project-owned `.codex/orchestra-*/`
+namespaces.
+
+---
+
+## 7. Project runtime management
+
+For an existing Codex project:
 
 ```bash
-node --test runtimes/codex/tests/routing-policy.test.mjs
+node scripts/orchestra-codex-project.mjs update /path/to/project --dry-run
+node scripts/orchestra-codex-project.mjs update /path/to/project
+node scripts/orchestra-codex-project.mjs doctor /path/to/project
+node scripts/orchestra-codex-project.mjs version /path/to/project
+node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
+node scripts/orchestra-codex-project.mjs evidence /path/to/project
+node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
+```
+
+The manager owns only `.codex/config.toml`, `.codex/agents/`, and
+`.codex/astra-orchestra/`. State, telemetry, artifacts, semantic approval
+data, and runtime-management history remain project-owned and survive updates.
+
+---
+
+## 8. Testing & Verification
+
+Run the complete deterministic Codex verification:
+
+```bash
+npm run test:codex
+node --test tests/installers/codex-project-runtime-manager.test.mjs
+node --test tests/architecture-invariants/codex-parity-authority.test.mjs
 ```

@@ -13,8 +13,14 @@ export function runContaminationCheck(rootDir = root) {
   const codexFiles = [
     join(codexDir, "config.toml"),
     join(codexDir, "astra-orchestra/INSTRUCTIONS.md"),
-    join(codexDir, "astra-orchestra/routing-policy.mjs"),
   ];
+
+  const codexOrchestraDir = join(codexDir, "astra-orchestra");
+  if (existsSync(codexOrchestraDir)) {
+    for (const file of readdirSync(codexOrchestraDir)) {
+      if (file.endsWith(".mjs") && !file.endsWith(".test.mjs")) codexFiles.push(join(codexOrchestraDir, file));
+    }
+  }
 
   const codexAgentsDir = join(codexDir, "agents");
   if (existsSync(codexAgentsDir)) {
