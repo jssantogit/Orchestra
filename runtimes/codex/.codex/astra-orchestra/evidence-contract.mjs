@@ -217,11 +217,11 @@ function localEvidenceCommitMatches(ev, activeState) {
 
 function validLocalCommandProvenance(ev, activeState) {
   const producer = localProducer(ev);
-  const workerRole = ["WORKER", "FLASH", "FLASH_WORKER", "FLASH_MEDIUM_WORKER", "FLASH_LOW_WORKER", "VALIDATOR"].includes(producer.role);
+  const workerRole = ["WORKER", "LUNA", "LUNA_HIGH", "LUNA_MEDIUM", "LUNA_MAX", "VALIDATOR"].includes(producer.role);
   const delegatedValidation = workerRole
     && ["WORK", "VALIDATION"].includes(String(producer.delegationKind || "WORK").toUpperCase())
     && producer.source === "RUNTIME_IDENTITY";
-  const parentValidation = ["ORCHESTRATOR", "FLASH_ORCHESTRATOR"].includes(producer.role)
+  const parentValidation = ["ORCHESTRATOR", "TERRA", "TERRA_MEDIUM"].includes(producer.role)
     && ["RUNTIME_IDENTITY", "CONVERSATION_BOUND_IDENTITY"].includes(producer.source)
     && !producer.delegationKind;
   const parentMatches = !producer.parentConversationId
