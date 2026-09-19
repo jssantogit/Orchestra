@@ -232,26 +232,32 @@ function main() {
     convId && knownMainConversationId && convId !== knownMainConversationId
   );
   if (freshRootMainMismatch) {
-    state.identityBootstrapRejected = {
-      conversationId: convId,
-      knownMainConversationId,
-      reason: "KNOWN_MAIN_MISMATCH",
-      timestamp: new Date().toISOString(),
-    };
-    const alreadyGuided = injectSteps.some((step) =>
-      String(step?.ephemeralMessage || "").includes("ORCHESTRATOR HANDOFF REQUIRED")
-    );
-    if (!alreadyGuided) {
-      const handoffReason = state.orchestratorHandoffClaimRejected?.reason || "NO_ARMED_HANDOFF";
-      injectSteps.push({
-        ephemeralMessage:
-          "ORCHESTRATOR HANDOFF REQUIRED: this fresh root conversation does not currently own project orchestration authority. "
-          + "The factual main conversation is still " + knownMainConversationId + ". "
-          + "Do not attempt development tools and do not ask the user to edit role-bindings.json, copy conversation IDs, or run a Node repair command. "
-          + "Ask the user to return to the previous main chat and say that they want to continue in a fresh chat; that orchestrator must arm the managed session handoff itself. "
-          + "Then this conversation can be reopened/continued and will claim automatically. Handoff status: " + handoffReason + ".",
-      });
-    }
+    const handoffReason = state.orchestratorHandoffClaimRejected?.reason || "NO_ARMED_HANDOFF";
+    injectSteps.push({
+      ephemeralMessage:
+        "ORCHESTRATOR HANDOFF REQUIRED: this conversation does not currently own project orchestration authority. "
+        + "A different factual main conversation is still active. "
+        + "Do not execute development tools and do not ask the user to edit role-bindings.json, copy conversation IDs, or run a Node repair command. "
+        + "Ask the user to return to the previous main chat and say that they want to continue in a fresh chat; that orchestrator must arm the managed session handoff itself. "
+        + "Then continue this conversation; its next invocation will claim automatically if the handoff is valid. Handoff status: " + handoffReason + ".",
+    });
+
+    // Context firewall: a non-authoritative root gets no active task capsule,
+    // scope, evidence, advisory state, worker identities, or current-milestone
+    // counters. It also must not mutate the factual main's active-state file.
+    try {
+      mkdirSync(dirname(telemetryPath), { recursive: true });
+      appendFileSync(telemetryPath, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "ORCHESTRATOR_HANDOFF_REQUIRED",
+        conversationId: convId,
+        currentMainConversationId: knownMainConversationId,
+        reason: handoffReason,
+      }) + "\n", "utf-8");
+    } catch {}
+
+    console.log(JSON.stringify({ injectSteps }));
+    return;
   }
 
   if (convId && !roleBindings.mainConversationId) {
