@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { verifyEvidenceContract } from "./evidence-contract.mjs";
+import { createCodexWorkerPacket } from "./context-packet.mjs";
+import { classifyMechanicalFastPath } from "./mechanical-fast-path.mjs";
 
 /**
  * Deterministic routing policy for the project-local OpenAI/Codex Orchestra.
@@ -459,6 +461,29 @@ export function decideRoute(facts = {}) {
       return routeFor("LUNA_HIGH", { reason: "focused-test-execution", taskDomain: normalizeTaskDomain(facts) });
     case "MECHANICAL_FIX": {
       const domain = normalizeTaskDomain(facts);
+      const explicitFastPath = facts.mechanicalFastPath === true || facts.fastPath === true;
+      if (explicitFastPath) {
+        const fastPath = classifyMechanicalFastPath({
+          taskAction: "MECHANICAL_FIX",
+          criticality: normalizeCriticality(facts),
+          scopeContract: facts.scopeContract || {},
+          requestedProfile: "luna-medium",
+          attempt: Number.isInteger(facts.attempt) ? facts.attempt : 0,
+          retry: facts.retry === true,
+        });
+        if (fastPath.eligible) {
+          return routeFor("LUNA_MEDIUM", {
+            reason: "bounded-mechanical-fast-path",
+            taskDomain: domain,
+            mechanicalFastPath: fastPath,
+          });
+        }
+        return routeFor("LUNA_HIGH", {
+          reason: "mechanical-fast-path-denied",
+          taskDomain: domain,
+          mechanicalFastPath: fastPath,
+        });
+      }
       const supportOnly = facts.deterministicSupport === true
         && facts.productWork !== true
         && ["DOCS", "INFRA", "TESTING"].includes(domain);
@@ -1211,6 +1236,17 @@ export function createImplementationHandoff(details = {}) {
     taskAction: "IMPLEMENT",
     taskDomain: details.taskDomain,
   });
+  const workerPacket = createCodexWorkerPacket({
+    task: {
+      taskId: details.taskId || details.activeState?.taskId || null,
+      taskAction: "IMPLEMENT",
+      taskDomain: scopeContract.taskDomain,
+      goal: details.goal ?? details.task ?? null,
+    },
+    scopeContract,
+    activeState: details.activeState || {},
+    auxiliaryRefs: Array.isArray(details.auxiliaryRefs) ? details.auxiliaryRefs : [],
+  });
   return {
     taskAction: "IMPLEMENT",
     taskDomain: scopeContract.taskDomain,
@@ -1233,6 +1269,7 @@ export function createImplementationHandoff(details = {}) {
     sideEffectCapabilities: details.sideEffectCapabilities ?? details.side_effect_capabilities ?? [],
     doNotChange: details.doNotChange ?? [],
     scopeContract,
+    workerPacket,
   };
 }
 
