@@ -44,6 +44,15 @@ function makeProject() {
   return root;
 }
 
+function initGitWorkspace(root) {
+  execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+  execFileSync("git", ["config", "user.name", "Orchestra Tests"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "orchestra@example.invalid"], { cwd: root });
+  writeFileSync(join(root, "product.txt"), "baseline\n");
+  execFileSync("git", ["add", "product.txt"], { cwd: root });
+  execFileSync("git", ["commit", "-m", "baseline"], { cwd: root, stdio: "ignore" });
+}
+
 function statePath(root) {
   return join(root, ".agents", "state", "active-state.json");
 }
@@ -182,7 +191,7 @@ test("handoff: boundary preparation fails while work is active or child delegati
   const activeRoot = makeProject();
   const childRoot = makeProject();
   try {
-    seedBoundary(activeRoot, { state: "EXECUTING", acceptanceState: "PENDING" });
+    seedBoundary(activeRoot, { state: "PLANNED", acceptanceState: "PENDING" });
     assert.throws(
       () => prepareProjectOrchestratorHandoff(activeRoot),
       /ORCHESTRATOR_HANDOFF_BOUNDARY_NOT_QUIESCENT/,
@@ -200,6 +209,14 @@ test("handoff: boundary preparation fails while work is active or child delegati
     assert.throws(
       () => prepareProjectOrchestratorHandoff(childRoot),
       /ORCHESTRATOR_HANDOFF_PENDING_SUBAGENTS/,
+    );
+
+    seedBoundary(activeRoot, { state: "DELEGATED", acceptanceState: "PENDING" });
+    assert.throws(
+      () => prepareProjectOrchestratorHandoff(activeRoot, {
+        mode: ORCHESTRATOR_HANDOFF_MODES.LIVE_CONTINUATION,
+      }),
+      /ORCHESTRATOR_HANDOFF_IN_FLIGHT_WORK/,
     );
   } finally {
     rmSync(activeRoot, { recursive: true, force: true });
@@ -289,6 +306,44 @@ test("handoff: changed authority state makes the lease stale and fail-closed", (
     assert.equal(readProjectOrchestratorHandoff(root).record.status, "ARMED");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("handoff: product workspace change after prepare invalidates the lease, governance writes do not", () => {
+  const root = makeProject();
+  try {
+    initGitWorkspace(root);
+    seedBoundary(root);
+    const prepared = prepareProjectOrchestratorHandoff(root);
+    assert.equal(prepared.record.workspace_git_available, true);
+    assert.ok(prepared.record.workspace_head);
+
+    // Governance state changes under .agents are excluded from the product fingerprint.
+    writeFileSync(join(root, ".agents", "telemetry", "extra.jsonl"), "{\"event\":\"runtime-only\"}\n");
+    const stillValid = claimProjectOrchestratorHandoff(root, {
+      candidateConversationId: "new-root-runtime-only",
+    });
+    assert.equal(stillValid.claimed, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  const changedRoot = makeProject();
+  try {
+    initGitWorkspace(changedRoot);
+    seedBoundary(changedRoot);
+    prepareProjectOrchestratorHandoff(changedRoot);
+    writeFileSync(join(changedRoot, "new-product-file.txt"), "changed after prepare\n");
+
+    const stale = claimProjectOrchestratorHandoff(changedRoot, {
+      candidateConversationId: "new-root-stale",
+    });
+    assert.equal(stale.claimed, false);
+    assert.equal(stale.reason, "ORCHESTRATOR_HANDOFF_STALE_WORKSPACE_CHANGED");
+    assert.equal(readProjectOrchestratorHandoff(changedRoot).record.status, "ARMED");
+  } finally {
+    rmSync(changedRoot, { recursive: true, force: true });
   }
 });
 
