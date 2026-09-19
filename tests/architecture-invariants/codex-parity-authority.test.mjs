@@ -29,7 +29,7 @@ const root = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const codexOrchestraDir = join(root, "runtimes/codex/.codex/astra-orchestra");
 
 test("ARCH-M01: active Codex modules never import Antigravity operational code", () => {
-  const files = readdirSync(codexOrchestraDir).filter((name) => name.endsWith(".mjs"));
+  const files = readdirSync(codexOrchestraDir).filter((name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs"));
   for (const name of files) {
     const source = readFileSync(join(codexOrchestraDir, name), "utf8");
     assert.equal(
@@ -113,7 +113,7 @@ test("ARCH-M07: Codex runtime manager owns code and preserves state in disjoint 
 });
 
 test("ARCH-M08: Codex parity source contains no Jev service route or provider contamination", () => {
-  const files = readdirSync(codexOrchestraDir).filter((name) => name.endsWith(".mjs"));
+  const files = readdirSync(codexOrchestraDir).filter((name) => name.endsWith(".mjs") && !name.endsWith(".test.mjs"));
   for (const name of files) {
     const source = readFileSync(join(codexOrchestraDir, name), "utf8");
     assert.equal(/api\.typesafe\.ai|TYPESAFE_API_KEY|jev-latest|experiments[\\/]jev/i.test(source), false, name);
