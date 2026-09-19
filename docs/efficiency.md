@@ -66,3 +66,27 @@ Mandatory packet content is never rankable. Goal, Scope Contract, path boundarie
 
 Jev currently runs offline/shadow only. Retrieval Assist code is fail-closed behind a factual evaluation report, matching human approval and an explicit local feature flag.
 
+
+---
+
+## 7. Codex Native Context Packet
+
+Orchestra 0.8 adds the same context-diet safety property to the Codex runtime
+without depending on Antigravity hooks.
+
+`.codex/astra-orchestra/context-packet.mjs` builds worker packets from a
+non-rankable mandatory core plus bounded auxiliary references. The mandatory
+core contains task identity, Scope Contract, acceptance criteria, required
+evidence, retry/mutation state, blockers, and Human Gate state.
+
+Auxiliary context defaults to at most 8 references and 16 KiB of reference
+metadata. Pinned governance references are never silently dropped.
+
+The Codex packet boundary rejects raw transcript/messages, prompts, hidden
+reasoning/thinking, raw stdout/stderr, credentials, secrets, and environment
+objects. Outputs above 64 KiB or 300 lines are classified
+`PERSIST_AND_REFERENCE`; files above 200 KiB default to
+`SEARCH_THEN_WINDOW` when no precise symbol/line anchor is already known.
+
+These are deterministic packet/output decisions. Provider-native transcript
+management remains owned by Codex.
