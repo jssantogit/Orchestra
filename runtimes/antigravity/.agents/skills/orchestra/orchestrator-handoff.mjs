@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 
 import { createContinuationCapsule } from "./trust-boundary.mjs";
@@ -26,6 +27,13 @@ export const ORCHESTRATOR_HANDOFF_MODES = Object.freeze({
 });
 
 const QUIESCENT_STATES = new Set(["DONE", "BLOCKED", "HUMAN_GATE"]);
+const IN_FLIGHT_RUNTIME_STATES = new Set([
+  "DELEGATED",
+  "EXECUTING",
+  "CI_WAIT",
+  "INTEGRATING",
+  "CRITICAL_REVIEW",
+]);
 const FORBIDDEN_CAPSULE_KEYS = new Set([
   "transcript", "transcripts", "messages", "prompt", "prompts",
   "reasoning", "thinking", "chainOfThought", "chain_of_thought",
@@ -81,6 +89,38 @@ function runtimePaths(repoRoot) {
   };
 }
 
+function readWorkspaceFingerprint(repoRoot) {
+  const root = resolve(repoRoot);
+  try {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).trim() || null;
+    const status = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    });
+    const workingTreeHash = hash(status);
+    return {
+      available: true,
+      head,
+      working_tree_hash: workingTreeHash,
+      fingerprint: hash({ head, workingTreeHash }),
+    };
+  } catch {
+    return {
+      available: false,
+      head: null,
+      working_tree_hash: null,
+      fingerprint: hash({ git: "UNAVAILABLE" }),
+    };
+  }
+}
+
 function readJson(path, fallback = null) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -109,6 +149,10 @@ function unconsumedPending(roleBindings = {}) {
 
 function inFlightDescriptors(activeState = {}) {
   const descriptors = [];
+  const runtimeState = String(activeState.state || "").toUpperCase();
+  if (IN_FLIGHT_RUNTIME_STATES.has(runtimeState)) {
+    descriptors.push({ kind: "runtimeState", state: runtimeState });
+  }
   const candidates = [
     ["investigationInFlight", activeState.investigationInFlight],
     ["directInvestigationDecisionInFlight", activeState.directInvestigationDecisionInFlight],
@@ -384,12 +428,20 @@ export function prepareProjectOrchestratorHandoff(repoRoot, options = {}) {
     };
   }
 
-  const record = prepareOrchestratorHandoffRecord({
+  const baseRecord = prepareOrchestratorHandoffRecord({
     activeState,
     activeContract,
     roleBindings,
     ...options,
     mode: requestedMode,
+  });
+  const workspace = readWorkspaceFingerprint(paths.root);
+  const record = finalizeRecord({
+    ...recordBody(baseRecord),
+    workspace_fingerprint: workspace.fingerprint,
+    workspace_head: workspace.head,
+    working_tree_hash: workspace.working_tree_hash,
+    workspace_git_available: workspace.available,
   });
   writeJson(paths.handoffPath, record);
   appendTelemetry(paths.telemetryPath, {
@@ -674,6 +726,19 @@ export function claimProjectOrchestratorHandoff(repoRoot, {
     const loaded = readProjectOrchestratorHandoff(paths.root);
     if (!loaded.exists) return { claimed: false, reason: "ORCHESTRATOR_HANDOFF_NOT_FOUND" };
     if (!loaded.valid) return { claimed: false, reason: loaded.reason };
+
+    const workspace = readWorkspaceFingerprint(paths.root);
+    if (
+      loaded.record.workspace_fingerprint
+      && workspace.fingerprint !== loaded.record.workspace_fingerprint
+    ) {
+      return {
+        claimed: false,
+        reason: "ORCHESTRATOR_HANDOFF_STALE_WORKSPACE_CHANGED",
+        preparedHead: loaded.record.workspace_head || null,
+        currentHead: workspace.head || null,
+      };
+    }
 
     const activeState = readJson(paths.statePath, {});
     const roleBindings = readJson(paths.roleBindingsPath, {
