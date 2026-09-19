@@ -50,6 +50,7 @@ Orchestra preserves two independent provider runtimes. They share core principle
 - Powered by OpenAI models: **Terra Medium** (control plane), **Luna High / Max** (workers), **Luna Medium** (support), **Terra High / Max** (investigation), and **Sol Low / Medium** (critical review).
 - **Astra Manual Only**: GPT-6 Astra is strictly manual-only upon explicit approval of an escalation packet. Automatic fallback or routing to Astra fails closed.
 - Integrates via native Codex project configuration (`.codex/config.toml`) and custom agent profiles (`.codex/agents/*.toml`).
+- **0.8 Runtime Parity** adds Codex-native factual Evidence Contracts/Federation, Feedback Plane, side-effect Trust Boundary, bounded context packets, Mechanical Fast Path, isolated Dream replay/shadow, and first-class `.codex` lifecycle management.
 
 ### 2. Antigravity Runtime (`runtimes/antigravity/`)
 - Powered by Google Gemini models under a 100% **ALL-GEMINI** architecture.
@@ -83,10 +84,10 @@ Orchestra preserves two independent provider runtimes. They share core principle
    - Validated continuously via automated firewall test suites.
 7. **Attributable Feedback & Context Trust**:
    - Hypotheses and experiments remain model claims until bound to factual runtime evidence.
-   - Antigravity reconstructs a bounded Runtime Continuation Capsule from persisted authority rather than trusting summaries or handoff prose.
+   - Both runtimes reconstruct bounded authority from factual runtime state rather than trusting summaries or handoff prose; Codex uses its native continuation/trust modules while Antigravity enforces the same property through hooks.
    - Remote/public writes are capability-gated and default-deny unless factual authority explicitly permits them.
 8. **Governed Recursive Exploration**:
-   - Dream policy can optimize isolated branching, bounded parallelism, pruning, and stopping only inside static runtime ceilings.
+   - Antigravity Dream can optimize isolated branching, bounded parallelism, pruning, and stopping only inside static runtime ceilings; Codex Dream remains an isolated offline/shadow lab with one active exploration branch and human-only Canary approval.
    - Full exploration composes sandboxed sibling workspaces; it never turns the primary project into a multi-writer free-for-all.
    - Learned exploration changes still pass Exact Replay, Shadow, progressive human-approved Canary, and explicit human promotion.
 
@@ -126,7 +127,8 @@ Orchestra/
 ├── scripts/
 │   ├── install-codex.sh       # Installs Codex runtime into target project
 │   ├── install-antigravity.sh # Clean Antigravity install
-│   ├── orchestra-project.mjs  # Install/update/doctor/version/diff/rollback manager
+│   ├── orchestra-project.mjs  # Antigravity install/update/doctor/version/diff/rollback manager
+│   ├── orchestra-codex-project.mjs # Codex install/update/doctor/version/diff/rollback manager
 │   ├── doctor.sh              # Validates Orchestra repository health
 │   └── contamination-check.mjs # Cross-runtime firewall scan
 │
@@ -145,7 +147,22 @@ Install Orchestra into any existing code repository:
 ```bash
 ./scripts/install-codex.sh /path/to/your/project
 ```
-This installs `.codex/` with `config.toml`, instructions, 9 custom agents, and the deterministic routing policy.
+This performs a clean install of `.codex/` with config, instructions, 9 custom
+agents, and the native parity modules.
+
+For an existing Codex project, use the managed updater instead of replacing
+`.codex` manually:
+
+```bash
+node scripts/orchestra-codex-project.mjs update /path/to/project --dry-run
+node scripts/orchestra-codex-project.mjs update /path/to/project
+node scripts/orchestra-codex-project.mjs doctor /path/to/project
+node scripts/orchestra-codex-project.mjs version /path/to/project
+node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
+```
+
+The Codex manager replaces only `.codex/config.toml`, `.codex/agents/`, and
+`.codex/astra-orchestra/`; project-owned Codex state is preserved.
 
 ### For Antigravity (Gemini):
 ```bash
@@ -188,7 +205,7 @@ All test suites are 100% deterministic, offline, and require **no API keys**:
 
 ```bash
 # Run all deterministic tests
-node --test runtimes/codex/tests/routing-policy.test.mjs
+npm run test:codex
 node --test runtimes/antigravity/tests/routing-policy.test.mjs
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
 node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
@@ -221,3 +238,19 @@ Orchestra includes an optional TypeSafe AI Jev experiment for **semantic priorit
 
 See `experiments/jev/README.md` and `docs/superpowers/specs/2026-09-18-orchestra-jev-semantic-memory.md`.
 
+
+### Codex Runtime Parity (0.8)
+
+Milestone M closes the architectural gap between the two runtimes while
+preserving strict provider isolation.
+
+Codex now has native modules for first-class factual evidence, delegated
+evidence federation, explicit remote-CI watches, attributable feedback,
+side-effect/context trust, bounded mechanical support, reference-oriented
+worker packets, zero-authority Dream replay/shadow, and managed `.codex`
+updates/backups/rollback.
+
+Parity means equivalent governance guarantees, not identical engine hooks.
+Codex does not import Antigravity operational code and does not emulate
+Antigravity's hook runtime. See
+`docs/superpowers/specs/2026-09-18-codex-runtime-parity.md`.
