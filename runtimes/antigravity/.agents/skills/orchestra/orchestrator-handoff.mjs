@@ -517,6 +517,16 @@ export function applyOrchestratorHandoffClaim({
   const previous = nextRoleBindings.bindings[previousConversationId]
     || nextRoleBindings.conversations[previousConversationId]
     || {};
+
+  if (record.mode === ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY) {
+    // Worker/reviewer/investigator bindings belong to the sealed milestone.
+    // Keep only lineage endpoints; task-scoped child identity history remains
+    // available in telemetry instead of contaminating future authority packets.
+    nextRoleBindings.bindings = {};
+    nextRoleBindings.conversations = {};
+    nextRoleBindings.pendingSubagents = [];
+  }
+
   const formerRecord = {
     ...previous,
     conversationId: previousConversationId,
