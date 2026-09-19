@@ -310,6 +310,8 @@ export function authorityStateSnapshot(activeState = {}, roleBindings = {}) {
 
   return {
     mainConversationId: roleBindings.mainConversationId || activeState.conversationId || null,
+    roleBindingsMainConversationId: roleBindings.mainConversationId || null,
+    activeStateConversationId: activeState.conversationId || null,
     taskId: activeState.taskId || activeState.taskKey || null,
     taskAction: activeState.taskAction || activeState.task_action || null,
     taskDomain: activeState.taskDomain || activeState.task_domain || null,
@@ -438,11 +440,25 @@ export function prepareOrchestratorHandoffRecord({
 
   const mainConversationId = roleBindings.mainConversationId || activeState.conversationId || null;
   if (!mainConversationId) throw new Error("ORCHESTRATOR_HANDOFF_MAIN_CONVERSATION_REQUIRED");
+  if (
+    roleBindings.mainConversationId
+    && activeState.conversationId
+    && roleBindings.mainConversationId !== activeState.conversationId
+  ) {
+    throw new Error("ORCHESTRATOR_HANDOFF_AUTHORITY_STATE_MISMATCH");
+  }
 
   const binding = activeMainBinding(roleBindings, mainConversationId);
-  const bindingRole = String(binding?.role || activeState.activeRole || "ORCHESTRATOR").toUpperCase();
-  if (!["ORCHESTRATOR", "FLASH_ORCHESTRATOR"].includes(bindingRole)) {
-    throw new Error("ORCHESTRATOR_HANDOFF_MAIN_ROLE_INVALID");
+  if (!binding) throw new Error("ORCHESTRATOR_HANDOFF_MAIN_BINDING_REQUIRED");
+  const bindingRole = String(binding.role || "").toUpperCase();
+  const bindingConfidence = String(binding.confidence || "").toUpperCase();
+  const authorityStatus = String(binding.authorityStatus || "ACTIVE").toUpperCase();
+  if (
+    !["ORCHESTRATOR", "FLASH_ORCHESTRATOR"].includes(bindingRole)
+    || bindingConfidence !== "HIGH"
+    || authorityStatus === "TRANSFERRED"
+  ) {
+    throw new Error("ORCHESTRATOR_HANDOFF_MAIN_BINDING_NOT_AUTHORITATIVE");
   }
 
   const pending = unconsumedPending(roleBindings);
@@ -622,6 +638,13 @@ export function evaluateOrchestratorHandoffClaim({
     return { allowed: false, reason: "ORCHESTRATOR_HANDOFF_CHILD_IDENTITY" };
   }
 
+  if (
+    roleBindings.mainConversationId
+    && activeState.conversationId
+    && roleBindings.mainConversationId !== activeState.conversationId
+  ) {
+    return { allowed: false, reason: "ORCHESTRATOR_HANDOFF_AUTHORITY_STATE_MISMATCH" };
+  }
   const currentMain = roleBindings.mainConversationId || activeState.conversationId || null;
   if (currentMain !== record.from_conversation_id) {
     return { allowed: false, reason: "ORCHESTRATOR_HANDOFF_MAIN_CHANGED" };
@@ -882,11 +905,14 @@ export function claimProjectOrchestratorHandoff(repoRoot, {
     });
     if (!result.claimed) return result;
 
-    writeJson(paths.statePath, result.activeState);
-    writeJson(paths.roleBindingsPath, result.roleBindings);
     if (result.record.mode === ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY) {
+      // Remove old task authority before publishing the new root. If the
+      // process dies mid-claim, the failure mode is missing authority (safe),
+      // never a fresh root executing under the previous milestone contract.
       rmSync(paths.contractPath, { force: true });
     }
+    writeJson(paths.statePath, result.activeState);
+    writeJson(paths.roleBindingsPath, result.roleBindings);
     writeJson(paths.handoffPath, result.record);
     appendTelemetry(paths.telemetryPath, result.telemetry);
     return result;
