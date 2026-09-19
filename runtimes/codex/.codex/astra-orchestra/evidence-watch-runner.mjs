@@ -34,7 +34,7 @@ export function runCodexEvidenceWatchStep({
     return {
       schema: CODEX_EVIDENCE_WATCH_RUNNER_SCHEMA,
       polled: false,
-      shouldPoll: shouldPollEvidenceWatch(activeState, requirement.id, nowMs),
+      shouldPoll: shouldPollEvidenceWatch(activeState, requirement, nowMs),
       watch,
       summary: summarizeEvidenceWatches(activeState),
     };
@@ -52,7 +52,7 @@ export function runCodexEvidenceWatchStep({
 
   noteEvidenceWatchResult(
     activeState,
-    requirement.id,
+    requirement,
     {
       result: evidence.result,
       reason: evidence.reason,
