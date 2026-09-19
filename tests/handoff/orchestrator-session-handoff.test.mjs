@@ -154,21 +154,30 @@ function runPreTool(root, conversationId, toolName, args = {}) {
 }
 
 
-test("handoff: unauthorized fresh root receives managed recovery guidance instead of silent dead-end", () => {
+test("handoff: unauthorized fresh root gets only recovery guidance and cannot observe or mutate active context", () => {
   const root = makeProject();
   try {
     seedBoundary(root);
+    const beforeState = readFileSync(statePath(root), "utf8");
+    const beforeContract = readFileSync(join(root, ".agents", "state", "active-contract.json"), "utf8");
+
     const output = runPreInvocation(root, "fresh-without-lease");
-    const message = output.injectSteps
-      .map((step) => String(step.ephemeralMessage || ""))
-      .find((value) => value.includes("ORCHESTRATOR HANDOFF REQUIRED"));
-    assert.ok(message);
+    assert.equal(output.injectSteps.length, 1);
+    const message = String(output.injectSteps[0]?.ephemeralMessage || "");
+    assert.match(message, /ORCHESTRATOR HANDOFF REQUIRED/);
     assert.match(message, /do not ask the user to edit role-bindings\.json/i);
     assert.match(message, /previous main chat/i);
+    assert.doesNotMatch(message, /tsuzuki-milestone-1|app\/legacy|legacy-proof|legacy-evidence/);
+
+    assert.equal(readFileSync(statePath(root), "utf8"), beforeState);
+    assert.equal(readFileSync(join(root, ".agents", "state", "active-contract.json"), "utf8"), beforeContract);
 
     const bindings = JSON.parse(readFileSync(bindingsPath(root), "utf8"));
     assert.equal(bindings.mainConversationId, "old-root");
     assert.equal(bindings.bindings["fresh-without-lease"], undefined);
+
+    const telemetry = readFileSync(join(root, ".agents", "telemetry", "events.jsonl"), "utf8");
+    assert.match(telemetry, /ORCHESTRATOR_HANDOFF_REQUIRED/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -532,6 +541,42 @@ test("handoff: PreInvocation automatically transfers root authority exactly once
   }
 });
 
+
+
+test("handoff: former root cannot observe a new milestone after authority transfer", () => {
+  const root = makeProject();
+  try {
+    seedBoundary(root);
+    prepareProjectOrchestratorHandoff(root);
+    runPreInvocation(root, "new-root");
+
+    const state = JSON.parse(readFileSync(statePath(root), "utf8"));
+    state.taskId = "new-milestone-secret";
+    state.taskAction = "IMPLEMENT";
+    state.taskDomain = "CODE";
+    state.state = "PLANNED";
+    state.scopeContract = {
+      allowedPaths: ["new/private/**"],
+      forbiddenPaths: [".agents/**"],
+      requiredEvidence: [{ id: "new-proof", class: "LOCAL_TEST", kind: "LOCAL_COMMAND", command: "node --test new.test.mjs" }],
+    };
+    writeFileSync(statePath(root), JSON.stringify(state, null, 2));
+    writeFileSync(
+      join(root, ".agents", "state", "active-contract.json"),
+      JSON.stringify(state.scopeContract, null, 2),
+    );
+    const beforeState = readFileSync(statePath(root), "utf8");
+
+    const output = runPreInvocation(root, "old-root");
+    assert.equal(output.injectSteps.length, 1);
+    const message = String(output.injectSteps[0]?.ephemeralMessage || "");
+    assert.match(message, /ORCHESTRATOR HANDOFF REQUIRED/);
+    assert.doesNotMatch(message, /new-milestone-secret|new\/private|new-proof/);
+    assert.equal(readFileSync(statePath(root), "utf8"), beforeState);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("handoff: exclusive claim lock prevents simultaneous fresh roots", () => {
   const root = makeProject();
