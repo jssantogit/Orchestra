@@ -16,10 +16,11 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
 export const CODEX_PROJECT_RUNTIME_SCHEMA = "orchestra.codex-project-runtime.v1";
-export const CODEX_PROJECT_RUNTIME_MANAGER_VERSION = 1;
+export const CODEX_PROJECT_RUNTIME_MANAGER_VERSION = 2;
 
 export const CODEX_MANAGED_RUNTIME_PATHS = Object.freeze([
   ".codex/config.toml",
+  ".codex/hooks.json",
   ".codex/agents",
   ".codex/astra-orchestra",
 ]);
