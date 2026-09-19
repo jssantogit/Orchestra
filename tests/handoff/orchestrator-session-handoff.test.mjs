@@ -224,6 +224,30 @@ test("handoff: explicit live continuation carries bounded runtime authority but 
   }
 });
 
+
+test("handoff: live continuation claim preserves current task authority instead of resetting to INTAKE", () => {
+  const root = makeProject();
+  try {
+    seedBoundary(root, { state: "PLANNED", acceptanceState: "PENDING" });
+    prepareProjectOrchestratorHandoff(root, {
+      mode: ORCHESTRATOR_HANDOFF_MODES.LIVE_CONTINUATION,
+      reason: "context window reset",
+    });
+
+    const result = claimProjectOrchestratorHandoff(root, {
+      candidateConversationId: "new-live-root",
+      modelName: "gemini-3.8-flash-medium",
+    });
+    assert.equal(result.claimed, true);
+    assert.equal(result.activeState.state, "PLANNED");
+    assert.equal(result.activeState.taskId, "tsuzuki-milestone-1");
+    assert.deepEqual(result.activeState.scopeContract.allowedPaths, ["app/legacy/**"]);
+    assert.equal(existsSync(join(root, ".agents", "state", "active-contract.json")), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("handoff: child conversation cannot consume an armed root lease", () => {
   const root = makeProject();
   try {
@@ -292,6 +316,15 @@ test("handoff: PreInvocation automatically transfers root authority exactly once
     assert.equal(state.conversationId, "new-root");
     assert.equal(state.orchestratorGeneration, 1);
     assert.equal(state.lastOrchestratorHandoff.handoffId, prepared.record.handoff_id);
+    assert.equal(state.state, "INTAKE");
+    assert.equal(state.acceptanceState, null);
+    assert.equal(state.taskId, undefined);
+    assert.equal(state.scopeContract, undefined);
+    assert.equal(state.evidenceLedger, undefined);
+    assert.equal(state.mutationSeq, 0);
+    assert.equal(state.previousMilestoneBoundary.task_id, "tsuzuki-milestone-1");
+    assert.equal(state.milestoneBoundaryFreshContext, true);
+    assert.equal(existsSync(join(root, ".agents", "state", "active-contract.json")), false);
     assert.equal(handoff.status, "CLAIMED");
     assert.equal(handoff.claimed_by, "new-root");
 
