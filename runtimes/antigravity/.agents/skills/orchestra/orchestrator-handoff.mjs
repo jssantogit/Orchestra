@@ -3,8 +3,10 @@ import {
   closeSync,
   existsSync,
   mkdirSync,
+  lstatSync,
   openSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -89,46 +91,135 @@ function runtimePaths(repoRoot) {
   };
 }
 
+function workspacePathspecs() {
+  return [
+    ".",
+    ":(exclude).agents/**",
+    ":(exclude).codex/orchestra-state/**",
+    ":(exclude).codex/orchestra-telemetry/**",
+    ":(exclude).codex/orchestra-artifacts/**",
+    ":(exclude).codex/orchestra-semantic/**",
+    ":(exclude).codex/runtime-management/**",
+    ":(exclude).codex/orchestra-runtime.json",
+  ];
+}
+
+function gitOutput(root, args, { encoding = "utf8" } = {}) {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+}
+
+function nulPaths(buffer) {
+  return String(buffer || "")
+    .split("\0")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function workingFileIdentity(root, relPath) {
+  const absolute = join(root, relPath);
+  try {
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink()) {
+      return {
+        path: relPath,
+        kind: "SYMLINK",
+        mode: stat.mode & 0o7777,
+        content_hash: hash(readlinkSync(absolute, "utf8")),
+      };
+    }
+    if (stat.isFile()) {
+      return {
+        path: relPath,
+        kind: "FILE",
+        mode: stat.mode & 0o7777,
+        size: stat.size,
+        content_hash: hash(readFileSync(absolute)),
+      };
+    }
+    if (stat.isDirectory()) {
+      // Submodule or nested repository: bind to its factual HEAD when possible.
+      let nestedHead = null;
+      try {
+        nestedHead = gitOutput(absolute, ["rev-parse", "HEAD"]).trim() || null;
+      } catch {}
+      return {
+        path: relPath,
+        kind: "DIRECTORY",
+        mode: stat.mode & 0o7777,
+        nested_head: nestedHead,
+      };
+    }
+    return {
+      path: relPath,
+      kind: "OTHER",
+      mode: stat.mode & 0o7777,
+      size: stat.size,
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { path: relPath, kind: "DELETED" };
+    }
+    throw error;
+  }
+}
+
 function readWorkspaceFingerprint(repoRoot) {
   const root = resolve(repoRoot);
   try {
-    const head = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5000,
-    }).trim() || null;
-    const status = execFileSync("git", [
-      "status",
-      "--porcelain=v1",
-      "--untracked-files=all",
-      "--",
-      ".",
-      ":(exclude).agents/**",
-      ":(exclude).codex/orchestra-state/**",
-      ":(exclude).codex/orchestra-telemetry/**",
-      ":(exclude).codex/orchestra-artifacts/**",
-      ":(exclude).codex/orchestra-semantic/**",
-      ":(exclude).codex/runtime-management/**",
-      ":(exclude).codex/orchestra-runtime.json",
-    ], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5000,
-    });
-    const workingTreeHash = hash(status);
+    const pathspecs = workspacePathspecs();
+    const head = gitOutput(root, ["rev-parse", "HEAD"]).trim() || null;
+
+    // The index listing captures staged content/mode/rename state independent
+    // of the working tree. Hashing it avoids a huge full-tree content scan.
+    const indexListing = gitOutput(
+      root,
+      ["ls-files", "-s", "-z", "--", ...pathspecs],
+      { encoding: "buffer" },
+    );
+    const indexHash = hash(indexListing);
+
+    // Bind actual working content for every tracked path changed relative to
+    // HEAD plus every untracked non-ignored path. This catches A->B edits even
+    // when porcelain status remains simply "M" or "??".
+    const trackedDirty = nulPaths(gitOutput(
+      root,
+      ["diff", "--name-only", "-z", "HEAD", "--", ...pathspecs],
+      { encoding: "buffer" },
+    ));
+    const untracked = nulPaths(gitOutput(
+      root,
+      ["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspecs],
+      { encoding: "buffer" },
+    ));
+    const dirtyPaths = [...new Set([...trackedDirty, ...untracked])].sort();
+    const workingFiles = dirtyPaths.map((relPath) => workingFileIdentity(root, relPath));
+
+    const fingerprintBody = {
+      head,
+      index_hash: indexHash,
+      working_files: workingFiles,
+    };
     return {
       available: true,
       head,
-      working_tree_hash: workingTreeHash,
-      fingerprint: hash({ head, workingTreeHash }),
+      index_hash: indexHash,
+      working_tree_hash: hash(workingFiles),
+      dirty_file_count: workingFiles.length,
+      fingerprint: hash(fingerprintBody),
     };
   } catch {
     return {
       available: false,
       head: null,
+      index_hash: null,
       working_tree_hash: null,
+      dirty_file_count: null,
       fingerprint: hash({ git: "UNAVAILABLE" }),
     };
   }
@@ -454,7 +545,9 @@ export function prepareProjectOrchestratorHandoff(repoRoot, options = {}) {
     ...recordBody(baseRecord),
     workspace_fingerprint: currentWorkspace.fingerprint,
     workspace_head: currentWorkspace.head,
+    index_hash: currentWorkspace.index_hash,
     working_tree_hash: currentWorkspace.working_tree_hash,
+    dirty_file_count: currentWorkspace.dirty_file_count,
     workspace_git_available: currentWorkspace.available,
   });
   writeJson(paths.handoffPath, record);
