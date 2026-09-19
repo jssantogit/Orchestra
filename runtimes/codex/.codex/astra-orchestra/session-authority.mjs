@@ -9,6 +9,7 @@ import {
   readlinkSync,
   readSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -468,6 +469,63 @@ export function cancelCodexSessionHandoff(repoRoot, { reason = null } = {}) {
   return { operation: "cancel", changed: true, record };
 }
 
+const UNINITIALIZED_CLAIM_LOCK_STALE_MS = 30_000;
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    // EPERM and unknown platform errors fail closed: do not steal a lock
+    // unless we can establish that its owner is gone.
+    return null;
+  }
+}
+
+function claimLockIsOrphaned(path) {
+  const lock = readJson(path, null);
+  const ownerAlive = processIsAlive(Number(lock?.pid));
+  if (ownerAlive === false) return true;
+  if (ownerAlive === true || ownerAlive === null && lock?.pid) return false;
+  try {
+    return Date.now() - statSync(path).mtimeMs >= UNINITIALIZED_CLAIM_LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function acquireClaimLock(p, sessionId) {
+  mkdirSync(dirname(p.claimLock), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = openSync(p.claimLock, "wx", 0o600);
+      try {
+        writeFileSync(fd, JSON.stringify({
+          schema: "orchestra.codex-session-claim-lock.v1",
+          pid: process.pid,
+          candidate_session_id: clean(sessionId, 300),
+          created_at: nowIso(),
+        }) + "\n", "utf8");
+      } catch (error) {
+        try { closeSync(fd); } catch {}
+        rmSync(p.claimLock, { force: true });
+        throw error;
+      }
+      return fd;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      if (attempt === 0 && claimLockIsOrphaned(p.claimLock)) {
+        rmSync(p.claimLock, { force: true });
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
 function resetBoundaryState(record) {
   return {
     state: "INTAKE",
@@ -565,14 +623,8 @@ export function claimCodexSessionHandoff(repoRoot, { candidateSessionId } = {}) 
   const sid = clean(candidateSessionId, 300);
   if (!sid) return { claimed: false, reason: "CODEX_SESSION_ID_REQUIRED" };
   const p = paths(repoRoot);
-  mkdirSync(dirname(p.claimLock), { recursive: true });
-  let lockFd;
-  try {
-    lockFd = openSync(p.claimLock, "wx", 0o600);
-  } catch (error) {
-    if (error?.code === "EEXIST") return { claimed: false, reason: "CODEX_SESSION_HANDOFF_CLAIM_BUSY" };
-    throw error;
-  }
+  const lockFd = acquireClaimLock(p, sid);
+  if (lockFd === null) return { claimed: false, reason: "CODEX_SESSION_HANDOFF_CLAIM_BUSY" };
 
   try {
     const authorityLoad = readCodexSessionAuthority(repoRoot);
