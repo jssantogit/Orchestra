@@ -252,12 +252,24 @@ function main() {
         writeFileSync(roleBindingsPath, JSON.stringify(roleBindings, null, 2), "utf-8");
       } catch {}
     } else {
+      const rejectionReason = conflictsWithKnownMain ? "KNOWN_MAIN_MISMATCH" : "PENDING_DELEGATIONS_EXIST";
       state.identityBootstrapRejected = {
         conversationId: convId,
         knownMainConversationId,
-        reason: conflictsWithKnownMain ? "KNOWN_MAIN_MISMATCH" : "PENDING_DELEGATIONS_EXIST",
+        reason: rejectionReason,
         timestamp: new Date().toISOString(),
       };
+      if (conflictsWithKnownMain) {
+        const handoffReason = state.orchestratorHandoffClaimRejected?.reason || "NO_ARMED_HANDOFF";
+        injectSteps.push({
+          ephemeralMessage:
+            "ORCHESTRATOR HANDOFF REQUIRED: this fresh root conversation does not currently own project orchestration authority. "
+            + "The factual main conversation is still " + knownMainConversationId + ". "
+            + "Do not attempt development tools and do not ask the user to edit role-bindings.json, copy conversation IDs, or run a Node repair command. "
+            + "Ask the user to return to the previous main chat and say that they want to continue in a fresh chat; that orchestrator must arm the managed session handoff itself. "
+            + "Then this conversation can be reopened/continued and will claim automatically. Handoff status: " + handoffReason + ".",
+        });
+      }
     }
   }
 
