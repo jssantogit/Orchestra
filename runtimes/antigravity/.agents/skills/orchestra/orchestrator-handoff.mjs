@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -467,6 +468,39 @@ export function evaluateOrchestratorHandoffClaim({
   };
 }
 
+function resetMilestoneBoundaryActiveState(activeState = {}, record = {}) {
+  const next = structuredClone(activeState || {});
+  const preservedBoundary = structuredClone(record.capsule?.previous_task || {});
+
+  const taskScopedKeys = [
+    "taskId", "taskKey", "taskAction", "task_action", "taskDomain", "task_domain",
+    "criticality", "complexity", "scopeContract", "requiredEvidence", "testsRequired",
+    "evidenceLedger", "evidenceSummary", "evidence", "evidenceCandidateHead",
+    "pendingPolicyRequirement", "investigationInFlight", "directInvestigationDecisionInFlight",
+    "delegatedDecisionInFlight", "criticalReviewInFlight", "ciWait", "twoKeyReview",
+    "workerCompletionClaimed", "workerCompletionClaimFactual", "workerCompletionClaimTimestamp",
+    "workerCompletionClaimIdentity", "implementationComplete", "workerConversationId",
+    "workerValidationObserved", "workerValidationCommand", "workerValidationActor",
+    "workerValidationActorConfidence", "workerValidationExecutionId", "workerValidationExitCode",
+    "workerValidationMutationSeq", "orchestratorValidationObserved",
+    "orchestratorValidationCommand", "orchestratorValidationExitCode",
+    "acceptanceResult", "acceptanceActor", "claimCompleted", "blockers",
+    "humanGateReason", "retryReason", "retry_reason", "retry_remaining", "remainingAttempts",
+    "mutations", "modifiedPaths", "mechanicalFastPath", "pollingTracker",
+    "stalled", "circuitBreakerType", "circuitBreakerTripped", "circuitBreaker",
+    "userRequestedStatus", "reactiveWakeupDisabled",
+  ];
+  for (const key of taskScopedKeys) delete next[key];
+
+  next.state = "INTAKE";
+  next.acceptanceState = null;
+  next.attempt = 0;
+  next.mutationSeq = 0;
+  next.previousMilestoneBoundary = preservedBoundary;
+  next.milestoneBoundaryFreshContext = true;
+  return next;
+}
+
 export function applyOrchestratorHandoffClaim({
   record,
   activeState = {},
@@ -530,7 +564,9 @@ export function applyOrchestratorHandoffClaim({
   nextRoleBindings.orchestratorLineageId = record.lineage_id;
   nextRoleBindings.orchestratorGeneration = record.target_generation;
 
-  const nextState = structuredClone(activeState || {});
+  const nextState = record.mode === ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY
+    ? resetMilestoneBoundaryActiveState(activeState, record)
+    : structuredClone(activeState || {});
   nextState.conversationId = nextConversationId;
   nextState.activeRole = "ORCHESTRATOR";
   nextState.agentProfile = nextRecord.profile;
@@ -611,6 +647,9 @@ export function claimProjectOrchestratorHandoff(repoRoot, {
 
   writeJson(paths.statePath, result.activeState);
   writeJson(paths.roleBindingsPath, result.roleBindings);
+  if (result.record.mode === ORCHESTRATOR_HANDOFF_MODES.MILESTONE_BOUNDARY) {
+    rmSync(paths.contractPath, { force: true });
+  }
   writeJson(paths.handoffPath, result.record);
   appendTelemetry(paths.telemetryPath, result.telemetry);
   return result;
