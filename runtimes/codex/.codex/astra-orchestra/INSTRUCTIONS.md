@@ -96,6 +96,36 @@ exact successful validation absent relevant mutation. Prefer compact reporters
 and targeted git views (`status --short`, `diff --stat`, `diff --name-only`,
 path diff); preserve failure excerpts needed to diagnose.
 
+## Root session authority and milestone handoff
+
+Codex root authority is bound only to the factual `session_id` supplied by the
+provider hooks in `.codex/hooks.json`. Never manufacture a conversation ID,
+copy Antigravity role bindings, or repair authority by editing JSON manually.
+
+When the user explicitly closes a milestone and says they will continue in a
+fresh chat, and the current task is quiescent, the factual Terra root executes:
+
+`node .codex/astra-orchestra/session-handoff-cli.mjs prepare --boundary`
+
+Do not ask the user to run that command, copy a session ID, or edit runtime
+state in the normal flow. Do not arm a handoff merely because a task reached
+`DONE`; explicit user intent to move chats is required.
+
+The next fresh trusted `SessionStart` claims the single-use boundary lease
+automatically. A successful boundary resets task authority to `INTAKE` and
+does not migrate the prior Scope Contract, Evidence Ledger, workers, retries,
+transcript, prompts, reasoning, or model summaries. The former root must stop;
+future prompts and supported project-tool calls from it are blocked by the
+provider-native session hooks.
+
+Milestone O implements milestone-boundary transfer only. Do not improvise a
+mid-task `LIVE_CONTINUATION`; use provider-native continuation semantics until
+a separate Orchestra trust contract exists for that mode.
+
+Project hooks remain subject to Codex hook trust. Use the provider's normal
+review/approval flow when trust is requested; never make bypassing hook trust
+part of the normal Orchestra workflow.
+
 ## Native parity boundaries
 
 Codex uses its own provider-native Orchestra modules under
