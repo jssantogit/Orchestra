@@ -1,0 +1,47 @@
+{
+  "description": "Orchestra Codex root-session authority and milestone-boundary handoff.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-hook.mjs\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')\"",
+            "timeout": 10,
+            "statusMessage": "Checking Orchestra session authority",
+            "additionalContextLimit": 1200
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-hook.mjs\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')\"",
+            "timeout": 10,
+            "statusMessage": "Checking Orchestra session authority"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-hook.mjs\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')\"",
+            "timeout": 10,
+            "statusMessage": "Checking Orchestra session authority"
+          }
+        ]
+      }
+    ]
+  }
+}
