@@ -127,7 +127,7 @@ On the first Antigravity `PreInvocation` of a different root conversation:
 4. Verify the authority-state fingerprint has not changed since preparation.
 5. Verify the candidate conversation is a root, not a child/reviewer/worker and
    is not correlated to a pending delegation.
-6. Atomically:
+6. Acquire the exclusive project claim lock, re-read authority state, then commit the single-use transition:
    - set `roleBindings.mainConversationId` to the new conversation;
    - bind the new conversation as HIGH-confidence `ORCHESTRATOR` with source
      `ORCHESTRATOR_HANDOFF`;
@@ -139,7 +139,7 @@ On the first Antigravity `PreInvocation` of a different root conversation:
    - append telemetry.
 7. Inject a compact authoritative handoff message/capsule.
 
-The handoff is single-use. A third conversation cannot replay a claimed lease.
+The handoff is single-use. Competing fresh roots serialize through an exclusive filesystem claim lock; only one may consume an `ARMED` lease. A third conversation cannot replay a claimed lease.
 
 ## Old-chat behavior after claim
 
