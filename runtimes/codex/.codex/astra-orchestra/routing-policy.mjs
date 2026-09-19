@@ -1296,7 +1296,7 @@ export function scanCodexOperationalFiles(cwd = process.cwd()) {
   ];
   const orchestraDir = join(codexDir, "astra-orchestra");
   if (existsSync(orchestraDir)) {
-    for (const name of readdirSync(orchestraDir).filter((entry) => entry.endsWith(".mjs"))) {
+    for (const name of readdirSync(orchestraDir).filter((entry) => entry.endsWith(".mjs") && !entry.endsWith(".test.mjs"))) {
       files.push(join(orchestraDir, name));
     }
   }
