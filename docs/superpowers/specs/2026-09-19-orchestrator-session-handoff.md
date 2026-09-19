@@ -125,9 +125,12 @@ On the first Antigravity `PreInvocation` of a different root conversation:
 2. Verify record hash/schema/status.
 3. Verify the old authoritative root still matches `fromConversationId`.
 4. Verify the authority-state fingerprint has not changed since preparation.
-5. Verify the candidate conversation is a root, not a child/reviewer/worker and
+5. Verify the product-workspace fingerprint has not changed. The fingerprint
+   binds HEAD, index state, and content hashes for tracked-dirty and untracked
+   non-ignored files while excluding Orchestra project-governance state.
+6. Verify the candidate conversation is a root, not a child/reviewer/worker and
    is not correlated to a pending delegation.
-6. Acquire the exclusive project claim lock, re-read authority state, then commit the single-use transition:
+7. Acquire the exclusive project claim lock, re-read authority state, then commit the single-use transition:
    - set `roleBindings.mainConversationId` to the new conversation;
    - bind the new conversation as HIGH-confidence `ORCHESTRATOR` with source
      `ORCHESTRATOR_HANDOFF`;
@@ -137,7 +140,7 @@ On the first Antigravity `PreInvocation` of a different root conversation:
    - advance lineage generation;
    - mark the lease `CLAIMED`;
    - append telemetry.
-7. Inject a compact authoritative handoff message/capsule.
+8. Inject a compact authoritative handoff message/capsule.
 
 The handoff is single-use. Competing fresh roots serialize through an exclusive filesystem claim lock; only one may consume an `ARMED` lease. A third conversation cannot replay a claimed lease.
 
@@ -158,12 +161,35 @@ All orchestrator-sensitive checks must require both:
 - orchestrator role; and
 - factual actor ID equal to the current `mainConversationId`.
 
+
+## Non-authoritative conversation context firewall
+
+A root conversation whose `conversationId` does not equal the factual
+`mainConversationId` and that did not successfully claim an armed lease is a
+terminal context boundary for that invocation.
+
+It receives only a compact `ORCHESTRATOR HANDOFF REQUIRED` advisory. It does
+not receive the current Runtime Continuation Capsule, Scope Contract, Evidence
+Ledger references, worker/reviewer identities, current-milestone advisories, or
+turn-economy counters. The invocation may append minimal handoff-required
+telemetry, but it must not mutate `active-state.json`.
+
+This rule is symmetric across generations: a premature fresh chat cannot read
+the old main's active milestone, and a `FORMER_ORCHESTRATOR` cannot read a new
+main's milestone after transfer.
+
 ## Stale lease protection
 
-The handoff records a hash of authority-relevant state. If the old chat
-continues development after arming the handoff and changes task identity,
-state, acceptance state, attempt, mutation sequence, candidate HEAD, or
-governed child/in-flight status, automatic claim fails closed as stale.
+The handoff records hashes of both authority-relevant runtime state and the
+product workspace. If the old chat continues development after arming the
+handoff and changes task identity, state, acceptance state, attempt, mutation
+sequence, candidate HEAD, governed child/in-flight status, Git index state, or
+the content/mode of a tracked-dirty or untracked product file, automatic claim
+fails closed as stale.
+
+Orchestra-local governance/telemetry paths are excluded from the workspace
+fingerprint so the act of preparing the lease and recording runtime telemetry
+does not invalidate the lease itself.
 
 The operator/current main may cancel and prepare a new lease.
 
@@ -199,8 +225,10 @@ Milestone N requires tests for:
 - preparation and idempotence;
 - pending/in-flight rejection;
 - boundary-mode quiescence;
-- stale state fingerprint rejection;
+- stale authority-state fingerprint rejection;
+- stale workspace-content/index fingerprint rejection;
 - child conversation claim rejection;
+- non-authoritative root context isolation and zero active-state mutation;
 - automatic root claim in PreInvocation;
 - lineage generation advancement;
 - old-root authority revocation;
