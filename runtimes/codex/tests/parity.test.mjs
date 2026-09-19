@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  createImplementationHandoff,
   createScopeContract,
+  decideRoute,
   evaluateAcceptance,
 } from "../.codex/astra-orchestra/routing-policy.mjs";
 import {
@@ -50,6 +52,71 @@ import {
 import {
   runCodexEvidenceWatchStep,
 } from "../.codex/astra-orchestra/evidence-watch-runner.mjs";
+
+
+test("Codex implementation handoff carries governed mandatory-core worker packet", () => {
+  const handoff = createImplementationHandoff({
+    taskId: "handoff-packet",
+    taskDomain: "CODE",
+    goal: "Change one implementation file",
+    allowedPaths: ["src/a.mjs"],
+    acceptanceCriteria: ["behavior passes"],
+    requiredEvidence: [{
+      id: "test",
+      class: "LOCAL_TEST",
+      kind: "LOCAL_COMMAND",
+      command: "node --test a.test.mjs",
+    }],
+    auxiliaryRefs: Array.from({ length: 12 }, (_, i) => ({
+      id: "ref-" + i,
+      path: "src/ref-" + i + ".mjs",
+      priority: 12 - i,
+    })),
+  });
+  assert.equal(handoff.workerPacket.schema, "orchestra.codex-worker-packet.v1");
+  assert.deepEqual(handoff.workerPacket.mandatory_core.scope.allowed_paths, ["src/a.mjs"]);
+  assert.equal(handoff.workerPacket.auxiliary_refs.length <= 8, true);
+});
+
+test("Codex explicit mechanical fast path is fail-closed and routes Luna Medium only when eligible", () => {
+  const eligible = decideRoute({
+    taskAction: "MECHANICAL_FIX",
+    taskDomain: "DOCS",
+    mechanicalFastPath: true,
+    scopeContract: {
+      allowedPaths: ["docs/readme.md"],
+      forbiddenPaths: [],
+      testsRequired: [],
+      requiredEvidence: [{
+        id: "exists",
+        class: "FILE_EXISTS",
+        kind: "LOCAL_FACT",
+        path: "docs/readme.md",
+      }],
+    },
+  });
+  assert.equal(eligible.profile, "luna-medium");
+  assert.equal(eligible.reason, "bounded-mechanical-fast-path");
+  assert.equal(eligible.mechanicalFastPath.eligible, true);
+
+  const denied = decideRoute({
+    taskAction: "MECHANICAL_FIX",
+    taskDomain: "INFRA",
+    mechanicalFastPath: true,
+    scopeContract: {
+      allowedPaths: [".codex/config.toml"],
+      requiredEvidence: [{
+        id: "exists",
+        class: "FILE_EXISTS",
+        kind: "LOCAL_FACT",
+        path: ".codex/config.toml",
+      }],
+    },
+  });
+  assert.equal(denied.profile, "luna-high");
+  assert.equal(denied.reason, "mechanical-fast-path-denied");
+  assert.ok(denied.mechanicalFastPath.reasons.includes("SENSITIVE_PATH"));
+});
 
 test("Codex requiredEvidence is first-class in scope and Terra acceptance", () => {
   const requirement = {
