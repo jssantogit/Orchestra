@@ -1,7 +1,7 @@
 # Cross-Runtime Isolation & Firewall
 
 Orchestra hosts two independent multi-agent runtimes:
-1. **Codex Runtime**: Built for OpenAI models (Terra / Luna / Sol / Astra).
+1. **Codex Runtime**: Built for OpenAI models (Sol / Luna / Astra).
 2. **Antigravity Runtime**: Built for Gemini models (Flash Low / Medium / High).
 
 ---
@@ -23,7 +23,7 @@ To permanently prevent accidental provider mixing, Orchestra maintains automated
   - Asserts zero active imports or routes matching `gemini-`, `flash-worker`, `flash-orchestrator`, or `ALL-GEMINI`.
 - **Antigravity Active Runtime Scan**:
   - Scans active routing definitions in `.agents/skills/orchestra/routing-policy.mjs` and agent definitions in `.agents/agents/*.md`.
-  - Asserts zero active routes selecting `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, or `gpt-6-astra`.
+  - Asserts zero active routes selecting legacy GPT-5.6 models or `gpt-6-sol`, `gpt-6-luna`, or `gpt-6-astra`.
 
 ---
 

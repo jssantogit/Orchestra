@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { prepareCodexSessionHandoff } from "../.codex/astra-orchestra/session-authority.mjs";
+import { createImplementationHandoff } from "../.codex/astra-orchestra/routing-policy.mjs";
 
 const runtimeDir = resolve(fileURLToPath(new URL("../.codex/astra-orchestra/", import.meta.url)));
 
@@ -23,6 +24,7 @@ function project() {
   mkdirSync(join(root, ".codex", "astra-orchestra"), { recursive: true });
   cpSync(join(runtimeDir, "session-authority.mjs"), join(root, ".codex", "astra-orchestra", "session-authority.mjs"));
   cpSync(join(runtimeDir, "session-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-hook.mjs"));
+  cpSync(join(runtimeDir, "verification-guard.mjs"), join(root, ".codex", "astra-orchestra", "verification-guard.mjs"));
   git(root, "add", ".");
   git(root, "commit", "-qm", "init");
   mkdirSync(join(root, ".codex", "orchestra-state"), { recursive: true });
@@ -95,5 +97,48 @@ test("fresh Codex root without valid lease receives no current task capsule and 
     assert.doesNotMatch(out, /secret-task|secret\/\*\*|secret-evidence/);
     const tool = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "Bash", tool_input: { command: "cat secret" } });
     assert.equal(jsonOut(tool).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("CI-first project policy blocks configured heavy commands for root and subagent calls", () => {
+  const root = project();
+  try {
+    hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" });
+    writeFileSync(join(root, ".codex", "orchestra-verification.json"), JSON.stringify({
+      schema: "orchestra.codex-verification.v1",
+      mode: "CI_FIRST",
+      authoritativeGate: "Fast CI",
+      localHeavyAttempts: 0,
+      heavyLocalCommands: ["gradlew", "gradle"],
+    }));
+    const handoff = createImplementationHandoff({
+      projectRoot: root,
+      taskDomain: "CODE",
+      requiredEvidence: [{ id: "ci", kind: "REMOTE_CI", class: "FAST_CI" }],
+    });
+    assert.equal(handoff.workerPacket.mandatory_core.scope.verification_policy.mode, "CI_FIRST");
+    assert.throws(() => createImplementationHandoff({
+      projectRoot: root,
+      taskDomain: "CODE",
+      verificationPolicy: { mode: "LOCAL_FOCUSED" },
+    }), /PROJECT_VERIFICATION_POLICY_MISMATCH/);
+    for (const command of ["./gradlew test", "timeout 120 ./gradlew test", "bash -lc './gradlew test'"]) {
+      const denied = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", agent_id: "worker-a", tool_name: "Bash", tool_input: { command } });
+      assert.equal(jsonOut(denied)?.hookSpecificOutput.permissionDecision, "deny", command);
+    }
+    const search = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", tool_name: "Bash", tool_input: { command: "rg -n gradlew docs" } });
+    assert.equal(search.stdout.trim(), "");
+    const edit = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } });
+    assert.equal(edit.stdout.trim(), "");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("invalid project verification policy blocks shell execution", () => {
+  const root = project();
+  try {
+    hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" });
+    writeFileSync(join(root, ".codex", "orchestra-verification.json"), "{invalid");
+    const result = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", tool_name: "Bash", tool_input: { command: "echo ok" } });
+    assert.equal(jsonOut(result)?.hookSpecificOutput.permissionDecisionReason, "VERIFICATION_CONFIG_UNREADABLE");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

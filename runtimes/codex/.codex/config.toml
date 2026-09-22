@@ -1,7 +1,7 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 # Orchestra: project-local Codex defaults.
 # Scoped to the repository; user-global configuration remains untouched.
-model = "gpt-5.6-terra"
+model = "gpt-6-sol"
 model_reasoning_effort = "medium"
 model_instructions_file = "astra-orchestra/INSTRUCTIONS.md"
 
@@ -12,7 +12,7 @@ multi_agent_v2 = true
 [agents]
 enabled = true
 max_concurrent_threads_per_session = 1
-default_subagent_model = "gpt-5.6-luna"
+default_subagent_model = "gpt-6-luna"
 # Luna Max is the default execution-plane profile; the router explicitly
 # selects High for small/simple work.
 default_subagent_reasoning_effort = "max"

@@ -6,6 +6,7 @@ import {
   authorizeCodexSession,
   enterCodexSession,
 } from "./session-authority.mjs";
+import { evaluateCodexVerificationTool } from "./verification-guard.mjs";
 function readStdin() {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
 }
@@ -58,9 +59,9 @@ function sessionStartOutput(context, { stop = false, stopReason = null, systemMe
   return output;
 }
 
-function preToolDeny(reason) {
+function preToolDeny(reason, message = "Orchestra blocked this tool because this Codex session does not own current project orchestration authority.") {
   return {
-    systemMessage: "Orchestra blocked this tool because this Codex session does not own current project orchestration authority.",
+    systemMessage: message,
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -111,7 +112,14 @@ function handleSessionStart(repoRoot, payload) {
 
 function handlePreToolUse(repoRoot, payload) {
   const decision = authorizeCodexSession(repoRoot, payload.session_id);
-  if (decision.allowed) return null;
+  if (decision.allowed) {
+    const verification = evaluateCodexVerificationTool(repoRoot, payload);
+    if (!verification.allowed) {
+      return preToolDeny(verification.reason,
+        "Orchestra blocked a local command under this project's verification policy. Use the declared CI gate or revise the project policy.");
+    }
+    return null;
+  }
   return preToolDeny(
     `CODEX_SESSION_AUTHORITY_DENIED:${decision.reason || "UNKNOWN"}. `
     + "Only the factual main Codex session may execute project tools. If the user requested a fresh chat, arm/claim the managed Orchestra session handoff instead of editing authority state manually."

@@ -221,7 +221,7 @@ function validLocalCommandProvenance(ev, activeState) {
   const delegatedValidation = workerRole
     && ["WORK", "VALIDATION"].includes(String(producer.delegationKind || "WORK").toUpperCase())
     && producer.source === "RUNTIME_IDENTITY";
-  const parentValidation = ["ORCHESTRATOR", "TERRA", "TERRA_MEDIUM"].includes(producer.role)
+  const parentValidation = ["ORCHESTRATOR", "SOL_MEDIUM"].includes(producer.role)
     && ["RUNTIME_IDENTITY", "CONVERSATION_BOUND_IDENTITY"].includes(producer.source)
     && !producer.delegationKind;
   const parentMatches = !producer.parentConversationId

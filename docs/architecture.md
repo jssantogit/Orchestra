@@ -26,11 +26,11 @@ Modern software development often leverages different foundation model ecosystem
          │       CODEX RUNTIME       │                   │    ANTIGRAVITY RUNTIME    │
          │   (OpenAI Ecosystem)      │                   │    (Gemini Ecosystem)     │
          ├───────────────────────────┤                   ├───────────────────────────┤
-         │ • Terra Medium Control    │                   │ • Flash Medium Control    │
+         │ • Sol Medium Control      │                   │ • Flash Medium Control    │
          │ • Luna High/Max Workers   │                   │ • Flash Low/Med/High Work │
          │ • Luna Medium Support     │                   │ • Flash High Specialists  │
-         │ • Terra High/Max Invest   │                   │ • Two-Key Flash Reviewers │
-         │ • Sol Low/Medium Review   │                   │ • Engine Tool Hooks       │
+         │ • Sol High/Max Invest     │                   │ • Two-Key Flash Reviewers │
+         │ • Sol Review Low/Medium   │                   │ • Engine Tool Hooks       │
          │ • Astra Manual Only       │                   │ • Automatic Ledger & Gate │
          │                           │                   │ • Dream Layer Foundation  │
          │                           │                   │   (Record-Only & Replay)  │
@@ -172,4 +172,3 @@ Controller termination is quiescent: stop/budget exhaustion cannot orphan pendin
 Branch-opening decisions are not rewarded merely because a workspace was created. Their outcomes are deferred until the branch yields a factual consequence. Controller/setup failures without a sealed branch trajectory are marked factual but non-attributable and become insufficient support. Each K decision/outcome pair is sealed as a separate one-decision world so Exact Replay never has to infer which of several decision types sharing a snapshot came first.
 
 Thus greater exploration autonomy is learned only inside pre-existing governance rather than becoming a new authority plane.
-

@@ -1904,7 +1904,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
         mutationActor: TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected ? "WORKER" : "NONE",
         dryRun: true,
         runtimeLoaded: true,
-        orchestratorIdentity: runtime === "codex" ? "terra-medium" : "flash-orchestrator",
+        orchestratorIdentity: runtime === "codex" ? "sol-medium" : "flash-orchestrator",
         workerObserved: !!TASK_FIDELITY_REQUIREMENTS[taskKey]?.delegationExpected,
         confidenceEvidence: {
           hasExplicitThreadId: true,
@@ -2092,7 +2092,7 @@ function runTask({ runtime, taskKey, dryRun, runId }) {
       controlPlaneWrites,
       dryRun: false,
       runtimeLoaded: true,
-      orchestratorIdentity: runtime === "codex" ? "terra-medium" : "flash-orchestrator",
+      orchestratorIdentity: runtime === "codex" ? "sol-medium" : "flash-orchestrator",
       workerObserved: workerMutations.length > 0 || (metrics.subagent_invocations || 0) > 0,
       confidenceEvidence: {
         hasExplicitThreadId: runtime === "codex" && (metrics.subagent_invocations || 0) > 0,

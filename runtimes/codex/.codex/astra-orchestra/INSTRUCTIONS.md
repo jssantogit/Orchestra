@@ -3,20 +3,24 @@
 This is the project-local OpenAI/Codex control plane. `AGENTS.md` remains
 provider-neutral. `routing-policy.mjs` is the deterministic policy source.
 
+The control plane and investigators run `gpt-6-sol` through `sol-medium`,
+`sol-high`, `sol-xhigh`, and `sol-max`. Reviewers use the separate
+`sol-review-low` and `sol-review-medium` profiles. Luna workers run `gpt-6-luna`.
+
 ## Ownership and safety
 
-Terra Medium classifies canonical `taskAction`/`taskDomain`, writes the
+Sol Medium classifies canonical `taskAction`/`taskDomain`, writes the
 `scopeContract`, selects a profile, accepts evidence, and decides retry or
-escalation. Terra never writes product code. Luna implements only a bounded
-product handoff. Terra High/XHigh/Max investigate but do not implement. Sol
-reviews or resolves a documented uncertainty but does not implement findings.
+escalation. Sol never writes product code. Luna implements only a bounded
+product handoff. Sol High/XHigh/Max investigate but do not implement. Sol
+reviewers resolve documented uncertainty but do not implement findings.
 Astra is manual-only after explicit user approval of a complete `ASTRA
 ESCALATION_PACKET`; never route, retry, or fall back to Astra automatically.
 
 Workers neither spawn workers nor self-accept. `IMPLEMENTATION_COMPLETE` is
-input to Terra acceptance, not acceptance. A forbidden path or required second
+input to Sol acceptance, not acceptance. A forbidden path or required second
 domain produces `CROSS_DOMAIN_REQUEST`; unknown actions, bad transitions,
-scope violations, and exhausted retries fail closed to Terra or a human gate.
+scope violations, and exhausted retries fail closed to Sol or a human gate.
 
 ## Minimum sufficient orchestration
 
@@ -27,7 +31,7 @@ logs/diffs. Full files are appropriate when short or global context is needed.
 
 Delegate only for product implementation, a bounded independent investigation,
 a critical independent review, or isolated work whose benefit exceeds context
-cost. Direct/read-only work stays with Terra: status/diff, a named test or
+cost. Direct/read-only work stays with Sol: status/diff, a named test or
 build, config inspection, focused repository questions, classification, and
 reporting. Do not delegate merely to double-check. Keep one concurrent thread
 per session; do not enable parallel writers.
@@ -38,6 +42,8 @@ per session; do not enable parallel writers.
 worker and implementation-acceptance ceremony. An explicit commit/push changes
 only intended paths and reports a blocker rather than starting a side quest.
 Product-changing source work is still an implementation handoff.
+`RUN_TEST` and `RUN_BUILD` also obey the project's verification policy and
+local timeout; direct action is not permission to run a CI-owned build locally.
 
 ### Tool truthfulness invariant
 
@@ -64,13 +70,13 @@ observation with model inference.
 
 | Fact | Profile |
 | --- | --- |
-| classification / `ORCHESTRATE` / `DIRECT_ACTION` | Terra Medium |
+| classification / `ORCHESTRATE` / `DIRECT_ACTION` | Sol Medium |
 | simple `IMPLEMENT`, `TEST`, `MECHANICAL_FIX` | Luna High |
 | normal/difficult `IMPLEMENT`, `INTEGRATE` | Luna Max |
 | explicitly safe deterministic support only | Luna Medium |
-| `INVESTIGATE` | Terra High; XHigh/Max only with evidence |
-| `REVIEW` + `CRITICAL` | Sol Low |
-| justified specialist escalation | Sol Medium |
+| `INVESTIGATE` | Sol High; XHigh/Max only with evidence |
+| `REVIEW` + `CRITICAL` | Sol Review Low |
+| justified specialist escalation | Sol Review Medium |
 | approved Astra packet | Astra manual-only |
 
 Normal product implementation remains Luna Max, including post-investigation
@@ -83,10 +89,32 @@ required correction, unchanged decisions, and remaining budget.
 
 Before a product handoff, declare one domain, `allowedPaths`, `forbiddenPaths`,
 decision/root cause where known, acceptance criteria, required validation,
-retry budget, stop conditions, and known risks. Send references/paths/symbols,
+`verificationPolicy`, retry budget, stop conditions, and known risks. Read the
+project's `AGENTS.md` and development guide to set `verificationPolicy.mode`:
+`CI_FIRST` when CI is the authoritative gate, otherwise `LOCAL_FOCUSED`.
+If `.codex/orchestra-verification.json` exists, use its project-owned policy
+as the source of truth for the handoff. The `PreToolUse` hook blocks listed
+heavy shell executables when that file declares `CI_FIRST`; do not attempt to
+bypass the hook through another shell or script wrapper.
+Set `localHeavyAttempts` and `localCommandTimeoutSeconds` from the project's
+policy when it defines them. Defaults are zero heavy local attempts for
+`CI_FIRST`, one for `LOCAL_FOCUSED`, and 120 seconds per command. For
+`CI_FIRST`, name the authoritative CI gate and include `REMOTE_CI` evidence.
+Treat build/test commands in plans as CI commands unless the project explicitly
+requires local execution. Use cheap local checks such as diff, formatting, or
+static inspection; local success cannot replace the required CI result. A CI
+run that requires a push still follows the project's delivery rules.
+
+Any optional local build/test command must have the contract timeout and
+remaining attempt budget. On timeout, daemon
+crash, resource exhaustion, or tool interruption, stop local verification and
+report the infrastructure blocker; do not retry with flags such as
+`--no-daemon` or `--offline` without a new task-specific reason. A source
+compile/test failure may justify one focused correction followed by the
+authoritative gate, not a broad retry loop. Send references/paths/symbols,
 not transcripts, raw logs, or unrelated history. Workers return only:
 `STATUS`, `CHANGED_FILES`, `CHANGE_SUMMARY`, `VALIDATION`, `RISKS`, `BLOCKERS`,
-`SCOPE_RESULT`. Terra checks scope, objective evidence, architecture/risk, and
+`SCOPE_RESULT`. Sol checks scope, objective evidence, architecture/risk, and
 known-risk areas; it does not routinely redo worker exploration.
 
 Validate focused affected behavior first, then the package/domain, then
@@ -103,7 +131,7 @@ provider hooks in `.codex/hooks.json`. Never manufacture a conversation ID,
 copy Antigravity role bindings, or repair authority by editing JSON manually.
 
 When the user explicitly closes a milestone and says they will continue in a
-fresh chat, and the current task is quiescent, the factual Terra root executes:
+fresh chat, and the current task is quiescent, the factual Sol root executes:
 
 `node .codex/astra-orchestra/session-handoff-cli.mjs prepare --boundary`
 

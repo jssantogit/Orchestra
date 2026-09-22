@@ -29,16 +29,16 @@ Orchestra preserves two independent provider runtimes. They share core principle
    │       CODEX RUNTIME       │           │    ANTIGRAVITY RUNTIME    │
    │   (OpenAI Ecosystem)      │           │    (Gemini Ecosystem)     │
    ├───────────────────────────┤           ├───────────────────────────┤
-   │ Terra Medium              │           │ Gemini 3.8 Flash Medium   │
+   │ Sol Medium              │           │ Gemini 3.8 Flash Medium   │
    │  └─ Global Control Plane  │           │  └─ Global Orchestrator   │
    │                           │           │                           │
    │ Luna High / Luna Max      │           │ Flash Low / Med / High    │
    │  └─ Implementation Workers│           │  └─ Implementation Workers│
    │                           │           │                           │
-   │ Terra High / XHigh / Max  │           │ Flash High Specialists    │
+   │ Sol High / XHigh / Max  │           │ Flash High Specialists    │
    │  └─ Investigation Ladder  │           │  └─ Deep Investigation   │
    │                           │           │                           │
-   │ Sol Low / Sol Medium      │           │ Two-Key Flash Reviewers   │
+   │ Sol Review Low / Medium   │           │ Two-Key Flash Reviewers   │
    │  └─ Critical Review       │           │  └─ Dual-Key Consensus   │
    │                           │           │                           │
    │ Astra Manual Only         │           │ Engine Tool Hooks         │
@@ -47,7 +47,7 @@ Orchestra preserves two independent provider runtimes. They share core principle
 ```
 
 ### 1. Codex Runtime (`runtimes/codex/`)
-- Powered by OpenAI models: **Terra Medium** (control plane), **Luna High / Max** (workers), **Luna Medium** (support), **Terra High / Max** (investigation), and **Sol Low / Medium** (critical review).
+- Powered by **GPT-6 Sol** for the control plane, investigation, and review, and **GPT-6 Luna** for implementation and support.
 - **Astra Manual Only**: GPT-6 Astra is strictly manual-only upon explicit approval of an escalation packet. Automatic fallback or routing to Astra fails closed.
 - Integrates via native Codex project configuration (`.codex/config.toml`) and custom agent profiles (`.codex/agents/*.toml`).
 - **0.8 Runtime Parity** adds Codex-native factual Evidence Contracts/Federation, Feedback Plane, side-effect Trust Boundary, bounded context packets, Mechanical Fast Path, isolated Dream replay/shadow, and first-class `.codex` lifecycle management.
@@ -282,7 +282,7 @@ authority to Codex's factual hook `session_id`, manages project hooks through
 `.codex/hooks.json`, and preserves the authority/lease records under
 project-owned `.codex/orchestra-state/`.
 
-At an explicit completed-milestone boundary, the current Terra root arms a
+At an explicit completed-milestone boundary, the current Sol root arms a
 single-use lease. A fresh root claims it automatically on `SessionStart`,
 returns task authority to `INTAKE`, and leaves prior Scope Contract, Evidence
 Ledger, workers, retries, transcript, prompts, and hidden reasoning behind.

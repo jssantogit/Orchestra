@@ -9,12 +9,12 @@ To maintain the architectural integrity, safety, and reliability of the project,
 ## 1. Strict Runtime Isolation (No Cross-Contamination)
 
 Orchestra explicitly preserves two independent runtimes:
-- **Codex Runtime (`runtimes/codex/`)**: Powered by OpenAI models (Terra / Luna / Sol / Astra).
+- **Codex Runtime (`runtimes/codex/`)**: Powered by OpenAI models (Sol / Luna / Astra).
 - **Antigravity Runtime (`runtimes/antigravity/`)**: Powered by Gemini models (Flash Low / Medium / High).
 
 ### Firewall Invariants:
 - **Never contaminate Codex with AGY**: Do not introduce Gemini models, Flash workers, Antigravity hooks, or ALL-GEMINI concepts into the Codex active runtime.
-- **Never contaminate AGY with Codex**: Do not introduce GPT models (Terra, Luna, Sol, Astra) or Codex-specific control-plane logic into the Antigravity active routing.
+- **Never contaminate AGY with Codex**: Do not introduce GPT models (Sol, Luna, Astra) or Codex-specific control-plane logic into the Antigravity active routing.
 - The shared principles live in `shared/` as conceptual architecture, contracts, and templates, **not** as unified runtime coupling.
 - Cross-runtime firewall tests are enforced by `npm run test:firewall` and `scripts/contamination-check.mjs`. Any cross-provider contamination will fail CI.
 
@@ -57,6 +57,6 @@ node scripts/contamination-check.mjs
 
 ## 5. Adding Runtime-Specific Improvements
 
-- When improving the **Codex** runtime, place changes inside `runtimes/codex/`, adhere to the separation of duties (Terra orchestrator / Luna worker / Sol reviewer / Astra manual), and update `docs/codex.md`.
+- When improving the **Codex** runtime, place changes inside `runtimes/codex/`, adhere to the separation of duties (Sol orchestrator and investigator / Luna worker / Sol Review reviewer / Astra manual), and update `docs/codex.md`.
 - When improving the **Antigravity** runtime, place changes inside `runtimes/antigravity/`, adhere to the ALL-GEMINI architecture (Flash Medium orchestrator / Flash workers / Two-Key review), and update `docs/antigravity.md`.
 - Clearly state in pull requests whether the change affects Codex, Antigravity, Shared Concepts, or Documentation.

@@ -31,9 +31,9 @@ test("Codex operational routes stay exclusively on OpenAI models", () => {
     assert.equal(route.model.includes("gemini"), false, `Codex route must not contain gemini: ${JSON.stringify(route)}`);
     assert.equal(route.executor.includes("flash"), false, `Codex executor must not be flash: ${JSON.stringify(route)}`);
   }
-  assert.equal(CODEX_MODELS.TERRA_MEDIUM.model, "gpt-5.6-terra");
-  assert.equal(CODEX_MODELS.LUNA_MAX.model, "gpt-5.6-luna");
-  assert.equal(CODEX_MODELS.SOL_LOW.model, "gpt-5.6-sol");
+  assert.equal(CODEX_MODELS.SOL_MEDIUM.model, "gpt-6-sol");
+  assert.equal(CODEX_MODELS.LUNA_MAX.model, "gpt-6-luna");
+  assert.equal(CODEX_MODELS.SOL_REVIEW_LOW.model, "gpt-6-sol");
   assert.equal(CODEX_MODELS.ASTRA_MANUAL.model, "gpt-6-astra");
 });
 
@@ -68,7 +68,7 @@ test("AGY active routing files contain no active OpenAI model routes", () => {
   const activeRouteLines = agyPolicy
     .split("\n")
     .filter((line) => /(?:model|executor|worker|profile)\s*[:=]/i.test(line));
-  assert.equal(activeRouteLines.some((line) => /gpt-5\.6-(?:terra|luna|sol)|gpt-6-astra/i.test(line)), false);
+  assert.equal(activeRouteLines.some((line) => /gpt-5\.6-(?:sol|luna|sol)|gpt-6-(?:sol|luna|astra)/i.test(line)), false);
 });
 
 test("AGY operational hooks and skills contain no benchmark-specific contamination", () => {
@@ -135,7 +135,7 @@ test("Codex scan fails if .codex/ imports or references AGY Dream runtime paths"
   }
 
   // Valid codex content passes
-  assert.equal(scanContentForDream('const model = "gpt-5.6-terra";'), true);
+  assert.equal(scanContentForDream('const model = "gpt-6-sol";'), true);
   assert.equal(scanContentForDream('model = "gpt-6-astra"'), true);
 
   // Foreign AGY dream imports/references fail
@@ -158,7 +158,7 @@ test("AGY Dream source contains zero OpenAI models or foreign providers", () => 
       const line = lines[i];
       if (/(?:model|executor|worker|profile|provider)\s*[:=]/i.test(line)) {
         assert.equal(
-          /gpt-5\.6-(?:terra|luna|sol)|gpt-6-astra|gpt-|claude-|text-embedding/i.test(line),
+          /gpt-5\.6-(?:sol|luna|sol)|gpt-6-astra|gpt-|claude-|text-embedding/i.test(line),
           false,
           `Dream source file ${file}:${i + 1} must not contain foreign model assignment: ${line.trim()}`
         );

@@ -32,7 +32,7 @@ test("fidelity: expected worker route classification", () => {
   assert.equal(TASK_FIDELITY_REQUIREMENTS.critical.delegationExpected, false);
 
   const codexSimpleRoute = getExpectedRoute("simple", "codex");
-  assert.equal(codexSimpleRoute.orchestrator, "terra-medium");
+  assert.equal(codexSimpleRoute.orchestrator, "sol-medium");
   assert.equal(codexSimpleRoute.worker, "luna-high");
   assert.equal(codexSimpleRoute.delegationExpected, true);
 
@@ -199,7 +199,7 @@ test("fidelity: direct / read-only tasks pass without worker delegation", () => 
     subagentInvocations: 0,
     mutationActor: "NONE",
     runtimeLoaded: true,
-    orchestratorIdentity: "terra-medium",
+    orchestratorIdentity: "sol-medium",
     workerObserved: false,
     confidenceEvidence: { hasExplicitAgentRole: true },
   });
@@ -231,7 +231,7 @@ test("fidelity: fidelity PASS logic when worker performs implementation", () => 
     subagentInvocations: 1,
     mutationActor: "WORKER",
     runtimeLoaded: true,
-    orchestratorIdentity: "terra-medium",
+    orchestratorIdentity: "sol-medium",
     workerObserved: true,
     confidenceEvidence: {
       hasExplicitThreadId: true,

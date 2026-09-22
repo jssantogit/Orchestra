@@ -3,7 +3,7 @@
 ## Overview
 
 The Turn Economy Benchmark evaluates model turn efficiency, tool call density, and context consumption across two agent orchestration runtimes:
-- **Codex Runtime**: Terra control plane + Luna workers + Sol review (OpenAI models).
+- **Codex Runtime**: Sol 6 control and investigation + Luna 6 workers + Sol 6 review.
 - **Antigravity Runtime**: Gemini 3.8 Flash Medium orchestrator + Flash Low/Medium/High workers + Two-Key Flash High reviewers (Google DeepMind Gemini models).
 
 The primary objective is to investigate the **Model Turn Amplification** hypothesis: whether the Antigravity runtime uses more inferences and context replay per task, resulting in higher quota/token consumption despite using efficient Flash models.

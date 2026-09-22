@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { verifyEvidenceContract } from "./evidence-contract.mjs";
 import { createCodexWorkerPacket } from "./context-packet.mjs";
+import { readCodexVerificationConfig } from "./verification-guard.mjs";
 import { classifyMechanicalFastPath } from "./mechanical-fast-path.mjs";
 
 /**
@@ -14,67 +15,67 @@ import { classifyMechanicalFastPath } from "./mechanical-fast-path.mjs";
  */
 
 export const CODEX_MODELS = Object.freeze({
-  TERRA_MEDIUM: Object.freeze({
-    profile: "terra-medium",
-    owner: "terra",
-    executor: "terra",
-    model: "gpt-5.6-terra",
+  SOL_MEDIUM: Object.freeze({
+    profile: "sol-medium",
+    owner: "sol",
+    executor: "sol",
+    model: "gpt-6-sol",
     reasoningEffort: "medium",
   }),
   LUNA_HIGH: Object.freeze({
     profile: "luna-high",
     owner: "luna",
     executor: "luna",
-    model: "gpt-5.6-luna",
+    model: "gpt-6-luna",
     reasoningEffort: "high",
   }),
   LUNA_MEDIUM: Object.freeze({
     profile: "luna-medium",
     owner: "luna",
     executor: "luna",
-    model: "gpt-5.6-luna",
+    model: "gpt-6-luna",
     reasoningEffort: "medium",
   }),
   LUNA_MAX: Object.freeze({
     profile: "luna-max",
     owner: "luna",
     executor: "luna",
-    model: "gpt-5.6-luna",
+    model: "gpt-6-luna",
     reasoningEffort: "max",
   }),
-  TERRA_HIGH: Object.freeze({
-    profile: "terra-high",
-    owner: "terra",
-    executor: "terra",
-    model: "gpt-5.6-terra",
+  SOL_HIGH: Object.freeze({
+    profile: "sol-high",
+    owner: "sol",
+    executor: "sol",
+    model: "gpt-6-sol",
     reasoningEffort: "high",
   }),
-  TERRA_XHIGH: Object.freeze({
-    profile: "terra-xhigh",
-    owner: "terra",
-    executor: "terra",
-    model: "gpt-5.6-terra",
+  SOL_XHIGH: Object.freeze({
+    profile: "sol-xhigh",
+    owner: "sol",
+    executor: "sol",
+    model: "gpt-6-sol",
     reasoningEffort: "xhigh",
   }),
-  TERRA_MAX: Object.freeze({
-    profile: "terra-max",
-    owner: "terra",
-    executor: "terra",
-    model: "gpt-5.6-terra",
+  SOL_MAX: Object.freeze({
+    profile: "sol-max",
+    owner: "sol",
+    executor: "sol",
+    model: "gpt-6-sol",
     reasoningEffort: "max",
   }),
-  SOL_LOW: Object.freeze({
-    profile: "sol-low",
+  SOL_REVIEW_LOW: Object.freeze({
+    profile: "sol-review-low",
     owner: "sol",
     executor: "sol",
-    model: "gpt-5.6-sol",
+    model: "gpt-6-sol",
     reasoningEffort: "low",
   }),
-  SOL_MEDIUM: Object.freeze({
-    profile: "sol-medium",
+  SOL_REVIEW_MEDIUM: Object.freeze({
+    profile: "sol-review-medium",
     owner: "sol",
     executor: "sol",
-    model: "gpt-5.6-sol",
+    model: "gpt-6-sol",
     reasoningEffort: "medium",
   }),
   ASTRA_MANUAL: Object.freeze({
@@ -426,7 +427,7 @@ export function decideRoute(facts = {}) {
     || facts.automaticFallback === true
     || normalizeToken(facts.fallbackTarget) === "ASTRA";
   if (fallbackRequested && !facts.astraApproved) {
-    return routeFor("TERRA_MEDIUM", {
+    return routeFor("SOL_MEDIUM", {
       reason: "ASTRA_MANUAL_ONLY",
       astraBlocked: true,
       classificationOnly: true,
@@ -434,18 +435,18 @@ export function decideRoute(facts = {}) {
   }
 
   const info = actionInfo(facts);
-  if (!info.explicit) return routeFor("TERRA_MEDIUM", { reason: "default-control-plane", classificationOnly: true });
+  if (!info.explicit) return routeFor("SOL_MEDIUM", { reason: "default-control-plane", classificationOnly: true });
   if (info.action === "UNKNOWN") return invalidRoute("INVALID_ROUTE", { reason: "unknown-task-action" });
 
   switch (info.action) {
     case "ORCHESTRATE":
-      return routeFor("TERRA_MEDIUM", { reason: "orchestration-control-plane" });
+      return routeFor("SOL_MEDIUM", { reason: "orchestration-control-plane" });
     case "DIRECT_ACTION": {
       const operation = normalizeToken(firstPresent(facts, ["operation", "directAction", "direct_action"]));
       if (!DIRECT_ACTION_SET.has(operation)) {
         return invalidRoute("INVALID_DIRECT_ACTION", { reason: "unknown-direct-action" });
       }
-      return routeFor("TERRA_MEDIUM", {
+      return routeFor("SOL_MEDIUM", {
         reason: "direct-operational-action",
         operation,
         directAction: true,
@@ -498,37 +499,37 @@ export function decideRoute(facts = {}) {
       const effort = normalizeInvestigationEffort(firstPresent(facts, ["investigationEffort", "investigationDepth", "difficulty", "complexity"]));
       if (effort === "max") {
         if (!escalationEvidencePresent(facts) || !(Number(facts.priorAttempts) > 0)) {
-          return routeFor("TERRA_XHIGH", { reason: "terra-max-evidence-required", escalationBlocked: true, requestedEffort: "max" });
+          return routeFor("SOL_XHIGH", { reason: "sol-max-evidence-required", escalationBlocked: true, requestedEffort: "max" });
         }
-        return routeFor("TERRA_MAX", { reason: "exceptional-investigation", escalationJustified: true });
+        return routeFor("SOL_MAX", { reason: "exceptional-investigation", escalationJustified: true });
       }
       if (effort === "xhigh") {
         if (!escalationEvidencePresent(facts)) {
-          return routeFor("TERRA_HIGH", { reason: "terra-xhigh-evidence-required", escalationBlocked: true, requestedEffort: "xhigh" });
+          return routeFor("SOL_HIGH", { reason: "sol-xhigh-evidence-required", escalationBlocked: true, requestedEffort: "xhigh" });
         }
-        return routeFor("TERRA_XHIGH", { reason: "justified-deeper-investigation", escalationJustified: true });
+        return routeFor("SOL_XHIGH", { reason: "justified-deeper-investigation", escalationJustified: true });
       }
-      return routeFor("TERRA_HIGH", { reason: "deep-investigation" });
+      return routeFor("SOL_HIGH", { reason: "deep-investigation" });
     }
     case "REVIEW": {
       const criticality = normalizeCriticality(facts);
       if (criticality === "CRITICAL" || facts.rareSpecialistReview === true) {
-        return routeFor("SOL_LOW", { reason: "critical-independent-review", independent: true, criticality });
+        return routeFor("SOL_REVIEW_LOW", { reason: "critical-independent-review", independent: true, criticality });
       }
-      return routeFor("TERRA_MEDIUM", { reason: "acceptance-review", criticality });
+      return routeFor("SOL_MEDIUM", { reason: "acceptance-review", criticality });
     }
     case "ESCALATE": {
       const target = normalizeToken(firstPresent(facts, ["specialistLevel", "escalationLevel", "target"]));
       if (target === "ASTRA" || target === "MANUAL") {
         return invalidRoute("ASTRA_APPROVAL_REQUIRED", { astraBlocked: true });
       }
-      if (target === "MEDIUM" || target === "SOL_MEDIUM") {
+      if (target === "MEDIUM" || target === "SOL_REVIEW_MEDIUM") {
         if (!facts.escalationJustified || !escalationEvidencePresent(facts)) {
-          return routeFor("TERRA_MEDIUM", { reason: "specialist-escalation-evidence-required", escalationBlocked: true });
+          return routeFor("SOL_MEDIUM", { reason: "specialist-escalation-evidence-required", escalationBlocked: true });
         }
-        return routeFor("SOL_MEDIUM", { reason: "justified-specialist-escalation", escalationJustified: true });
+        return routeFor("SOL_REVIEW_MEDIUM", { reason: "justified-specialist-escalation", escalationJustified: true });
       }
-      return routeFor("SOL_LOW", { reason: "rare-specialist-review", independent: true, criticality: normalizeCriticality(facts) });
+      return routeFor("SOL_REVIEW_LOW", { reason: "rare-specialist-review", independent: true, criticality: normalizeCriticality(facts) });
     }
     case "ASTRA":
       if (!facts.astraApproved || !astraPacketValid(facts.astraEscalationPacket)) {
@@ -627,6 +628,33 @@ export function createScopeContract(details = {}) {
   const taskAction = normalizeTaskAction(merged) === "UNKNOWN" ? "IMPLEMENT" : normalizeTaskAction(merged);
   const allowedPaths = Array.isArray(merged.allowedPaths) ? [...merged.allowedPaths] : [];
   const forbiddenPaths = Array.isArray(merged.forbiddenPaths) ? [...merged.forbiddenPaths] : [];
+  const verification = merged.verificationPolicy && typeof merged.verificationPolicy === "object"
+    ? merged.verificationPolicy
+    : {};
+  if (verification.mode && !["CI_FIRST", "LOCAL_FOCUSED"].includes(verification.mode)) {
+    throw new Error("VERIFICATION_MODE_INVALID");
+  }
+  const mode = verification.mode === "CI_FIRST" ? "CI_FIRST" : "LOCAL_FOCUSED";
+  if (mode === "CI_FIRST" && (typeof verification.authoritativeGate !== "string" || !verification.authoritativeGate.trim())) {
+    throw new Error("CI_FIRST_REQUIRES_AUTHORITATIVE_GATE");
+  }
+  const verificationPolicy = {
+    mode,
+    authoritativeGate: mode === "CI_FIRST" ? verification.authoritativeGate.trim() : "LOCAL",
+    localHeavyAttempts: Number.isInteger(verification.localHeavyAttempts)
+      && verification.localHeavyAttempts >= 0
+      ? Math.min(verification.localHeavyAttempts, 2)
+      : (mode === "CI_FIRST" ? 0 : 1),
+    localCommandTimeoutSeconds: Number.isInteger(verification.localCommandTimeoutSeconds)
+      && verification.localCommandTimeoutSeconds > 0
+      ? Math.min(verification.localCommandTimeoutSeconds, 300)
+      : 120,
+    stopOnInfrastructureFailure: true,
+  };
+  const requiredEvidence = Array.isArray(merged.requiredEvidence) ? structuredClone(merged.requiredEvidence) : [];
+  if (mode === "CI_FIRST" && !requiredEvidence.some((item) => item?.kind === "REMOTE_CI")) {
+    throw new Error("CI_FIRST_REQUIRES_REMOTE_CI_EVIDENCE");
+  }
   return {
     taskAction,
     taskDomain: normalizeTaskDomain(merged),
@@ -635,7 +663,8 @@ export function createScopeContract(details = {}) {
     dependencies: Array.isArray(merged.dependencies) ? [...merged.dependencies] : [],
     acceptanceCriteria: Array.isArray(merged.acceptanceCriteria) ? [...merged.acceptanceCriteria] : [],
     testsRequired: Array.isArray(merged.testsRequired) ? [...merged.testsRequired] : [],
-    requiredEvidence: Array.isArray(merged.requiredEvidence) ? structuredClone(merged.requiredEvidence) : [],
+    verificationPolicy,
+    requiredEvidence,
     retryBudget: createRetryBudget(merged),
     stopConditions: Array.isArray(merged.stopConditions) ? [...merged.stopConditions] : [],
     doNotChange: Array.isArray(merged.doNotChange) ? [...merged.doNotChange] : [],
@@ -712,7 +741,7 @@ export function createAcceptanceGate(details = {}) {
   const workerResult = details.workerResult ?? {};
   const workerComplete = workerResult.status === "IMPLEMENTATION_COMPLETE" && workerResult.complete !== false;
   return {
-    owner: "terra",
+    owner: "sol",
     workerComplete,
     result: workerComplete ? "EVIDENCE_REQUIRED" : "WORKER_INCOMPLETE",
     accepted: false,
@@ -726,7 +755,7 @@ function evidenceForCommand(evidence, command) {
 export function evaluateAcceptance(details = {}) {
   const workerResult = details.workerResult ?? {};
   const workerComplete = workerResult.status === "IMPLEMENTATION_COMPLETE" && workerResult.complete !== false;
-  if (!workerComplete) return { accepted: false, result: "WORKER_INCOMPLETE", owner: "terra", workerComplete };
+  if (!workerComplete) return { accepted: false, result: "WORKER_INCOMPLETE", owner: "sol", workerComplete };
   const scopeContract = details.scopeContract ?? {};
   const requiredTests = Array.isArray(details.requiredTests)
     ? details.requiredTests
@@ -751,13 +780,13 @@ export function evaluateAcceptance(details = {}) {
   } else {
     evidenceComplete = requiredTests.every((command) => evidenceForCommand(evidence, command));
   }
-  if (!evidenceComplete) return { accepted: false, result: "EVIDENCE_INCOMPLETE", owner: "terra", workerComplete, evidenceComplete, evidenceContract };
+  if (!evidenceComplete) return { accepted: false, result: "EVIDENCE_INCOMPLETE", owner: "sol", workerComplete, evidenceComplete, evidenceContract };
   const scope = validateScopeContract(scopeContract, details.changedPaths ?? []);
-  if (!scope.valid) return { accepted: false, result: "SCOPE_VIOLATION", owner: "terra", workerComplete, evidenceComplete, scope };
+  if (!scope.valid) return { accepted: false, result: "SCOPE_VIOLATION", owner: "sol", workerComplete, evidenceComplete, scope };
   if (requiresIntegration(details) && details.integrated !== true) {
-    return { accepted: false, result: "INTEGRATION_REQUIRED", owner: "terra", workerComplete, evidenceComplete, scope };
+    return { accepted: false, result: "INTEGRATION_REQUIRED", owner: "sol", workerComplete, evidenceComplete, scope };
   }
-  return { accepted: true, result: "ACCEPTED", owner: "terra", workerComplete, evidenceComplete, scope };
+  return { accepted: true, result: "ACCEPTED", owner: "sol", workerComplete, evidenceComplete, scope };
 }
 
 export const acceptanceGate = createAcceptanceGate;
@@ -767,8 +796,8 @@ export function createCriticalReviewPacket(details = {}) {
     criticality: "CRITICAL",
     independent: true,
     owner: "sol",
-    profile: "sol-low",
-    model: CODEX_MODELS.SOL_LOW.model,
+    profile: "sol-review-low",
+    model: CODEX_MODELS.SOL_REVIEW_LOW.model,
     goal: details.goal ?? null,
     acceptanceCriteria: details.acceptanceCriteria ?? [],
     decision: details.decision ?? null,
@@ -782,37 +811,37 @@ export const createIndependentReviewPacket = createCriticalReviewPacket;
 
 export function evaluateCriticalReview(packet = {}, verdict) {
   const normalized = normalizeToken(verdict);
-  if (["ACCEPT", "ACCEPT_WITH_NOTES"].includes(normalized)) return { accepted: true, result: normalized, owner: "terra" };
-  if (["CHANGES_REQUIRED", "BLOCK"].includes(normalized)) return { accepted: false, result: normalized, owner: "terra", findingsReturned: true };
-  return { accepted: false, result: "INVALID_REVIEW", owner: "terra", packet };
+  if (["ACCEPT", "ACCEPT_WITH_NOTES"].includes(normalized)) return { accepted: true, result: normalized, owner: "sol" };
+  if (["CHANGES_REQUIRED", "BLOCK"].includes(normalized)) return { accepted: false, result: normalized, owner: "sol", findingsReturned: true };
+  return { accepted: false, result: "INVALID_REVIEW", owner: "sol", packet };
 }
 
 export function reviewRoute(facts = {}) {
   const request = facts.crossDomainRequest;
   if (request?.type === CROSS_DOMAIN_REQUEST) {
-    return routeFor("TERRA_MEDIUM", { reason: "cross-domain-request", controlReturned: true, crossDomainRequest: request });
+    return routeFor("SOL_MEDIUM", { reason: "cross-domain-request", controlReturned: true, crossDomainRequest: request });
   }
   if (facts.scopeViolation === true || facts.scope?.valid === false) {
-    return routeFor("TERRA_MEDIUM", { reason: "scope-violation", scopeViolation: true, replanRequired: true });
+    return routeFor("SOL_MEDIUM", { reason: "scope-violation", scopeViolation: true, replanRequired: true });
   }
   const verdict = normalizeToken(facts.reviewerVerdict ?? facts.reviewVerdict);
   if (["CHANGES_REQUIRED", "BLOCK"].includes(verdict)) {
-    return routeFor("TERRA_MEDIUM", { reason: "review-findings-returned", findingsReturned: true, implementationExecutor: "luna-max" });
+    return routeFor("SOL_MEDIUM", { reason: "review-findings-returned", findingsReturned: true, implementationExecutor: "luna-max" });
   }
   const workerResult = facts.workerResult ?? {};
   const incomplete = workerResult.complete === false || workerResult.status === "PARTIAL" || workerResult.status === "INCOMPLETE";
   if (incomplete) {
     const budget = createRetryBudget(facts);
     if (budget.remainingAttempts <= 0) {
-      return routeFor("TERRA_MEDIUM", { reason: "retry-budget-exhausted", retryAllowed: false, replanRequired: true, remainingAttempts: 0 });
+      return routeFor("SOL_MEDIUM", { reason: "retry-budget-exhausted", retryAllowed: false, replanRequired: true, remainingAttempts: 0 });
     }
     const route = decideRoute({ taskAction: facts.taskAction ?? "IMPLEMENT", implementationComplexity: facts.implementationComplexity, taskDomain: facts.taskDomain });
-    if (!route.valid || !["luna-high", "luna-max"].includes(route.profile)) return routeFor("TERRA_MEDIUM", { reason: "retry-needs-reclassification", replanRequired: true });
+    if (!route.valid || !["luna-high", "luna-max"].includes(route.profile)) return routeFor("SOL_MEDIUM", { reason: "retry-needs-reclassification", replanRequired: true });
     const nextBudget = consumeRetryBudget(facts);
     return { ...route, reason: "bounded-delta-retry", retry: true, retryReason: facts.retryReason ?? "INCOMPLETE_IMPLEMENTATION", remainingAttempts: nextBudget.remainingAttempts, attempt: nextBudget.attempt };
   }
   if (normalizeCriticality(facts) === "CRITICAL" && !verdict) return decideRoute({ ...facts, taskAction: "REVIEW" });
-  return routeFor("TERRA_MEDIUM", { reason: "acceptance-review" });
+  return routeFor("SOL_MEDIUM", { reason: "acceptance-review" });
 }
 
 export function validateStateTransition(fromState, toState) {
@@ -1211,7 +1240,7 @@ export function canWorkerSpawn(profile) {
 }
 
 export function canWorkerAccept(profile) {
-  return normalizeToken(profile).startsWith("TERRA");
+  return normalizeToken(profile) === "SOL_MEDIUM";
 }
 
 export function directWriteDecision(facts = {}) {
@@ -1231,8 +1260,21 @@ export function directWriteDecision(facts = {}) {
 }
 
 export function createImplementationHandoff(details = {}) {
+  const projectConfig = details.projectRoot ? readCodexVerificationConfig(details.projectRoot) : null;
+  if (projectConfig && !projectConfig.valid) throw new Error(projectConfig.reason);
+  const suppliedPolicy = details.scopeContract?.verificationPolicy ?? details.verificationPolicy;
+  if (projectConfig?.policy && suppliedPolicy
+    && (projectConfig.policy.mode !== suppliedPolicy.mode
+      || projectConfig.policy.authoritativeGate !== suppliedPolicy.authoritativeGate)) {
+    throw new Error("PROJECT_VERIFICATION_POLICY_MISMATCH");
+  }
+  const verificationPolicy = projectConfig?.policy ?? suppliedPolicy;
+  if (!verificationPolicy) {
+    throw new Error("IMPLEMENTATION_VERIFICATION_POLICY_REQUIRED");
+  }
   const scopeContract = createScopeContract({
     ...details,
+    scopeContract: { ...details.scopeContract, verificationPolicy },
     taskAction: "IMPLEMENT",
     taskDomain: details.taskDomain,
   });
@@ -1257,7 +1299,7 @@ export function createImplementationHandoff(details = {}) {
     reasoningEffort: CODEX_MODELS.LUNA_MAX.reasoningEffort,
     task: details.task ?? null,
     goal: details.goal ?? null,
-    packetFormat: ["goal", "taskDomain", "allowedPaths", "forbiddenPaths", "decision", "acceptanceCriteria", "testsRequired", "requiredEvidence", "sideEffectCapabilities", "stopConditions", "knownRisks"],
+    packetFormat: ["goal", "taskDomain", "allowedPaths", "forbiddenPaths", "decision", "acceptanceCriteria", "testsRequired", "verificationPolicy", "requiredEvidence", "sideEffectCapabilities", "stopConditions", "knownRisks"],
     knownRisks: details.knownRisks ?? details.risks ?? [],
     rootCauseDecision: details.rootCauseDecision ?? details.decision ?? null,
     files: details.files ?? details.areas ?? [],
@@ -1293,7 +1335,7 @@ export function createTelemetryEvent(input = {}, decision = null) {
     acceptance_result: input.acceptanceResult ?? null,
     integration_required: requiresIntegration(input),
     criticality: normalizeCriticality(input),
-    independent_review_model: input.independentReviewModel ?? (normalizeCriticality(input) === "CRITICAL" ? CODEX_MODELS.SOL_LOW.model : null),
+    independent_review_model: input.independentReviewModel ?? (normalizeCriticality(input) === "CRITICAL" ? CODEX_MODELS.SOL_REVIEW_LOW.model : null),
     independent_review_result: input.independentReviewResult ?? null,
   };
 }
@@ -1301,18 +1343,18 @@ export function createTelemetryEvent(input = {}, decision = null) {
 export function summarizePolicyDrift(events = []) {
   const implementations = events.filter((event) => event?.task_action === "IMPLEMENT");
   const luna = implementations.filter((event) => ["luna", "luna-high", "luna-max"].includes(event.implementation_executor));
-  const terra = implementations.filter((event) => ["terra", "terra-medium"].includes(event.implementation_executor));
+  const sol = implementations.filter((event) => ["sol", "sol-medium"].includes(event.implementation_executor));
   const total = implementations.length;
   const lunaRate = total === 0 ? 0 : luna.length / total;
-  const terraRate = total === 0 ? 0 : terra.length / total;
+  const solRate = total === 0 ? 0 : sol.length / total;
   return {
     totalImplementations: total,
     lunaImplementations: luna.length,
-    terraDirectImplementations: terra.length,
+    solDirectImplementations: sol.length,
     lunaImplementationRate: lunaRate,
-    terraDirectImplementationRate: terraRate,
-    drift: total > 0 && (lunaRate <= 0.85 || terraRate >= 0.1),
-    diagnostic: total > 0 && (lunaRate <= 0.85 || terraRate >= 0.1) ? "ORCHESTRATION_POLICY_DRIFT" : null,
+    solDirectImplementationRate: solRate,
+    drift: total > 0 && (lunaRate <= 0.85 || solRate >= 0.1),
+    diagnostic: total > 0 && (lunaRate <= 0.85 || solRate >= 0.1) ? "ORCHESTRATION_POLICY_DRIFT" : null,
   };
 }
 

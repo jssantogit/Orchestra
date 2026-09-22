@@ -69,11 +69,11 @@ REQUIRED_CODEX_FILES=(
   "runtimes/codex/.codex/agents/luna-high.toml"
   "runtimes/codex/.codex/agents/luna-medium.toml"
   "runtimes/codex/.codex/agents/luna-max.toml"
-  "runtimes/codex/.codex/agents/terra-high.toml"
-  "runtimes/codex/.codex/agents/terra-xhigh.toml"
-  "runtimes/codex/.codex/agents/terra-max.toml"
-  "runtimes/codex/.codex/agents/sol-low.toml"
-  "runtimes/codex/.codex/agents/sol-medium.toml"
+  "runtimes/codex/.codex/agents/sol-high.toml"
+  "runtimes/codex/.codex/agents/sol-xhigh.toml"
+  "runtimes/codex/.codex/agents/sol-max.toml"
+  "runtimes/codex/.codex/agents/sol-review-low.toml"
+  "runtimes/codex/.codex/agents/sol-review-medium.toml"
   "runtimes/codex/.codex/agents/astra-manual.toml"
 )
 

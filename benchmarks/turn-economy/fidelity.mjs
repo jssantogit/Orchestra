@@ -56,14 +56,14 @@ export const TASK_FIDELITY_REQUIREMENTS = {
 export const EXPECTED_ROUTES = {
   codex: {
     orchestrator: {
-      profile: "terra-medium",
-      model: "gpt-5.6-terra",
+      profile: "sol-medium",
+      model: "gpt-6-sol",
       reasoningEffort: "medium",
     },
     worker: {
-      simple: { profile: "luna-high", model: "gpt-5.6-luna", reasoningEffort: "high" },
-      multi: { profile: "luna-max", model: "gpt-5.6-luna", reasoningEffort: "max" },
-      investigation: { profile: "luna-high", model: "gpt-5.6-luna", reasoningEffort: "high" },
+      simple: { profile: "luna-high", model: "gpt-6-luna", reasoningEffort: "high" },
+      multi: { profile: "luna-max", model: "gpt-6-luna", reasoningEffort: "max" },
+      investigation: { profile: "luna-high", model: "gpt-6-luna", reasoningEffort: "high" },
     },
   },
   antigravity: {
@@ -220,7 +220,7 @@ export function evaluateTaskFidelity({
         delegationExpected,
       },
       observed: {
-        orchestrator: orchestratorIdentity || (runtime === "codex" ? "terra-medium" : "flash-orchestrator"),
+        orchestrator: orchestratorIdentity || (runtime === "codex" ? "sol-medium" : "flash-orchestrator"),
         worker: delegationExpected ? (expectedRoute?.worker || "worker") : null,
         delegation: delegationExpected,
         subagentInvocations,
@@ -424,7 +424,7 @@ export function evaluateTaskFidelity({
       delegationExpected,
     },
     observed: {
-      orchestrator: orchestratorIdentity || (runtime === "codex" ? "terra-medium" : "flash-orchestrator"),
+      orchestrator: orchestratorIdentity || (runtime === "codex" ? "sol-medium" : "flash-orchestrator"),
       worker: isWorkerPresent ? (expectedRoute?.worker || "worker") : null,
       delegation: isWorkerPresent,
       subagentInvocations,

@@ -8,22 +8,26 @@ The Codex runtime implementation of Orchestra coordinates multi-agent coding tas
 
 The Codex control plane uses tiered OpenAI models:
 
+Sol 6 handles orchestration and investigation through `sol-medium`,
+`sol-high`, `sol-xhigh`, and `sol-max`. Reviewers use separate
+`sol-review-low` and `sol-review-medium` profiles.
+
 ```text
-TERRA MEDIUM (Control Plane)
+SOL MEDIUM (Control Plane)
   ├─ classify action/domain and write scopeContract
-  ├─ investigate → TERRA HIGH / XHIGH / MAX
+  ├─ investigate → SOL HIGH / XHIGH / MAX
   ├─ implement  → LUNA HIGH (simple) or LUNA MAX (normal)
   ├─ support    → LUNA MEDIUM (explicitly bounded deterministic)
-  ├─ critical review → SOL LOW; justified specialist → SOL MEDIUM
+  ├─ critical review → SOL REVIEW LOW; specialist → SOL REVIEW MEDIUM
   └─ validate evidence, integrate when needed, accept or fail closed
 ```
 
-- **Terra Medium (`gpt-5.6-terra`, effort: medium)**: Main session control plane. Handles task intake, routing decisions, scope contracts, validation evaluation, and final acceptance.
-- **Luna High (`gpt-5.6-luna`, effort: high)**: Implementation worker for small, conventional, and low-risk changes.
-- **Luna Max (`gpt-5.6-luna`, effort: max)**: Implementation worker for standard, non-trivial, and complex product implementation.
-- **Luna Medium (`gpt-5.6-luna`, effort: medium)**: Bounded deterministic support worker for mechanical tasks, docs, and non-critical formatting.
-- **Terra High / XHigh / Max (`gpt-5.6-terra`, effort: high/xhigh/max)**: Escalation ladder for difficult architectural investigations and conflicting evidence. Operates in read-only sandbox mode.
-- **Sol Low / Medium (`gpt-5.6-sol`, effort: low/medium)**: Independent critical review and specialist escalation. Sol never implements its own findings.
+- **Sol Medium (`gpt-6-sol`, effort: medium)**: Main session control plane. Handles task intake, routing decisions, scope contracts, validation evaluation, and final acceptance.
+- **Luna High (`gpt-6-luna`, effort: high)**: Implementation worker for small, conventional, and low-risk changes.
+- **Luna Max (`gpt-6-luna`, effort: max)**: Implementation worker for standard, non-trivial, and complex product implementation.
+- **Luna Medium (`gpt-6-luna`, effort: medium)**: Bounded deterministic support worker for mechanical tasks, docs, and non-critical formatting.
+- **Sol High / XHigh / Max (`gpt-6-sol`, effort: high/xhigh/max)**: Escalation ladder for difficult architectural investigations and conflicting evidence. Operates in read-only sandbox mode.
+- **Sol Review Low / Medium (`gpt-6-sol`, effort: low/medium)**: Independent critical review and specialist escalation. Reviewers never implement their own findings.
 - **Astra Manual (`gpt-6-astra`, effort: medium)**: **MANUAL ONLY**. Accessible only via an explicitly approved user escalation packet. Automatic fallback or routing to Astra is prohibited.
 
 ---
@@ -34,7 +38,7 @@ The configuration file is scoped to the repository:
 
 ```toml
 #:schema https://developers.openai.com/codex/config-schema.json
-model = "gpt-5.6-terra"
+model = "gpt-6-sol"
 model_reasoning_effort = "medium"
 model_instructions_file = "astra-orchestra/INSTRUCTIONS.md"
 
@@ -45,7 +49,7 @@ multi_agent_v2 = true
 [agents]
 enabled = true
 max_concurrent_threads_per_session = 1
-default_subagent_model = "gpt-5.6-luna"
+default_subagent_model = "gpt-6-luna"
 default_subagent_reasoning_effort = "max"
 ```
 
@@ -53,7 +57,7 @@ default_subagent_reasoning_effort = "max"
 
 ## 3. Delegation & Scope Contracts
 
-Every delegation to Luna or Terra includes:
+Every delegation to Luna or Sol includes:
 1. `taskDomain`: Canonical domain (`CODE`, `UI`, `DATA`, `INFRA`, `TESTING`, `DOCS`, `RESEARCH`, `GENERAL`).
 2. `scopeContract`: Explicit `allowedPaths` and `forbiddenPaths`.
 3. `acceptanceCriteria`: Measurable requirements.
@@ -76,7 +80,7 @@ The Codex policy module enforces deterministic tool evaluation:
 
 When the user requests routine operations (e.g. status, diff, running a named test, committing, pushing):
 - Bypasses worker spawning and acceptance ceremonies.
-- Executes directly in Terra with minimal tools.
+- Executes directly in Sol with minimal tools.
 - Halts immediately on nonzero exits.
 
 ---
@@ -131,7 +135,7 @@ root authority, `UserPromptSubmit` blocks future turns from a former root, and
 `PreToolUse` denies supported local/MCP/function tools to sessions that do not
 own the current authority record.
 
-At an explicit completed-milestone chat boundary, the current Terra root runs:
+At an explicit completed-milestone chat boundary, the current Sol root runs:
 
 ```bash
 node .codex/astra-orchestra/session-handoff-cli.mjs prepare --boundary

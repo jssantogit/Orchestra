@@ -85,7 +85,7 @@ export function runContaminationCheck(rootDir = root) {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (/(?:model|executor|worker|profile)\s*[:=]/i.test(line)) {
-        if (/gpt-5\.6-(?:terra|luna|sol)|gpt-6-astra/i.test(line)) {
+        if (/gpt-5\.6-(?:terra|luna|sol)|gpt-6-(?:sol|luna|astra)/i.test(line)) {
           violations.push({
             runtime: "ANTIGRAVITY",
             file: relative(rootDir, file),

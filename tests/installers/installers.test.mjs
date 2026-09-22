@@ -23,6 +23,9 @@ test("installer: installs Codex runtime cleanly into empty project", () => {
     assert.equal(existsSync(join(tempProject, ".codex/hooks.json")), true);
     assert.equal(existsSync(join(tempProject, ".codex/astra-orchestra/INSTRUCTIONS.md")), true);
     assert.equal(existsSync(join(tempProject, ".codex/agents/luna-high.toml")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/agents/sol-high.toml")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/agents/sol-review-medium.toml")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/agents/terra-high.toml")), false);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-runtime.json")), true);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/.gitkeep")), true);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic/.gitkeep")), true);

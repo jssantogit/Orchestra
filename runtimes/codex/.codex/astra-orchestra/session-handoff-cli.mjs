@@ -14,7 +14,7 @@ function usage() {
     "  node .codex/astra-orchestra/session-handoff-cli.mjs status",
     "  node .codex/astra-orchestra/session-handoff-cli.mjs cancel [--reason TEXT]",
     "",
-    "Normal flow: the factual Terra root executes prepare after explicit user intent to continue in a fresh chat.",
+    "Normal flow: the factual Sol root executes prepare after explicit user intent to continue in a fresh chat.",
     "The user does not copy session IDs or edit Orchestra state.",
   ].join("\n");
 }

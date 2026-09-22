@@ -113,6 +113,7 @@ export function createCodexWorkerPacket({
       forbidden_paths: Array.isArray(scopeContract.forbiddenPaths) ? [...scopeContract.forbiddenPaths] : [],
       acceptance_criteria: Array.isArray(scopeContract.acceptanceCriteria) ? [...scopeContract.acceptanceCriteria] : [],
       tests_required: Array.isArray(scopeContract.testsRequired) ? [...scopeContract.testsRequired] : [],
+      verification_policy: scopeContract.verificationPolicy || null,
       required_evidence: Array.isArray(scopeContract.requiredEvidence) ? stable(scopeContract.requiredEvidence) : [],
       side_effect_capabilities: Array.isArray(scopeContract.sideEffectCapabilities)
         ? [...scopeContract.sideEffectCapabilities]

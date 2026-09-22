@@ -49,12 +49,12 @@ const assertCodexRoute = (route) => {
   assert.equal(route.executor.includes("flash"), false);
 };
 
-test("Terra Medium is the default control plane", () => {
+test("Sol Medium is the default control plane", () => {
   const route = decideRoute({ taskAction: "ORCHESTRATE" });
-  assert.equal(route.profile, "terra-medium");
-  assert.equal(route.model, CODEX_MODELS.TERRA_MEDIUM.model);
+  assert.equal(route.profile, "sol-medium");
+  assert.equal(route.model, CODEX_MODELS.SOL_MEDIUM.model);
   assert.equal(route.reasoningEffort, "medium");
-  assert.equal(route.owner, "terra");
+  assert.equal(route.owner, "sol");
   assertCodexRoute(route);
 });
 
@@ -74,26 +74,26 @@ test("normal implementation routes to Luna Max", () => {
   assertCodexRoute(route);
 });
 
-test("deep investigation routes to Terra High", () => {
+test("deep investigation routes to Sol High", () => {
   const route = decideRoute({ taskAction: "INVESTIGATE", investigationEffort: "high" });
-  assert.equal(route.profile, "terra-high");
-  assert.equal(route.owner, "terra");
+  assert.equal(route.profile, "sol-high");
+  assert.equal(route.owner, "sol");
   assertCodexRoute(route);
 });
 
-test("justified deeper investigation routes to Terra XHigh", () => {
+test("justified deeper investigation routes to Sol XHigh", () => {
   const route = decideRoute({
     taskAction: "INVESTIGATE",
     investigationEffort: "xhigh",
     justification: "High left two conflicting hypotheses",
     evidence: ["reproduction remains nondeterministic"],
   });
-  assert.equal(route.profile, "terra-xhigh");
+  assert.equal(route.profile, "sol-xhigh");
   assert.equal(route.escalationJustified, true);
   assertCodexRoute(route);
 });
 
-test("exceptional investigation routes to Terra Max only with evidence", () => {
+test("exceptional investigation routes to Sol Max only with evidence", () => {
   const route = decideRoute({
     taskAction: "INVESTIGATE",
     investigationEffort: "max",
@@ -101,27 +101,27 @@ test("exceptional investigation routes to Terra Max only with evidence", () => {
     evidence: ["three focused experiments inconclusive"],
     priorAttempts: 2,
   });
-  assert.equal(route.profile, "terra-max");
+  assert.equal(route.profile, "sol-max");
   assert.equal(route.escalationJustified, true);
   assertCodexRoute(route);
 });
 
-test("CRITICAL review routes to rare Sol Low independent review", () => {
+test("CRITICAL review routes to Sol Review Low", () => {
   const route = decideRoute({ taskAction: "REVIEW", criticality: "CRITICAL" });
-  assert.equal(route.profile, "sol-low");
+  assert.equal(route.profile, "sol-review-low");
   assert.equal(route.owner, "sol");
   assert.equal(route.independent, true);
   assertCodexRoute(route);
 });
 
-test("justified specialist escalation routes to Sol Medium", () => {
+test("justified specialist escalation routes to Sol Review Medium", () => {
   const route = decideRoute({
     taskAction: "ESCALATE",
     specialistLevel: "medium",
     escalationJustified: true,
-    evidence: ["Sol Low could not resolve a specific uncertainty"],
+    evidence: ["Sol Review Low could not resolve a specific uncertainty"],
   });
-  assert.equal(route.profile, "sol-medium");
+  assert.equal(route.profile, "sol-review-medium");
   assert.equal(route.owner, "sol");
   assertCodexRoute(route);
 });
@@ -149,23 +149,25 @@ test("Astra cannot be an automatic fallback", () => {
   const route = decideRoute({ taskAction: "IMPLEMENT", fallback: true, fallbackTarget: "astra" });
   assert.notEqual(route.profile, "astra-manual");
   assert.equal(route.astraBlocked, true);
-  assert.equal(route.profile, "terra-medium");
+  assert.equal(route.profile, "sol-medium");
   assertCodexRoute(route);
 });
 
 test("workers cannot spawn or coordinate workers", () => {
   assert.equal(canWorkerSpawn("luna-max"), false);
-  assert.equal(canWorkerSpawn("terra-high"), false);
-  assert.equal(canWorkerSpawn("terra-medium"), false);
+  assert.equal(canWorkerSpawn("sol-high"), false);
+  assert.equal(canWorkerSpawn("sol-medium"), false);
 });
 
 test("workers cannot self-accept", () => {
   assert.equal(canWorkerAccept("luna-max"), false);
   assert.equal(canWorkerAccept("luna-high"), false);
-  assert.equal(canWorkerAccept("sol-low"), false);
+  assert.equal(canWorkerAccept("sol-review-low"), false);
+  assert.equal(canWorkerAccept("sol-high"), false);
+  assert.equal(canWorkerAccept("sol-medium"), true);
 });
 
-test("CROSS_DOMAIN_REQUEST returns control to Terra", () => {
+test("CROSS_DOMAIN_REQUEST returns control to Sol", () => {
   const request = createCrossDomainRequest({
     currentDomain: "UI",
     requiredDomain: "DSP_CORE",
@@ -176,7 +178,7 @@ test("CROSS_DOMAIN_REQUEST returns control to Terra", () => {
   assert.equal(request.type, CROSS_DOMAIN_REQUEST);
   assert.equal(request.blocking, true);
   const route = reviewRoute({ crossDomainRequest: request });
-  assert.equal(route.profile, "terra-medium");
+  assert.equal(route.profile, "sol-medium");
   assert.equal(route.controlReturned, true);
 });
 
@@ -224,7 +226,7 @@ test("retry budgets are bounded and consume one attempt", () => {
   });
 });
 
-test("partial worker result gets a bounded Luna retry, exhaustion returns Terra", () => {
+test("partial worker result gets a bounded Luna retry, exhaustion returns Sol", () => {
   const retry = reviewRoute({
     taskAction: "IMPLEMENT",
     implementationComplexity: "normal",
@@ -241,7 +243,7 @@ test("partial worker result gets a bounded Luna retry, exhaustion returns Terra"
     workerResult: { status: "IMPLEMENTATION_COMPLETE", complete: false },
     retryBudget: { maxAttempts: 1, attempt: 1, remainingAttempts: 0 },
   });
-  assert.equal(exhausted.profile, "terra-medium");
+  assert.equal(exhausted.profile, "sol-medium");
   assert.equal(exhausted.retryAllowed, false);
   assert.equal(exhausted.replanRequired, true);
 });
@@ -256,7 +258,7 @@ test("IMPLEMENTATION_COMPLETE is evidence, not acceptance", () => {
   });
   assert.equal(result.accepted, false);
   assert.equal(result.result, "EVIDENCE_INCOMPLETE");
-  assert.equal(createAcceptanceGate({ workerResult: { status: "IMPLEMENTATION_COMPLETE" } }).owner, "terra");
+  assert.equal(createAcceptanceGate({ workerResult: { status: "IMPLEMENTATION_COMPLETE" } }).owner, "sol");
 });
 
 test("acceptance requires objective evidence and a compliant scope", () => {
@@ -281,13 +283,13 @@ test("integration gate is absent for one deliverable and required for many", () 
   assert.equal(contract.owner, "luna");
 });
 
-test("Sol findings return to Terra instead of self-implementation", () => {
+test("Sol findings return to Sol instead of self-implementation", () => {
   const route = reviewRoute({
     criticality: "CRITICAL",
     reviewerVerdict: "CHANGES_REQUIRED",
     findings: ["edge case not covered"],
   });
-  assert.equal(route.profile, "terra-medium");
+  assert.equal(route.profile, "sol-medium");
   assert.equal(route.findingsReturned, true);
   assert.equal(route.implementationExecutor, "luna-max");
 });
@@ -322,6 +324,7 @@ test("implementation handoff always names Luna as executor", () => {
     implementationPlan: ["Apply bounded correction"],
     acceptanceCriteria: ["Focused test passes"],
     testsRequired: ["pnpm test"],
+    verificationPolicy: { mode: "LOCAL_FOCUSED" },
     doNotChange: ["vendor/**"],
   });
   assert.equal(handoff.taskAction, "IMPLEMENT");
@@ -332,8 +335,8 @@ test("implementation handoff always names Luna as executor", () => {
 
 test("Codex route firewall rejects non-Codex models and workers", () => {
   assert.equal(validateCodexRoute({ model: "gemini-3.8-flash-high", executor: "flash-worker" }).valid, false);
-  assert.equal(validateCodexRoute({ model: "gpt-5.6-luna", executor: "flash" }).valid, false);
-  assert.equal(validateCodexRoute({ model: "gpt-5.6-luna", executor: "luna-max" }).valid, true);
+  assert.equal(validateCodexRoute({ model: "gpt-6-luna", executor: "flash" }).valid, false);
+  assert.equal(validateCodexRoute({ model: "gpt-6-luna", executor: "luna-max" }).valid, true);
   assert.equal(validateCodexRoute({ model: "gpt-6-astra", executor: "astra-manual", automatic: true }).valid, false);
 });
 
@@ -350,9 +353,9 @@ test("project config disables every AGY-only skill by official name selector", (
 });
 
 
-test("direct operational actions stay with Terra and bypass worker acceptance", () => {
+test("direct operational actions stay with Sol and bypass worker acceptance", () => {
   const route = decideRoute({ taskAction: "DIRECT_ACTION", operation: "SHOW_STATUS" });
-  assert.equal(route.profile, "terra-medium");
+  assert.equal(route.profile, "sol-medium");
   assert.equal(route.directAction, true);
   assert.equal(route.bypassesImplementationAcceptance, true);
   assert.equal(isDirectAction({ taskAction: "DIRECT_ACTION", operation: "SHOW_STATUS" }), true);
@@ -561,7 +564,7 @@ test("Codex action vocabulary is explicit and provider-independent", () => {
 
 test("instruction source remains within the Codex control-plane tree", () => {
   const instructions = readFileSync(new URL("./INSTRUCTIONS.md", import.meta.url), "utf8");
-  assert.equal(instructions.includes("Terra Medium"), true);
+  assert.equal(instructions.includes("Sol Medium"), true);
   assert.equal(instructions.includes(".agents/skills/agy-orchestra"), false);
   assert.equal(instructions.includes("gemini-"), false);
 });

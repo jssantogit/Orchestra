@@ -61,11 +61,13 @@ test("Codex implementation handoff carries governed mandatory-core worker packet
     goal: "Change one implementation file",
     allowedPaths: ["src/a.mjs"],
     acceptanceCriteria: ["behavior passes"],
+    verificationPolicy: { mode: "CI_FIRST", authoritativeGate: "GitHub Fast CI" },
     requiredEvidence: [{
-      id: "test",
-      class: "LOCAL_TEST",
-      kind: "LOCAL_COMMAND",
-      command: "node --test a.test.mjs",
+      id: "fast-ci",
+      class: "FAST_CI",
+      kind: "REMOTE_CI",
+      provider: "GITHUB_ACTIONS",
+      workflow: { name: "CI" },
     }],
     auxiliaryRefs: Array.from({ length: 12 }, (_, i) => ({
       id: "ref-" + i,
@@ -75,7 +77,34 @@ test("Codex implementation handoff carries governed mandatory-core worker packet
   });
   assert.equal(handoff.workerPacket.schema, "orchestra.codex-worker-packet.v1");
   assert.deepEqual(handoff.workerPacket.mandatory_core.scope.allowed_paths, ["src/a.mjs"]);
+  assert.deepEqual(handoff.workerPacket.mandatory_core.scope.verification_policy, {
+    mode: "CI_FIRST",
+    authoritativeGate: "GitHub Fast CI",
+    localHeavyAttempts: 0,
+    localCommandTimeoutSeconds: 120,
+    stopOnInfrastructureFailure: true,
+  });
   assert.equal(handoff.workerPacket.auxiliary_refs.length <= 8, true);
+  assert.throws(() => createImplementationHandoff({
+    taskDomain: "CODE",
+    verificationPolicy: { mode: "CI_FIRST", authoritativeGate: "GitHub Fast CI" },
+  }), /CI_FIRST_REQUIRES_REMOTE_CI_EVIDENCE/);
+  assert.throws(() => createImplementationHandoff({
+    taskDomain: "CODE",
+    verificationPolicy: { mode: "CI_FIRST" },
+  }), /CI_FIRST_REQUIRES_AUTHORITATIVE_GATE/);
+  assert.throws(() => createImplementationHandoff({ taskDomain: "CODE" }),
+    /IMPLEMENTATION_VERIFICATION_POLICY_REQUIRED/);
+  const local = createImplementationHandoff({
+    taskDomain: "CODE",
+    verificationPolicy: {
+      mode: "LOCAL_FOCUSED",
+      localHeavyAttempts: 2,
+      localCommandTimeoutSeconds: 240,
+    },
+  });
+  assert.equal(local.workerPacket.mandatory_core.scope.verification_policy.localHeavyAttempts, 2);
+  assert.equal(local.workerPacket.mandatory_core.scope.verification_policy.localCommandTimeoutSeconds, 240);
 });
 
 test("Codex explicit mechanical fast path is fail-closed and routes Luna Medium only when eligible", () => {
@@ -118,7 +147,7 @@ test("Codex explicit mechanical fast path is fail-closed and routes Luna Medium 
   assert.ok(denied.mechanicalFastPath.reasons.includes("SENSITIVE_PATH"));
 });
 
-test("Codex requiredEvidence is first-class in scope and Terra acceptance", () => {
+test("Codex requiredEvidence is first-class in scope and Sol acceptance", () => {
   const requirement = {
     id: "test-1",
     class: "LOCAL_TEST",
