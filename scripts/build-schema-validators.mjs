@@ -17,11 +17,22 @@ const schemas = [
   'runtime-event.v1.schema.json',
 ];
 
+function makeRuntimeSelfContained(source) {
+  return source.replace(
+    /const (func\d+) = require\("ajv\/dist\/runtime\/ucs2length"\)\.default;/g,
+    'const $1 = (value) => Array.from(value).length;',
+  );
+}
+
 function generatedSource(schemaFile) {
   const schema = JSON.parse(readFileSync(join(schemaDir, schemaFile), 'utf8'));
   const ajv = new Ajv2020({ allErrors: true, strict: true, code: { source: true, esm: true } });
   const validate = ajv.compile(schema);
-  return `// GENERATED from schemas/${schemaFile}; do not edit.\n${standaloneCode(ajv, validate)}\n`;
+  const standalone = makeRuntimeSelfContained(standaloneCode(ajv, validate));
+  if (/\brequire\s*\(/.test(standalone)) {
+    throw new Error(`NON_STANDALONE_VALIDATOR:${schemaFile}`);
+  }
+  return `// GENERATED from schemas/${schemaFile}; do not edit.\n${standalone}\n`;
 }
 
 let drift = false;
