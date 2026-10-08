@@ -23,6 +23,15 @@
       "path": "domain/work-lease.mjs"
     },
     {
+      "path": "evidence/evidence-federation.mjs"
+    },
+    {
+      "path": "evidence/evidence-watch.mjs"
+    },
+    {
+      "path": "feedback/feedback-plane.mjs"
+    },
+    {
       "path": "schema/generated/audit-result.v1.mjs"
     },
     {
