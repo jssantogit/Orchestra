@@ -6,3 +6,5 @@ Task 1 Ruling: use a deterministic dependency-free Node schema compiler/runtime 
 Task 1 RED: PR CI run 37775795689 failed at Core Foundation Tests before core/schema existed.
 Task 1 debug: PR CI run 37776209127 proved all schema assertions green; standalone fixture failed only because the test imported join from node:url. Root cause fixed in test only.
 Task 1 complete: commit 23b410439d166edac98d40e7f9700199b68c3700, PR CI run 37776348917 -> all workflow steps success, including Core Foundation Tests, Doctor, provider suites, evidence, handoff, Turn Economy, invariants, firewall, installers, contamination.
+Task 2 RED: PR CI run 37776644459 failed exactly with ERR_MODULE_NOT_FOUND for core/domain/implementation-packet.mjs; schema tests stayed green.
+Task 2 complete: commit 56c31c467aa785ea6151b711a091407e93f2bfb9, PR CI run 37776797143 -> full workflow success. Domain modules are thin schema-backed provider-neutral contracts; session/model/provider vocabulary is not required canonical state and raw provider identity is not a top-level WorkLease authority field.
