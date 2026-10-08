@@ -35,10 +35,16 @@
       "path": "policy/discovery-authorization.mjs"
     },
     {
+      "path": "policy/test-mutation.mjs"
+    },
+    {
       "path": "schema/generated/audit-result.v1.mjs"
     },
     {
       "path": "schema/generated/candidate.v1.mjs"
+    },
+    {
+      "path": "schema/generated/delta-packet.v1.mjs"
     },
     {
       "path": "schema/generated/evidence.v1.mjs"
@@ -68,6 +74,9 @@
       "path": "schemas/candidate.v1.schema.json"
     },
     {
+      "path": "schemas/delta-packet.v1.schema.json"
+    },
+    {
       "path": "schemas/evidence.v1.schema.json"
     },
     {
@@ -83,6 +92,9 @@
       "path": "schemas/work-lease.v1.schema.json"
     },
     {
+      "path": "workflow/delta-packet.mjs"
+    },
+    {
       "path": "workflow/direct-work-policy.mjs"
     },
     {
@@ -90,6 +102,9 @@
     },
     {
       "path": "workflow/implementation-packet.mjs"
+    },
+    {
+      "path": "workflow/implementation-result.mjs"
     }
   ]
 }
