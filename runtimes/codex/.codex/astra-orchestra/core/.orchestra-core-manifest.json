@@ -30,6 +30,18 @@
       "sha256": "59f6e23d0254548ba5e8612531140b94456003cebf987d35be82432cc8a01f82"
     },
     {
+      "path": "evidence/evidence-federation.mjs",
+      "sha256": "61a911f6abc7d236e588537175073b604992cb5270e055b2fe163c5461836df0"
+    },
+    {
+      "path": "evidence/evidence-watch.mjs",
+      "sha256": "35014905f2e68de424c94fbd4d918f6d54358b0551c0f5a486e5f59bff2c6552"
+    },
+    {
+      "path": "feedback/feedback-plane.mjs",
+      "sha256": "e18fabab8221a0c1c123f0ef4a075e9f652e31b8d535785ddf00c9539a37617f"
+    },
+    {
       "path": "schema/generated/audit-result.v1.mjs",
       "sha256": "7c8106696cc7c4c691adc7d9ff8faf7d50bbec1421f24dd4b2a4dc9ceb9b4701"
     },
