@@ -78,6 +78,12 @@
     },
     {
       "path": "schemas/work-lease.v1.schema.json"
+    },
+    {
+      "path": "workflow/direct-work-policy.mjs"
+    },
+    {
+      "path": "workflow/direct-work-state.mjs"
     }
   ]
 }
