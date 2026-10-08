@@ -7,101 +7,84 @@ on:
     branches: [ main ]
 
 jobs:
-  verify:
-    name: Deterministic Policy & Firewall Verification
+  materialize-runtime-core:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/orchestra-1x-native'
+    name: Materialize Runtime Core Mirrors
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
-      - name: Check out repository
+      - name: Check out PR head
         uses: actions/checkout@v4
-
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Install development dependencies
+      - name: Generate runtime core mirrors
         run: |
           npm ci --ignore-scripts
+          npm run sync:runtime-core
+          git add runtimes/codex/.codex/astra-orchestra/core runtimes/antigravity/.agents/skills/orchestra/core
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(runtime): refresh neutral core mirrors"
+          git push origin HEAD:${GITHUB_HEAD_REF}
 
+  verify:
+    name: Deterministic Policy & Firewall Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts
       - name: Build schema validators
         run: |
           npm run build:schemas
           npm run check:schemas
           git diff --exit-code -- core/schema/generated package-lock.json
-
       - name: Verify Runtime Core Mirrors
-        run: |
-          npm run check:runtime-core
-
+        run: npm run check:runtime-core
       - name: Run Core Foundation Tests
-        run: |
-          npm run test:core
-
+        run: npm run test:core
       - name: Run Doctor & Health Checks
-        run: |
-          ./scripts/doctor.sh
-
+        run: ./scripts/doctor.sh
       - name: Run Codex Policy Tests
-        run: |
-          node --test runtimes/codex/tests/routing-policy.test.mjs
-
+        run: node --test runtimes/codex/tests/routing-policy.test.mjs
       - name: Run Codex Parity Tests
-        run: |
-          npm run test:codex-parity
-
+        run: npm run test:codex-parity
       - name: Run Antigravity Policy Tests
-        run: |
-          node --test runtimes/antigravity/tests/routing-policy.test.mjs
-
+        run: node --test runtimes/antigravity/tests/routing-policy.test.mjs
       - name: Run Antigravity Hook Tests
-        run: |
-          node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
-
+        run: node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
       - name: Run Dream Layer Tests
-        run: |
-          npm run test:dream
-
+        run: npm run test:dream
       - name: Run Evidence Contract Tests
-        run: |
-          npm run test:evidence
-
+        run: npm run test:evidence
       - name: Run Attributable Feedback Tests
-        run: |
-          npm run test:feedback
-
+        run: npm run test:feedback
       - name: Run Context Trust Boundary Tests
-        run: |
-          npm run test:trust
-
+        run: npm run test:trust
       - name: Run Orchestrator Session Handoff Tests
-        run: |
-          npm run test:handoff
-
+        run: npm run test:handoff
       - name: Run Jev Semantic Shadow Tests
-        run: |
-          npm run test:jev
-
+        run: npm run test:jev
       - name: Run Mechanical Fast Path Tests
-        run: |
-          npm run test:mechanical
-
+        run: npm run test:mechanical
       - name: Run Turn Economy Tests
-        run: |
-          npm run test:turn-economy
-
+        run: npm run test:turn-economy
       - name: Run Architecture Invariants
-        run: |
-          npm run test:architecture-invariants
-
+        run: npm run test:architecture-invariants
       - name: Run Cross-Runtime Firewall Tests
-        run: |
-          node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
-
+        run: node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
       - name: Run Project Runtime & Installer Tests
-        run: |
-          npm run test:installers
-
+        run: npm run test:installers
       - name: Run Cross-Runtime Contamination Check
-        run: |
-          node scripts/contamination-check.mjs
+        run: node scripts/contamination-check.mjs
