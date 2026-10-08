@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.audit-result.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "candidateId", "candidateGeneration", "verdict", "findings"],
+  "properties": {
+    "schema": { "const": "orchestra.audit-result.v1" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "candidateId": { "type": "string", "minLength": 1 },
+    "candidateGeneration": { "type": "integer", "minimum": 0 },
+    "verdict": { "enum": ["PASS", "BLOCKING_FINDING"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location", "packetRequirement", "issue", "evidence"],
+        "properties": {
+          "location": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "line": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "packetRequirement": { "type": "string", "minLength": 1 },
+          "issue": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}
