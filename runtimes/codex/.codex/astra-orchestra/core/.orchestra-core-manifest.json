@@ -1,0 +1,93 @@
+{
+  "schema": "orchestra.runtime-core-manifest.v1",
+  "files": [
+    {
+      "path": "domain/audit-result.mjs",
+      "sha256": "1aca4943987af69cae41dd47c10b8538861f1633a0e6ec5df9c89371f2feceba"
+    },
+    {
+      "path": "domain/candidate.mjs",
+      "sha256": "d18d6ad34e60df4df72f98a309faac5c01176149825db07cfb2804c503813fb7"
+    },
+    {
+      "path": "domain/evidence.mjs",
+      "sha256": "7f3b8087f20f03568d27286d3a4ada1631ae4fdddca05636ebe528f27a7c3656"
+    },
+    {
+      "path": "domain/implementation-packet.mjs",
+      "sha256": "59a71d19532046cb9897c9e04bcdf29108fa44fd62770d278a292eaa5b654831"
+    },
+    {
+      "path": "domain/runtime-event.mjs",
+      "sha256": "ca7acbeab2f9edc261f3085e375a16b9372d9652bf9bb1a2cf8c7227349e5bff"
+    },
+    {
+      "path": "domain/scope-contract.mjs",
+      "sha256": "d1a5b51b566cc64a7e7a912467185fbb877cc10317945a02732b3e8f956d3f21"
+    },
+    {
+      "path": "domain/work-lease.mjs",
+      "sha256": "59f6e23d0254548ba5e8612531140b94456003cebf987d35be82432cc8a01f82"
+    },
+    {
+      "path": "schema/generated/audit-result.v1.mjs",
+      "sha256": "7c8106696cc7c4c691adc7d9ff8faf7d50bbec1421f24dd4b2a4dc9ceb9b4701"
+    },
+    {
+      "path": "schema/generated/candidate.v1.mjs",
+      "sha256": "010cdb886390737c1080e5535e6f0391fd39d82c3809862a956f91f39b9c5294"
+    },
+    {
+      "path": "schema/generated/evidence.v1.mjs",
+      "sha256": "325303b83c8febcf1cfd81273bb2f40468c0f5218087d40b82f19aaf4026d5dc"
+    },
+    {
+      "path": "schema/generated/implementation-packet.v1.mjs",
+      "sha256": "7c849cd7a8fa7c281735ec56d263742d241ce091940b6e33c4364054a3ed7b69"
+    },
+    {
+      "path": "schema/generated/runtime-event.v1.mjs",
+      "sha256": "67a5f588a9e13dc93bb7aff8440b2b7788ab75643358e9dd7f3c3fcc8ba12164"
+    },
+    {
+      "path": "schema/generated/scope-contract.v2.mjs",
+      "sha256": "a869f0fb2444a614d2cc876f5bbfa162b9252ef645cd70165aba8a60a9cfac25"
+    },
+    {
+      "path": "schema/generated/work-lease.v1.mjs",
+      "sha256": "30824b89773c25eba6114148390b8ce348be1eb03c03dedb7ad5bda35f715137"
+    },
+    {
+      "path": "schema/validator.mjs",
+      "sha256": "c0534c41088b918c4705e74da4a0a999e7587599fe8ef28e201682c83b9f1970"
+    },
+    {
+      "path": "schemas/audit-result.v1.schema.json",
+      "sha256": "de87376d7f2a3c001c22557e143f43e10a206188a3c531d677b2e6d4c232b00f"
+    },
+    {
+      "path": "schemas/candidate.v1.schema.json",
+      "sha256": "d9147add9d6cc1ac29720de327f2a0ab93717e2517be0e570e5afc164d647c56"
+    },
+    {
+      "path": "schemas/evidence.v1.schema.json",
+      "sha256": "edbafdac25548dc94f1ea453a81552211dd6f4fd12fe6de57bf5850ff0755ec3"
+    },
+    {
+      "path": "schemas/implementation-packet.v1.schema.json",
+      "sha256": "1da8929fa1eb772b834efa03491a0219af00919d42a7d4a3d1abb3ae404616e7"
+    },
+    {
+      "path": "schemas/runtime-event.v1.schema.json",
+      "sha256": "8efbde3ac7cea7befcb8ab4708ea139880fe423e0596cd561458218b4b5c7a6e"
+    },
+    {
+      "path": "schemas/scope-contract.v2.schema.json",
+      "sha256": "3316afb07df94b339477d2fa419dada500400e13f0aed822d358a18f1716f408"
+    },
+    {
+      "path": "schemas/work-lease.v1.schema.json",
+      "sha256": "bbd6a77b511ef6961f8cd3c4003f72e54820fc63ea0e872cf285ddab9a10d9bb"
+    }
+  ]
+}

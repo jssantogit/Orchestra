@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.candidate.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "generation", "identity", "changedFiles", "actor"],
+  "properties": {
+    "schema": { "const": "orchestra.candidate.v1" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "generation": { "type": "integer", "minimum": 0 },
+    "identity": { "type": "string", "minLength": 1 },
+    "changedFiles": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "actor": { "$ref": "#/$defs/actor" }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "sessionIdHash"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "sessionIdHash": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

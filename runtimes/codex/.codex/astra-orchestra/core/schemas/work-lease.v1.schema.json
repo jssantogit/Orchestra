@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.work-lease.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "projectLineage", "workspaceId", "taskId", "generation", "state", "actor", "capabilities"],
+  "properties": {
+    "schema": { "const": "orchestra.work-lease.v1" },
+    "projectLineage": { "type": "string", "minLength": 1 },
+    "workspaceId": { "type": "string", "minLength": 1 },
+    "taskId": { "type": "string", "minLength": 1 },
+    "generation": { "type": "integer", "minimum": 0 },
+    "state": { "enum": ["CONTROL", "IMPLEMENTING", "VERIFYING", "ACCEPTANCE", "DONE", "BLOCKED"] },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "sessionIdHash"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "sessionIdHash": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "candidate": { "type": ["string", "null"] }
+  }
+}
