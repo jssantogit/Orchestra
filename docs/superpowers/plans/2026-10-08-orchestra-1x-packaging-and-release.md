@@ -25,11 +25,11 @@
 
 ## Review Focus
 
-- A missing or unexpected managed runtime asset must fail build/Doctor deterministically — pinned by manifest tests.
-- Updating a project must preserve `.orchestra/state`, provider-owned state/telemetry, and locally ignored runtime state — pinned by installer tests.
+- A missing or unexpected managed runtime asset must fail build/Doctor deterministically — pinned by `tests/runtime/runtime-manifest.test.mjs` and `tests/runtime/doctor.test.mjs`.
+- Updating a project must preserve `.orchestra/state`, provider-owned state/telemetry, and locally ignored runtime state — pinned by `tests/installers/manifest-project-runtime-manager.test.mjs` plus the Work Lease `tests/leases/project-state-ignore.test.mjs` regression.
 - Installed runtime smoke tests must run in a temporary repo with no Orchestra source tree/node_modules — pinned by `tests/installers/self-contained-runtime.test.mjs`.
-- Labs must remain unable to satisfy evidence/acceptance or acquire lease/capability even if their output is syntactically valid — pinned by labs authority tests.
-- A release cannot be declared ready when version, runtime manifest version, migration docs, CI baseline, or release notes disagree — pinned by release-readiness tests.
+- Labs must remain unable to satisfy evidence/acceptance or acquire lease/capability even if their output is syntactically valid — pinned by `tests/labs/lab-authority.test.mjs`.
+- A release cannot be declared ready when version, runtime manifest version, migration docs, CI baseline, or release notes disagree — pinned by `tests/release/release-readiness.test.mjs`.
 
 ---
 
@@ -45,7 +45,7 @@
 - Modify: schema build/check inputs from Core Foundation.
 
 **Interfaces:**
-- `loadRuntimeManifest(name) -> validated manifest`.
+- Produces: `loadRuntimeManifest(name) -> validated manifest`.
 - Manifest fields include `schema`, `runtime`, `version`, `sourceRoots`, `managedAssets`, `preservedProjectPaths`, `generatedInputs`, `entrypoints`, and `healthChecks`.
 - Assets describe source-to-output mapping explicitly; no glob may escape declared canonical roots.
 
@@ -57,10 +57,12 @@
 
 - [ ] **Step 2: Confirm RED**
   - Run: `node --test tests/runtime/runtime-manifest.test.mjs`
+  - Expected: FAIL because manifest schema/loader do not exist.
 
 - [ ] **Step 3: Add schema + manifest loader and populate manifests from the current proven runtime image**
 
 - [ ] **Step 4: Verify GREEN and commit**
+  - Run: `node --test tests/runtime/runtime-manifest.test.mjs`
   - Commit message: `feat(runtime): add manifest-driven runtime ownership`
 
 ---
@@ -72,13 +74,13 @@
 - Create: `scripts/build-runtimes.mjs`
 - Create: `scripts/check-runtime-build.mjs`
 - Create: `tests/runtime/runtime-builder.test.mjs`
-- Create generated build root: `dist/runtime/codex/**`
-- Create generated build root: `dist/runtime/antigravity/**`
+- Generated build root: `dist/runtime/codex/**`
+- Generated build root: `dist/runtime/antigravity/**`
 - Modify: `package.json`
-- Modify: `.gitignore` according to chosen generated-artifact policy.
+- Modify: `.gitignore` according to the chosen generated-artifact policy.
 
 **Interfaces:**
-- `buildRuntime({ runtime, outputDir }) -> { runtime, manifestHash, files, version }`.
+- Produces: `buildRuntime({ runtime, outputDir }) -> { runtime, manifestHash, files, version }`.
 - CLI `npm run build:runtimes` rebuilds both runtime images from canonical core/provider source and provider static templates.
 - `npm run check:runtimes` builds into a temporary directory and compares deterministic file manifests against committed/expected build metadata.
 
@@ -90,6 +92,7 @@
 
 - [ ] **Step 2: Confirm RED**
   - Run: `node --test tests/runtime/runtime-builder.test.mjs`
+  - Expected: FAIL because builder does not exist.
 
 - [ ] **Step 3: Implement deterministic builder**
   - Consume runtime manifests only.
@@ -110,7 +113,7 @@
 
 **Files:**
 - Create: `runtime/project-runtime-manager.mjs`
-- Create: `runtime/project-state-ignore.mjs`
+- Modify: `runtime/project-state-ignore.mjs` created by the Work Lease plan; extend it to cover provider telemetry/artifacts/runtime-management paths while preserving its bounded `.orchestra/state/` block semantics.
 - Modify: `runtimes/codex/.codex/astra-orchestra/codex-runtime-manager.mjs`
 - Modify: `runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs`
 - Modify: `scripts/install-codex.mjs`
@@ -120,27 +123,27 @@
 - Modify: `tests/installers/codex-project-runtime-manager.test.mjs`
 - Modify: `tests/installers/project-runtime-manager.test.mjs`
 - Create: `tests/installers/manifest-project-runtime-manager.test.mjs`
-- Create: `tests/installers/project-state-ignore.test.mjs`
+- Modify: `tests/leases/project-state-ignore.test.mjs` with provider-state cases.
 
 **Interfaces:**
-- `inspectProjectRuntime({ targetDir, runtimeManifest, builtRuntime })`.
-- `installProjectRuntime(...)`, `updateProjectRuntime(...)`, `rollbackProjectRuntime(...)` share common copy/backup/hash/quiescence semantics.
+- Produces: `inspectProjectRuntime({ targetDir, runtimeManifest, builtRuntime })`.
+- Produces: `installProjectRuntime(...)`, `updateProjectRuntime(...)`, `rollbackProjectRuntime(...)` with shared copy/backup/hash/quiescence semantics.
 - Provider runtime-manager files become compatibility wrappers providing provider-specific state/quiescence adapters.
-- `ensureProjectStateIgnored(targetDir)` manages bounded entries in `.git/info/exclude` for Orchestra-owned volatile state (including `.orchestra/state/`, provider telemetry/artifacts/runtime-management) without modifying tracked product `.gitignore`.
+- Existing `ensureProjectStateIgnored(targetDir)` now covers Orchestra-owned volatile state including `.orchestra/state/` plus provider telemetry/artifacts/runtime-management, without modifying tracked product `.gitignore`.
 
 - [ ] **Step 1: Write RED shared-manager parity tests**
   - Existing Codex/AGY dry-run/add/change/remove/preserve/rollback cases produce the same normalized results through shared manager.
   - Runtime updates consume built manifest images, not source-tree runtime directories.
 
-- [ ] **Step 2: Write RED downstream git-status cleanliness tests**
-  - In a temporary Git repo, installation creates project-owned runtime state but `git status --short` does not show volatile Orchestra state because bounded `.git/info/exclude` entries are installed.
-  - Existing user exclude content is preserved byte-for-byte outside the Orchestra managed block.
+- [ ] **Step 2: Extend the existing RED/green downstream git-status cleanliness suite**
+  - In a temporary Git repo, installation creates neutral/provider project-owned runtime state but `git status --short` does not show volatile Orchestra state.
+  - Existing user `.git/info/exclude` content is preserved byte-for-byte outside the Orchestra managed block.
   - Uninstall/update does not erase user entries.
 
-- [ ] **Step 3: Implement common manager + compatibility wrappers**
+- [ ] **Step 3: Implement common manager + compatibility wrappers and extend the existing ignore helper**
 
 - [ ] **Step 4: Verify installer suites**
-  - Run: `npm run test:installers && node --test tests/installers/manifest-project-runtime-manager.test.mjs tests/installers/project-state-ignore.test.mjs`
+  - Run: `npm run test:installers && node --test tests/installers/manifest-project-runtime-manager.test.mjs tests/leases/project-state-ignore.test.mjs`
 
 - [ ] **Step 5: Commit**
   - Commit message: `refactor(runtime): unify manifest-driven project installers`
@@ -182,8 +185,8 @@
 - Modify: existing Dream/Jev tests and launch scripts to canonical lab paths.
 
 **Interfaces:**
-- `LAB_AUTHORITY = 'NONE'`.
-- `assertLabOperationAllowed(operation)` allows bounded observation/analysis/storage only; denies `ACCEPT_WORK`, `GRANT_CAPABILITY`, `CLAIM_WORK_LEASE`, `MUTATE_PRODUCT` by default.
+- Produces: `LAB_AUTHORITY = 'NONE'`.
+- Produces: `assertLabOperationAllowed(operation)` which allows bounded observation/analysis/storage only and denies `ACCEPT_WORK`, `GRANT_CAPABILITY`, `CLAIM_WORK_LEASE`, `MUTATE_PRODUCT` by default.
 - Runtime compatibility launchers may invoke packaged lab functionality but cannot change this authority contract.
 
 - [ ] **Step 1: Write RED lab authority tests before moving source**
@@ -194,7 +197,7 @@
 - [ ] **Step 2: Add compatibility launchers and manifest mappings, then move Jev canonical source**
   - Run Jev tests after move.
 
-- [ ] **Step 3: Move Dream canonical source in small groups with existing huge Dream suite as regression oracle**
+- [ ] **Step 3: Move Dream canonical source in small groups with existing Dream suite as regression oracle**
   - Keep provider-installed compatibility paths only when needed by runtime launchers; generated/build output owns those paths.
 
 - [ ] **Step 4: Verify Labs + provider/runtime suites**
@@ -215,7 +218,7 @@
 - Modify: runtime manifests' `healthChecks`.
 
 **Interfaces:**
-- `runDoctor({ repoRoot, runtime = 'all' }) -> { healthy, checks[] }`.
+- Produces: `runDoctor({ repoRoot, runtime = 'all' }) -> { healthy, checks[] }`.
 - Checks include schema validator freshness, runtime build freshness, manifest completeness, source/provider firewall, generated/install image imports, project/runtime metadata version coherence, and declared focused tests/syntax checks.
 - Doctor discovers required assets from manifests; no giant per-provider required-file arrays remain.
 
@@ -250,7 +253,7 @@
 - Modify: runtime manifest versions/runtime metadata version declarations.
 
 **Interfaces:**
-- `checkReleaseReadiness({ expectedVersion }) -> { ready, failures[] }` compares package version, runtime manifest versions, migration docs, build/schema freshness, required test declarations, and release checklist state.
+- Produces: `checkReleaseReadiness({ expectedVersion }) -> { ready, failures[] }` comparing package version, runtime manifest versions, migration docs, build/schema freshness, required test declarations, and release checklist state.
 - Do **not** bump to final `1.0.0` until code/runtime behavior is complete and the operator starts the release task; during development use a consistent prerelease such as `1.0.0-rc.0` only if a version bump is required by runtime metadata tests.
 
 - [ ] **Step 1: Write RED release consistency tests**
