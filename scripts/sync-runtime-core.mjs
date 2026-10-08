@@ -43,8 +43,8 @@ async function collectFiles(root, prefix = "") {
   return files;
 }
 
-async function expectedRuntimeCore(repoRoot) {
-  await buildSchemaValidators({ repoRoot });
+async function expectedRuntimeCore(repoRoot, { checkOnly = false } = {}) {
+  await buildSchemaValidators({ repoRoot, checkOnly });
 
   const expected = new Map();
   for (const file of await collectFiles(join(repoRoot, "core"))) {
@@ -100,7 +100,7 @@ async function writeMirror(repoRoot, mirrorRelative, expected) {
 }
 
 export async function syncRuntimeCore({ repoRoot = defaultRepoRoot, checkOnly = false } = {}) {
-  const expected = await expectedRuntimeCore(repoRoot);
+  const expected = await expectedRuntimeCore(repoRoot, { checkOnly });
   const missing = [];
   const stale = [];
   const changed = [];
