@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.scope-contract.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "allowedPaths", "forbiddenPaths", "acceptanceCriteria", "requiredEvidence", "retryBudget", "sideEffectCapabilities", "stopConditions"],
+  "properties": {
+    "schema": { "const": "orchestra.scope-contract.v2" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "taskAction": { "type": "string" },
+    "taskDomain": { "type": "string" },
+    "allowedPaths": { "type": "array", "items": { "type": "string" } },
+    "forbiddenPaths": { "type": "array", "items": { "type": "string" } },
+    "acceptanceCriteria": { "type": "array", "items": { "type": "string" } },
+    "requiredEvidence": { "type": "array", "items": { "type": "string" } },
+    "testsRequired": { "type": "array", "items": { "type": "string" } },
+    "retryBudget": { "type": "integer", "minimum": 0 },
+    "sideEffectCapabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "stopConditions": { "type": "array", "items": { "type": "string" } }
+  }
+}

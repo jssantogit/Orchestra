@@ -6,6 +6,11 @@
   "type": "module",
   "scripts": {
     "test": "npm run test:codex && node --test runtimes/antigravity/tests/routing-policy.test.mjs && node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs && npm run test:dream && npm run test:evidence && npm run test:feedback && npm run test:trust && npm run test:handoff && npm run test:jev && npm run test:mechanical && node --test tests/cross-runtime/cross-runtime-firewall.test.mjs && npm run test:installers && node --test tests/turn-economy/instrumentation.test.mjs && node --test tests/turn-economy/token-semantics.test.mjs && node --test tests/turn-economy/fidelity.test.mjs && node --test tests/turn-economy/turn-diet.test.mjs && node --test tests/turn-economy/critical-review-consensus.test.mjs && npm run test:architecture-invariants",
+    "test:core": "node --test tests/core/*.test.mjs",
+    "build:schemas": "node scripts/build-schema-validators.mjs",
+    "check:schemas": "node scripts/build-schema-validators.mjs --check",
+    "sync:runtime-core": "node scripts/sync-runtime-core.mjs",
+    "check:runtime-core": "node scripts/check-runtime-core.mjs",
     "test:codex": "node --test runtimes/codex/tests/routing-policy.test.mjs runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs",
     "test:antigravity": "node --test runtimes/antigravity/tests/routing-policy.test.mjs",
     "test:hooks": "node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs",
@@ -35,5 +40,8 @@
     "test:handoff": "node --test tests/handoff/orchestrator-session-handoff.test.mjs runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs",
     "handoff:orchestrator": "node runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff-cli.mjs",
     "handoff:codex": "node runtimes/codex/.codex/astra-orchestra/session-handoff-cli.mjs"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1"
   }
 }

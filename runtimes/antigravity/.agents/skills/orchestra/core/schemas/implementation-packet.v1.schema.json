@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.implementation-packet.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "candidateGeneration", "goal", "direction", "anchors", "scope", "permissions", "validation", "failurePolicy"],
+  "properties": {
+    "schema": { "const": "orchestra.implementation-packet.v1" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "candidateGeneration": { "type": "integer", "minimum": 0 },
+    "goal": { "type": "string", "minLength": 1 },
+    "direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cause", "change", "preserve"],
+      "properties": {
+        "cause": { "type": "string", "minLength": 1 },
+        "change": { "type": "string", "minLength": 1 },
+        "preserve": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "anchors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "symbol": { "type": "string", "minLength": 1 },
+          "filePattern": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "testHint": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedAreas", "forbidden"],
+      "properties": {
+        "allowedAreas": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "forbidden": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["discovery", "tests", "sideEffects"],
+      "properties": {
+        "discovery": { "enum": ["NONE", "DIRECTED", "INVESTIGATIVE"] },
+        "tests": { "enum": ["READ_ONLY", "MODIFY_AUTHORIZED_TARGETS"] },
+        "sideEffects": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "validation": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "failurePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selfCaused", "unrelatedOrUncertain"],
+      "properties": {
+        "selfCaused": { "const": "REPAIR" },
+        "unrelatedOrUncertain": { "const": "RETURN_TO_CONTROL" }
+      }
+    }
+  }
+}
