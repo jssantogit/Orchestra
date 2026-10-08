@@ -1,0 +1,9 @@
+// GENERATED FILE. DO NOT EDIT.
+import { validateAgainstSchema } from "../runtime-validator.mjs";
+
+export const schema = Object.freeze({"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"orchestra.evidence.v1","type":"object","additionalProperties":false,"required":["schema","taskId","candidateGeneration","kind","status","reference"],"properties":{"schema":{"const":"orchestra.evidence.v1"},"taskId":{"type":"string","minLength":1},"candidateGeneration":{"type":"integer","minimum":0},"kind":{"enum":["TEST","CI","FORMAT","LINT","BUILD","OTHER"]},"status":{"enum":["PASSED","FAILED","RUNNING","UNKNOWN"]},"reference":{"type":"string","minLength":1},"provider":{"type":["string","null"]},"observedAt":{"type":["string","null"]},"metadata":{"type":"object"}}});
+export const schemaId = schema.$id;
+export function validate(value) {
+  return validateAgainstSchema(schema, value);
+}
+export default validate;
