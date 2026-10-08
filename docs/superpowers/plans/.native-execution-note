@@ -1,0 +1,1 @@
+Orchestra 1.x Native execution branch. Validation is performed through branch/PR CI because the chat container has no network access to install development dependencies.

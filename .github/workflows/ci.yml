@@ -20,9 +20,21 @@ jobs:
         with:
           node-version: 20
 
+      - name: Check diff hygiene
+        run: |
+          git diff --check
+
       - name: Run Doctor & Health Checks
         run: |
           ./scripts/doctor.sh
+
+      - name: Run Core Foundation Tests
+        run: |
+          npm run test:core
+
+      - name: Run Direct Work Tests
+        run: |
+          npm run test:direct-work
 
       - name: Run Codex Policy Tests
         run: |
@@ -78,7 +90,7 @@ jobs:
 
       - name: Run Cross-Runtime Firewall Tests
         run: |
-          node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
+          npm run test:firewall
 
       - name: Run Project Runtime & Installer Tests
         run: |
@@ -86,4 +98,4 @@ jobs:
 
       - name: Run Cross-Runtime Contamination Check
         run: |
-          node scripts/contamination-check.mjs
+          npm run check:contamination

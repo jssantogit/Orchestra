@@ -253,14 +253,30 @@ else
   report_fail "Runtime telemetry leaked: ${TELEMETRY_FILES}"
 fi
 
-# 6. Run Cross-Runtime Contamination Check
+# 6. Canonical Schema & Runtime Core Health
+if node "${ROOT_DIR}/scripts/build-schema-validators.mjs" --check >/dev/null 2>&1; then
+  report_pass "Schema validators: OK"
+else
+  report_fail "Schema validators: DRIFT"
+fi
+
+RUNTIME_CORE_CHECK_OUTPUT=""
+if RUNTIME_CORE_CHECK_OUTPUT=$(node "${ROOT_DIR}/scripts/check-runtime-core.mjs" 2>&1); then
+  report_pass "Runtime core mirror: OK"
+elif [[ "${RUNTIME_CORE_CHECK_OUTPUT}" =~ missing=([1-9][0-9]*) ]]; then
+  report_fail "Runtime core mirror: MISSING"
+else
+  report_fail "Runtime core mirror: DRIFT"
+fi
+
+# 7. Run Cross-Runtime Contamination Check
 if node "${ROOT_DIR}/scripts/contamination-check.mjs" >/dev/null 2>&1; then
   report_pass "Cross-runtime contamination check passed"
 else
   report_fail "Cross-runtime contamination check failed"
 fi
 
-# 7. Run Deterministic Tests
+# 8. Run Deterministic Tests
 echo ""
 echo "Running deterministic test verification..."
 
@@ -315,7 +331,7 @@ fi
 if node --test "${ROOT_DIR}/tests/jev/jev-contract.test.mjs" "${ROOT_DIR}/tests/jev/jev-shadow.test.mjs" "${ROOT_DIR}/tests/jev/future-use-oracle.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-jev.test.mjs" "${ROOT_DIR}/tests/jev/turn-economy-metrics.test.mjs"; then
   report_pass "Milestone L Jev semantic shadow tests passed"
 else
-  report_fail "Milestone L Jev semantic shadow tests failed"
+  report_fail "Milestone L Jev tests failed"
 fi
 
 if node --test "${ROOT_DIR}/tests/cross-runtime/cross-runtime-firewall.test.mjs" >/dev/null 2>&1; then

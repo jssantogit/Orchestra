@@ -1,0 +1,110 @@
+{
+  "schema": "orchestra.runtime-core-manifest.v1",
+  "files": [
+    {
+      "path": "domain/audit-result.mjs"
+    },
+    {
+      "path": "domain/candidate.mjs"
+    },
+    {
+      "path": "domain/evidence.mjs"
+    },
+    {
+      "path": "domain/implementation-packet.mjs"
+    },
+    {
+      "path": "domain/runtime-event.mjs"
+    },
+    {
+      "path": "domain/scope-contract.mjs"
+    },
+    {
+      "path": "domain/work-lease.mjs"
+    },
+    {
+      "path": "evidence/evidence-federation.mjs"
+    },
+    {
+      "path": "evidence/evidence-watch.mjs"
+    },
+    {
+      "path": "feedback/feedback-plane.mjs"
+    },
+    {
+      "path": "policy/discovery-authorization.mjs"
+    },
+    {
+      "path": "policy/test-mutation.mjs"
+    },
+    {
+      "path": "schema/generated/audit-result.v1.mjs"
+    },
+    {
+      "path": "schema/generated/candidate.v1.mjs"
+    },
+    {
+      "path": "schema/generated/delta-packet.v1.mjs"
+    },
+    {
+      "path": "schema/generated/evidence.v1.mjs"
+    },
+    {
+      "path": "schema/generated/implementation-packet.v1.mjs"
+    },
+    {
+      "path": "schema/generated/runtime-event.v1.mjs"
+    },
+    {
+      "path": "schema/generated/scope-contract.v2.mjs"
+    },
+    {
+      "path": "schema/generated/work-lease.v1.mjs"
+    },
+    {
+      "path": "schema/runtime-validator.mjs"
+    },
+    {
+      "path": "schema/validator.mjs"
+    },
+    {
+      "path": "schemas/audit-result.v1.schema.json"
+    },
+    {
+      "path": "schemas/candidate.v1.schema.json"
+    },
+    {
+      "path": "schemas/delta-packet.v1.schema.json"
+    },
+    {
+      "path": "schemas/evidence.v1.schema.json"
+    },
+    {
+      "path": "schemas/implementation-packet.v1.schema.json"
+    },
+    {
+      "path": "schemas/runtime-event.v1.schema.json"
+    },
+    {
+      "path": "schemas/scope-contract.v2.schema.json"
+    },
+    {
+      "path": "schemas/work-lease.v1.schema.json"
+    },
+    {
+      "path": "workflow/delta-packet.mjs"
+    },
+    {
+      "path": "workflow/direct-work-policy.mjs"
+    },
+    {
+      "path": "workflow/direct-work-state.mjs"
+    },
+    {
+      "path": "workflow/implementation-packet.mjs"
+    },
+    {
+      "path": "workflow/implementation-result.mjs"
+    }
+  ]
+}

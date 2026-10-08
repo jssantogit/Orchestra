@@ -18,6 +18,52 @@ export const ROLES = Object.freeze({
   UNKNOWN: "UNKNOWN",
 });
 
+function nonNegativeNumber(value, fallback = 0) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function nullableNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function countRedundantReads(entries = []) {
+  if (!Array.isArray(entries)) return 0;
+  return entries.filter((entry) => [
+    "whole_file_read_after_targeted_read",
+    "same_file_read_repeatedly_without_mutation",
+  ].includes(entry?.reason)).length;
+}
+
+/**
+ * Normalizes the Orchestra 1.x workflow-economy vocabulary while keeping
+ * historical benchmark result files readable.
+ *
+ * Missing count metrics are zero because the old result did not record an
+ * observed count. Metrics that require an observed factual value rather than
+ * an additive counter remain null when absent.
+ */
+export function normalizeWorkflowEconomyMetrics(result = {}) {
+  const roles = result?.role_invocations || {};
+  const explicitTurnsToFirstEdit = nullableNonNegativeNumber(result?.turns_to_first_edit);
+  const derivedTurnsToFirstEdit = result?.first_mutation_turn == null
+    ? null
+    : Math.max(0, nonNegativeNumber(result.first_mutation_turn, 1) - 1);
+
+  return {
+    control_turns: nonNegativeNumber(result?.control_turns, nonNegativeNumber(roles.orchestrator, 0)),
+    worker_turns: nonNegativeNumber(result?.worker_turns, nonNegativeNumber(roles.worker, 0)),
+    repository_discovery_ops: nonNegativeNumber(result?.repository_discovery_ops, 0),
+    redundant_reads: nonNegativeNumber(result?.redundant_reads, countRedundantReads(result?.potentiallyAvoidableToolCalls)),
+    turns_to_first_edit: explicitTurnsToFirstEdit ?? derivedTurnsToFirstEdit,
+    delegations: nonNegativeNumber(result?.delegations, nonNegativeNumber(result?.subagent_invocations, 0)),
+    model_handoffs: nonNegativeNumber(
+      result?.model_handoffs,
+      nonNegativeNumber(result?.model_to_model_handoffs, 0),
+    ),
+    approximate_cost: nullableNonNegativeNumber(result?.approximate_cost),
+  };
+}
+
 /**
  * Analyzes an Antigravity transcript or telemetry event sequence.
  *
@@ -46,6 +92,7 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
   let preMutationReadCalls = 0;
   let preMutationSearchCalls = 0;
   let preMutationValidationCalls = 0;
+  let repositoryDiscoveryOps = 0;
 
   const roleInvocations = {
     orchestrator: 0,
@@ -112,6 +159,8 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
         const isEdit = name === "replace_file_content" || name === "write_to_file";
         const isShell = name === "run_command";
 
+        if (isRead || isSearch) repositoryDiscoveryOps++;
+
         let isValidation = false;
         let isShellMutation = false;
 
@@ -124,6 +173,7 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
             isShellMutation = true;
           }
           if (/\bgit\s+(?:status|diff|log|branch)\b/.test(cmd)) {
+            repositoryDiscoveryOps++;
             gitInspections.push({ turnIndex: currentTurnIndex, cmd });
             if (gitInspections.length > 2) {
               potentiallyAvoidableToolCalls.push({
@@ -239,6 +289,16 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
     throw new Error(`Tool count invariant failed: derivedToolSum ${derivedToolSum} !== totalTools ${totalTools}`);
   }
 
+  const workflowEconomy = normalizeWorkflowEconomyMetrics({
+    role_invocations: roleInvocations,
+    repository_discovery_ops: repositoryDiscoveryOps,
+    redundant_reads: countRedundantReads(potentiallyAvoidableToolCalls),
+    turns_to_first_edit: firstMutationTurn === null ? null : Math.max(0, firstMutationTurn - 1),
+    delegations: subagentInvocations,
+    model_handoffs: activeState.model_handoffs ?? activeState.model_to_model_handoffs,
+    approximate_cost: activeState.approximate_cost,
+  });
+
   return {
     model_turns_total: modelTurnsTotal,
     total_tool_calls: totalTools,
@@ -259,5 +319,6 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
     preMutationValidationCalls,
     potentiallyAvoidableToolCalls,
     role_invocations: roleInvocations,
+    ...workflowEconomy,
   };
 }
