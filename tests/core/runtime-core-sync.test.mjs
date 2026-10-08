@@ -33,6 +33,19 @@ test("empty runtime mirrors report canonical files as missing in check-only mode
   });
 });
 
+test("check-only runtime inspection never materializes missing canonical validators", async () => {
+  await withFixture(async (root) => {
+    const generated = join(root, "core", "schema", "generated");
+    const generatedCandidate = join(generated, "candidate.v1.mjs");
+    await rm(generated, { recursive: true, force: true });
+    await assert.rejects(readFile(generatedCandidate, "utf8"));
+
+    await syncRuntimeCore({ repoRoot: root, checkOnly: true });
+
+    await assert.rejects(readFile(generatedCandidate, "utf8"));
+  });
+});
+
 test("sync repairs drift exactly and reports modified generated validators as stale", async () => {
   await withFixture(async (root) => {
     const write = await syncRuntimeCore({ repoRoot: root });
