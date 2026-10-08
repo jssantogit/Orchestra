@@ -11,7 +11,7 @@ function outputName(schemaFile) {
 }
 
 function renderModule(schema) {
-  const json = JSON.stringify(schema, null, 2);
+  const json = JSON.stringify(schema);
   return `// GENERATED FILE. DO NOT EDIT.\nimport { validateAgainstSchema } from "../runtime-validator.mjs";\n\nexport const schema = Object.freeze(${json});\nexport const schemaId = schema.$id;\nexport function validate(value) {\n  return validateAgainstSchema(schema, value);\n}\nexport default validate;\n`;
 }
 
