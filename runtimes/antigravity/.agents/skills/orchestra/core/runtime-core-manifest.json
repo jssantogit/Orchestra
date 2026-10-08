@@ -32,6 +32,9 @@
       "path": "feedback/feedback-plane.mjs"
     },
     {
+      "path": "policy/discovery-authorization.mjs"
+    },
+    {
       "path": "schema/generated/audit-result.v1.mjs"
     },
     {
@@ -84,6 +87,9 @@
     },
     {
       "path": "workflow/direct-work-state.mjs"
+    },
+    {
+      "path": "workflow/implementation-packet.mjs"
     }
   ]
 }
