@@ -14,7 +14,9 @@ function read(path) {
 const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs");
 const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
-const federation = read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs");
+const federationAdapter = read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs");
+const codexFederationAdapter = read("runtimes/codex/.codex/astra-orchestra/evidence-federation.mjs");
+const federation = read("core/evidence/evidence-federation.mjs");
 const inspector = read("runtimes/antigravity/.agents/skills/orchestra/evidence-inspector.mjs");
 const providerRegistry = read("runtimes/antigravity/.agents/skills/orchestra/evidence-provider-registry.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
@@ -76,7 +78,6 @@ test("ARCH-EVIDENCE-06: structured requiredEvidence survives delegation and can 
   assert.match(preTool, /extracted\.hasRequiredEvidence\s*\?\s*extracted\.requiredEvidence\s*:\s*baseRequiredEvidence/);
 });
 
-
 test("ARCH-EVIDENCE-07: delegated evidence federation requires factual identity and task binding", () => {
   assert.match(federation, /confidence !== "HIGH"/);
   assert.match(federation, /source !== "RUNTIME_IDENTITY"/);
@@ -85,6 +86,11 @@ test("ARCH-EVIDENCE-07: delegated evidence federation requires factual identity 
   assert.match(federation, /ORCHESTRA_PARENT_EVIDENCE_FEDERATION/);
   assert.match(contract, /TASK_ID_MISMATCH/);
   assert.match(contract, /COMMIT_SHA_MISMATCH/);
+});
+
+test("ARCH-EVIDENCE-07A: provider runtime federation adapters delegate to the canonical core", () => {
+  assert.match(federationAdapter, /export \* from "\.\/core\/evidence\/evidence-federation\.mjs";/);
+  assert.match(codexFederationAdapter, /export \* from "\.\/core\/evidence\/evidence-federation\.mjs";/);
 });
 
 test("ARCH-EVIDENCE-08: local evidence producers are explicit and reviewer/model claims are excluded", () => {
@@ -101,7 +107,6 @@ test("ARCH-EVIDENCE-09: distinct command executions are merged by execution iden
   assert.match(federation, /exactEvidenceIdentity/);
   assert.equal(federation.includes("command + type + scope"), false);
 });
-
 
 test("ARCH-EVIDENCE-10: evidence observability is read-only and non-authoritative", () => {
   assert.match(inspector, /inspectProjectEvidence/);
