@@ -7,7 +7,7 @@
   "properties": {
     "schema": { "const": "orchestra.runtime-event.v1" },
     "eventType": { "type": "string", "minLength": 1 },
-    "timestamp": { "type": "string", "format": "date-time" },
+    "timestamp": { "type": "string", "minLength": 1 },
     "taskId": { "type": "string" },
     "candidateGeneration": { "type": "integer", "minimum": 0 },
     "actor": {
