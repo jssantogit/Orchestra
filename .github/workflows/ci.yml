@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     name: Deterministic Policy & Firewall Verification
@@ -29,9 +32,31 @@ jobs:
           npm run build:schemas
           npm run check:schemas
 
+      - name: Build runtime core mirrors
+        run: |
+          npm run sync:runtime-core
+          npm run check:runtime-core
+
       - name: Run Core Foundation Tests
         run: |
           npm run test:core
+
+      - name: Record generated runtime core mirrors on PR branch
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$HEAD_REF"
+          git switch "$HEAD_REF"
+          git add runtimes/codex/.codex/astra-orchestra/core/ runtimes/antigravity/.agents/skills/orchestra/core/
+          if git diff --cached --quiet; then
+            echo "Runtime core mirrors already current."
+          else
+            git commit -m "build(runtime): record generated neutral core mirrors"
+            git push origin "HEAD:$HEAD_REF"
+          fi
 
       - name: Capture generated schema artifacts
         if: always()
