@@ -21,6 +21,26 @@ report_fail() {
   FAILURES=$((FAILURES + 1))
 }
 
+# 0. Canonical Schema & Runtime Core Mirror Health
+CORE_HEALTH_STATUS=0
+CORE_HEALTH_OUTPUT="$(node "${ROOT_DIR}/scripts/check-runtime-core.mjs" 2>&1)" || CORE_HEALTH_STATUS=$?
+if [ "${CORE_HEALTH_STATUS}" -eq 0 ]; then
+  report_pass "Schema validators: OK"
+  report_pass "Runtime core mirror: OK"
+else
+  if grep -q "Schema validators: DRIFT" <<< "${CORE_HEALTH_OUTPUT}"; then
+    report_fail "Schema validators: DRIFT"
+  else
+    report_pass "Schema validators: OK"
+  fi
+  if grep -q "Runtime core mirror: MISSING" <<< "${CORE_HEALTH_OUTPUT}"; then
+    report_fail "Runtime core mirror: MISSING"
+  else
+    report_fail "Runtime core mirror: DRIFT"
+  fi
+fi
+echo ""
+
 # 1. Required Meta Files
 REQUIRED_META_FILES=(
   "README.md"
