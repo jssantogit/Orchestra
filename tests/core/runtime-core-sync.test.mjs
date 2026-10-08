@@ -91,3 +91,13 @@ test("copied runtime core validates schemas in an isolated project without node_
     }
   });
 });
+
+test("Doctor exposes canonical schema and runtime-core mirror diagnostics", async () => {
+  const doctor = await readFile(join(repoRoot, "scripts", "doctor.sh"), "utf8");
+  assert.match(doctor, /build-schema-validators\.mjs" --check/);
+  assert.match(doctor, /Schema validators: OK/);
+  assert.match(doctor, /Schema validators: DRIFT/);
+  assert.match(doctor, /check-runtime-core\.mjs/);
+  assert.match(doctor, /Runtime core mirror: OK/);
+  assert.match(doctor, /Runtime core mirror: (?:DRIFT|MISSING)/);
+});
