@@ -4,9 +4,9 @@
 
 **Goal:** Establish the canonical provider-neutral schemas, domain contracts, runtime-core bridge, and regression oracle required by Orchestra 1.x without changing the externally observable 0.10 workflow.
 
-**Architecture:** Introduce `core/` and `schemas/` as canonical development source, then mirror only the provider-neutral runtime subset into each provider runtime as a temporary generated bridge so existing project installers remain self-contained. Extract only modules already byte-identical across Codex and Antigravity first; provider-local behavior remains authoritative until later plans switch it deliberately.
+**Architecture:** Introduce `core/` and `schemas/` as canonical development source, then mirror only the provider-neutral runtime subset into each provider runtime as a temporary generated bridge so existing project installers remain self-contained. JSON Schema is compiled at repository build/check time into dependency-free standalone validators; installed project runtimes never depend on Orchestra's `node_modules`. Extract only modules already byte-identical across Codex and Antigravity first; provider-local behavior remains authoritative until later plans switch it deliberately.
 
-**Tech Stack:** Node.js ESM, `node:test`, JSON Schema draft 2020-12, Ajv 8, existing npm scripts and provider runtime managers.
+**Tech Stack:** Node.js ESM, `node:test`, JSON Schema draft 2020-12, Ajv 8 + standalone code generation as development tooling, existing npm scripts and provider runtime managers.
 
 **Spec:** `docs/superpowers/specs/2026-10-08-orchestra-1x-direct-work-architecture.md`
 
@@ -17,23 +17,32 @@
 - Core imports no Codex or Antigravity runtime code.
 - Codex and Antigravity must never import one another.
 - Provider transcripts, prompts, hidden reasoning, secrets, raw stdout/stderr, and environment dumps are never canonical domain state.
-- Generated provider-local core mirrors are transitional build artifacts and must never become hand-edited source.
+- Installed runtime validation must be self-contained; it may not require the Orchestra repository's `node_modules`.
+- Generated schema validators and provider-local core mirrors are transitional build artifacts and must never become hand-edited source.
 - No existing session-authority or handoff behavior is removed in this plan.
 
 ## Review Focus
 
 - Unknown or provider-specific schema fields must fail closed instead of being silently accepted — pinned by `tests/core/schema-validation.test.mjs`.
-- A stale/generated provider runtime core mirror must be detected before CI/Doctor can pass — pinned by `tests/core/runtime-core-sync.test.mjs`.
-- A provider runtime missing its generated core payload must fail with an explicit health error rather than a module-not-found surprise — pinned by installer/Doctor tests.
+- Generated standalone validators must execute in an isolated fixture with no `node_modules` — pinned by `tests/core/schema-standalone-runtime.test.mjs`.
+- A stale/generated provider runtime core mirror or validator must be detected before CI/Doctor can pass — pinned by `tests/core/runtime-core-sync.test.mjs`.
 - Extracted evidence/watch/feedback behavior must remain byte/behavior equivalent across providers — pinned by `tests/core/core-extraction-parity.test.mjs`.
 - Provider model IDs, hook field names, or session semantics must not leak into `core/` or `schemas/` — pinned by `tests/cross-runtime/core-provider-firewall.test.mjs`.
 
 ---
 
-### Task 1: Add canonical schema validation infrastructure
+### Task 1: Add canonical schemas and dependency-free runtime validators
 
 **Files:**
+- Create: `scripts/build-schema-validators.mjs`
 - Create: `core/schema/validator.mjs`
+- Generated: `core/schema/generated/implementation-packet.v1.mjs`
+- Generated: `core/schema/generated/scope-contract.v2.mjs`
+- Generated: `core/schema/generated/candidate.v1.mjs`
+- Generated: `core/schema/generated/evidence.v1.mjs`
+- Generated: `core/schema/generated/audit-result.v1.mjs`
+- Generated: `core/schema/generated/work-lease.v1.mjs`
+- Generated: `core/schema/generated/runtime-event.v1.mjs`
 - Create: `schemas/implementation-packet.v1.schema.json`
 - Create: `schemas/scope-contract.v2.schema.json`
 - Create: `schemas/candidate.v1.schema.json`
@@ -42,35 +51,43 @@
 - Create: `schemas/work-lease.v1.schema.json`
 - Create: `schemas/runtime-event.v1.schema.json`
 - Create: `tests/core/schema-validation.test.mjs`
+- Create: `tests/core/schema-standalone-runtime.test.mjs`
 - Modify: `package.json`
 - Create: `package-lock.json`
 
 **Interfaces:**
-- Produces: `validateSchema(schemaFile: string, value: unknown) -> { valid: boolean, errors: Array<{ path: string, keyword: string, message: string }> }`
+- Build CLI: `node scripts/build-schema-validators.mjs` compiles every canonical schema into deterministic standalone ESM under `core/schema/generated/`.
+- Produces: `validateSchema(schemaFile: string, value: unknown) -> { valid: boolean, errors: Array<{ path: string, keyword: string, message: string }> }` using only generated local validators at runtime.
 - Produces: `assertSchema(schemaFile: string, value: unknown) -> unknown`, throwing `ORCHESTRA_SCHEMA_INVALID:<schemaFile>` with compact errors.
 
 - [ ] **Step 1: Write failing schema tests**
-  - `implementation-packet.v1` accepts the spec example and rejects missing `taskId`, invalid discovery modes, unknown top-level properties, and unauthorized free-form transcript/reasoning fields.
+  - `implementation-packet.v1` accepts the approved spec example and rejects missing `taskId`, invalid discovery modes, unknown top-level properties, and unauthorized free-form transcript/reasoning fields.
   - `work-lease.v1` requires non-negative integer `generation`, explicit `workspaceId`, `taskId`, state, actor provenance, and capabilities.
   - Every schema rejects unknown top-level properties unless the spec explicitly permits an extension object.
 
-- [ ] **Step 2: Run the focused test and confirm RED**
-  - Run: `node --test tests/core/schema-validation.test.mjs`
-  - Expected: FAIL because validator/schemas do not exist.
+- [ ] **Step 2: Write the failing standalone-runtime test**
+  - Copy only `core/schema/**` into a temporary fixture with no `package.json` dependency and no `node_modules`.
+  - Import `validator.mjs`, validate one valid and one invalid Implementation Packet, and assert results are identical to repository execution.
 
-- [ ] **Step 3: Add Ajv 8 and implement the minimal validator**
-  - Add `ajv` as a production dependency and lock it.
-  - `validator.mjs` loads schemas only from repository `schemas/`, uses draft 2020-12 validation, caches compiled schemas, and returns deterministic compact errors.
+- [ ] **Step 3: Run focused tests and confirm RED**
+  - Run: `node --test tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs`
+  - Expected: FAIL because schemas/generated validators do not exist.
 
-- [ ] **Step 4: Add the seven schemas with exact v1/v2 schema IDs from the spec**
+- [ ] **Step 4: Add Ajv 8 as a development dependency and implement standalone generation**
+  - Add `ajv` as a **devDependency**, never a runtime dependency of installed provider payloads.
+  - Use Ajv draft 2020-12 plus its standalone code generator to emit deterministic ESM validators.
+  - `validator.mjs` imports only `./generated/*.mjs`; it must never import `ajv`.
+  - Add `build:schemas` and `check:schemas` scripts; `check:schemas` regenerates to a temporary location and fails on drift.
+
+- [ ] **Step 5: Add the seven schemas with exact v1/v2 schema IDs from the spec**
   - Required enum values include discovery `NONE|DIRECTED|INVESTIGATIVE` and audit verdict `PASS|BLOCKING_FINDING`.
   - `scope-contract.v2` makes `requiredEvidence`, `sideEffectCapabilities`, and `stopConditions` first-class; do not resurrect stale `requiredValidation` as canonical state.
 
-- [ ] **Step 5: Verify GREEN**
-  - Run: `node --test tests/core/schema-validation.test.mjs`
-  - Expected: PASS.
+- [ ] **Step 6: Generate validators and verify GREEN without runtime dependencies**
+  - Run: `npm run build:schemas && npm run check:schemas && node --test tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs`
+  - Expected: PASS, including isolated fixture execution with no `node_modules`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
   - Commit message: `feat(core): add canonical Orchestra schemas`
 
 ---
@@ -90,7 +107,7 @@
 **Interfaces:**
 - Produces: `DISCOVERY_MODES = { NONE, DIRECTED, INVESTIGATIVE }`.
 - Produces: `validateImplementationPacket(packet)`, `validateScopeContract(contract)`, `validateCandidate(candidate)`, `validateEvidence(record)`, `validateAuditResult(result)`, `validateWorkLease(lease)`, and `validateRuntimeEvent(event)`; each returns the compact `validateSchema` result.
-- Produces: `assert*` counterpart for every validator; no domain module imports provider code.
+- Produces: `assert*` counterpart for every validator; no domain module imports provider code or external npm packages.
 
 - [ ] **Step 1: Write failing contract tests**
   - Assert the domain constants exactly match schema enums.
@@ -105,7 +122,7 @@
   - Keep modules focused: constants + normalization limited to domain spelling + schema validation. No routing logic yet.
 
 - [ ] **Step 4: Verify GREEN**
-  - Run: `node --test tests/core/domain-contracts.test.mjs tests/core/schema-validation.test.mjs`
+  - Run: `node --test tests/core/domain-contracts.test.mjs tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs`
   - Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -128,12 +145,14 @@
 **Interfaces:**
 - Produces: `syncRuntimeCore({ repoRoot, checkOnly = false }) -> { changed: string[], stale: string[], missing: string[] }`.
 - CLI: `node scripts/sync-runtime-core.mjs` writes generated mirrors; `node scripts/check-runtime-core.mjs` exits non-zero on drift.
+- Sync requires canonical generated schema validators to be current before copying runtime-core payloads.
 
 - [ ] **Step 1: Write failing sync tests**
   - Empty mirror reports missing files.
-  - Modified generated file reports stale content.
+  - Modified generated file or standalone schema validator reports stale content.
   - Sync repairs drift exactly from canonical `core/` + `schemas/`.
   - Provider-specific source outside the generated mirror is never copied into core.
+  - A copied runtime core executes schema validation in an isolated temporary project without Orchestra `node_modules`.
 
 - [ ] **Step 2: Confirm RED**
   - Run: `node --test tests/core/runtime-core-sync.test.mjs`
@@ -141,15 +160,16 @@
 
 - [ ] **Step 3: Implement deterministic sync/check tooling**
   - Canonical source is top-level `core/` and `schemas/` only.
-  - Generated mirrors include a machine-generated header/manifest and are overwritten wholesale by sync.
+  - Run/check `build:schemas` before mirroring so runtime always receives current dependency-free validators.
+  - Generated mirrors include a machine-generated manifest and are overwritten wholesale by sync.
   - Do not copy tests, docs, provider adapters, or labs.
 
 - [ ] **Step 4: Wire health checks**
   - Add `check:runtime-core` npm script.
-  - Doctor reports `Runtime core mirror: OK|DRIFT|MISSING` before provider syntax tests.
+  - Doctor reports `Schema validators: OK|DRIFT` and `Runtime core mirror: OK|DRIFT|MISSING` before provider syntax tests.
 
 - [ ] **Step 5: Generate mirrors and verify GREEN**
-  - Run: `node scripts/sync-runtime-core.mjs && node --test tests/core/runtime-core-sync.test.mjs && npm run check:runtime-core`
+  - Run: `npm run build:schemas && node scripts/sync-runtime-core.mjs && npm run check:schemas && node --test tests/core/runtime-core-sync.test.mjs && npm run check:runtime-core`
   - Expected: PASS and zero drift.
 
 - [ ] **Step 6: Commit**
@@ -243,8 +263,8 @@
 **Interfaces:**
 - Produces the stable foundation consumed by `2026-10-08-orchestra-1x-direct-work.md`.
 
-- [ ] **Step 1: Verify generated runtime is clean**
-  - Run: `npm run check:runtime-core && git diff --check`
+- [ ] **Step 1: Verify generated schemas/runtime are clean**
+  - Run: `npm run check:schemas && npm run check:runtime-core && git diff --check`
   - Expected: PASS.
 
 - [ ] **Step 2: Run the complete baseline suite**
