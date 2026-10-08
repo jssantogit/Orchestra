@@ -24,6 +24,10 @@ jobs:
         run: |
           ./scripts/doctor.sh
 
+      - name: Run Core Foundation Tests
+        run: |
+          npm run test:core
+
       - name: Run Codex Policy Tests
         run: |
           node --test runtimes/codex/tests/routing-policy.test.mjs
