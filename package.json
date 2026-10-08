@@ -10,7 +10,7 @@
     "check:schemas": "node scripts/build-schema-validators.mjs --check",
     "sync:runtime-core": "node scripts/sync-runtime-core.mjs",
     "check:runtime-core": "node scripts/check-runtime-core.mjs",
-    "test:core": "npm run build:schemas && npm run check:schemas && npm run check:runtime-core && node --test tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs tests/core/domain-contracts.test.mjs tests/core/runtime-core-sync.test.mjs tests/core/core-extraction-parity.test.mjs",
+    "test:core": "npm run check:schemas && npm run check:runtime-core && node --test tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs tests/core/domain-contracts.test.mjs tests/core/runtime-core-sync.test.mjs tests/core/core-extraction-parity.test.mjs",
     "test:codex": "node --test runtimes/codex/tests/routing-policy.test.mjs runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs",
     "test:antigravity": "node --test runtimes/antigravity/tests/routing-policy.test.mjs",
     "test:hooks": "node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs",
