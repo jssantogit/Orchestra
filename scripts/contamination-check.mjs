@@ -5,8 +5,62 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(new URL(".", import.meta.url).pathname, "..");
 
+function walkTextFiles(dir) {
+  if (!existsSync(dir)) return [];
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...walkTextFiles(path));
+      continue;
+    }
+    if (/\.(?:mjs|js|json|md|toml)$/i.test(entry.name)) out.push(path);
+  }
+  return out;
+}
+
+function scanCanonicalCore(rootDir, violations) {
+  const coreDir = join(rootDir, "core");
+  const coreFiles = walkTextFiles(coreDir);
+  const forbiddenInCore = [
+    {
+      pattern: /(?:runtimes[\\/](?:codex|antigravity)|(?:^|["'`])[^\n"'`]*[\\/]\.(?:codex|agents)[\\/])/im,
+      name: "Dependency or reference to provider runtime",
+    },
+    {
+      pattern: /\b(?:gpt-(?:5\.6|6)-[a-z0-9._-]+|gemini-[a-z0-9._-]+|claude-[a-z0-9._-]+)\b/i,
+      name: "Concrete provider model ID in canonical core",
+    },
+    {
+      pattern: /\b(?:session_id|mainConversationId|rootSessionId|root_session_id)\b/,
+      name: "Provider session field in canonical core",
+    },
+    {
+      pattern: /\b(?:PreToolUse|PostToolUse|PreInvocation|PostInvocation|BeforeToolUse|AfterToolUse)\b/,
+      name: "Provider hook API in canonical core",
+    },
+  ];
+
+  for (const file of coreFiles) {
+    const content = readFileSync(file, "utf8");
+    for (const { pattern, name } of forbiddenInCore) {
+      if (pattern.test(content)) {
+        violations.push({
+          runtime: "CORE",
+          file: relative(rootDir, file),
+          violation: name,
+        });
+      }
+    }
+  }
+}
+
 export function runContaminationCheck(rootDir = root) {
   const violations = [];
+
+  // 0. Canonical provider-neutral core may be consumed by provider adapters,
+  // but it may never depend back on provider runtimes or provider mechanics.
+  scanCanonicalCore(rootDir, violations);
 
   // 1. Scan Codex Active Runtime Files
   const codexDir = join(rootDir, "runtimes/codex/.codex");
