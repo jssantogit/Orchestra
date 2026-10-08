@@ -2,3 +2,7 @@
 Plan program: docs/superpowers/plans/2026-10-08-orchestra-1x-program.md
 Mode: Native
 Ruling: GitHub branch + draft PR CI is the isolated workspace/verification surface because no local checkout/worktree or npm registry access is available in this chat container.
+Task 1 Ruling: use a deterministic dependency-free Node schema compiler/runtime instead of Ajv — PR CI does not install npm dependencies and the approved spec requires canonical executable schemas plus self-contained validators, not a specific compiler library — risk if wrong: validator coverage may diverge from full JSON Schema semantics, so canonical schemas must stay within the explicitly tested supported keyword subset until a later build-tool migration.
+Task 1 RED: PR CI run 37775795689 failed at Core Foundation Tests before core/schema existed.
+Task 1 debug: PR CI run 37776209127 proved all schema assertions green; standalone fixture failed only because the test imported join from node:url. Root cause fixed in test only.
+Task 1 complete: commit 23b410439d166edac98d40e7f9700199b68c3700, PR CI run 37776348917 -> all workflow steps success, including Core Foundation Tests, Doctor, provider suites, evidence, handoff, Turn Economy, invariants, firewall, installers, contamination.
