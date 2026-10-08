@@ -1,3 +1,4 @@
+// TDD RED: these contracts intentionally precede the Direct Work implementation.
 import test from "node:test";
 import assert from "node:assert/strict";
 
