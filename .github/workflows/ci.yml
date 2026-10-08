@@ -20,6 +20,10 @@ jobs:
         with:
           node-version: 20
 
+      - name: Run Core Foundation Tests
+        run: |
+          node --test tests/core/*.test.mjs
+
       - name: Run Doctor & Health Checks
         run: |
           ./scripts/doctor.sh
