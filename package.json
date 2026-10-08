@@ -31,7 +31,7 @@
     "test:jev": "node --test tests/jev/jev-contract.test.mjs tests/jev/jev-shadow.test.mjs tests/jev/future-use-oracle.test.mjs tests/jev/turn-economy-jev.test.mjs tests/jev/turn-economy-metrics.test.mjs",
     "jev:lab": "node experiments/jev/jev-cli.mjs",
     "benchmark:jev": "node benchmarks/turn-economy/jev-evaluation.mjs",
-    "test:codex-parity": "node --test runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs",
+    "test:codex-parity": "node --test runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs && npm run test:core",
     "project:codex-runtime": "node scripts/orchestra-codex-project.mjs",
     "test:handoff": "node --test tests/handoff/orchestrator-session-handoff.test.mjs runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs",
     "handoff:orchestrator": "node runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff-cli.mjs",
