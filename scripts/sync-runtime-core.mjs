@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,10 +19,6 @@ function posix(path) {
 
 function repoRelative(repoRoot, path) {
   return posix(relative(repoRoot, path));
-}
-
-function hash(content) {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 async function exists(path) {
@@ -61,9 +56,7 @@ async function expectedRuntimeCore(repoRoot) {
 
   const manifest = {
     schema: "orchestra.runtime-core-manifest.v1",
-    files: [...expected.entries()]
-      .map(([path, content]) => ({ path, sha256: hash(content) }))
-      .sort((a, b) => a.path.localeCompare(b.path)),
+    files: [...expected.keys()].sort().map((path) => ({ path })),
   };
   expected.set("runtime-core-manifest.json", Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"));
   return expected;
