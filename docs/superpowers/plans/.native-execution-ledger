@@ -1,0 +1,4 @@
+# Native execution ledger
+Plan program: docs/superpowers/plans/2026-10-08-orchestra-1x-program.md
+Mode: Native
+Ruling: GitHub branch + draft PR CI is the isolated workspace/verification surface because no local checkout/worktree or npm registry access is available in this chat container.
