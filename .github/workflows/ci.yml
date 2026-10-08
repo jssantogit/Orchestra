@@ -20,6 +20,10 @@ jobs:
         with:
           node-version: 20
 
+      - name: Check diff hygiene
+        run: |
+          git diff --check
+
       - name: Run Doctor & Health Checks
         run: |
           ./scripts/doctor.sh
