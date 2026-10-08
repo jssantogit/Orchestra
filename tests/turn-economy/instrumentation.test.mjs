@@ -208,3 +208,63 @@ test("instrumentation: parseAgyTelemetry computes worker turn budget signals and
 
   rmSync(tempDir, { recursive: true, force: true });
 });
+
+test("instrumentation: workflow economy metrics normalize legacy benchmark results", async () => {
+  const { normalizeWorkflowEconomyMetrics } = await import("../../benchmarks/turn-economy/turn-analysis.mjs");
+
+  const normalized = normalizeWorkflowEconomyMetrics({
+    model_turns_total: 4,
+    role_invocations: { orchestrator: 4, worker: 0 },
+  });
+
+  assert.deepEqual(normalized, {
+    control_turns: 4,
+    worker_turns: 0,
+    repository_discovery_ops: 0,
+    redundant_reads: 0,
+    turns_to_first_edit: null,
+    delegations: 0,
+    model_handoffs: 0,
+    approximate_cost: null,
+  });
+
+  assert.deepEqual(normalizeWorkflowEconomyMetrics({
+    control_turns: 2,
+    worker_turns: 5,
+    repository_discovery_ops: 7,
+    redundant_reads: 1,
+    turns_to_first_edit: 2,
+    delegations: 1,
+    model_handoffs: 2,
+    approximate_cost: 0.031,
+  }), {
+    control_turns: 2,
+    worker_turns: 5,
+    repository_discovery_ops: 7,
+    redundant_reads: 1,
+    turns_to_first_edit: 2,
+    delegations: 1,
+    model_handoffs: 2,
+    approximate_cost: 0.031,
+  });
+});
+
+test("instrumentation: conversation analysis emits the Orchestra 1.x workflow economy vocabulary", async () => {
+  const { analyzeAgyConversation } = await import("../../benchmarks/turn-economy/turn-analysis.mjs");
+  const steps = [
+    { type: "PLANNER_RESPONSE", source: "MODEL", tool_calls: [{ name: "grep_search", args: { Query: "formatNumber" } }] },
+    { type: "PLANNER_RESPONSE", source: "MODEL", tool_calls: [{ name: "view_file", args: { path: "src/formatter.js", StartLine: 1, EndLine: 60 } }] },
+    { type: "PLANNER_RESPONSE", source: "MODEL", tool_calls: [{ name: "view_file", args: { path: "src/formatter.js", StartLine: 1, EndLine: 60 } }] },
+    { type: "PLANNER_RESPONSE", source: "MODEL", tool_calls: [{ name: "replace_file_content", args: { TargetFile: "src/formatter.js" } }] },
+  ];
+
+  const analysis = analyzeAgyConversation(steps, {});
+  assert.equal(analysis.control_turns, 4);
+  assert.equal(analysis.worker_turns, 0);
+  assert.equal(analysis.repository_discovery_ops, 3);
+  assert.equal(analysis.redundant_reads, 1);
+  assert.equal(analysis.turns_to_first_edit, 3);
+  assert.equal(analysis.delegations, 0);
+  assert.equal(analysis.model_handoffs, 0);
+  assert.equal(analysis.approximate_cost, null);
+});
