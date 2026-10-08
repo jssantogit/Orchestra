@@ -24,6 +24,19 @@ function outputName(schemaFile) {
   return schemaFile.replace(/\.schema\.json$/, ".mjs");
 }
 
+function makeDependencyFree(moduleCode, schemaFile) {
+  const withInlineLength = moduleCode.replace(
+    /const (func\d+) = require\("ajv\/dist\/runtime\/ucs2length"\)\.default;/g,
+    "const $1 = (value) => [...value].length;",
+  );
+
+  if (/require\(["']ajv\//.test(withInlineLength) || /from ["']ajv\//.test(withInlineLength)) {
+    throw new Error(`Generated validator still depends on Ajv runtime: ${schemaFile}`);
+  }
+
+  return withInlineLength;
+}
+
 async function compileSchema(schemaFile) {
   const schema = JSON.parse(await readFile(join(schemaDir, schemaFile), "utf8"));
   const ajv = new Ajv2020({
@@ -33,7 +46,8 @@ async function compileSchema(schemaFile) {
     code: { source: true, esm: true, optimize: true },
   });
   const validate = ajv.compile(schema);
-  return `${standaloneCode(ajv, validate).trimEnd()}\n`;
+  const moduleCode = standaloneCode(ajv, validate);
+  return `${makeDependencyFree(moduleCode, schemaFile).trimEnd()}\n`;
 }
 
 export async function buildSchemaValidators({ checkOnly = false, outputDir = generatedDir } = {}) {
