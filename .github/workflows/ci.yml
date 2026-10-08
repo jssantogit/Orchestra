@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [ main ]
 
-permissions:
-  contents: write
-
 jobs:
   verify:
     name: Deterministic Policy & Firewall Verification
@@ -35,55 +32,6 @@ jobs:
       - name: Run Core Foundation Tests
         run: |
           npm run test:core
-
-      - name: Record canonical-core Doctor checks on PR branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$HEAD_REF"
-          git switch "$HEAD_REF"
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/doctor.sh")
-          text = path.read_text()
-          marker = "# 0. Canonical Core Health"
-          if marker not in text:
-              needle = '''report_fail() {
-            echo " [FAIL] $1"
-            FAILURES=$((FAILURES + 1))
-          }
-          '''
-              block = '''
-          # 0. Canonical Core Health
-          if node "${ROOT_DIR}/scripts/build-schema-validators.mjs" --check >/dev/null 2>&1; then
-            report_pass "Schema validators: OK"
-          else
-            report_fail "Schema validators: DRIFT"
-          fi
-
-          if node "${ROOT_DIR}/scripts/check-runtime-core.mjs" >/dev/null 2>&1; then
-            report_pass "Runtime core mirror: OK"
-          elif [ ! -d "${ROOT_DIR}/runtimes/codex/.codex/astra-orchestra/core" ] && [ ! -d "${ROOT_DIR}/runtimes/antigravity/.agents/skills/orchestra/core" ]; then
-            report_fail "Runtime core mirror: MISSING"
-          else
-            report_fail "Runtime core mirror: DRIFT"
-          fi
-          '''
-              if needle not in text:
-                  raise SystemExit("doctor insertion anchor not found")
-              path.write_text(text.replace(needle, needle + block, 1))
-          PY
-          git add scripts/doctor.sh
-          if git diff --cached --quiet; then
-            echo "Doctor canonical-core checks already present."
-          else
-            git commit -m "doctor: verify canonical schema and runtime core"
-            git push origin "HEAD:$HEAD_REF"
-          fi
 
       - name: Run Doctor & Health Checks
         run: |
