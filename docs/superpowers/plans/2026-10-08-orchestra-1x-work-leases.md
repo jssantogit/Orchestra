@@ -4,7 +4,7 @@
 
 **Goal:** Replace project ownership by provider conversation/session ID with temporary factual Work Leases that fence incompatible mutation while keeping session identity only as provenance.
 
-**Architecture:** Introduce a provider-neutral atomic lease store under project-owned Orchestra state, migrate Codex and Antigravity through a `session|dual|lease` authority mode, and prove that fresh chats can continue factual work whenever no incompatible writer is active. Existing handoff/session authority remains a recovery compatibility layer until lease mode is proven and promoted.
+**Architecture:** Introduce a provider-neutral atomic lease store under project-owned Orchestra state, migrate Codex and Antigravity through a `session|dual|lease` authority mode, and prove that fresh chats can continue factual work whenever no incompatible writer is active. Existing handoff/session authority remains a recovery compatibility layer until lease mode is proven and promoted. Volatile neutral state is preserved by runtime updates and hidden from normal downstream `git status` through a bounded managed block in `.git/info/exclude`, never by editing the product's tracked `.gitignore`.
 
 **Tech Stack:** Node.js ESM, `node:test`, filesystem atomic `wx` locks, Git workspace fingerprinting, canonical Work Lease/Candidate/Evidence contracts from prior plans, existing Codex SessionStart/UserPromptSubmit/PreToolUse and Antigravity hook surfaces.
 
@@ -21,6 +21,7 @@
 - Generation fencing denies every stale mutation attempt.
 - CI/evidence is candidate/work-owned and survives chat changes.
 - No transcript, prompt, hidden reasoning, or arbitrary prior conversation becomes continuation authority.
+- `.orchestra/state/**` is project-owned volatile governance state: preserved across runtime updates, excluded from product workspace fingerprints, and locally ignored without modifying tracked product `.gitignore`.
 - Existing handoff paths remain recovery-only until lease mode is fully verified.
 
 ## Review Focus
@@ -29,7 +30,7 @@
 - Stale generation must be denied even when stale and current sessions are the same provider identity class — pinned by `tests/leases/generation-fencing.test.mjs`.
 - Fresh chat during running CI but no writer must continue the same candidate/evidence instead of resetting work — pinned by `tests/leases/session-continuation.test.mjs`.
 - Fresh chat while Luna actively holds `WORKSPACE_EDIT` must receive `WRITE_LEASE_ACTIVE`, not take authority — pinned by `tests/leases/session-continuation.test.mjs`.
-- Raw provider identifiers must not be required in neutral persisted authority state when a stable hash is sufficient — pinned by `tests/leases/work-lease-schema.test.mjs`.
+- Raw provider identifiers must not be required in neutral persisted authority state and neutral state must not pollute downstream `git status` — pinned by `tests/leases/work-lease-schema.test.mjs` and `tests/leases/project-state-ignore.test.mjs`.
 
 ---
 
@@ -51,7 +52,7 @@
 
 - [ ] **Step 1: Write RED tests from current handoff semantics**
   - Dirty tracked bytes, untracked product bytes, index changes, and HEAD changes alter fingerprint.
-  - Orchestra governance state is excludable and does not invalidate product identity.
+  - Orchestra governance state, including `.orchestra/state/**`, is excludable and does not invalidate product identity.
   - Live lock cannot be stolen; dead-owner lock can be recovered; fresh malformed lock fails closed.
 
 - [ ] **Step 2: Confirm RED**
@@ -65,13 +66,16 @@
 
 ---
 
-### Task 2: Implement the canonical Work Lease store and generation fencing
+### Task 2: Implement the canonical Work Lease store, schema contract and local state hygiene
 
 **Files:**
 - Create: `core/leases/work-lease-store.mjs`
 - Create: `core/leases/lease-authorizer.mjs`
+- Create: `runtime/project-state-ignore.mjs`
 - Create: `tests/leases/work-lease-store.test.mjs`
+- Create: `tests/leases/work-lease-schema.test.mjs`
 - Create: `tests/leases/generation-fencing.test.mjs`
+- Create: `tests/leases/project-state-ignore.test.mjs`
 
 **Interfaces:**
 - Storage: `.orchestra/state/work-lease.json` and `.orchestra/state/work-lease.claim.lock` are project-owned state.
@@ -80,21 +84,28 @@
 - Produces: `transitionWorkLease(repoRoot, { generation, state, actor, capabilities, candidate }) -> { changed, lease, reason }`.
 - Produces: `releaseWorkLease(repoRoot, { generation, actor, terminalState })`.
 - Produces: `authorizeLeaseMutation({ lease, actor, generation, capability }) -> { allowed, reason }`.
+- Produces: `ensureProjectStateIgnored(targetDir) -> { changed, path }`, managing only a bounded Orchestra block in `.git/info/exclude`.
 - Denial constants include `STALE_WORK_LEASE`, `WRITE_LEASE_ACTIVE`, `CAPABILITY_NOT_GRANTED`, `LEASE_IDENTITY_INVALID`.
 
-- [ ] **Step 1: Write RED store/fencing tests**
+- [ ] **Step 1: Write RED store/schema/fencing tests**
   - First claim starts generation 0; compatible later claim increments generation atomically.
   - Actor at generation N cannot mutate after N+1 is committed.
   - Two concurrent `WORKSPACE_EDIT` claims serialize; only one succeeds.
   - Read-only/control provenance may coexist only when it does not grant incompatible mutation.
-  - Stored actor contains provider + stable session ID hash, not raw transcript/context.
+  - Stored actor contains provider + stable session ID hash, not raw transcript/context or a required raw provider ID.
+  - Persisted record validates against canonical `work-lease.v1`.
 
-- [ ] **Step 2: Confirm RED**
-  - Run: `node --test tests/leases/work-lease-store.test.mjs tests/leases/generation-fencing.test.mjs`
+- [ ] **Step 2: Write RED local-ignore tests**
+  - In a temporary Git repository, `.orchestra/state/**` is hidden from `git status --short` after `ensureProjectStateIgnored()`.
+  - Existing user `.git/info/exclude` content is preserved exactly outside the managed Orchestra block.
+  - Repeated calls are idempotent.
 
-- [ ] **Step 3: Implement store/authorizer using Task 1 lock/fingerprint primitives and canonical schema validation**
+- [ ] **Step 3: Confirm RED**
+  - Run: `node --test tests/leases/work-lease-store.test.mjs tests/leases/work-lease-schema.test.mjs tests/leases/generation-fencing.test.mjs tests/leases/project-state-ignore.test.mjs`
 
-- [ ] **Step 4: Verify GREEN and commit**
+- [ ] **Step 4: Implement store/authorizer using Task 1 lock/fingerprint primitives, canonical schema validation and bounded local-ignore helper**
+
+- [ ] **Step 5: Verify GREEN and commit**
   - Commit message: `feat(leases): add generation-fenced Work Lease store`
 
 ---
@@ -134,6 +145,7 @@
 - Modify: `runtimes/codex/.codex/astra-orchestra/session-authority.mjs`
 - Modify: `runtimes/codex/.codex/astra-orchestra/session-hook.mjs`
 - Modify: `runtimes/codex/.codex/astra-orchestra/session-handoff-cli.mjs`
+- Modify: `runtimes/codex/.codex/astra-orchestra/codex-runtime-manager.mjs`
 - Modify: `runtimes/codex/tests/session-authority.test.mjs`
 - Modify: `runtimes/codex/tests/session-hook.test.mjs`
 - Create: `runtimes/codex/tests/work-lease-authority.test.mjs`
@@ -155,10 +167,14 @@
   - Keep provider `session_id` factual; hash it before neutral persistence.
   - Keep manual handoff CLI as recovery/debug compatibility path.
 
-- [ ] **Step 3: Verify Codex authority suites**
-  - Run: `node --test runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs runtimes/codex/tests/work-lease-authority.test.mjs`
+- [ ] **Step 3: Integrate neutral state preservation/ignore into Codex project runtime management**
+  - Ensure `.orchestra/state/**` is never treated as managed runtime payload or deleted on update/rollback.
+  - Call `ensureProjectStateIgnored(targetDir)` during install/update health-safe paths.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Verify Codex authority suites**
+  - Run: `node --test runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs runtimes/codex/tests/work-lease-authority.test.mjs tests/leases/project-state-ignore.test.mjs`
+
+- [ ] **Step 5: Commit**
   - Commit message: `feat(codex): add dual Work Lease authority`
 
 ---
@@ -170,6 +186,7 @@
 - Modify: `runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs`
 - Modify: `runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff.mjs`
 - Modify: `runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff-cli.mjs`
+- Modify: `runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs`
 - Modify: `runtimes/antigravity/tests/hooks.test.mjs`
 - Modify: `tests/handoff/orchestrator-session-handoff.test.mjs`
 - Create: `tests/leases/antigravity-work-lease.test.mjs`
@@ -186,10 +203,13 @@
 
 - [ ] **Step 2: Integrate pre-invocation/tool enforcement with core lease authorizer**
 
-- [ ] **Step 3: Verify AGY/handoff suites**
-  - Run: `npm run test:hooks && npm run test:handoff && node --test tests/leases/antigravity-work-lease.test.mjs`
+- [ ] **Step 3: Integrate neutral state preservation/ignore into Antigravity runtime management**
+  - Same `.orchestra/state/**` preservation and bounded `.git/info/exclude` behavior as Codex.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Verify AGY/handoff suites**
+  - Run: `npm run test:hooks && npm run test:handoff && node --test tests/leases/antigravity-work-lease.test.mjs tests/leases/project-state-ignore.test.mjs`
+
+- [ ] **Step 5: Commit**
   - Commit message: `feat(antigravity): add dual Work Lease authority`
 
 ---
@@ -210,6 +230,7 @@
   - No provider session/conversation ID is the sole primary project-owner test in `lease` mode.
   - Provider IDs remain required for attributable actor provenance.
   - Both providers call the same neutral lease authorizer contract without importing one another.
+  - `.orchestra/state/**` is excluded from product workspace identity and preserved from runtime lifecycle operations.
 
 - [ ] **Step 2: Update invariant suite and verify**
   - Run: `npm run test:architecture-invariants && npm run test:firewall`
@@ -238,6 +259,7 @@
   - Fresh chat while CI runs and no writer: allowed continuation.
   - Fresh chat while implementer writes: mutation denied with `WRITE_LEASE_ACTIVE`.
   - Stale old chat after generation advance: `STALE_WORK_LEASE`.
+  - Neutral state remains absent from `git status --short` in a temporary installed project.
 
 - [ ] **Step 2: Switch default to `lease` and rerun authority/provider/full suites**
   - Run: `npm test && npm run doctor && npm run check:contamination && git diff --check`
