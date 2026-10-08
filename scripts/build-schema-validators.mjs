@@ -4,9 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, "..");
-const schemaDir = join(repoRoot, "schemas");
-const generatedDir = join(repoRoot, "core", "schema", "generated");
+const defaultRepoRoot = resolve(here, "..");
 
 function outputName(schemaFile) {
   return schemaFile.replace(/\.schema\.json$/, ".mjs");
@@ -17,7 +15,12 @@ function renderModule(schema) {
   return `// GENERATED FILE. DO NOT EDIT.\nimport { validateAgainstSchema } from "../runtime-validator.mjs";\n\nexport const schema = Object.freeze(${json});\nexport const schemaId = schema.$id;\nexport function validate(value) {\n  return validateAgainstSchema(schema, value);\n}\nexport default validate;\n`;
 }
 
-export async function buildSchemaValidators({ checkOnly = false, outputDir = generatedDir } = {}) {
+export async function buildSchemaValidators({
+  checkOnly = false,
+  repoRoot = defaultRepoRoot,
+  schemaDir = join(repoRoot, "schemas"),
+  outputDir = join(repoRoot, "core", "schema", "generated"),
+} = {}) {
   const schemaFiles = (await readdir(schemaDir)).filter((name) => name.endsWith(".schema.json")).sort();
   const changed = [];
   const missing = [];
