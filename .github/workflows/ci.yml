@@ -7,6 +7,37 @@ on:
     branches: [ main ]
 
 jobs:
+  materialize-core-schema:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/orchestra-1x-native'
+    name: Materialize Core Schema Artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate lockfile and validators
+        run: |
+          npm install --ignore-scripts
+          npm run build:schemas
+          git add package-lock.json core/schema/generated/*.mjs
+          if git diff --cached --quiet; then
+            echo "Generated artifacts already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(core): materialize schema artifacts"
+          git push origin HEAD:${GITHUB_HEAD_REF}
+
   verify:
     name: Deterministic Policy & Firewall Verification
     runs-on: ubuntu-latest
