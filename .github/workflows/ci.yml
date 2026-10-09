@@ -91,7 +91,7 @@ jobs:
 
       - name: Run Cross-Runtime Firewall Tests
         run: |
-          node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
+          npm run test:firewall
 
       - name: Run Project Runtime & Installer Tests
         run: |

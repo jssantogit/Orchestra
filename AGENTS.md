@@ -11,9 +11,9 @@ This file contains durable repository rules for the Orchestra project itself. It
 
 ## Runtime Isolation Invariant
 
-- Maintain strict separation between the Codex runtime (`runtimes/codex/`) and the Antigravity runtime (`runtimes/antigravity/`).
-- Do not mix model providers, agent definitions, or runtime-specific routing policies across runtimes.
-- Any shared concepts must remain in `shared/` as documentation, contracts, or templates without creating runtime coupling.
+- Keep the Core layer provider-neutral: provider runtimes may depend on `core/**`, while Core must not import or assume provider runtime APIs, model identifiers, hook payloads, or session fields.
+- Keep provider adapters one-way into Core. The Codex runtime (`runtimes/codex/`) and Antigravity runtime (`runtimes/antigravity/`) must never depend on each other.
+- Keep shared architectural principles in `shared/`; runtime-specific model choices, agent definitions, and routing policies stay inside their own runtime.
 
 ## Verification
 

@@ -8,6 +8,11 @@ const root = resolve(new URL(".", import.meta.url).pathname, "..");
 export function runContaminationCheck(rootDir = root) {
   const violations = [];
 
+  // Core is the provider-neutral contract layer. Provider adapters may depend
+  // on Core, while Core itself must never depend on a runtime implementation.
+  violations.push(...scanCoreProviderFirewall(rootDir));
+  violations.push(...scanProviderRuntimeImports(rootDir));
+
   // 1. Scan Codex Active Runtime Files
   const codexDir = join(rootDir, "runtimes/codex/.codex");
   const codexFiles = [
@@ -195,6 +200,118 @@ export function runContaminationCheck(rootDir = root) {
     }
   }
 
+  return violations;
+}
+
+const coreProviderRules = [
+  {
+    pattern: /(?:from\s*|import\s*\(|require\s*\()\s*["'][^"']*runtimes[\\/][^"']*["']/gi,
+    name: "Core runtime import (adapters may depend on Core, never the reverse)",
+  },
+  {
+    pattern: /(?:runtimes[\\/](?:codex|antigravity)|\.codex[\\/]|\.agents[\\/])/gi,
+    name: "Core reference to provider runtime path",
+  },
+  {
+    pattern: /\b(?:codex|antigravity)\b/gi,
+    name: "Core reference to provider runtime",
+  },
+  {
+    pattern: /\b(?:gpt-(?:[0-9]+(?:\.[0-9]+)?(?:-[a-z0-9]+)*)|gemini-[a-z0-9.-]+|claude-[a-z0-9.-]+)\b/gi,
+    name: "Concrete provider model identifier in Core",
+  },
+  {
+    pattern: /\b(?:openai|anthropic)\b/gi,
+    name: "Concrete model-provider reference in Core",
+  },
+  {
+    pattern: /\b(?:hook_event_name|hookSpecificOutput|PreToolUse|PostToolUse|UserPromptSubmit|SessionStart|BeforeTool|AfterTool|BeforeAgent|AfterAgent|tool_name|tool_input|stop_hook_active)\b/g,
+    name: "Provider runtime hook API assumption in Core",
+  },
+  {
+    pattern: /\b(?:session_id|main_session_id|pending_session_id|candidate_session_id|codexSessionId|antigravitySessionId|geminiSessionId)\b/g,
+    name: "Provider runtime session field assumption in Core",
+  },
+];
+
+function listFilesRecursively(directory) {
+  if (!existsSync(directory)) return [];
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...listFilesRecursively(path));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files;
+}
+
+const sourceImportPattern = /\bimport\s*["']([^"']+)["']|\b(?:import|export)\s+(?:(?!["';])[\s\S])*?\s+from\s*["']([^"']+)["']|\b(?:import|require)\s*\(\s*["']([^"']+)["']/g;
+
+function runtimeNameForPath(path) {
+  const normalized = path.replaceAll("\\", "/");
+  if (/(?:^|\/)runtimes\/codex\//i.test(normalized)) return "CODEX";
+  if (/(?:^|\/)runtimes\/antigravity\//i.test(normalized)) return "ANTIGRAVITY";
+  return null;
+}
+
+export function scanProviderRuntimeImports(rootDir) {
+  const violations = [];
+  for (const provider of ["codex", "antigravity"]) {
+    const runtimeDir = join(rootDir, "runtimes", provider);
+    for (const file of listFilesRecursively(runtimeDir)) {
+      if (!/\.(?:mjs|cjs|js|ts|mts|cts)$/.test(file) || file.endsWith(".test.mjs")) continue;
+      const content = readFileSync(file, "utf8");
+      sourceImportPattern.lastIndex = 0;
+      let match;
+      while ((match = sourceImportPattern.exec(content))) {
+        const specifier = match[1] || match[2] || match[3];
+        const target = specifier.startsWith(".")
+          ? resolve(file, "..", specifier)
+          : resolve(rootDir, specifier);
+        const targetProvider = runtimeNameForPath(target)
+          || runtimeNameForPath(resolve(rootDir, specifier));
+        if (targetProvider && targetProvider !== provider.toUpperCase()) {
+          violations.push({
+            runtime: provider.toUpperCase(),
+            file: relative(rootDir, file),
+            line: content.slice(0, match.index).split("\n").length,
+            violation: `Provider runtime import of ${targetProvider} runtime: ${specifier}`,
+          });
+        }
+      }
+    }
+  }
+  return violations;
+}
+
+export function scanCoreProviderFirewall(rootDir) {
+  const coreDirs = [
+    join(rootDir, "core"),
+    join(rootDir, "schemas"),
+    join(rootDir, "runtimes/codex/.codex/astra-orchestra/core"),
+    join(rootDir, "runtimes/antigravity/.agents/skills/orchestra/core"),
+  ];
+  const violations = [];
+  for (const coreDir of coreDirs) {
+    for (const file of listFilesRecursively(coreDir)) {
+      const content = readFileSync(file, "utf8");
+      const lines = content.split("\n");
+      for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        for (const { pattern, name } of coreProviderRules) {
+          pattern.lastIndex = 0;
+          if (pattern.test(line)) {
+            violations.push({
+              runtime: "CORE",
+              file: relative(rootDir, file),
+              line: index + 1,
+              violation: name,
+            });
+          }
+        }
+      }
+    }
+  }
   return violations;
 }
 
