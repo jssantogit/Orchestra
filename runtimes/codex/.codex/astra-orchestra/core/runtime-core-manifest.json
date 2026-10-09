@@ -59,7 +59,7 @@
     },
     {
       "path": "schema/generated/runtime-event.v1.mjs",
-      "sha256": "d82bdd5e9528323d12aad50a1b98430f5b152e44fbc96e6e07c3122154cf78fc"
+      "sha256": "752c528b7167fad89f9203829cbc1cf1835327a96179399ace19502e86ed084a"
     },
     {
       "path": "schema/generated/scope-contract.v2.mjs",
@@ -91,7 +91,7 @@
     },
     {
       "path": "schemas/runtime-event.v1.schema.json",
-      "sha256": "9fb22cf24bf32783b94dc5052304618744373dba87e7558a08ca89032d55fe23"
+      "sha256": "608543cc0e713c0d1fce027f69da5506d6906e625765e97aad272dca1b15350f"
     },
     {
       "path": "schemas/scope-contract.v2.schema.json",

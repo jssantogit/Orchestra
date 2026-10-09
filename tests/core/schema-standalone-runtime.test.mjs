@@ -42,6 +42,22 @@ test("generated schema validators run in an isolated fixture with no node_module
     const invalid = validateSchema("implementation-packet.v1.schema.json", { ...validPacket, transcript: "forbidden" });
     assert.equal(invalid.valid, false);
 
+    const validEvent = {
+      schema: "orchestra.runtime-event.v1",
+      eventId: "event-standalone",
+      type: "CANDIDATE_READY",
+      generation: 1,
+      taskId: "task-standalone",
+      actor: { provider: "codex", sessionIdHash: "sha256:abc123" },
+      payload: {},
+    };
+    assert.equal(validateSchema("runtime-event.v1.schema.json", validEvent).valid, true);
+
+    for (const field of ["session_id", "conversationId", "transcript", "reasoning", "stdout", "unknownPayloadField"]) {
+      const event = { ...validEvent, payload: { [field]: "must not become canonical domain state" } };
+      assert.equal(validateSchema("runtime-event.v1.schema.json", event).valid, false, `payload.${field} must be rejected`);
+    }
+
     await assert.rejects(
       import(pathToFileURL(join(fixture, "node_modules", "ajv", "index.js")).href),
       /ERR_MODULE_NOT_FOUND|Cannot find module/,

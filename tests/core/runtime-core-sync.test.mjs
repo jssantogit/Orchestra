@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { buildSchemaValidators } from "../../scripts/build-schema-validators.mjs";
+import { checkRuntimeCore } from "../../scripts/check-runtime-core.mjs";
 import { syncRuntimeCore } from "../../scripts/sync-runtime-core.mjs";
 
 const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
@@ -15,7 +17,16 @@ async function fixtureRoot() {
   const root = await mkdtemp(join(tmpdir(), "orchestra-runtime-core-sync-"));
   await cp(join(repoRoot, "core"), join(root, "core"), { recursive: true });
   await cp(join(repoRoot, "schemas"), join(root, "schemas"), { recursive: true });
+  await buildSchemaValidators({ repoRoot: root });
   return root;
+}
+
+async function changeFixtureCandidateSchema(root) {
+  const schemaPath = join(root, "schemas", "candidate.v1.schema.json");
+  const schema = JSON.parse(await readFile(schemaPath, "utf8"));
+  schema.required.push("fixtureRequiredField");
+  schema.properties.fixtureRequiredField = { type: "string", minLength: 1 };
+  await writeFile(schemaPath, `${JSON.stringify(schema, null, 2)}\n`, "utf8");
 }
 
 test("empty runtime mirrors report canonical files as missing", async () => {
@@ -98,5 +109,65 @@ test("a generated runtime core validates schemas in isolation without Orchestra 
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(isolated, { recursive: true, force: true });
+  }
+});
+
+test("runtime-core check validates schemas from the supplied fixture root without writing", async () => {
+  const root = await fixtureRoot();
+  try {
+    await syncRuntimeCore({ repoRoot: root });
+    const validatorPath = join(root, "core/schema/generated/candidate.v1.mjs");
+    const mirrorPath = join(root, CODEX_MIRROR, "schema/generated/candidate.v1.mjs");
+    const canonicalBefore = await readFile(validatorPath, "utf8");
+    const mirrorBefore = await readFile(mirrorPath, "utf8");
+
+    await changeFixtureCandidateSchema(root);
+    const result = await checkRuntimeCore({ repoRoot: root });
+
+    assert.equal(result.valid, false);
+    assert.equal(result.reason, "SCHEMA_VALIDATOR_DRIFT");
+    assert.ok(result.schema.changed.includes("candidate.v1.mjs"));
+    assert.equal(await readFile(validatorPath, "utf8"), canonicalBefore);
+    assert.equal(await readFile(mirrorPath, "utf8"), mirrorBefore);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime-core sync rejects stale canonical validators before changing mirrors", async () => {
+  const root = await fixtureRoot();
+  try {
+    await buildSchemaValidators({ repoRoot: root });
+    await syncRuntimeCore({ repoRoot: root });
+    const mirrorPath = join(root, CODEX_MIRROR, "schema/generated/candidate.v1.mjs");
+    const mirrorBefore = await readFile(mirrorPath, "utf8");
+
+    await changeFixtureCandidateSchema(root);
+    await assert.rejects(
+      syncRuntimeCore({ repoRoot: root }),
+      (error) => error?.code === "SCHEMA_VALIDATOR_DRIFT" && error?.schemaResult?.changed?.includes("candidate.v1.mjs"),
+    );
+
+    assert.equal(await readFile(mirrorPath, "utf8"), mirrorBefore);
+    await assert.rejects(
+      syncRuntimeCore({ repoRoot: root, checkOnly: true }),
+      { code: "SCHEMA_VALIDATOR_DRIFT" },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("schema validator check-only mode does not create a missing output directory", async () => {
+  const root = await fixtureRoot();
+  const outputDir = join(root, "core/schema/check-only-output");
+  try {
+    await rm(outputDir, { recursive: true, force: true });
+    const result = await buildSchemaValidators({ checkOnly: true, repoRoot: root, outputDir });
+
+    assert.equal(result.missing.length, 7);
+    await assert.rejects(access(outputDir), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

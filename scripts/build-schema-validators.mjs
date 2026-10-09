@@ -6,9 +6,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import standaloneCode from "ajv/dist/standalone/index.js";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(scriptDir, "..");
-const schemaDir = join(repoRoot, "schemas");
-const generatedDir = join(repoRoot, "core", "schema", "generated");
+const defaultRepoRoot = resolve(scriptDir, "..");
 
 export const SCHEMA_FILES = Object.freeze([
   "audit-result.v1.schema.json",
@@ -37,7 +35,7 @@ function makeDependencyFree(moduleCode, schemaFile) {
   return withInlineLength;
 }
 
-async function compileSchema(schemaFile) {
+async function compileSchema(schemaFile, schemaDir) {
   const schema = JSON.parse(await readFile(join(schemaDir, schemaFile), "utf8"));
   const ajv = new Ajv2020({
     allErrors: true,
@@ -50,14 +48,22 @@ async function compileSchema(schemaFile) {
   return `${makeDependencyFree(moduleCode, schemaFile).trimEnd()}\n`;
 }
 
-export async function buildSchemaValidators({ checkOnly = false, outputDir = generatedDir } = {}) {
+export async function buildSchemaValidators({
+  checkOnly = false,
+  repoRoot = defaultRepoRoot,
+  schemaDir: schemaDirOption,
+  outputDir: outputDirOption,
+} = {}) {
+  const root = resolve(repoRoot);
+  const schemaDir = resolve(root, schemaDirOption || join(root, "schemas"));
+  const outputDir = resolve(root, outputDirOption || join(root, "core", "schema", "generated"));
   const changed = [];
   const missing = [];
-  await mkdir(outputDir, { recursive: true });
+  if (!checkOnly) await mkdir(outputDir, { recursive: true });
 
   for (const schemaFile of SCHEMA_FILES) {
     const outputPath = join(outputDir, outputName(schemaFile));
-    const expected = await compileSchema(schemaFile);
+    const expected = await compileSchema(schemaFile, schemaDir);
     let current = null;
     try {
       current = await readFile(outputPath, "utf8");

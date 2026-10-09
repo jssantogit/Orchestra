@@ -128,6 +128,15 @@ test("provider session/model vocabulary is not a required or accepted top-level 
   assert.deepEqual(fixtures.lease.actor, { provider: "codex", sessionIdHash: "sha256:abc" });
 });
 
+test("runtime event domain accepts an empty payload and rejects raw or undeclared payload fields", () => {
+  assert.equal(validateRuntimeEvent(fixtures.event).valid, true);
+
+  for (const field of ["session_id", "conversationId", "transcript", "reasoning", "stdout", "unknownPayloadField"]) {
+    const event = { ...fixtures.event, payload: { [field]: "must not become canonical domain state" } };
+    assert.equal(validateRuntimeEvent(event).valid, false, `payload.${field} must be rejected`);
+  }
+});
+
 test("core domain modules do not depend on provider trees, provider model SKUs, or external packages", async () => {
   const files = [
     "implementation-packet.mjs",

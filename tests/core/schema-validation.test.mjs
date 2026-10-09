@@ -90,6 +90,31 @@ test("work lease requires factual bounded authority fields and a non-negative ge
   assert.equal(validateSchema("work-lease.v1.schema.json", negativeGeneration).valid, false);
 });
 
+test("runtime event payload accepts empty data and rejects raw, provider-specific, and unknown fields", () => {
+  const event = {
+    schema: "orchestra.runtime-event.v1",
+    eventId: "event-1",
+    type: "CANDIDATE_READY",
+    generation: 1,
+    taskId: "task-1",
+    actor: { provider: "codex", sessionIdHash: "sha256:abc123" },
+    payload: {},
+  };
+
+  assert.equal(validateSchema("runtime-event.v1.schema.json", event).valid, true);
+  for (const field of ["session_id", "conversationId", "transcript", "reasoning", "stdout", "unknownPayloadField"]) {
+    const withForbiddenPayload = {
+      ...event,
+      payload: { [field]: "must not become canonical domain state" },
+    };
+    assert.equal(
+      validateSchema("runtime-event.v1.schema.json", withForbiddenPayload).valid,
+      false,
+      `payload.${field} must be rejected`,
+    );
+  }
+});
+
 test("every canonical schema rejects unknown top-level properties", () => {
   const fixtures = {
     "implementation-packet.v1.schema.json": validImplementationPacket(),

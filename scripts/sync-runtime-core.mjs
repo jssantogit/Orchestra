@@ -3,6 +3,8 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildSchemaValidators } from "./build-schema-validators.mjs";
+
 export const RUNTIME_CORE_MIRRORS = Object.freeze([
   "runtimes/codex/.codex/astra-orchestra/core",
   "runtimes/antigravity/.agents/skills/orchestra/core",
@@ -104,6 +106,14 @@ async function writeMirror(repoRoot, mirrorRoot, payload) {
 export async function syncRuntimeCore({ repoRoot, checkOnly = false }) {
   if (!repoRoot) throw new TypeError("repoRoot is required");
   const root = resolve(repoRoot);
+  const schemaResult = await buildSchemaValidators({ checkOnly: true, repoRoot: root });
+  if (schemaResult.changed.length || schemaResult.missing.length) {
+    const drift = [...schemaResult.missing, ...schemaResult.changed];
+    const error = new Error(`Canonical schema validator drift: ${drift.join(", ")}`);
+    error.code = "SCHEMA_VALIDATOR_DRIFT";
+    error.schemaResult = schemaResult;
+    throw error;
+  }
   const payload = await canonicalPayload(root);
   const result = { changed: [], stale: [], missing: [] };
 

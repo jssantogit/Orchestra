@@ -9,7 +9,7 @@ function hasDrift(result) {
 }
 
 export async function checkRuntimeCore({ repoRoot }) {
-  const schemaResult = await buildSchemaValidators({ checkOnly: true });
+  const schemaResult = await buildSchemaValidators({ checkOnly: true, repoRoot });
   if (schemaResult.changed.length || schemaResult.missing.length) {
     return {
       valid: false,

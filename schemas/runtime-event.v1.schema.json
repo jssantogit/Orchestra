@@ -19,6 +19,6 @@
         "sessionIdHash": { "type": "string", "minLength": 1 }
       }
     },
-    "payload": { "type": "object", "additionalProperties": true }
+    "payload": { "type": "object", "additionalProperties": false }
   }
 }
