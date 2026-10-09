@@ -14,7 +14,15 @@ function read(path) {
 const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs");
 const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
-const federation = read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs");
+const federation = read("core/evidence/evidence-federation.mjs");
+const federationMirrors = [
+  read("runtimes/codex/.codex/astra-orchestra/core/evidence/evidence-federation.mjs"),
+  read("runtimes/antigravity/.agents/skills/orchestra/core/evidence/evidence-federation.mjs"),
+];
+const federationAdapters = [
+  read("runtimes/codex/.codex/astra-orchestra/evidence-federation.mjs"),
+  read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs"),
+];
 const inspector = read("runtimes/antigravity/.agents/skills/orchestra/evidence-inspector.mjs");
 const providerRegistry = read("runtimes/antigravity/.agents/skills/orchestra/evidence-provider-registry.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
@@ -78,13 +86,21 @@ test("ARCH-EVIDENCE-06: structured requiredEvidence survives delegation and can 
 
 
 test("ARCH-EVIDENCE-07: delegated evidence federation requires factual identity and task binding", () => {
-  assert.match(federation, /confidence !== "HIGH"/);
-  assert.match(federation, /source !== "RUNTIME_IDENTITY"/);
-  assert.match(federation, /bindingTaskMatches/);
-  assert.match(federation, /bindingAttemptMatches/);
-  assert.match(federation, /ORCHESTRA_PARENT_EVIDENCE_FEDERATION/);
+  for (const source of [federation, ...federationMirrors]) {
+    assert.match(source, /confidence !== "HIGH"/);
+    assert.match(source, /source !== "RUNTIME_IDENTITY"/);
+    assert.match(source, /bindingTaskMatches/);
+    assert.match(source, /bindingAttemptMatches/);
+    assert.match(source, /ORCHESTRA_PARENT_EVIDENCE_FEDERATION/);
+  }
   assert.match(contract, /TASK_ID_MISMATCH/);
   assert.match(contract, /COMMIT_SHA_MISMATCH/);
+});
+
+test("evidence federation provider modules remain thin exports of their installed Core mirrors", () => {
+  for (const adapter of federationAdapters) {
+    assert.equal(adapter.trim(), 'export * from "./core/evidence/evidence-federation.mjs";');
+  }
 });
 
 test("ARCH-EVIDENCE-08: local evidence producers are explicit and reviewer/model claims are excluded", () => {
@@ -96,10 +112,12 @@ test("ARCH-EVIDENCE-08: local evidence producers are explicit and reviewer/model
 });
 
 test("ARCH-EVIDENCE-09: distinct command executions are merged by execution identity, not command text", () => {
-  assert.match(federation, /executionId/);
-  assert.match(federation, /transcriptEvidenceId/);
-  assert.match(federation, /exactEvidenceIdentity/);
-  assert.equal(federation.includes("command + type + scope"), false);
+  for (const source of [federation, ...federationMirrors]) {
+    assert.match(source, /executionId/);
+    assert.match(source, /transcriptEvidenceId/);
+    assert.match(source, /exactEvidenceIdentity/);
+    assert.equal(source.includes("command + type + scope"), false);
+  }
 });
 
 
