@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.candidate.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "candidateId", "generation", "workspaceId", "headSha"],
+  "properties": {
+    "schema": { "const": "orchestra.candidate.v1" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "candidateId": { "type": "string", "minLength": 1 },
+    "generation": { "type": "integer", "minimum": 0 },
+    "workspaceId": { "type": "string", "minLength": 1 },
+    "headSha": { "type": ["string", "null"], "minLength": 1 }
+  }
+}

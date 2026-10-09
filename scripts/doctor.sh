@@ -21,6 +21,21 @@ report_fail() {
   FAILURES=$((FAILURES + 1))
 }
 
+# 0. Canonical Core Health
+if node "${ROOT_DIR}/scripts/build-schema-validators.mjs" --check >/dev/null 2>&1; then
+  report_pass "Schema validators: OK"
+else
+  report_fail "Schema validators: DRIFT"
+fi
+
+if node "${ROOT_DIR}/scripts/check-runtime-core.mjs" >/dev/null 2>&1; then
+  report_pass "Runtime core mirror: OK"
+elif [ ! -d "${ROOT_DIR}/runtimes/codex/.codex/astra-orchestra/core" ] && [ ! -d "${ROOT_DIR}/runtimes/antigravity/.agents/skills/orchestra/core" ]; then
+  report_fail "Runtime core mirror: MISSING"
+else
+  report_fail "Runtime core mirror: DRIFT"
+fi
+
 # 1. Required Meta Files
 REQUIRED_META_FILES=(
   "README.md"

@@ -1,6 +1,8 @@
 # Shared Orchestration Principles
 
-Orchestra coordinates coding agents across different execution environments using a set of core principles. These principles are architectural and behavioral invariants shared by all Orchestra runtimes (Codex and Antigravity), even though their underlying model providers and control-plane implementations are completely independent.
+Orchestra coordinates coding agents across different execution environments using a set of core principles. These principles are architectural and behavioral invariants shared by all Orchestra runtimes, even though their underlying model providers and control-plane implementations are independent.
+
+The `core/` layer contains provider-neutral contracts and behavior. Provider adapters may translate runtime-specific data into Core contracts, but Core must not import provider runtimes or encode concrete provider models, hook APIs, or session fields. Provider runtimes must not depend on one another.
 
 ---
 

@@ -11,7 +11,15 @@ const read = (path) => readFileSync(resolve(root, path), "utf8");
 const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const registry = read("runtimes/antigravity/.agents/skills/orchestra/evidence-provider-registry.mjs");
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
-const watch = read("runtimes/antigravity/.agents/skills/orchestra/evidence-watch.mjs");
+const watch = read("core/evidence/evidence-watch.mjs");
+const watchMirrors = [
+  read("runtimes/codex/.codex/astra-orchestra/core/evidence/evidence-watch.mjs"),
+  read("runtimes/antigravity/.agents/skills/orchestra/core/evidence/evidence-watch.mjs"),
+];
+const watchAdapters = [
+  read("runtimes/codex/.codex/astra-orchestra/evidence-watch.mjs"),
+  read("runtimes/antigravity/.agents/skills/orchestra/evidence-watch.mjs"),
+];
 const runner = read("runtimes/antigravity/.agents/skills/orchestra/evidence-watch-runner.mjs");
 const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
 
@@ -48,11 +56,19 @@ test("ARCH-PROVIDER-04: background runner cannot accept or finish a task", () =>
 });
 
 test("ARCH-PROVIDER-05: watch identity binds task attempt and mutation sequence", () => {
-  assert.match(watch, /taskId/);
-  assert.match(watch, /attempt/);
-  assert.match(watch, /mutationSeq/);
-  assert.match(watch, /WATCH_BINDING_STALE/);
+  for (const source of [watch, ...watchMirrors]) {
+    assert.match(source, /taskId/);
+    assert.match(source, /attempt/);
+    assert.match(source, /mutationSeq/);
+    assert.match(source, /WATCH_BINDING_STALE/);
+  }
   assert.match(runner, /WATCH_TASK_CHANGED/);
+});
+
+test("evidence watch provider modules remain thin exports of their installed Core mirrors", () => {
+  for (const adapter of watchAdapters) {
+    assert.equal(adapter.trim(), 'export * from "./core/evidence/evidence-watch.mjs";');
+  }
 });
 
 test("ARCH-PROVIDER-06: source-unavailable gate counts factual polls, not repeated reads", () => {

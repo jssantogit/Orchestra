@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.evidence.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "taskId", "candidateId", "candidateGeneration", "kind", "status", "source"],
+  "properties": {
+    "schema": { "const": "orchestra.evidence.v1" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "candidateId": { "type": "string", "minLength": 1 },
+    "candidateGeneration": { "type": "integer", "minimum": 0 },
+    "kind": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["PASSED", "FAILED", "RUNNING", "MISSING"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "reference"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "reference": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
