@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
-import { installCodexProjectRuntime } from "../runtimes/codex/.codex/astra-orchestra/codex-runtime-manager.mjs";
+import { buildRuntime } from "../runtime/runtime-builder.mjs";
+import { loadRuntimeManifest } from "../runtime/manifest-loader.mjs";
+import { installProjectRuntime } from "../runtime/project-runtime-manager.mjs";
 
 const args = process.argv.slice(2);
 if (args.length < 1) {
@@ -12,29 +15,32 @@ if (args.length < 1) {
 }
 
 const targetDir = resolve(args[0]);
-const scriptDir = fileURLToPath(new URL(".", import.meta.url));
-const orchestraRoot = resolve(scriptDir, "..");
-const sourceRuntimeRoot = resolve(orchestraRoot, "runtimes", "codex");
-
 if (!existsSync(targetDir)) {
   console.error(`Error: Target directory '${targetDir}' does not exist.`);
   process.exit(1);
 }
 
+let buildRoot;
 try {
   console.log(`Installing Orchestra Codex runtime into '${targetDir}'...`);
-  const result = installCodexProjectRuntime({ sourceRuntimeRoot, targetDir });
+  buildRoot = await mkdtemp(join(tmpdir(), "orchestra-codex-install-"));
+  const builtRuntime = join(buildRoot, "codex");
+  const runtimeManifest = await loadRuntimeManifest("codex");
+  await buildRuntime({ runtime: "codex", outputDir: builtRuntime });
+  const result = await installProjectRuntime({ targetDir, runtimeManifest, builtRuntime });
   console.log(`Codex runtime successfully installed to '${targetDir}/.codex'.`);
-  console.log(`Version: ${result.metadata.orchestraVersion || "unknown"}`);
-  console.log(`Source commit: ${result.metadata.sourceCommit || "unknown"}`);
+  console.log(`Version: ${result.metadata.version || "unknown"}`);
   console.log("Verify with: node scripts/orchestra-codex-project.mjs doctor <project>");
 } catch (error) {
-  if (error?.code === "CODEX_INSTALL_CONFLICT" || /CODEX_INSTALL_CONFLICT/.test(String(error?.message || ""))) {
-    console.error(`Conflict detected: '${targetDir}/.codex' already exists in target project.`);
+  if (error?.code === "RUNTIME_INSTALL_CONFLICT" || /RUNTIME_INSTALL_CONFLICT/.test(String(error?.message || ""))) {
+    console.error(`Conflict detected: managed Codex runtime paths already exist in '${targetDir}'.`);
     console.error("Aborting installation to prevent overwriting existing configuration.");
     console.error("Use orchestra-codex-project.mjs update to adopt/update an existing runtime.");
-    process.exit(2);
+    process.exitCode = 2;
+  } else {
+    console.error(String(error?.message || error));
+    process.exitCode = 1;
   }
-  console.error(String(error?.message || error));
-  process.exit(1);
+} finally {
+  if (buildRoot) await rm(buildRoot, { recursive: true, force: true });
 }
