@@ -239,3 +239,41 @@ export function authorizeCodexLeaseCapability(repoRoot, {
   });
   return { handled: true, ...decision, mode: authorityMode, lease };
 }
+
+export function releaseCodexLeaseWrite(repoRoot, { sessionId, mode = undefined } = {}) {
+  const authorityMode = resolveCodexAuthorityMode(mode);
+  if (authorityMode === "session") {
+    return { handled: false, released: false, reason: "SESSION_AUTHORITY_MODE", mode: authorityMode, lease: null };
+  }
+  const actor = actorFor(sessionId);
+  if (!actor) return { handled: true, released: false, reason: "CODEX_SESSION_ID_REQUIRED", mode: authorityMode, lease: null };
+  const actorBinding = readActorBinding(repoRoot, actor);
+  if (!actorBinding.valid || !actorBinding.binding) {
+    return { handled: true, released: false, reason: actorBinding.reason || "LEASE_BINDING_MISSING", mode: authorityMode, lease: null };
+  }
+  const current = readWorkLease(repoRoot);
+  if (!current.exists || !current.valid || !current.lease) {
+    return { handled: true, released: false, reason: current.reason || "WORK_LEASE_NOT_INITIALIZED", mode: authorityMode, lease: current.lease || null };
+  }
+  const lease = current.lease;
+  const generation = actorBinding.binding.generation;
+  const control = authorizeLeaseMutation({ lease, actor, generation, capability: "CONTROL" });
+  if (!control.allowed) return { handled: true, released: false, reason: control.reason, mode: authorityMode, lease };
+  if (!lease.capabilities.includes("WORKSPACE_EDIT")) {
+    return { handled: true, released: false, reason: null, mode: authorityMode, lease };
+  }
+  const result = transitionWorkLease(repoRoot, {
+    generation,
+    actor,
+    state: "CONTROL",
+    capabilities: ["CONTROL"],
+    candidate: lease.candidate,
+  });
+  return {
+    handled: true,
+    released: Boolean(result.changed),
+    reason: result.reason || null,
+    mode: authorityMode,
+    lease: result.lease || lease,
+  };
+}
