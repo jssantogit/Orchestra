@@ -10,7 +10,7 @@ const canaryPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-
 const rolloutPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-rollout.mjs");
 const policyStorePath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/policy-store.mjs");
 const preToolLegacyPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
-const stopPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/stop-guard.mjs");
+const stopPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/stop-guard-legacy.mjs");
 const outcomePath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/outcome-recorder.mjs");
 const cliPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-cli.mjs");
 
