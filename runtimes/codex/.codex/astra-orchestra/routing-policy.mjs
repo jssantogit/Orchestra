@@ -20,6 +20,7 @@ export {
   canWorkerAccept,
   canWorkerSpawn,
   canonicalTaskDomain,
+  normalizeTaskAction,
   consumeRetryBudget,
   createAcceptanceGate,
   createAstraEscalationPacket,
