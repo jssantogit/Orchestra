@@ -10,8 +10,9 @@ import {
   createCodexQuickAuditPacket,
 } from '../.codex/astra-orchestra/direct-work-routing.mjs';
 
-test('Direct Work mode defaults to shadow and invalid values fail safe to shadow', () => {
-  assert.equal(readCodexDirectWorkMode({}), 'shadow');
+test('Direct Work mode defaults to on while invalid explicit values fail safe to shadow', () => {
+  assert.equal(readCodexDirectWorkMode({}), 'on');
+  assert.equal(readCodexDirectWorkMode({ ORCHESTRA_DIRECT_WORK_MODE: '' }), 'on');
   assert.equal(readCodexDirectWorkMode({ ORCHESTRA_DIRECT_WORK_MODE: 'wat' }), 'shadow');
 });
 

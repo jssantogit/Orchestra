@@ -2,8 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { decideCodexWork } from '../../runtimes/codex/.codex/astra-orchestra/direct-work-routing.mjs';
-import { decideAntigravityWork } from '../../runtimes/antigravity/.agents/skills/orchestra/direct-work-routing.mjs';
+import {
+  decideCodexWork,
+  readCodexDirectWorkMode,
+} from '../../runtimes/codex/.codex/astra-orchestra/direct-work-routing.mjs';
+import {
+  decideAntigravityWork,
+  readAntigravityDirectWorkMode,
+} from '../../runtimes/antigravity/.agents/skills/orchestra/direct-work-routing.mjs';
 import { evaluateDirectWorkToolUse } from '../../runtimes/antigravity/.agents/skills/orchestra/direct-work-tool-policy.mjs';
 
 function normalized(result) {
@@ -15,6 +21,17 @@ function normalized(result) {
     spawnReviewerBeforeCandidate: result.directWork.spawnReviewerBeforeCandidate,
   };
 }
+
+test('provider gates default Direct Work to on and keep invalid explicit values fail-safe in shadow', () => {
+  for (const readMode of [readCodexDirectWorkMode, readAntigravityDirectWorkMode]) {
+    assert.equal(readMode({}), 'on');
+    assert.equal(readMode({ ORCHESTRA_DIRECT_WORK_MODE: '' }), 'on');
+    assert.equal(readMode({ ORCHESTRA_DIRECT_WORK_MODE: 'off' }), 'off');
+    assert.equal(readMode({ ORCHESTRA_DIRECT_WORK_MODE: 'shadow' }), 'shadow');
+    assert.equal(readMode({ ORCHESTRA_DIRECT_WORK_MODE: 'on' }), 'on');
+    assert.equal(readMode({ ORCHESTRA_DIRECT_WORK_MODE: 'invalid' }), 'shadow');
+  }
+});
 
 for (const facts of [
   { taskAction: 'IMPLEMENT', bounded: true, criticality: 'NORMAL' },
