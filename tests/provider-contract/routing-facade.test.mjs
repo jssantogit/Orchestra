@@ -31,6 +31,28 @@ test("Antigravity public routing policy is a thin facade over neutral routing an
   assert.doesNotMatch(text, /gemini-3\.8-flash/i);
 });
 
+test("routing compatibility facades retain named exports consumed by active runtime entrypoints", async () => {
+  const codex = await import(`${new URL("../../runtimes/codex/.codex/astra-orchestra/routing-policy.mjs", import.meta.url).href}?exports=${Date.now()}`);
+  const antigravity = await import(`${new URL("../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs", import.meta.url).href}?exports=${Date.now()}`);
+
+  for (const name of ["SIDE_EFFECT_CAPABILITIES"]) {
+    assert.ok(name in codex, `Codex routing facade must preserve ${name}`);
+  }
+
+  for (const name of [
+    "classifyScopeSpecificity",
+    "isConcretePath",
+    "isHealthyDelegatedExecution",
+    "isOrchestratorRole",
+    "isWorkerRole",
+    "checkValidationCompletionLock",
+    "isValidationCommand",
+    "verifyTaskEvidence",
+  ]) {
+    assert.ok(name in antigravity, `Antigravity routing facade must preserve ${name}`);
+  }
+});
+
 test("facade routing remains behaviorally compatible for baseline provider scenarios", async () => {
   const codex = await import(`${new URL("../../runtimes/codex/.codex/astra-orchestra/routing-policy.mjs", import.meta.url).href}?facade=${Date.now()}`);
   const antigravity = await import(`${new URL("../../runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs", import.meta.url).href}?facade=${Date.now()}`);
