@@ -216,3 +216,13 @@ node --test tests/architecture-invariants/codex-parity-authority.test.mjs tests/
 - Remote-CI watching advances through explicit factual provider observations;
   the Codex runtime does not create a background credential-owning daemon.
 - Requires OpenAI models with reasoning effort configuration support.
+
+---
+
+## 13. Direct Work Default Lane
+
+Codex defaults bounded implementation work to Direct Work. With `ORCHESTRA_DIRECT_WORK_MODE` unset or empty, the runtime resolves the gate to `on`; explicit `shadow` keeps legacy routing authoritative while computing Direct Work metadata, and explicit `off` restores the legacy route exactly. Invalid explicit values fail safe to `shadow`.
+
+Sol resolves the task before implementation and emits a canonical Implementation Packet. Luna receives that packet as execution input rather than a raw problem to reinterpret. Luna discovery is limited to `NONE` or anchor-bound `DIRECTED` lookup, tests may change only when explicitly authorized, and only failures clearly caused by Luna's own patch may be repaired locally. Unrelated or uncertain failures return to Sol with factual evidence.
+
+After a candidate is ready, factual evidence/CI and an independent `luna-auditor` Quick Audit may run in parallel. The auditor is read-only, sees only the packet/diff/changed files/evidence refs, and reports only `PASS` or a causal `BLOCKING_FINDING`. Sol confirms or rejects findings, emits a bounded Delta Packet when necessary, and remains the sole acceptance authority.
