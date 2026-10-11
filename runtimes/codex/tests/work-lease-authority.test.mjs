@@ -87,6 +87,26 @@ test("former generation is fenced after a fresh root advances control", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a previously bound stale session cannot auto-claim a newer generation on SessionStart", () => {
+  const root = project();
+  try {
+    state(root, { taskId: "task-1", state: "VERIFYING", candidateId: "candidate-7" });
+    const first = enterCodexWorkLease(root, { sessionId: "root-a", mode: "dual" });
+    const second = enterCodexWorkLease(root, { sessionId: "root-b", mode: "dual" });
+    assert.equal(second.authoritative, true);
+    assert.equal(second.lease.generation, 1);
+
+    const staleReentry = enterCodexWorkLease(root, { sessionId: "root-a", mode: "dual" });
+    assert.equal(staleReentry.authoritative, false);
+    assert.equal(staleReentry.reason, "STALE_WORK_LEASE");
+    assert.equal(staleReentry.lease.generation, 1);
+
+    const currentReentry = enterCodexWorkLease(root, { sessionId: "root-b", mode: "dual" });
+    assert.equal(currentReentry.authoritative, true);
+    assert.equal(currentReentry.lease.generation, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("tool classifier grants CONTROL only to strict read-only operations", () => {
   assert.equal(codexCapabilityForTool({ tool_name: "apply_patch", tool_input: {} }), "WORKSPACE_EDIT");
   assert.equal(codexCapabilityForTool({ tool_name: "Bash", tool_input: { command: "git status --short" } }), "CONTROL");
