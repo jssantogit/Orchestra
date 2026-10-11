@@ -11,7 +11,7 @@ function read(path) {
   return readFileSync(resolve(root, path), "utf8");
 }
 
-const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs");
+const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-policy-legacy.mjs");
 const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
 const federation = read("core/evidence/evidence-federation.mjs");
