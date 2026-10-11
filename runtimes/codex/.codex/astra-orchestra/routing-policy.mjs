@@ -3,10 +3,16 @@ import { escalateTask } from "./core/routing/escalation.mjs";
 import { resolveModelProfile } from "./provider/codex/model-catalog.mjs";
 import * as legacyRouting from "./routing-policy-legacy.mjs";
 
-// Compatibility facade for the Codex runtime. Provider-neutral classification
-// and escalation live in core; concrete model/profile mapping lives in the
-// Codex catalog. Keep the historical public surface explicit so new legacy
-// symbols cannot leak through this boundary accidentally.
+export {
+  STOP_DECISIONS,
+  evaluateStopDecision,
+} from "./core/acceptance/stop-decision.mjs";
+export { createRuntimeEvent } from "./core/events/runtime-event.mjs";
+
+// Compatibility facade for the Codex runtime. Provider-neutral classification,
+// escalation, acceptance and event ownership live in core; concrete
+// model/profile mapping lives in the Codex catalog. Keep the historical public
+// surface explicit so new legacy symbols cannot leak through this boundary.
 export {
   ACTIONS,
   DIRECT_ACTIONS,
@@ -86,8 +92,5 @@ export function resolveRoutingProfile(facts = {}) {
 }
 
 export function decideRoute(facts = {}) {
-  // Keep the public route byte-for-byte compatible while extraction is staged.
-  // Neutral helpers above are the new ownership surface; later tasks migrate
-  // legacy responsibilities behind them one bounded concern at a time.
   return legacyRouting.decideRoute(facts);
 }
