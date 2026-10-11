@@ -87,6 +87,21 @@ jobs:
       - name: Verify Antigravity install operation
         run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=installed node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
 
+      - name: Verify Antigravity hooks.json parity
+        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-hooks-json node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify Antigravity hooks parity
+        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-hooks node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify Antigravity agents parity
+        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-agents node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify Antigravity skills parity
+        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-skills node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify Antigravity Dream parity
+        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-dream node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
       - name: Verify Antigravity clean inspection
         run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
 
