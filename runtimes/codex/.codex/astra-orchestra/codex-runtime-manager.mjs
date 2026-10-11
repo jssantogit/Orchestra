@@ -15,6 +15,8 @@ import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
+import { ensureProjectStateIgnored } from "./project-state-ignore.mjs";
+
 export const CODEX_PROJECT_RUNTIME_SCHEMA = "orchestra.codex-project-runtime.v1";
 export const CODEX_PROJECT_RUNTIME_MANAGER_VERSION = 2;
 
@@ -31,6 +33,7 @@ export const CODEX_PRESERVED_PROJECT_PATHS = Object.freeze([
   ".codex/orchestra-artifacts",
   ".codex/orchestra-semantic",
   ".codex/runtime-management",
+  ".orchestra/state",
 ]);
 
 const QUIESCENT_STATES = new Set(["INTAKE", "DONE", "BLOCKED", "HUMAN_GATE"]);
@@ -92,6 +95,7 @@ function ensureProjectStateDirs(targetDir) {
     ".codex/orchestra-artifacts/outputs",
     ".codex/orchestra-semantic",
     ".codex/runtime-management/backups",
+    ".orchestra/state",
   ];
   for (const rel of dirs) mkdirSync(join(targetDir, rel), { recursive: true });
 
@@ -107,6 +111,7 @@ function ensureProjectStateDirs(targetDir) {
     const path = join(targetDir, rel);
     if (!existsSync(path)) writeFileSync(path, "");
   }
+  ensureProjectStateIgnored(targetDir);
 }
 
 function copyPath(sourceBase, targetBase, relPath) {
