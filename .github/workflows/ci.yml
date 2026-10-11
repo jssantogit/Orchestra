@@ -95,7 +95,15 @@ jobs:
 
       - name: Run Architecture Invariants
         run: |
-          npm run test:architecture-invariants
+          set -o pipefail
+          npm run test:architecture-invariants 2>&1 | tee architecture-invariants.log
+
+      - name: Upload Architecture Invariant Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-invariants-log
+          path: architecture-invariants.log
 
       - name: Run Cross-Runtime Firewall Tests
         run: |
