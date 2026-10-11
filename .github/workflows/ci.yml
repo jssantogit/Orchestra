@@ -48,11 +48,14 @@ jobs:
           npm run test:antigravity
           npm run test:hooks
 
-      - name: Verify zero-authority Labs
-        run: |
-          npm run test:dream
-          npm run test:jev
-          npm run test:labs
+      - name: Verify Dream compatibility Lab
+        run: npm run test:dream
+
+      - name: Verify Jev compatibility Lab
+        run: npm run test:jev
+
+      - name: Verify canonical zero-authority Lab contracts
+        run: npm run test:labs
 
       - name: Verify manifest project manager and self-contained installs
         run: |
