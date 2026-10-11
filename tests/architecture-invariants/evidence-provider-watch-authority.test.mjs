@@ -21,7 +21,7 @@ const watchAdapters = [
   read("runtimes/antigravity/.agents/skills/orchestra/evidence-watch.mjs"),
 ];
 const runner = read("runtimes/antigravity/.agents/skills/orchestra/evidence-watch-runner.mjs");
-const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
+const stop = read("runtimes/antigravity/.agents/hooks/stop-guard-legacy.mjs");
 
 test("ARCH-PROVIDER-01: remote evidence contract delegates provider validation to registry", () => {
   assert.match(contract, /validateRemoteEvidenceRequirement/);
