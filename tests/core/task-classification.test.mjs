@@ -77,7 +77,7 @@ const fixtures = [
     },
     expected: {
       logicalRole: LOGICAL_ROLES.CRITICAL_REVIEWER,
-      intensity: "specialist",
+      intensity: "standard",
       directWorkMode: EXECUTION_MODES.GUIDED_WORK,
     },
   },
