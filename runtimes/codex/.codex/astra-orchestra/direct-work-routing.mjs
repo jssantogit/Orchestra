@@ -9,7 +9,9 @@ import { createCodexWorkerPacket } from './context-packet.mjs';
 const DIRECT_WORK_GATES = new Set(['off', 'shadow', 'on']);
 
 export function readCodexDirectWorkMode(env = process.env) {
-  const raw = String(env?.ORCHESTRA_DIRECT_WORK_MODE ?? 'shadow').trim().toLowerCase();
+  const configured = env?.ORCHESTRA_DIRECT_WORK_MODE;
+  if (configured == null || String(configured).trim() === '') return 'on';
+  const raw = String(configured).trim().toLowerCase();
   return DIRECT_WORK_GATES.has(raw) ? raw : 'shadow';
 }
 
