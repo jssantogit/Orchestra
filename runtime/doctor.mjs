@@ -92,7 +92,7 @@ export async function runDoctor({ repoRoot = moduleRoot, runtime = "all", runCom
 
   if (runCommands && root === moduleRoot) {
     checks.push(commandCheck(root, "generated:schemas", process.execPath, ["scripts/build-schema-validators.mjs", "--check"]));
-    checks.push(commandCheck(root, "generated:runtimes", process.execPath, ["scripts/check-runtime-build.mjs"]));
+    checks.push(commandCheck(root, "runtime:builder-contract", process.execPath, ["--test", "tests/runtime/runtime-builder.test.mjs"]));
     checks.push(commandCheck(root, "architecture:contamination", process.execPath, ["scripts/contamination-check.mjs"]));
     checks.push(commandCheck(root, "architecture:firewall", process.execPath, ["--test", "tests/cross-runtime/cross-runtime-firewall.test.mjs", "tests/cross-runtime/core-provider-firewall.test.mjs"]));
     checks.push(commandCheck(root, "runtime:self-contained", process.execPath, ["--test", "tests/installers/self-contained-runtime.test.mjs"]));
