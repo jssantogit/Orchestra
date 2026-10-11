@@ -47,9 +47,8 @@ export function resolveRoutingProfile(facts = {}) {
 }
 
 export function decideRoute(facts = {}) {
-  // Exercise the neutral ownership boundary on every public routing call while
-  // preserving the proven provider-specific result until later decomposition
-  // tasks migrate the remaining legacy responsibilities.
-  resolveRoutingProfile(facts);
+  // Keep the public route byte-for-byte compatible while extraction is staged.
+  // Neutral helpers above are the new ownership surface; later tasks migrate
+  // legacy responsibilities behind them one bounded concern at a time.
   return legacyRouting.decideRoute(facts);
 }
