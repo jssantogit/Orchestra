@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { validateImplementationPacket } from "./core/domain/implementation-packet.mjs";
 
 export const CODEX_PACKET_SCHEMA = "orchestra.codex-worker-packet.v1";
 export const CODEX_CONTEXT_LIMITS = Object.freeze({
@@ -99,6 +100,8 @@ export function createCodexWorkerPacket({
   activeState = {},
   auxiliaryRefs = [],
   limits = CODEX_CONTEXT_LIMITS,
+  implementationPacket = null,
+  workerRole = null,
 } = {}) {
   const mandatoryCore = {
     task: {
@@ -131,6 +134,20 @@ export function createCodexWorkerPacket({
   };
   assertSafe(mandatoryCore);
 
+  let directWork = null;
+  if (implementationPacket !== null) {
+    const packetValidation = validateImplementationPacket(implementationPacket);
+    if (!packetValidation.valid) throw new Error("CODEX_IMPLEMENTATION_PACKET_INVALID");
+    const role = cleanString(workerRole || "IMPLEMENTER", 64).toUpperCase();
+    if (role === "IMPLEMENTER" && implementationPacket.permissions?.discovery === "INVESTIGATIVE") {
+      throw new Error("CODEX_IMPLEMENTER_INVESTIGATIVE_DISCOVERY_FORBIDDEN");
+    }
+    directWork = {
+      role,
+      implementation_packet: stable(implementationPacket),
+    };
+  }
+
   const auxiliary = selectCodexAuxiliaryRefs(auxiliaryRefs, limits);
   const body = {
     schema: CODEX_PACKET_SCHEMA,
@@ -141,6 +158,7 @@ export function createCodexWorkerPacket({
       auxiliary_candidates: auxiliary.totalCandidates,
       auxiliary_selected: auxiliary.selected.length,
     },
+    ...(directWork ? { direct_work: directWork } : {}),
   };
   assertSafe(body);
   return { ...body, packet_id: "codex-packet-" + hash(body).slice(0, 24) };
