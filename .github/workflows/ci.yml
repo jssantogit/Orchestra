@@ -69,6 +69,26 @@ jobs:
         continue-on-error: true
         run: node --test tests/installers/codex-project-runtime-manager.test.mjs
 
+      - name: Diagnose Legacy Installer Harness
+        continue-on-error: true
+        run: node --test tests/installers/installers.test.mjs
+
+      - name: Diagnose Antigravity Runtime Manager
+        continue-on-error: true
+        run: node --test tests/installers/project-runtime-manager.test.mjs
+
+      - name: Diagnose Shared Manifest Runtime Manager
+        continue-on-error: true
+        run: node --test tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Diagnose Codex Runtime Preservation
+        continue-on-error: true
+        run: node --test tests/leases/codex-runtime-state-preservation.test.mjs
+
+      - name: Diagnose Antigravity Runtime Preservation
+        continue-on-error: true
+        run: node --test tests/leases/antigravity-runtime-state-preservation.test.mjs
+
       - name: Diagnose Evidence
         continue-on-error: true
         run: npm run test:evidence
