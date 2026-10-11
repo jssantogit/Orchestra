@@ -10,8 +10,23 @@ export const RUNTIME_CORE_MIRRORS = Object.freeze([
   "runtimes/antigravity/.agents/skills/orchestra/core",
 ]);
 
-const MANIFEST_FILE = "runtime-core-manifest.json";
-const MANIFEST_SCHEMA = "orchestra.runtime-core-manifest.v1";
+export const RUNTIME_PROVIDER_MIRRORS = Object.freeze([
+  Object.freeze({
+    provider: "codex",
+    sourceRoot: "providers/codex",
+    mirrorRoot: "runtimes/codex/.codex/astra-orchestra/provider/codex",
+  }),
+  Object.freeze({
+    provider: "antigravity",
+    sourceRoot: "providers/antigravity",
+    mirrorRoot: "runtimes/antigravity/.agents/skills/orchestra/provider/antigravity",
+  }),
+]);
+
+const CORE_MANIFEST_FILE = "runtime-core-manifest.json";
+const CORE_MANIFEST_SCHEMA = "orchestra.runtime-core-manifest.v1";
+const PROVIDER_MANIFEST_FILE = "runtime-provider-manifest.json";
+const PROVIDER_MANIFEST_SCHEMA = "orchestra.runtime-provider-manifest.v1";
 
 function posix(path) {
   return path.split(sep).join("/");
@@ -42,7 +57,16 @@ async function walkFiles(root) {
   return files;
 }
 
-async function canonicalPayload(repoRoot) {
+function appendManifest(payload, { file, schema, provider = undefined }) {
+  const files = [...payload.entries()]
+    .map(([path, bytes]) => ({ path, sha256: digest(bytes) }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const record = provider ? { schema, provider, files } : { schema, files };
+  payload.set(file, Buffer.from(`${JSON.stringify(record, null, 2)}\n`, "utf8"));
+  return payload;
+}
+
+async function canonicalCorePayload(repoRoot) {
   const sources = [
     { root: join(repoRoot, "core"), prefix: "" },
     { root: join(repoRoot, "schemas"), prefix: "schemas" },
@@ -57,12 +81,24 @@ async function canonicalPayload(repoRoot) {
     }
   }
 
-  const files = [...payload.entries()]
-    .map(([path, bytes]) => ({ path, sha256: digest(bytes) }))
-    .sort((a, b) => a.path.localeCompare(b.path));
-  const manifest = Buffer.from(`${JSON.stringify({ schema: MANIFEST_SCHEMA, files }, null, 2)}\n`, "utf8");
-  payload.set(MANIFEST_FILE, manifest);
-  return payload;
+  return appendManifest(payload, {
+    file: CORE_MANIFEST_FILE,
+    schema: CORE_MANIFEST_SCHEMA,
+  });
+}
+
+async function canonicalProviderPayload(repoRoot, config) {
+  const absoluteRoot = join(repoRoot, config.sourceRoot);
+  const payload = new Map();
+  for (const absolute of await walkFiles(absoluteRoot)) {
+    const rel = posix(relative(absoluteRoot, absolute));
+    payload.set(rel, await readFile(absolute));
+  }
+  return appendManifest(payload, {
+    file: PROVIDER_MANIFEST_FILE,
+    schema: PROVIDER_MANIFEST_SCHEMA,
+    provider: config.provider,
+  });
 }
 
 async function inspectMirror(repoRoot, mirrorRoot, payload) {
@@ -103,6 +139,16 @@ async function writeMirror(repoRoot, mirrorRoot, payload) {
   }
 }
 
+async function reconcileMirror({ root, mirrorRoot, payload, checkOnly, result }) {
+  const mirror = await inspectMirror(root, mirrorRoot, payload);
+  result.changed.push(...mirror.changed);
+  result.stale.push(...mirror.stale);
+  result.missing.push(...mirror.missing);
+  if (!checkOnly && (mirror.changed.length || mirror.stale.length || mirror.missing.length)) {
+    await writeMirror(root, mirrorRoot, payload);
+  }
+}
+
 export async function syncRuntimeCore({ repoRoot, checkOnly = false }) {
   if (!repoRoot) throw new TypeError("repoRoot is required");
   const root = resolve(repoRoot);
@@ -114,17 +160,22 @@ export async function syncRuntimeCore({ repoRoot, checkOnly = false }) {
     error.schemaResult = schemaResult;
     throw error;
   }
-  const payload = await canonicalPayload(root);
-  const result = { changed: [], stale: [], missing: [] };
 
+  const result = { changed: [], stale: [], missing: [] };
+  const corePayload = await canonicalCorePayload(root);
   for (const mirrorRoot of RUNTIME_CORE_MIRRORS) {
-    const mirror = await inspectMirror(root, mirrorRoot, payload);
-    result.changed.push(...mirror.changed);
-    result.stale.push(...mirror.stale);
-    result.missing.push(...mirror.missing);
-    if (!checkOnly && (mirror.changed.length || mirror.stale.length || mirror.missing.length)) {
-      await writeMirror(root, mirrorRoot, payload);
-    }
+    await reconcileMirror({ root, mirrorRoot, payload: corePayload, checkOnly, result });
+  }
+
+  for (const config of RUNTIME_PROVIDER_MIRRORS) {
+    const providerPayload = await canonicalProviderPayload(root, config);
+    await reconcileMirror({
+      root,
+      mirrorRoot: config.mirrorRoot,
+      payload: providerPayload,
+      checkOnly,
+      result,
+    });
   }
 
   result.changed.sort();
@@ -142,9 +193,9 @@ async function main() {
   const repoRoot = resolve(scriptDir, "..");
   const result = await syncRuntimeCore({ repoRoot });
   if (hasDrift(result)) {
-    console.log(`Runtime core mirror synchronized: ${result.missing.length} missing, ${result.stale.length} stale, ${result.changed.length} unexpected repaired.`);
+    console.log(`Runtime generated mirrors synchronized: ${result.missing.length} missing, ${result.stale.length} stale, ${result.changed.length} unexpected repaired.`);
   } else {
-    console.log("Runtime core mirror: already current.");
+    console.log("Runtime generated mirrors: already current.");
   }
 }
 
