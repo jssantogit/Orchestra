@@ -4,9 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { installCodexProjectRuntime } from "../providers/codex/project-runtime-manager.mjs";
 import { buildRuntime } from "../runtime/runtime-builder.mjs";
-import { loadRuntimeManifest } from "../runtime/manifest-loader.mjs";
-import { installProjectRuntime } from "../runtime/project-runtime-manager.mjs";
 
 const args = process.argv.slice(2);
 if (args.length < 1) {
@@ -25,9 +24,8 @@ try {
   console.log(`Installing Orchestra Codex runtime into '${targetDir}'...`);
   buildRoot = await mkdtemp(join(tmpdir(), "orchestra-codex-install-"));
   const builtRuntime = join(buildRoot, "codex");
-  const runtimeManifest = await loadRuntimeManifest("codex");
   await buildRuntime({ runtime: "codex", outputDir: builtRuntime });
-  const result = await installProjectRuntime({ targetDir, runtimeManifest, builtRuntime });
+  const result = await installCodexProjectRuntime({ targetDir, builtRuntime });
   console.log(`Codex runtime successfully installed to '${targetDir}/.codex'.`);
   console.log(`Version: ${result.metadata.version || "unknown"}`);
   console.log("Verify with: node scripts/orchestra-codex-project.mjs doctor <project>");
