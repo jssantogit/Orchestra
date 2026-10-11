@@ -215,3 +215,13 @@ npm run dream:canary -- help
 - Requires Google Antigravity environment with support for tool hooks (`PreToolUse`, `PostToolUse`, `PreInvocation`, `Stop`).
 - Does not permit external model fallbacks (Claude, GPT, or Sonnet).
 - Automatic Canary stage advancement and automatic promotion remain forbidden. The supported 5% → 20% → 50% → 100% rollout is human-gated at every transition.
+
+---
+
+## 8. Direct Work Default Lane
+
+Antigravity defaults bounded implementation work to Direct Work. With `ORCHESTRA_DIRECT_WORK_MODE` unset or empty, the runtime resolves the gate to `on`; explicit `shadow` computes Direct Work while leaving the legacy executor authoritative, and explicit `off` preserves the legacy route exactly. Invalid explicit values fail safe to `shadow`.
+
+The Flash control plane resolves the task and builds the canonical Implementation Packet before delegation. `flash-direct-worker` receives an already-decided implementation direction and may perform only packet-authorized `NONE` or anchor-bound `DIRECTED` discovery. It cannot reinterpret the task, broaden repository exploration, mutate tests without explicit authorization, chase unrelated/uncertain validation failures, spawn workers, or self-accept.
+
+After a candidate is produced, factual evidence/CI and an independent `flash-quick-auditor` may run in parallel when audit is required. The auditor is diff/task scoped and returns only `PASS` or a causal `BLOCKING_FINDING`. The control plane confirms findings, emits bounded Delta Packets when needed, and remains the only acceptance authority.
