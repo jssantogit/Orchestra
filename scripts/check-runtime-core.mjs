@@ -33,12 +33,12 @@ async function main() {
   const repoRoot = resolve(scriptDir, "..");
   const result = await checkRuntimeCore({ repoRoot });
   if (!result.valid) {
-    console.error(`Runtime core mirror: ${result.reason}`);
+    console.error(`Runtime generated mirrors: ${result.reason}`);
     if (result.mirrors) console.error(JSON.stringify(result.mirrors));
     process.exitCode = 1;
     return;
   }
-  console.log("Runtime core mirror: OK");
+  console.log("Runtime generated mirrors: OK");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
