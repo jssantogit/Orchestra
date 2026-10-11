@@ -27,6 +27,7 @@ function project() {
   cpSync(join(runtimeDir, "verification-guard.mjs"), join(root, ".codex", "astra-orchestra", "verification-guard.mjs"));
   cpSync(join(runtimeDir, "work-lease-authority.mjs"), join(root, ".codex", "astra-orchestra", "work-lease-authority.mjs"));
   cpSync(join(runtimeDir, "core"), join(root, ".codex", "astra-orchestra", "core"), { recursive: true });
+  cpSync(join(runtimeDir, "provider"), join(root, ".codex", "astra-orchestra", "provider"), { recursive: true });
   git(root, "add", ".");
   git(root, "commit", "-qm", "init");
   mkdirSync(join(root, ".codex", "orchestra-state"), { recursive: true });

@@ -6,10 +6,17 @@ import { escalateTask } from "./core/routing/escalation.mjs";
 import { resolveModelProfile } from "./provider/antigravity/model-catalog.mjs";
 import * as legacyRouting from "./routing-policy-legacy.mjs";
 
+export {
+  STOP_DECISIONS,
+  evaluateStopDecision,
+} from "./core/acceptance/stop-decision.mjs";
+export { createRuntimeEvent } from "./core/events/runtime-event.mjs";
+
 // Compatibility facade for the Antigravity runtime. Provider-neutral
-// classification/escalation live in core and concrete Gemini mapping lives in
-// the provider catalog. Keep the historical API explicit so legacy additions
-// cannot cross the facade boundary without an intentional compatibility edit.
+// classification, escalation, acceptance and event ownership live in core and
+// concrete Gemini mapping lives in the provider catalog. Keep the historical
+// API explicit so legacy additions cannot cross the facade boundary without an
+// intentional compatibility edit.
 export {
   TASK_DOMAINS,
   GEMINI_MODELS,

@@ -6,6 +6,10 @@
       "sha256": "babb658c5dd44dc041a48677de8a284b817ca8efd92ea54ee92ce0ecc94351c4"
     },
     {
+      "path": "acceptance/stop-decision.mjs",
+      "sha256": "47cef6832008d70d0765ec5de4d1efa5ec696f88ccbfd7c3a107c13650be5ada"
+    },
+    {
       "path": "audit/quick-audit.mjs",
       "sha256": "4522258d44b48a7b80aad72efd0cbab29f153db93f4a95452cf807f119c8449f"
     },
@@ -40,6 +44,10 @@
     {
       "path": "domain/work-lease.mjs",
       "sha256": "b39d77e9e06acdb710832fcf6d2941c4eb5a06f87a5064a77b671ef58c0e6136"
+    },
+    {
+      "path": "events/runtime-event.mjs",
+      "sha256": "a664acaea6fb32998b0a036d2c2208b683945bd90468cb7df1130f83e08bf02d"
     },
     {
       "path": "evidence/evidence-federation.mjs",
@@ -160,6 +168,14 @@
     {
       "path": "schemas/work-lease.v1.schema.json",
       "sha256": "b81199f08d035d5412255fdfe289d7e5d140c45fa1254bbc18bf8e440e251d6f"
+    },
+    {
+      "path": "state-machine/candidate-transition.mjs",
+      "sha256": "8487b0b35aacf2977a6318784ba1b9e29c60b6ee66777068f9ebad14d53f45e0"
+    },
+    {
+      "path": "state-machine/evidence-transition.mjs",
+      "sha256": "7e666a48f0881bfaa16d1ad6300dcc11a7c5d135e2c1449845882d2b4de42a0b"
     },
     {
       "path": "workflow/delta-packet.mjs",

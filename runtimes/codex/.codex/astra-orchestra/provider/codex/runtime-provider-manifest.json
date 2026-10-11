@@ -11,6 +11,10 @@
       "sha256": "5383f4866588360ac975f5373658495d138043278e5323676581857c4481fec0"
     },
     {
+      "path": "adapter/telemetry.mjs",
+      "sha256": "2691f4e1f96766f0cfabc95aa701424ef3f592cf12178f6cc903caf6935ec722"
+    },
+    {
       "path": "adapter/tool-event.mjs",
       "sha256": "08261c62be2c9fe6ca25af02e5579b9ecad8f27727586a0a47d4a43149315ede"
     },

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import {
@@ -15,9 +15,18 @@ import {
   resolveCodexAuthorityMode,
 } from "./work-lease-authority.mjs";
 import { evaluateCodexVerificationTool } from "./verification-guard.mjs";
+import { normalizeToolEvent } from "./provider/codex/adapter/tool-event.mjs";
+import { attachProviderTelemetryReference } from "./provider/codex/adapter/telemetry.mjs";
+import { authorizeCapability } from "./core/policy/capability-authorization.mjs";
+import { authorizeMutation } from "./core/policy/mutation-authorization.mjs";
+import { createRuntimeEvent } from "./core/events/runtime-event.mjs";
 
 function readStdin() {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
+}
+
+function readJson(path, fallback = null) {
+  try { return JSON.parse(readFileSync(path, "utf8")); } catch { return fallback; }
 }
 
 function parsePayload() {
@@ -52,6 +61,34 @@ function repoRootFrom(cwd) {
     if (parent === cursor) return base;
     cursor = parent;
   }
+}
+
+function activePacket(repoRoot) {
+  const active = readJson(join(repoRoot, ".codex", "orchestra-state", "active-state.json"), {}) || {};
+  return active.implementationPacket
+    || active.implementation_packet
+    || active.directWork?.implementationPacket
+    || active.direct_work?.implementation_packet
+    || null;
+}
+
+function emitRuntimeEvent(repoRoot, payload, lease, normalized) {
+  if (!lease || !normalized || normalized.eventType === "UNKNOWN") return;
+  try {
+    const event = createRuntimeEvent({
+      type: normalized.eventType,
+      generation: lease.generation,
+      taskId: lease.taskId || null,
+      actor: lease.actor,
+    });
+    let record = { event };
+    if (payload.tool_call_id || payload.toolCallId || payload.tool_call?.id) {
+      record = attachProviderTelemetryReference(event, payload);
+    }
+    const path = join(repoRoot, ".codex", "orchestra-state", "runtime-events.jsonl");
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+  } catch {}
 }
 
 function sessionStartOutput(context, { stop = false, stopReason = null, systemMessage = null } = {}) {
@@ -209,13 +246,38 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
     );
   }
 
+  let normalized;
+  try {
+    normalized = normalizeToolEvent(payload);
+  } catch (error) {
+    return preToolDeny(`CODEX_PROVIDER_EVENT_DENIED:${error?.message || "INVALID_PROVIDER_EVENT"}.`);
+  }
+  if (normalized.eventType === "UNKNOWN" || normalized.operation === "UNKNOWN") {
+    return preToolDeny("CODEX_PROVIDER_EVENT_DENIED:UNKNOWN_OPERATION.");
+  }
+
   const verification = evaluateCodexVerificationTool(repoRoot, payload);
   if (!verification.allowed) {
     return preToolDeny(verification.reason,
       "Orchestra blocked a local command under this project's verification policy. Use the declared CI gate or revise the project policy.");
   }
 
+  const packet = activePacket(repoRoot);
+  if (packet && normalized.operation === "READ") {
+    const readDecision = authorizeCapability({
+      actor: control.lease.actor,
+      lease: control.lease,
+      packet,
+      operation: "READ",
+      capability: "CONTROL",
+    });
+    if (!readDecision.allowed) {
+      return preToolDeny(`CODEX_CAPABILITY_DENIED:${readDecision.reason}.`);
+    }
+  }
+
   const capability = codexCapabilityForTool(payload);
+  let effectiveLease = control.lease;
   if (capability === "WORKSPACE_EDIT") {
     const mutation = authorizeCodexLeaseCapability(repoRoot, {
       sessionId: payload.session_id,
@@ -229,7 +291,32 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
         "Orchestra blocked workspace mutation because this actor does not hold the current generation-fenced WORKSPACE_EDIT capability.",
       );
     }
+    effectiveLease = mutation.lease;
+    const mutationDecision = authorizeMutation({
+      actor: effectiveLease.actor,
+      lease: effectiveLease,
+      generation: effectiveLease.generation,
+      workspace: { workspaceId: effectiveLease.workspaceId },
+      operation: "WRITE",
+    });
+    if (!mutationDecision.allowed) {
+      return preToolDeny(`CODEX_MUTATION_DENIED:${mutationDecision.reason}.`);
+    }
+    if (packet) {
+      const capabilityDecision = authorizeCapability({
+        actor: effectiveLease.actor,
+        lease: effectiveLease,
+        packet,
+        operation: "WRITE",
+        capability: "WORKSPACE_EDIT",
+      });
+      if (!capabilityDecision.allowed) {
+        return preToolDeny(`CODEX_CAPABILITY_DENIED:${capabilityDecision.reason}.`);
+      }
+    }
   }
+
+  emitRuntimeEvent(repoRoot, payload, effectiveLease, normalized);
   return null;
 }
 
