@@ -5,9 +5,47 @@ import * as legacyRouting from "./routing-policy-legacy.mjs";
 
 // Compatibility facade for the Codex runtime. Provider-neutral classification
 // and escalation live in core; concrete model/profile mapping lives in the
-// Codex catalog. The legacy decision engine remains the behavior oracle while
-// the remaining enforcement responsibilities are extracted task-by-task.
-export * from "./routing-policy-legacy.mjs";
+// Codex catalog. Keep the historical public surface explicit so new legacy
+// symbols cannot leak through this boundary accidentally.
+export {
+  ACTIONS,
+  DIRECT_ACTIONS,
+  COMMAND_SEMANTICS,
+  CODEX_MODELS,
+  CROSS_DOMAIN_REQUEST,
+  STATE_NAMES,
+  TASK_DOMAINS,
+  CORE_TASK_DOMAINS,
+  registerCustomDomains,
+  canWorkerAccept,
+  canWorkerSpawn,
+  canonicalTaskDomain,
+  consumeRetryBudget,
+  createAcceptanceGate,
+  createAstraEscalationPacket,
+  createCrossDomainRequest,
+  createImplementationHandoff,
+  createIntegrationContract,
+  createRetryBudget,
+  createScopeContract,
+  directWriteDecision,
+  evaluateAcceptance,
+  evaluateCriticalReview,
+  evaluateDirectAction,
+  createCommandResult,
+  evaluateCommandResult,
+  evaluateCodexExecEvents,
+  requiresIntegration,
+  reviewRoute,
+  scanCodexSkillIsolation,
+  scanCodexOperationalFiles,
+  validateCodexRoute,
+  validateAstraEscalationPacket,
+  validateScopeContract,
+  validateStateTransition,
+  isDirectAction,
+  validateWorkerCompletion,
+} from "./routing-policy-legacy.mjs";
 
 function neutralRole(facts = {}) {
   const action = String(facts?.taskAction ?? facts?.nextTaskAction ?? facts?.action ?? "")
