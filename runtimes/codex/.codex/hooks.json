@@ -1,5 +1,5 @@
 {
-  "description": "Orchestra Codex root-session authority and milestone-boundary handoff.",
+  "description": "Orchestra Codex root-session provenance and Work Lease authority.",
   "hooks": {
     "SessionStart": [
       {
@@ -26,6 +26,20 @@
             "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')\"",
             "timeout": 10,
             "statusMessage": "Checking Orchestra session authority"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-post-tool-hook.mjs\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-post-tool-hook.mjs')\"",
+            "timeout": 10,
+            "statusMessage": "Releasing Orchestra workspace writer lease"
           }
         ]
       }
