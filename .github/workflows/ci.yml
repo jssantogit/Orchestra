@@ -47,6 +47,46 @@ jobs:
       - name: Run Antigravity Policy Tests
         run: node --test runtimes/antigravity/tests/routing-policy.test.mjs
 
+      - name: Diagnose Contamination
+        continue-on-error: true
+        run: node scripts/contamination-check.mjs
+
+      - name: Diagnose Codex Policy
+        continue-on-error: true
+        run: node --test runtimes/codex/tests/routing-policy.test.mjs
+
+      - name: Diagnose Codex Parity Session
+        continue-on-error: true
+        run: node --test runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs
+
+      - name: Diagnose Codex Installer
+        continue-on-error: true
+        run: node --test tests/installers/codex-project-runtime-manager.test.mjs
+
+      - name: Diagnose Evidence
+        continue-on-error: true
+        run: npm run test:evidence
+
+      - name: Diagnose Mechanical
+        continue-on-error: true
+        run: npm run test:mechanical
+
+      - name: Diagnose Milestones IJK
+        continue-on-error: true
+        run: node --test tests/feedback/feedback-plane.test.mjs tests/trust/trust-boundary.test.mjs tests/exploration/full-exploration.test.mjs
+
+      - name: Diagnose Handoff
+        continue-on-error: true
+        run: npm run test:handoff
+
+      - name: Diagnose Jev
+        continue-on-error: true
+        run: npm run test:jev
+
+      - name: Diagnose Firewall
+        continue-on-error: true
+        run: node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
+
       - name: Run Doctor & Health Checks
         run: ./scripts/doctor.sh
 
