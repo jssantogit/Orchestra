@@ -1,9 +1,75 @@
-import { assertImplementationPacket, validateImplementationPacket } from '../domain/implementation-packet.mjs';
-const UNRESOLVED_DIRECTION_PATTERNS = Object.freeze([/^\s*(?:find|locate|identify)\s+(?:the\s+)?bug\b/i,/\bfigure\s+out\b/i,/\binvestigat(?:e|ion)\b/i,/\bdetermine\s+(?:the\s+)?(?:cause|change|fix)\b/i,/^\s*(?:unknown|tbd|to be determined)\s*$/i]);
-function unresolved(value) { if (typeof value !== 'string' || !value.trim()) return true; return UNRESOLVED_DIRECTION_PATTERNS.some((pattern) => pattern.test(value.trim())); }
-function cloneList(value) { return Array.isArray(value) ? value.map((item) => (item && typeof item === 'object' ? { ...item } : item)) : value; }
-export function buildImplementationPacket({ taskId, candidateGeneration, goal, direction, anchors, scope, permissions, validation, failurePolicy } = {}) {
-  const packet = { schema: 'orchestra.implementation-packet.v1', taskId, candidateGeneration, goal, direction: direction && typeof direction === 'object' ? { ...direction, preserve: cloneList(direction.preserve) } : direction, anchors: cloneList(anchors), scope: scope && typeof scope === 'object' ? { ...scope, allowedAreas: cloneList(scope.allowedAreas), forbidden: cloneList(scope.forbidden) } : scope, permissions: permissions && typeof permissions === 'object' ? { ...permissions, sideEffects: cloneList(permissions.sideEffects) } : permissions, validation: cloneList(validation), failurePolicy: failurePolicy && typeof failurePolicy === 'object' ? { ...failurePolicy } : failurePolicy };
-  assertImplementationPacket(packet); return packet;
+import {
+  assertImplementationPacket,
+  validateImplementationPacket,
+} from '../domain/implementation-packet.mjs';
+
+const UNRESOLVED_DIRECTION_PATTERNS = Object.freeze([
+  /^\s*(?:find|locate|identify)\s+(?:the\s+)?bug\b/i,
+  /\bfigure\s+out\b/i,
+  /\binvestigat(?:e|ion)\b/i,
+  /\bdetermine\s+(?:the\s+)?(?:cause|change|fix)\b/i,
+  /^\s*(?:unknown|tbd|to be determined)\s*$/i,
+]);
+
+function unresolved(value) {
+  if (typeof value !== 'string' || !value.trim()) return true;
+  return UNRESOLVED_DIRECTION_PATTERNS.some((pattern) => pattern.test(value.trim()));
 }
-export function assessImplementationReadiness(packet) { const validation = validateImplementationPacket(packet); if (!validation.valid) return Object.freeze({ ready: false, reason: 'PACKET_INSUFFICIENT' }); const direction = packet.direction || {}; const insufficient = unresolved(direction.cause) || unresolved(direction.change) || !Array.isArray(packet.anchors) || packet.anchors.length === 0 || !Array.isArray(packet.scope?.allowedAreas) || packet.scope.allowedAreas.length === 0 || !Array.isArray(packet.validation) || packet.validation.length === 0; return insufficient ? Object.freeze({ ready: false, reason: 'PACKET_INSUFFICIENT' }) : Object.freeze({ ready: true, reason: 'IMPLEMENTATION_READY' }); }
+
+function cloneList(value) {
+  return Array.isArray(value)
+    ? value.map((item) => (item && typeof item === 'object' ? { ...item } : item))
+    : value;
+}
+
+export function buildImplementationPacket({
+  taskId,
+  candidateGeneration,
+  goal,
+  direction,
+  anchors,
+  scope,
+  permissions,
+  validation,
+  failurePolicy,
+} = {}) {
+  const packet = {
+    schema: 'orchestra.implementation-packet.v1',
+    taskId,
+    candidateGeneration,
+    goal,
+    direction: direction && typeof direction === 'object'
+      ? { ...direction, preserve: cloneList(direction.preserve) }
+      : direction,
+    anchors: cloneList(anchors),
+    scope: scope && typeof scope === 'object'
+      ? { ...scope, allowedAreas: cloneList(scope.allowedAreas), forbidden: cloneList(scope.forbidden) }
+      : scope,
+    permissions: permissions && typeof permissions === 'object'
+      ? { ...permissions, sideEffects: cloneList(permissions.sideEffects) }
+      : permissions,
+    validation: cloneList(validation),
+    failurePolicy: failurePolicy && typeof failurePolicy === 'object' ? { ...failurePolicy } : failurePolicy,
+  };
+
+  assertImplementationPacket(packet);
+  return packet;
+}
+
+export function assessImplementationReadiness(packet) {
+  const validation = validateImplementationPacket(packet);
+  if (!validation.valid) return Object.freeze({ ready: false, reason: 'PACKET_INSUFFICIENT' });
+
+  const direction = packet.direction || {};
+  const insufficient = (
+    unresolved(direction.cause) ||
+    unresolved(direction.change) ||
+    !Array.isArray(packet.anchors) || packet.anchors.length === 0 ||
+    !Array.isArray(packet.scope?.allowedAreas) || packet.scope.allowedAreas.length === 0 ||
+    !Array.isArray(packet.validation) || packet.validation.length === 0
+  );
+
+  return insufficient
+    ? Object.freeze({ ready: false, reason: 'PACKET_INSUFFICIENT' })
+    : Object.freeze({ ready: true, reason: 'IMPLEMENTATION_READY' });
+}
