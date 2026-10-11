@@ -2,21 +2,10 @@
   "schema": "orchestra.runtime-provider-manifest.v1",
   "provider": "antigravity",
   "files": [
-    {
-      "path": "adapter/evidence.mjs",
-      "sha256": "afb9added198424f21cd0056c7e7875270d01cb415f869797e213547f850d440"
-    },
-    {
-      "path": "adapter/session.mjs",
-      "sha256": "0c78555d10b9ed8534ab8c6f26fd5d05a8f8174474acd48a916150179eff197b"
-    },
-    {
-      "path": "adapter/tool-event.mjs",
-      "sha256": "d78e990c533de9f0503218c24c93f9d72c53b73703e0fab66f94ab641f6c4ece"
-    },
-    {
-      "path": "model-catalog.mjs",
-      "sha256": "884bc5148ed71b3f1ef856741dd7c968e0a4b0491591f7f3d2cd82d6f5ece336"
-    }
+    {"path":"adapter/evidence.mjs","sha256":"afb9added198424f21cd0056c7e7875270d01cb415f869797e213547f850d440"},
+    {"path":"adapter/session.mjs","sha256":"0c78555d10b9ed8534ab8c6f26fd5d05a8f8174474acd48a916150179eff197b"},
+    {"path":"adapter/telemetry.mjs","sha256":"bf175af9527f39ec9fe8c1903fe2b8b4136ce11ce7292437eb668bdc70c7c856"},
+    {"path":"adapter/tool-event.mjs","sha256":"da0325350c40ed5adbd10810da8e070c80cf94974884291ebf6e9f456fc61c26"},
+    {"path":"model-catalog.mjs","sha256":"884bc5148ed71b3f1ef856741dd7c968e0a4b0491591f7f3d2cd82d6f5ece336"}
   ]
 }
