@@ -44,7 +44,7 @@ export function escalateTask({ task = {}, currentRole, result = {} } = {}) {
       && currentRole !== LOGICAL_ROLES.CRITICAL_REVIEWER) {
     return Object.freeze({
       nextRole: LOGICAL_ROLES.CRITICAL_REVIEWER,
-      intensity: "specialist",
+      intensity: "standard",
       terminal: false,
       reason: "CRITICAL_ACCEPTANCE_REVIEW_REQUIRED",
     });
