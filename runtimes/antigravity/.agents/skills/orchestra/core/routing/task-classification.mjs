@@ -102,7 +102,7 @@ export function classifyTask(task = {}) {
     reasons.push("DANGEROUS_SIDE_EFFECT_MANUAL_GATE");
   } else if ((role === "ACCEPTANCE" || role === "REVIEW") && criticality === "CRITICAL") {
     logicalRole = LOGICAL_ROLES.CRITICAL_REVIEWER;
-    intensity = "specialist";
+    intensity = "standard";
     reasons.push("CRITICAL_ACCEPTANCE_REQUIRES_INDEPENDENT_REVIEW");
   } else if (role === "QUICK_AUDIT") {
     logicalRole = LOGICAL_ROLES.QUICK_AUDITOR;
