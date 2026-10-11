@@ -5,33 +5,52 @@ import { fileURLToPath } from "node:url";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RUNTIMES = Object.freeze(["core", "codex", "antigravity"]);
+const REQUIRED_SCRIPTS = Object.freeze([
+  "test",
+  "test:runtime",
+  "test:core",
+  "test:direct-work",
+  "test:leases",
+  "test:labs",
+  "test:installers",
+  "test:firewall",
+  "test:architecture-invariants",
+  "check:schemas",
+  "check:runtime-core",
+  "build:runtimes",
+  "check:runtimes",
+  "check:contamination",
+  "doctor",
+]);
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function check(id, ok, detail = "") {
-  return { id, ok: Boolean(ok), detail };
+  return { id, ok: Boolean(ok), detail: String(detail) };
 }
 
 export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion } = {}) {
   const root = resolve(repoRoot);
   const checks = [];
-  let packageVersion = null;
-  let lock = null;
+  let packageJson = null;
+
   try {
-    packageVersion = readJson(join(root, "package.json")).version;
+    packageJson = readJson(join(root, "package.json"));
+    checks.push(check(
+      "version:package",
+      packageJson.version === expectedVersion,
+      `expected=${expectedVersion}; actual=${packageJson.version || "missing"}`,
+    ));
   } catch (error) {
     checks.push(check("version:package", false, error.message));
   }
-  if (packageVersion !== null) {
-    checks.push(check("version:package", packageVersion === expectedVersion, `expected=${expectedVersion}; actual=${packageVersion}`));
-  }
 
   try {
-    lock = readJson(join(root, "package-lock.json"));
+    const lock = readJson(join(root, "package-lock.json"));
     const lockVersion = lock?.packages?.[""]?.version ?? lock?.version;
-    checks.push(check("version:lock", lockVersion === expectedVersion, `expected=${expectedVersion}; actual=${lockVersion}`));
+    checks.push(check("version:lock", lockVersion === expectedVersion, `expected=${expectedVersion}; actual=${lockVersion || "missing"}`));
   } catch (error) {
     checks.push(check("version:lock", false, error.message));
   }
@@ -39,13 +58,29 @@ export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion }
   for (const runtime of RUNTIMES) {
     try {
       const manifest = readJson(join(root, "runtime", "manifests", `${runtime}.json`));
-      checks.push(check(`version:manifest:${runtime}`, manifest.version === expectedVersion, `expected=${expectedVersion}; actual=${manifest.version}`));
+      checks.push(check(`version:manifest:${runtime}`, manifest.version === expectedVersion, `expected=${expectedVersion}; actual=${manifest.version || "missing"}`));
     } catch (error) {
       checks.push(check(`version:manifest:${runtime}`, false, error.message));
     }
   }
 
-  const migrationPath = join(root, "docs/migrations/0.10-to-1.x.md");
+  if (packageJson?.scripts) {
+    const missingScripts = REQUIRED_SCRIPTS.filter((name) => typeof packageJson.scripts[name] !== "string" || packageJson.scripts[name].trim() === "");
+    checks.push(check(
+      "gates:package-scripts",
+      missingScripts.length === 0,
+      missingScripts.length === 0 ? "required release gates declared" : `missing: ${missingScripts.join(", ")}`,
+    ));
+  } else {
+    checks.push(check("gates:package-scripts", false, "package.json scripts missing"));
+  }
+
+  const schemaValidator = join(root, "core", "schema", "generated", "implementation-packet.v1.mjs");
+  const schemaSource = join(root, "schemas", "implementation-packet.v1.schema.json");
+  const hasSchemaPair = existsSync(schemaValidator) && existsSync(schemaSource);
+  checks.push(check("generated:schema-contract", hasSchemaPair, hasSchemaPair ? "canonical schema + generated validator present" : "missing canonical schema or generated validator"));
+
+  const migrationPath = join(root, "docs", "migrations", "0.10-to-1.x.md");
   if (!existsSync(migrationPath)) {
     checks.push(check("docs:migration", false, "missing docs/migrations/0.10-to-1.x.md"));
   } else {
@@ -60,19 +95,33 @@ export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion }
     checks.push(check("docs:migration", missing.length === 0, missing.length ? `missing: ${missing.join(", ")}` : "rollback levers documented"));
   }
 
-  const checklistPath = join(root, "docs/release/1.x-checklist.md");
-  checks.push(check("docs:release-checklist", existsSync(checklistPath), existsSync(checklistPath) ? "present" : "missing docs/release/1.x-checklist.md"));
+  const checklistPath = join(root, "docs", "release", "1.x-checklist.md");
+  if (!existsSync(checklistPath)) {
+    checks.push(check("docs:release-checklist", false, "missing docs/release/1.x-checklist.md"));
+  } else {
+    const checklist = readFileSync(checklistPath, "utf8");
+    const hasOperatorGate = /operator approval required/i.test(checklist) && /stable version|1\.0\.0/i.test(checklist);
+    checks.push(check("docs:release-checklist", hasOperatorGate, hasOperatorGate ? "technical/operator gates separated" : "operator-gated stable release boundary missing"));
+  }
 
+  const failures = checks.filter((item) => !item.ok);
   return {
     expectedVersion,
-    ready: checks.length > 0 && checks.every((item) => item.ok),
+    ready: checks.length > 0 && failures.length === 0,
+    failures,
     checks,
   };
 }
 
+function versionArg(argv) {
+  const inline = argv.find((value) => value.startsWith("--expected-version=") || value.startsWith("--version="));
+  if (inline) return inline.slice(inline.indexOf("=") + 1);
+  const index = argv.findIndex((value) => value === "--version" || value === "--expected-version");
+  return index >= 0 ? argv[index + 1] : null;
+}
+
 function main() {
-  const arg = process.argv.find((value) => value.startsWith("--expected-version="));
-  const expectedVersion = arg?.slice("--expected-version=".length) || readJson(join(moduleRoot, "package.json")).version;
+  const expectedVersion = versionArg(process.argv.slice(2)) || readJson(join(moduleRoot, "package.json")).version;
   const report = checkReleaseReadiness({ expectedVersion });
   for (const item of report.checks) {
     console.log(`${item.ok ? "PASS" : "FAIL"} ${item.id}${item.detail ? ` — ${item.detail}` : ""}`);
