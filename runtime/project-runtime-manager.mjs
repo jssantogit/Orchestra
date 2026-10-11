@@ -56,6 +56,16 @@ function historyPath(targetDir, runtime) {
   return join(managementRoot(targetDir, runtime), "history.jsonl");
 }
 
+function assertBackupId(value) {
+  const backupId = String(value || "");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(backupId) || backupId === "." || backupId === "..") {
+    const error = new Error(`INVALID_BACKUP_ID: ${backupId || "EMPTY"}`);
+    error.code = "INVALID_BACKUP_ID";
+    throw error;
+  }
+  return backupId;
+}
+
 async function exists(path) {
   try {
     await lstat(path);
@@ -327,12 +337,15 @@ export async function updateProjectRuntime({ targetDir, runtimeManifest, builtRu
 export async function rollbackProjectRuntime({ targetDir, runtimeManifest, backupId, adapter = null, force = false }) {
   validateRuntimeManifest(runtimeManifest);
   await ensureTarget(targetDir);
+  const safeBackupId = assertBackupId(backupId);
   await assertQuiescent(targetDir, adapter, force);
-  const backupDir = join(backupsRoot(targetDir, runtimeManifest.runtime), backupId);
+  const backupDir = join(backupsRoot(targetDir, runtimeManifest.runtime), safeBackupId);
   const backup = await readJson(join(backupDir, "backup.json"), null);
-  if (!backup || backup.schema !== BACKUP_SCHEMA) throw new Error(`RUNTIME_BACKUP_NOT_FOUND: ${backupId}`);
+  if (!backup || backup.schema !== BACKUP_SCHEMA || backup.backupId !== safeBackupId) {
+    throw new Error(`RUNTIME_BACKUP_NOT_FOUND: ${safeBackupId}`);
+  }
 
-  const safetyBackup = await createBackup({ targetDir, manifest: runtimeManifest, reason: `pre-rollback:${backupId}` });
+  const safetyBackup = await createBackup({ targetDir, manifest: runtimeManifest, reason: `pre-rollback:${safeBackupId}` });
   const roots = managedRoots(runtimeManifest);
   await removeManagedRoots(targetDir, roots);
   for (const rel of roots) {
@@ -360,8 +373,8 @@ export async function rollbackProjectRuntime({ targetDir, runtimeManifest, backu
     previousBackupId: safetyBackup.backupId,
   };
   await writeFile(metadataPath(targetDir, runtimeManifest.runtime), `${JSON.stringify(metadata, null, 2)}\n`);
-  await appendHistory(targetDir, runtimeManifest.runtime, { operation: "rollback", backupId, safetyBackupId: safetyBackup.backupId, runtimeHash: restored.hash });
-  return { operation: "rollback", changed: true, backupId, safetyBackupId: safetyBackup.backupId, metadata };
+  await appendHistory(targetDir, runtimeManifest.runtime, { operation: "rollback", backupId: safeBackupId, safetyBackupId: safetyBackup.backupId, runtimeHash: restored.hash });
+  return { operation: "rollback", changed: true, backupId: safeBackupId, safetyBackupId: safetyBackup.backupId, metadata };
 }
 
 export const PROJECT_RUNTIME_METADATA_SCHEMA = METADATA_SCHEMA;
