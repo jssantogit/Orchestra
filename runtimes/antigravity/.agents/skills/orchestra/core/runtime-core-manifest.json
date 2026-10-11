@@ -74,8 +74,16 @@
       "sha256": "2d0e22a6427a70cf6696c36c35c422dd509aa41615c0482d4ff27f9f12efc390"
     },
     {
+      "path": "policy/capability-authorization.mjs",
+      "sha256": "87c85c2c4973684542e9f7745a0afd0d0491feffe3d9134b214084ca4403b0bb"
+    },
+    {
       "path": "policy/discovery-authorization.mjs",
       "sha256": "f8abaf9e5e2af62d38897bb496cf6413dfff720f3976b0b48d1a7f5ea4ebffba"
+    },
+    {
+      "path": "policy/mutation-authorization.mjs",
+      "sha256": "2057190d61852bbd82da8384dc45cd3d09c0c3af08a22cefe75d5dc77c4bc5d2"
     },
     {
       "path": "policy/test-mutation.mjs",
