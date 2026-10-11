@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchestra.dev/schemas/dream/snapshot-v1.json",
+  "title": "orchestra.snapshot.v1",
+  "description": "Deterministic pre-action workspace and execution state snapshot",
+  "type": "object",
+  "required": [
+    "schema",
+    "snapshot_id",
+    "task_fingerprint",
+    "contract_fingerprint",
+    "runtime_fingerprint",
+    "workspace_fingerprint",
+    "environment_fingerprint",
+    "execution_state_identity",
+    "evidence_fingerprint"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "orchestra.snapshot.v1"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "task_fingerprint": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "contract_fingerprint": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "runtime_fingerprint": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "workspace_fingerprint": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "environment_fingerprint": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "execution_state_identity": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "evidence_fingerprint": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        { "type": "object" }
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
