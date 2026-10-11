@@ -8,6 +8,7 @@ import {
   authorizeCodexLeaseCapability,
   codexCapabilityForTool,
   enterCodexWorkLease,
+  releaseCodexLeaseWrite,
   resolveCodexAuthorityMode,
 } from "../.codex/astra-orchestra/work-lease-authority.mjs";
 
@@ -66,6 +67,30 @@ test("active workspace writer blocks a fresh root", () => {
     const second = enterCodexWorkLease(root, { sessionId: "root-b", mode: "dual" });
     assert.equal(second.authoritative, false);
     assert.equal(second.reason, "WRITE_LEASE_ACTIVE");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("writer lease returns to CONTROL after mutation completes, allowing fresh continuation", () => {
+  const root = project();
+  try {
+    state(root, { taskId: "task-1", state: "IMPLEMENTING", candidateId: "candidate-7" });
+    const first = enterCodexWorkLease(root, { sessionId: "root-a", mode: "dual" });
+    const edit = authorizeCodexLeaseCapability(root, {
+      sessionId: "root-a",
+      capability: "WORKSPACE_EDIT",
+      mode: "dual",
+    });
+    assert.equal(edit.allowed, true);
+    assert.deepEqual(edit.lease.capabilities, ["CONTROL", "WORKSPACE_EDIT"]);
+
+    const released = releaseCodexLeaseWrite(root, { sessionId: "root-a", mode: "dual" });
+    assert.equal(released.released, true);
+    assert.equal(released.lease.state, "CONTROL");
+    assert.deepEqual(released.lease.capabilities, ["CONTROL"]);
+
+    const second = enterCodexWorkLease(root, { sessionId: "root-b", mode: "dual" });
+    assert.equal(second.authoritative, true);
+    assert.equal(second.lease.generation, 1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
