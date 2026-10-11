@@ -33,6 +33,10 @@ jobs:
         run: |
           npm run test:core
 
+      - name: Run Direct Work Tests
+        run: |
+          npm run test:direct-work
+
       - name: Run Doctor & Health Checks
         run: |
           ./scripts/doctor.sh
