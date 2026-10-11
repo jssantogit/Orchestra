@@ -24,6 +24,10 @@ jobs:
         run: |
           npm ci --ignore-scripts
 
+      - name: Run Provider Facade Contract Tests
+        run: |
+          node --test tests/provider-contract/routing-facade.test.mjs
+
       - name: Verify canonical schema and runtime-core artifacts
         run: |
           npm run check:schemas
