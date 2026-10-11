@@ -117,5 +117,11 @@ jobs:
         run: |
           node scripts/contamination-check.mjs
 
-# Harness revision: validate ARCH-027 composition after Work Lease wrapper fix.
-# Harness revision: RED gate for Work Lease as the default authority mode.
+      - name: Run Task 7 Exact Promotion Verification
+        run: |
+          npm test
+          npm run doctor
+          npm run check:contamination
+          git diff --check
+
+# Harness-only diagnostics and exact promotion verification; PR #26 is never an integration target.
