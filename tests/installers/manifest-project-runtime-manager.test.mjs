@@ -63,7 +63,21 @@ for (const fixture of [
       const installed = await installProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 });
       assert.equal(installed.operation, "install");
       if (diagnosticStop === "installed") return;
-      assert.equal((await inspectProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 })).clean, true);
+      const inspection = await inspectProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 });
+      const rootByDiagnostic = {
+        "inspect-hooks-json": ".agents/hooks.json",
+        "inspect-hooks": ".agents/hooks",
+        "inspect-agents": ".agents/agents",
+        "inspect-skills": ".agents/skills",
+        "inspect-dream": ".agents/dream",
+      };
+      const diagnosticRoot = rootByDiagnostic[diagnosticStop];
+      if (diagnosticRoot) {
+        const mismatches = [...inspection.diff.added, ...inspection.diff.removed, ...inspection.diff.changed];
+        assert.equal(mismatches.some((path) => path === diagnosticRoot || path.startsWith(`${diagnosticRoot}/`)), false);
+        return;
+      }
+      assert.equal(inspection.clean, true);
       if (diagnosticStop === "inspect") return;
       assert.equal(await readFile(join(project, fixture.managedProbe), "utf8"), await readFile(join(builtV1, fixture.managedProbe), "utf8"));
       if (diagnosticStop === "install") return;
