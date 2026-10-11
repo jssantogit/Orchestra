@@ -84,20 +84,14 @@ jobs:
       - name: Verify Codex manifest project manager
         run: node --test --test-name-pattern="codex.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
 
-      - name: Verify Antigravity install checkpoint
+      - name: Verify Antigravity install operation
+        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=installed node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify Antigravity clean inspection
+        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify Antigravity installed asset parity
         run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=install node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity state checkpoint
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=state node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity dry-update checkpoint
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=dry node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity update checkpoint
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=update node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity rollback checkpoint
-        run: node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
 
       - name: Verify manifest project manager backup ID guard
         run: node --test --test-name-pattern="rollback rejects backup identifiers" tests/installers/manifest-project-runtime-manager.test.mjs
