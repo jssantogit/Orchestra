@@ -1,0 +1,2 @@
+Harness-only trigger for the Orchestra 1.x Work Lease Task 7 exact promotion verification.
+This branch/PR is not an integration target.
