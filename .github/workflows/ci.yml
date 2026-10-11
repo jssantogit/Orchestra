@@ -81,8 +81,14 @@ jobs:
       - name: Verify provider project runtime wrappers
         run: node --test tests/installers/provider-project-runtime-wrappers.test.mjs
 
-      - name: Verify manifest project runtime manager
-        run: node --test tests/installers/manifest-project-runtime-manager.test.mjs
+      - name: Verify Codex manifest project manager
+        run: node --test --test-name-pattern="codex: shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify Antigravity manifest project manager
+        run: node --test --test-name-pattern="antigravity: shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify manifest project manager backup ID guard
+        run: node --test --test-name-pattern="rollback rejects backup identifiers" tests/installers/manifest-project-runtime-manager.test.mjs
 
       - name: Verify project-state ignore behavior
         run: node --test tests/leases/project-state-ignore.test.mjs
