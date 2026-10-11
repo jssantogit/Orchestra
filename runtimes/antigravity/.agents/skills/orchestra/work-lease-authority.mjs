@@ -8,6 +8,7 @@ import {
   transitionWorkLease,
 } from "./core/leases/work-lease-store.mjs";
 import { authorizeLeaseMutation } from "./core/leases/lease-authorizer.mjs";
+import { ensureProjectStateIgnored } from "./project-state-ignore.mjs";
 
 const VALID_MODES = new Set(["session", "dual", "lease"]);
 const BINDINGS_SCHEMA = "orchestra.antigravity-work-lease-bindings.v1";
@@ -121,6 +122,7 @@ export function enterAntigravityWorkLease(repoRoot, {
   }
   const actor = actorFor(conversationId);
   if (!actor) return { handled: true, authoritative: false, reason: "ANTIGRAVITY_CONVERSATION_ID_REQUIRED", mode: authorityMode, lease: null };
+  ensureProjectStateIgnored(repoRoot);
 
   const actorBinding = readActorBinding(repoRoot, actor);
   if (!actorBinding.valid) {
