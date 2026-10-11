@@ -123,8 +123,61 @@ jobs:
       - name: Run Turn Economy Tests
         run: npm run test:turn-economy
 
-      - name: Run Architecture Invariants
-        run: npm run test:architecture-invariants
+      - name: ARCH dream
+        if: always()
+        run: node --test tests/architecture-invariants/dream-authority.test.mjs
+
+      - name: ARCH policy-lab
+        if: always()
+        run: node --test tests/architecture-invariants/policy-lab-authority.test.mjs
+
+      - name: ARCH shadow
+        if: always()
+        run: node --test tests/architecture-invariants/shadow-authority.test.mjs
+
+      - name: ARCH canary
+        if: always()
+        run: node --test tests/architecture-invariants/canary-authority.test.mjs
+
+      - name: ARCH evidence
+        if: always()
+        run: node --test tests/architecture-invariants/evidence-authority.test.mjs
+
+      - name: ARCH project-runtime
+        if: always()
+        run: node --test tests/architecture-invariants/project-runtime-authority.test.mjs
+
+      - name: ARCH mechanical
+        if: always()
+        run: node --test tests/architecture-invariants/mechanical-fast-path-authority.test.mjs
+
+      - name: ARCH provider-watch
+        if: always()
+        run: node --test tests/architecture-invariants/evidence-provider-watch-authority.test.mjs
+
+      - name: ARCH milestones-ijk
+        if: always()
+        run: node --test tests/architecture-invariants/milestones-i-j-k-authority.test.mjs
+
+      - name: ARCH jev
+        if: always()
+        run: node --test tests/architecture-invariants/jev-authority.test.mjs
+
+      - name: ARCH codex-parity
+        if: always()
+        run: node --test tests/architecture-invariants/codex-parity-authority.test.mjs
+
+      - name: ARCH handoff
+        if: always()
+        run: node --test tests/architecture-invariants/orchestrator-handoff-authority.test.mjs
+
+      - name: ARCH codex-session
+        if: always()
+        run: node --test tests/architecture-invariants/codex-session-authority.test.mjs
+
+      - name: ARCH work-lease
+        if: always()
+        run: node --test tests/architecture-invariants/work-lease-authority.test.mjs
 
       - name: Run Cross-Runtime Firewall Tests
         run: npm run test:firewall
