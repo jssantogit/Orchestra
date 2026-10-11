@@ -45,7 +45,43 @@ Routine operational requests ("run tests", "show git status", "commit changes") 
 
 ---
 
-## 6. Semantic Retrieval Shadow Layer
+## 6. Direct Work Turn Economy
+
+Direct Work applies the same economy principle to normal bounded product changes: expensive control reasoning is used to compress the decision, while cheap workers expand that decision into code without rediscovering the task.
+
+The expected shape is:
+
+```text
+control resolve
+  -> one bounded implementer
+  -> candidate
+       |-> evidence / CI
+       `-> independent Quick Audit (when required)
+  -> control acceptance
+```
+
+The implementer is restricted to `NONE` or semantic `DIRECTED` discovery. Broad repository exploration, alternative-solution search, unauthorized test mutation, and investigation of unrelated or uncertain failures are not part of the execution budget.
+
+Post-candidate evidence and Quick Audit are planned as independent parallel branches. Mechanical or explicitly low-risk work may skip Quick Audit while still satisfying its required evidence.
+
+Turn-economy instrumentation tracks the following canonical fields without fabricating unavailable values:
+
+- `control_turns`
+- `worker_turns`
+- `repository_discovery_ops`
+- `redundant_reads`
+- `turns_to_first_edit`
+- `delegations`
+- `model_handoffs`
+- `quick_audit_invocations`
+- `candidate_generations`
+- nullable `approximate_cost`
+
+Representative promotion probes cover a bounded bug fix, an explicitly authorized regression-test change, an unrelated external failure returned to control, and a Quick Audit blocking finding followed by one bounded Delta Packet.
+
+---
+
+## 7. Semantic Retrieval Shadow Layer
 
 Orchestra 0.7 introduces an experimental Jev semantic lab under `experiments/jev/`.
 
@@ -69,7 +105,7 @@ Jev currently runs offline/shadow only. Retrieval Assist code is fail-closed beh
 
 ---
 
-## 7. Codex Native Context Packet
+## 8. Codex Native Context Packet
 
 Orchestra 0.8 adds the same context-diet safety property to the Codex runtime
 without depending on Antigravity hooks.
