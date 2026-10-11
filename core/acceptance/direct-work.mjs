@@ -19,12 +19,13 @@ export function evaluateDirectWorkAcceptance({
   audit = null,
   auditRequired = true,
   currentGeneration,
+  currentCandidateGeneration = currentGeneration,
 } = {}) {
   if (!validateCandidate(candidate).valid) return reject('CANDIDATE_SCHEMA_INVALID');
   if (packet?.taskId !== candidate.taskId || packet?.candidateGeneration !== candidate.generation) {
     return reject('PACKET_CANDIDATE_MISMATCH');
   }
-  if (currentGeneration !== candidate.generation) return reject('STALE_CANDIDATE_GENERATION');
+  if (currentCandidateGeneration !== candidate.generation) return reject('STALE_CANDIDATE_GENERATION');
   if (!Array.isArray(evidence)) return reject('EVIDENCE_SCHEMA_INVALID');
 
   for (const record of evidence) {
