@@ -2,7 +2,7 @@
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "antigravity",
   "version": "1.0.0-rc.0",
-  "sourceRoots": ["core", "providers/antigravity", "runtimes/antigravity", "schemas"],
+  "sourceRoots": ["core", "providers/antigravity", "runtimes/antigravity", "labs/dream", "schemas"],
   "managedAssets": [
     { "type": "file", "source": "runtimes/antigravity/GEMINI.md", "output": "GEMINI.md" },
     { "type": "file", "source": "runtimes/antigravity/.agents/hooks.json", "output": ".agents/hooks.json" },
@@ -14,7 +14,7 @@
       "output": ".agents/skills",
       "exclude": ["orchestra/core/**", "orchestra/provider/**"]
     },
-    { "type": "tree", "source": "runtimes/antigravity/.agents/dream", "output": ".agents/dream" },
+    { "type": "tree", "source": "labs/dream/runtime", "output": ".agents/dream" },
     { "type": "tree", "source": "core", "output": ".agents/skills/orchestra/core" },
     { "type": "tree", "source": "schemas", "output": ".agents/skills/orchestra/core/schemas" },
     { "type": "tree", "source": "providers/antigravity", "output": ".agents/skills/orchestra/provider/antigravity" }
@@ -29,7 +29,7 @@
     ".agents/runtime-management",
     ".orchestra/state"
   ],
-  "generatedInputs": ["core", "schemas", "providers/antigravity"],
+  "generatedInputs": ["core", "schemas", "providers/antigravity", "labs/dream/runtime"],
   "entrypoints": [
     "GEMINI.md",
     ".agents/hooks/pre-tool-enforce.mjs",
