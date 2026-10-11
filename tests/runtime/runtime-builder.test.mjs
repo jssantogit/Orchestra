@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 
-import { buildRuntime } from "../../runtime/runtime-builder.mjs";
+import { buildRuntime, runtimeRepositoryRoot } from "../../runtime/runtime-builder.mjs";
 
 async function walkFiles(root, current = root) {
   const entries = await readdir(current, { withFileTypes: true });
@@ -43,6 +43,18 @@ async function assertSelfContained(root) {
     }
   }
 }
+
+test("builder refuses destructive output directories containing the Orchestra checkout", async () => {
+  const root = runtimeRepositoryRoot();
+  await assert.rejects(
+    () => buildRuntime({ runtime: "codex", outputDir: root }),
+    (error) => error?.code === "UNSAFE_RUNTIME_OUTPUT_DIR",
+  );
+  await assert.rejects(
+    () => buildRuntime({ runtime: "codex", outputDir: dirname(root) }),
+    (error) => error?.code === "UNSAFE_RUNTIME_OUTPUT_DIR",
+  );
+});
 
 test("builder emits deterministic self-contained provider runtimes from manifests", async () => {
   const base = await mkdtemp(join(tmpdir(), "orchestra-runtime-builder-"));
