@@ -7,6 +7,9 @@ import {
   authorizeAntigravityLeaseCapability,
   resolveAntigravityAuthorityMode,
 } from "../skills/orchestra/work-lease-authority.mjs";
+import { normalizeToolEvent } from "../skills/orchestra/provider/antigravity/adapter/tool-event.mjs";
+import { authorizeCapability } from "../skills/orchestra/core/policy/capability-authorization.mjs";
+import { authorizeMutation } from "../skills/orchestra/core/policy/mutation-authorization.mjs";
 
 const legacyHook = resolve(dirname(fileURLToPath(import.meta.url)), "pre-tool-enforce.mjs");
 
@@ -38,6 +41,19 @@ function readJson(path, fallback = null) {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return fallback; }
 }
 
+function activePacket(repoRoot) {
+  const state = readJson(resolve(repoRoot, ".agents/state/active-state.json"), {}) || {};
+  return state.implementationPacket
+    || state.implementation_packet
+    || state.directWork?.implementationPacket
+    || state.direct_work?.implementation_packet
+    || null;
+}
+
+function deny(reason) {
+  console.log(JSON.stringify({ decision: "deny", reason }));
+}
+
 function delegate(rawInput) {
   const result = spawnSync(process.execPath, [legacyHook], {
     cwd: process.cwd(),
@@ -66,7 +82,7 @@ function main() {
 
   const repoRoot = repoRootFrom(payload);
   const convId = payload.conversationId || null;
-  const bindings = readJson(resolve(repoRoot, ".agents/state/role-bindings.json"), {});
+  const bindings = readJson(resolve(repoRoot, ".agents/state/role-bindings.json"), {}) || {};
   const record = convId
     ? ((bindings?.bindings && bindings.bindings[convId]) || (bindings?.conversations && bindings.conversations[convId]) || null)
     : null;
@@ -85,19 +101,83 @@ function main() {
     return;
   }
 
-  const decision = authorizeAntigravityLeaseCapability(repoRoot, {
+  const control = authorizeAntigravityLeaseCapability(repoRoot, {
     conversationId: convId,
     capability: "CONTROL",
     mode,
   });
-  if (!decision.allowed) {
-    console.log(JSON.stringify({
-      decision: "deny",
-      reason:
-        `ORCHESTRA_WORK_LEASE_AUTHORITY_DENIED:${decision.reason || "UNKNOWN"}. `
-        + "This root conversation does not hold the current generation-fenced Work Lease. Continue in the current root conversation.",
-    }));
+  if (!control.allowed) {
+    deny(
+      `ORCHESTRA_WORK_LEASE_AUTHORITY_DENIED:${control.reason || "UNKNOWN"}. `
+      + "This root conversation does not hold the current generation-fenced Work Lease. Continue in the current root conversation.",
+    );
     return;
+  }
+
+  let event;
+  try {
+    event = normalizeToolEvent(payload);
+  } catch (error) {
+    deny(`ORCHESTRA_PROVIDER_EVENT_DENIED:${error?.message || "INVALID_PROVIDER_EVENT"}`);
+    return;
+  }
+  if (event.eventType === "UNKNOWN" || event.operation === "UNKNOWN") {
+    deny("ORCHESTRA_PROVIDER_EVENT_DENIED:UNKNOWN_OPERATION");
+    return;
+  }
+
+  const packet = activePacket(repoRoot);
+  const actor = control.lease?.actor;
+  if (packet && event.operation === "READ") {
+    const readDecision = authorizeCapability({
+      actor,
+      lease: control.lease,
+      packet,
+      operation: "READ",
+      capability: "CONTROL",
+    });
+    if (!readDecision.allowed) {
+      deny(`ORCHESTRA_CAPABILITY_DENIED:${readDecision.reason}`);
+      return;
+    }
+  }
+
+  if (event.operation === "WRITE" || event.operation === "COMMAND") {
+    const mutationLease = authorizeAntigravityLeaseCapability(repoRoot, {
+      conversationId: convId,
+      generation: control.lease.generation,
+      capability: "WORKSPACE_EDIT",
+      mode,
+    });
+    if (!mutationLease.allowed) {
+      deny(`ORCHESTRA_WORK_LEASE_AUTHORITY_DENIED:${mutationLease.reason || "UNKNOWN"}`);
+      return;
+    }
+    const lease = mutationLease.lease;
+    const mutationDecision = authorizeMutation({
+      actor: lease.actor,
+      lease,
+      generation: lease.generation,
+      workspace: { workspaceId: lease.workspaceId },
+      operation: "WRITE",
+    });
+    if (!mutationDecision.allowed) {
+      deny(`ORCHESTRA_MUTATION_DENIED:${mutationDecision.reason}`);
+      return;
+    }
+    if (packet) {
+      const capabilityDecision = authorizeCapability({
+        actor: lease.actor,
+        lease,
+        packet,
+        operation: "WRITE",
+        capability: "WORKSPACE_EDIT",
+      });
+      if (!capabilityDecision.allowed) {
+        deny(`ORCHESTRA_CAPABILITY_DENIED:${capabilityDecision.reason}`);
+        return;
+      }
+    }
   }
 
   delegate(rawInput);
