@@ -69,8 +69,11 @@ jobs:
       - name: Verify shared Lab authority boundary
         run: node --test tests/labs/lab-authority.test.mjs
 
-      - name: Verify canonical Dream Lab source
-        run: node --test tests/labs/dream-canonical.test.mjs
+      - name: Verify canonical Dream Lab source loadability
+        run: node --test --test-name-pattern="canonical Dream Lab source is loadable" tests/labs/dream-canonical.test.mjs
+
+      - name: Verify canonical Dream Lab authority boundary
+        run: node --test --test-name-pattern="Dream Lab canonical source remains observational" tests/labs/dream-canonical.test.mjs
 
       - name: Verify canonical Jev Lab source
         run: node --test tests/labs/jev-canonical.test.mjs
