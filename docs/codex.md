@@ -124,33 +124,57 @@ node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup late
 The manager owns only `.codex/config.toml`, `.codex/hooks.json`, `.codex/agents/`, and
 `.codex/astra-orchestra/`. State, telemetry, artifacts, semantic approval
 data, and runtime-management history remain project-owned and survive updates.
+The neutral `.orchestra/state/**` Work Lease namespace is also project-owned,
+preserved across runtime replacement, and locally ignored through managed
+`.git/info/exclude` rather than a tracked `.gitignore` entry.
 
 ---
 
-## 8. Root session authority and milestone handoff
+## 8. Work Lease authority and session recovery
 
-Orchestra 0.10 binds Codex project authority to the factual provider
-`session_id` delivered by project hooks. `SessionStart` establishes or claims
-root authority, `UserPromptSubmit` blocks future turns from a former root, and
-`PreToolUse` denies supported local/MCP/function tools to sessions that do not
-own the current authority record.
+Orchestra 1.x treats Codex `session_id` as **provenance**, not permanent project
+ownership. Primary project authority is the provider-neutral, generation-fenced
+Work Lease stored under `.orchestra/state/work-lease.json`.
 
-At an explicit completed-milestone chat boundary, the current Sol root runs:
+With `ORCHESTRA_AUTHORITY_MODE` unset or empty, Codex now resolves authority to
+`lease`. The supported migration/rollback values remain:
+
+- `lease` — primary 1.x authority. A fresh root may continue compatible factual
+  work when no incompatible writer is active.
+- `dual` — compatibility mode that evaluates Work Lease authority while retaining
+  the legacy session record for provenance and migration diagnostics.
+- `session` — temporary rollback mode using the 0.10 session authority path.
+
+An invalid explicit value fails safe to `session` rather than silently granting
+new authority.
+
+Each root actor is persisted only as provider plus a stable hash of the factual
+`session_id`. A Work Lease generation is the mutation fence. After another root
+advances the generation, the former root is denied as `STALE_WORK_LEASE`. While
+an actor holds `WORKSPACE_EDIT`, an incompatible fresh root cannot take over and
+receives `WRITE_LEASE_ACTIVE`. Once mutation authority is released back to
+`CONTROL`, another fresh root may atomically advance the generation and continue
+candidate/evidence-bound work without a prepared chat handoff.
+
+Continuation is factual and bounded: task/work state, candidate identity,
+evidence/audit references, generation, blockers, and approved direction may
+survive. Provider transcript, prompts, summaries, arbitrary prior conversation
+text, and hidden reasoning never grant continuation authority.
+
+The legacy boundary command remains available only for recovery/debug or an
+explicit rollback workflow:
 
 ```bash
 node .codex/astra-orchestra/session-handoff-cli.mjs prepare --boundary
 ```
 
-The next fresh root claims the lease automatically. The transfer is single-use,
-workspace/state-bound, and fail-closed through
-`ACTIVE -> TRANSFERRING -> ACTIVE`. A boundary claim resets task state to
-`INTAKE` and removes the prior active Scope Contract instead of carrying
-scope, evidence, workers, retries, transcript, prompts, or reasoning forward.
+It is no longer the normal way to move development into a fresh Codex chat in
+`lease` mode. In explicit `session` rollback mode it retains the 0.10
+single-use, workspace/state-bound `ACTIVE -> TRANSFERRING -> ACTIVE` semantics
+and still performs a clean milestone boundary rather than transcript migration.
 
-The normal user flow requires no copied session ID and no JSON edits. Project
-hooks are subject to Codex's normal hook-trust review; Orchestra does not use a
-trust bypass as part of normal operation. This milestone does not add an
-Orchestra `LIVE_CONTINUATION` mode for Codex.
+Project-local hooks remain subject to Codex's normal hook-trust review; Orchestra
+does not use a trust bypass as part of normal operation.
 
 ---
 
@@ -160,6 +184,7 @@ Run the complete deterministic Codex verification:
 
 ```bash
 npm run test:codex
+npm run test:leases
+npm run test:architecture-invariants
 node --test tests/installers/codex-project-runtime-manager.test.mjs
-node --test tests/architecture-invariants/codex-parity-authority.test.mjs tests/architecture-invariants/codex-session-authority.test.mjs
 ```

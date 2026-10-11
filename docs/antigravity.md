@@ -25,24 +25,25 @@ GEMINI 3.8 FLASH MEDIUM (Global Orchestrator)
 
 ## 2. Tool Lifecycle Hooks (`.agents/hooks/`)
 
-The Antigravity runtime registers lifecycle hooks in `.agents/hooks.json`:
+The Antigravity runtime registers lifecycle hooks in `.agents/hooks.json`. The
+Work Lease wrappers are the normal root entry points; after applying lease
+authority they delegate into the existing governance hooks so provider-neutral
+authority does not bypass Antigravity's established enforcement.
 
-1. **`pre-tool-enforce.mjs` (`PreToolUse`)**:
-   - Validates file edits against the active `scopeContract` (`allowedPaths`, `forbiddenPaths`).
-   - Blocks workers from invoking subagents.
-   - Prevents orchestrators from directly editing product code.
-   - Enforces the `Large File Guard` (blocking `cat` or `jq` dumps on files >200 KB).
-   - Enforces polling budgets and backoff on `manage_task(Action='status')`.
+1. **`work-lease-pre-tool.mjs` (`PreToolUse`)**:
+   - Fences root tool authority by Work Lease generation/capability.
+   - Delegated children remain governed by the legacy Antigravity role/scope path.
+   - Delegates allowed calls to `pre-tool-enforce.mjs`, which validates Scope Contracts, blocks worker subagent spawning, prevents orchestrator product edits, and enforces file/output/polling guardrails.
 
 2. **`post-tool-telemetry.mjs` (`PostToolUse`)**:
    - Captures command exit codes, test counts, and execution duration automatically into the Evidence Ledger.
    - Increments `mutationSeq` on file modifications and records modified paths.
    - Tracks tool mix, shell overuse, and exploration overhead.
 
-3. **`pre-invocation-guard.mjs` (`PreInvocation`)**:
-   - Injects pending advisory notices (e.g. `NATIVE_TOOLS_FIRST`).
-   - Activates circuit breakers upon detecting loops, stalls, or excessive coordination overhead.
-   - Claims a valid single-use orchestrator handoff when a fresh root conversation opens after the previous factual main explicitly armed a transfer.
+3. **`work-lease-pre-invocation.mjs` (`PreInvocation`)**:
+   - Establishes or advances factual root Work Lease authority before model invocation.
+   - Projects the current lease root into legacy `mainConversationId` state only for provider compatibility.
+   - Delegates normal governance to `pre-invocation-guard.mjs`, including advisory notices, circuit breakers, trust-boundary capsules, and recovery handoff behavior when explicitly requested.
 
 4. **`stop-guard.mjs` (`Stop`)**:
    - Prevents the agent from declaring a task complete unless required verification evidence is fresh and recorded in the Evidence Ledger.
@@ -66,51 +67,68 @@ Every validation evidence record carries the `mutationSeq` at the time of execut
 
 ---
 
-## 4. Orchestrator Session Handoff
+## 4. Work Lease authority and handoff recovery
 
-Antigravity binds root orchestration authority to the factual
-`mainConversationId`. Milestone N makes changing that root conversation a
-governed transition instead of a manual state repair.
+Orchestra 1.x no longer treats `mainConversationId` as permanent project
+ownership. The factual Antigravity conversation identity is actor provenance;
+primary project authority is the provider-neutral, generation-fenced Work Lease
+under `.orchestra/state/work-lease.json`.
 
-At the end of a milestone, when the user explicitly says development will
-continue in a fresh chat, the current orchestrator executes:
+With `ORCHESTRA_AUTHORITY_MODE` unset or empty, Antigravity resolves to `lease`.
+Explicit modes remain available for migration and rollback:
+
+- `lease` — primary 1.x mode. A fresh **root** conversation may continue
+  compatible factual work whenever no incompatible writer is active.
+- `dual` — migration mode retaining legacy conversation state as provenance and
+  compatibility projection while Work Lease authority is evaluated.
+- `session` — temporary rollback to the 0.9 handoff/session authority behavior.
+
+Invalid explicit values fail safe to `session`.
+
+Only factual root identities may claim control. Child workers, reviewers, and
+investigators cannot acquire root authority merely by possessing a conversation
+ID. The neutral lease stores only provider plus a stable conversation-ID hash,
+never the raw transcript or conversation content.
+
+Generation is the mutation fence. A stale former root is denied with
+`STALE_WORK_LEASE`. An active `WORKSPACE_EDIT` holder protects the workspace and
+causes an incompatible fresh root to receive `WRITE_LEASE_ACTIVE`. Once mutation
+authority returns to `CONTROL`, a fresh root can atomically advance the lease
+generation and continue the factual candidate/evidence lineage without any
+prepared chat transfer.
+
+Continuation authority is bounded to factual work state: task identity,
+candidate, evidence/audit references, lease generation, blockers, and approved
+direction. Transcript, prompts, summaries, arbitrary prior chat text, and hidden
+reasoning are never migrated as authority.
+
+The older handoff CLI remains available for explicit recovery/debug and for
+`session` rollback mode:
 
 ```bash
 node .agents/skills/orchestra/orchestrator-handoff-cli.mjs prepare --boundary
+node .agents/skills/orchestra/orchestrator-handoff-cli.mjs prepare --live
 ```
 
-The next **root** conversation in the same project claims automatically on its
-first PreInvocation. No conversation ID needs to be copied by the user.
+These commands are no longer the normal fresh-chat UX in `lease` mode. Boundary
+handoff still resets to `INTAKE` without carrying the prior Scope Contract,
+Evidence Ledger, or transcript; live continuation remains a bounded recovery
+mechanism and is rejected while incompatible delegated work is active.
 
-Boundary mode is intentionally a clean context break. It records a minimal
-factual previous-milestone capsule, then removes the old active Scope Contract,
-Evidence Ledger and task identity and returns active governance state to
-`INTAKE`. Provider transcript/history is never migrated.
-
-For an explicit mid-task context reset, `prepare --live` preserves the
-current bounded Runtime Continuation Capsule. It is rejected while delegated
-or other in-flight work exists.
-
-The lease is hash-bound and single-use. State changes after preparation make it
-stale. Children cannot claim it. After a successful claim the old conversation
-becomes `FORMER_ORCHESTRATOR` and loses tool authority.
-
-Manual `claim` exists only as recovery/debug tooling; it is not exposed as a
-model-authorized control command.
+Neutral governance state is preserved across runtime updates and locally hidden
+using managed `.git/info/exclude`; Orchestra does not add `.orchestra/state/**`
+to the project's tracked `.gitignore`.
 
 ---
 
 ## 5. Verification & Tests
 
-Run the Antigravity test suites:
+Run the Antigravity and authority suites:
 
 ```bash
-# Policy unit tests
 node --test runtimes/antigravity/tests/routing-policy.test.mjs
-
-# Lifecycle hook tests (always run with concurrency 1)
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
-
-# Root chat authority transfer
+npm run test:leases
 npm run test:handoff
+npm run test:architecture-invariants
 ```
