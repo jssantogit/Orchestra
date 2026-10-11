@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "acceptance/direct-work.mjs",
-      "sha256": "316cb592988465012cf4d6f0704e6ff1fa44b513969900e6ada43d7377dc0646"
+      "sha256": "babb658c5dd44dc041a48677de8a284b817ca8efd92ea54ee92ce0ecc94351c4"
     },
     {
       "path": "audit/quick-audit.mjs",
@@ -48,6 +48,26 @@
     {
       "path": "feedback/feedback-plane.mjs",
       "sha256": "e18fabab8221a0c1c123f0ef4a075e9f652e31b8d535785ddf00c9539a37617f"
+    },
+    {
+      "path": "leases/atomic-lock.mjs",
+      "sha256": "0dac42198933ae90f553bd2cfbb5d4ea391319fc49e7c02832094b9f55007d1e"
+    },
+    {
+      "path": "leases/lease-authorizer.mjs",
+      "sha256": "e660513138d1bb017efaaa2c1105a091f76fdb015934076a54198538e7805c54"
+    },
+    {
+      "path": "leases/work-continuation.mjs",
+      "sha256": "94e38e5d1fd0e7cfdc083707363c8a7dfa88788e06d440bb536d1fac55311dd2"
+    },
+    {
+      "path": "leases/work-lease-store.mjs",
+      "sha256": "fd1667ed13ccfac1ac331cd0816de354cdf71b33b927f0edaf8264135f9b46cd"
+    },
+    {
+      "path": "leases/workspace-fingerprint.mjs",
+      "sha256": "2d0e22a6427a70cf6696c36c35c422dd509aa41615c0482d4ff27f9f12efc390"
     },
     {
       "path": "policy/discovery-authorization.mjs",
