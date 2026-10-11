@@ -39,6 +39,19 @@ test('stale candidate, evidence, or audit generation fails closed', () => {
   assert.equal(evaluateDirectWorkAcceptance({ packet, candidate, evidence: [evidence('unit-tests'), evidence('formatter')], audit: audit({ candidateGeneration: 6 }), auditRequired: true, currentGeneration: 7 }).accepted, false);
 });
 
+test('lease generation advancement does not stale an unchanged candidate generation', () => {
+  const result = evaluateDirectWorkAcceptance({
+    packet,
+    candidate,
+    evidence: [evidence('unit-tests'), evidence('formatter')],
+    audit: audit(),
+    auditRequired: true,
+    currentGeneration: 8,
+    currentCandidateGeneration: 7,
+  });
+  assert.deepEqual(result, { accepted: true, reason: 'ACCEPTED' });
+});
+
 test('failed tool output cannot satisfy required evidence', () => {
   const result = evaluateDirectWorkAcceptance({ packet, candidate, evidence: [evidence('unit-tests', { status: 'FAILED' }), evidence('formatter')], audit: audit(), auditRequired: true, currentGeneration: 7 });
   assert.equal(result.accepted, false);
