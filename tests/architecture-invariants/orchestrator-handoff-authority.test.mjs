@@ -21,7 +21,7 @@ const handoff = read("runtimes/antigravity/.agents/skills/orchestra/orchestrator
 const leaseAuthority = read("runtimes/antigravity/.agents/skills/orchestra/work-lease-authority.mjs");
 const preInvocation = read("runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs");
 const preInvocationLease = read("runtimes/antigravity/.agents/hooks/work-lease-pre-invocation.mjs");
-const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
+const preToolLegacy = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
 const preToolLease = read("runtimes/antigravity/.agents/hooks/work-lease-pre-tool.mjs");
 const hooks = JSON.parse(read("runtimes/antigravity/.agents/hooks.json"));
 const evidence = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
@@ -103,10 +103,10 @@ test("ARCH-N04: mainConversationId is compatibility projection while Work Lease 
   assert.match(preToolLease, /authorizeAntigravityLeaseCapability/);
   assert.match(preToolLease, /ORCHESTRA_WORK_LEASE_AUTHORITY_DENIED/);
 
-  assert.match(preTool, /actorIsCurrentMain/);
-  assert.match(preTool, /actor\.actorId\s*===\s*roleBindings\.mainConversationId/);
-  assert.match(preTool, /ORCHESTRATOR_AUTHORITY_TRANSFERRED/);
-  assert.match(preTool, /FORMER_ORCHESTRATOR/);
+  assert.match(preToolLegacy, /actorIsCurrentMain/);
+  assert.match(preToolLegacy, /actor\.actorId\s*===\s*roleBindings\.mainConversationId/);
+  assert.match(preToolLegacy, /ORCHESTRATOR_AUTHORITY_TRANSFERRED/);
+  assert.match(preToolLegacy, /FORMER_ORCHESTRATOR/);
 });
 
 test("ARCH-N05: model-visible handoff control cannot manually claim or inject shell", () => {
