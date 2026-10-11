@@ -114,7 +114,7 @@ function readOnlyBash(command) {
 }
 
 export function resolveCodexAuthorityMode(value = process.env.ORCHESTRA_AUTHORITY_MODE) {
-  if (value === undefined || value === null || String(value).trim() === "") return "dual";
+  if (value === undefined || value === null || String(value).trim() === "") return "lease";
   const normalized = String(value).trim().toLowerCase();
   return VALID_MODES.has(normalized) ? normalized : "session";
 }
