@@ -90,3 +90,7 @@ test("installer: aborts on conflict without destructive overwrite (Antigravity)"
     rmSync(tempProject, { recursive: true, force: true });
   }
 });
+
+// Phase 5 shared manifest-driven manager contract. Keep this imported by the
+// existing installer suite so the RED/green cycle is enforced by legacy CI too.
+await import("./manifest-project-runtime-manager.test.mjs");
