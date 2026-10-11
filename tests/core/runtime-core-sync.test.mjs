@@ -12,11 +12,14 @@ import { syncRuntimeCore } from "../../scripts/sync-runtime-core.mjs";
 const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
 const CODEX_MIRROR = "runtimes/codex/.codex/astra-orchestra/core";
 const AGY_MIRROR = "runtimes/antigravity/.agents/skills/orchestra/core";
+const CODEX_PROVIDER_MIRROR = "runtimes/codex/.codex/astra-orchestra/provider/codex";
+const AGY_PROVIDER_MIRROR = "runtimes/antigravity/.agents/skills/orchestra/provider/antigravity";
 
 async function fixtureRoot() {
   const root = await mkdtemp(join(tmpdir(), "orchestra-runtime-core-sync-"));
   await cp(join(repoRoot, "core"), join(root, "core"), { recursive: true });
   await cp(join(repoRoot, "schemas"), join(root, "schemas"), { recursive: true });
+  await cp(join(repoRoot, "providers"), join(root, "providers"), { recursive: true });
   await buildSchemaValidators({ repoRoot: root });
   return root;
 }
@@ -35,6 +38,8 @@ test("empty runtime mirrors report canonical files as missing", async () => {
     const result = await syncRuntimeCore({ repoRoot: root, checkOnly: true });
     assert.ok(result.missing.some((path) => path.startsWith(`${CODEX_MIRROR}/`)));
     assert.ok(result.missing.some((path) => path.startsWith(`${AGY_MIRROR}/`)));
+    assert.ok(result.missing.some((path) => path.startsWith(`${CODEX_PROVIDER_MIRROR}/`)));
+    assert.ok(result.missing.some((path) => path.startsWith(`${AGY_PROVIDER_MIRROR}/`)));
     assert.deepEqual(result.stale, []);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -59,11 +64,37 @@ test("sync repairs missing, stale, and unexpected generated mirror content deter
     assert.ok(drift.changed.includes(`${CODEX_MIRROR}/unexpected.mjs`));
 
     await syncRuntimeCore({ repoRoot: root });
-    assert.deepEqual(await syncRuntimeCore({ repoRoot: root, checkOnly: true }), {
-      changed: [],
-      stale: [],
-      missing: [],
-    });
+    assert.deepEqual(await syncRuntimeCore({ repoRoot: root, checkOnly: true }), { changed: [], stale: [], missing: [] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("provider-specific source mirrors only into its matching runtime namespace and drift is repairable", async () => {
+  const root = await fixtureRoot();
+  try {
+    const codexFixture = join(root, "providers", "codex", "adapter", "fixture.mjs");
+    const agyFixture = join(root, "providers", "antigravity", "adapter", "fixture.mjs");
+    await mkdir(dirname(codexFixture), { recursive: true });
+    await mkdir(dirname(agyFixture), { recursive: true });
+    await writeFile(codexFixture, "export const provider = 'codex';\n", "utf8");
+    await writeFile(agyFixture, "export const provider = 'antigravity';\n", "utf8");
+
+    await syncRuntimeCore({ repoRoot: root });
+
+    assert.match(await readFile(join(root, CODEX_PROVIDER_MIRROR, "adapter", "fixture.mjs"), "utf8"), /codex/);
+    assert.match(await readFile(join(root, AGY_PROVIDER_MIRROR, "adapter", "fixture.mjs"), "utf8"), /antigravity/);
+    await assert.rejects(readFile(join(root, "runtimes/antigravity/.agents/skills/orchestra/provider/codex/adapter/fixture.mjs"), "utf8"), { code: "ENOENT" });
+    await assert.rejects(readFile(join(root, "runtimes/codex/.codex/astra-orchestra/provider/antigravity/adapter/fixture.mjs"), "utf8"), { code: "ENOENT" });
+
+    const mirroredCodex = join(root, CODEX_PROVIDER_MIRROR, "adapter", "fixture.mjs");
+    await writeFile(mirroredCodex, "// stale provider mirror\n", "utf8");
+    const drift = await syncRuntimeCore({ repoRoot: root, checkOnly: true });
+    assert.ok(drift.stale.includes(`${CODEX_PROVIDER_MIRROR}/adapter/fixture.mjs`));
+
+    await syncRuntimeCore({ repoRoot: root });
+    assert.equal(await readFile(mirroredCodex, "utf8"), "export const provider = 'codex';\n");
+    assert.deepEqual(await syncRuntimeCore({ repoRoot: root, checkOnly: true }), { changed: [], stale: [], missing: [] });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -93,17 +124,8 @@ test("a generated runtime core validates schemas in isolation without Orchestra 
     await syncRuntimeCore({ repoRoot: root });
     await cp(join(root, CODEX_MIRROR), join(isolated, "core"), { recursive: true });
 
-    const { validateSchema } = await import(
-      `${pathToFileURL(join(isolated, "core", "schema", "validator.mjs")).href}?isolated=${Date.now()}`
-    );
-    const result = validateSchema("candidate.v1.schema.json", {
-      schema: "orchestra.candidate.v1",
-      taskId: "task-1",
-      candidateId: "candidate-1",
-      generation: 1,
-      workspaceId: "primary",
-      headSha: "abcdef1",
-    });
+    const { validateSchema } = await import(`${pathToFileURL(join(isolated, "core", "schema", "validator.mjs")).href}?isolated=${Date.now()}`);
+    const result = validateSchema("candidate.v1.schema.json", { schema: "orchestra.candidate.v1", taskId: "task-1", candidateId: "candidate-1", generation: 1, workspaceId: "primary", headSha: "abcdef1" });
     assert.deepEqual(result, { valid: true, errors: [] });
     await assert.rejects(readFile(join(isolated, "node_modules", "ajv", "package.json"), "utf8"), { code: "ENOENT" });
   } finally {
@@ -143,16 +165,10 @@ test("runtime-core sync rejects stale canonical validators before changing mirro
     const mirrorBefore = await readFile(mirrorPath, "utf8");
 
     await changeFixtureCandidateSchema(root);
-    await assert.rejects(
-      syncRuntimeCore({ repoRoot: root }),
-      (error) => error?.code === "SCHEMA_VALIDATOR_DRIFT" && error?.schemaResult?.changed?.includes("candidate.v1.mjs"),
-    );
+    await assert.rejects(syncRuntimeCore({ repoRoot: root }), (error) => error?.code === "SCHEMA_VALIDATOR_DRIFT" && error?.schemaResult?.changed?.includes("candidate.v1.mjs"));
 
     assert.equal(await readFile(mirrorPath, "utf8"), mirrorBefore);
-    await assert.rejects(
-      syncRuntimeCore({ repoRoot: root, checkOnly: true }),
-      { code: "SCHEMA_VALIDATOR_DRIFT" },
-    );
+    await assert.rejects(syncRuntimeCore({ repoRoot: root, checkOnly: true }), { code: "SCHEMA_VALIDATOR_DRIFT" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -164,7 +180,6 @@ test("schema validator check-only mode does not create a missing output director
   try {
     await rm(outputDir, { recursive: true, force: true });
     const result = await buildSchemaValidators({ checkOnly: true, repoRoot: root, outputDir });
-
     assert.equal(result.missing.length, 7);
     await assert.rejects(access(outputDir), { code: "ENOENT" });
   } finally {
