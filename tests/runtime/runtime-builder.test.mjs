@@ -56,11 +56,12 @@ test("builder emits deterministic self-contained provider runtimes from manifest
     const antigravity = await buildRuntime({ runtime: "antigravity", outputDir: agy });
 
     assert.equal(first.runtime, "codex");
-    assert.equal(first.version, "0.10.0");
+    assert.equal(first.version, "1.0.0-rc.0");
     assert.match(first.manifestHash, /^[a-f0-9]{64}$/);
     assert.deepEqual(first, second);
     assert.deepEqual(first.files, [...first.files].sort((a, b) => a.path.localeCompare(b.path)));
     assert.equal(antigravity.runtime, "antigravity");
+    assert.equal(antigravity.version, "1.0.0-rc.0");
 
     const codexFiles = await walkFiles(codexA);
     const agyFiles = await walkFiles(agy);
