@@ -22,8 +22,8 @@ function state(root, value = {}) {
   writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"), JSON.stringify(value, null, 2) + "\n");
 }
 
-test("authority mode defaults to dual and invalid values fail safe to session", () => {
-  assert.equal(resolveCodexAuthorityMode(undefined), "dual");
+test("authority mode defaults to lease and invalid values fail safe to session", () => {
+  assert.equal(resolveCodexAuthorityMode(undefined), "lease");
   assert.equal(resolveCodexAuthorityMode("dual"), "dual");
   assert.equal(resolveCodexAuthorityMode("lease"), "lease");
   assert.equal(resolveCodexAuthorityMode("session"), "session");
