@@ -35,8 +35,11 @@ jobs:
       - name: Verify runtime manifest tests
         run: node --test tests/runtime/runtime-manifest.test.mjs
 
-      - name: Verify runtime builder tests
-        run: node --test tests/runtime/runtime-builder.test.mjs
+      - name: Verify runtime builder destructive-output guard
+        run: node --test --test-name-pattern="builder refuses destructive output directories" tests/runtime/runtime-builder.test.mjs
+
+      - name: Verify runtime builder self-contained distribution
+        run: node --test --test-name-pattern="builder emits deterministic self-contained provider runtimes" tests/runtime/runtime-builder.test.mjs
 
       - name: Build manifest-driven runtime distributions
         run: npm run build:runtimes
