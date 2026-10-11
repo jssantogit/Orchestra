@@ -4,9 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { installAntigravityProjectRuntime } from "../providers/antigravity/project-runtime-manager.mjs";
 import { buildRuntime } from "../runtime/runtime-builder.mjs";
-import { loadRuntimeManifest } from "../runtime/manifest-loader.mjs";
-import { installProjectRuntime } from "../runtime/project-runtime-manager.mjs";
 
 const args = process.argv.slice(2);
 if (args.length < 1) {
@@ -25,9 +24,8 @@ try {
   console.log(`Installing Orchestra Antigravity runtime into '${targetDir}'...`);
   buildRoot = await mkdtemp(join(tmpdir(), "orchestra-antigravity-install-"));
   const builtRuntime = join(buildRoot, "antigravity");
-  const runtimeManifest = await loadRuntimeManifest("antigravity");
   await buildRuntime({ runtime: "antigravity", outputDir: builtRuntime });
-  const result = await installProjectRuntime({ targetDir, runtimeManifest, builtRuntime });
+  const result = await installAntigravityProjectRuntime({ targetDir, builtRuntime });
 
   console.log(`Antigravity runtime successfully installed to '${resolve(targetDir, ".agents")}'.`);
   console.log(`Version: ${result.metadata.version || "unknown"}`);
