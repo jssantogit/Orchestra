@@ -116,3 +116,5 @@ jobs:
       - name: Run Cross-Runtime Contamination Check
         run: |
           node scripts/contamination-check.mjs
+
+# Harness revision: validate ARCH-027 composition after Work Lease wrapper fix.
