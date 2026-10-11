@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import {
   claimWorkLease,
@@ -10,6 +10,7 @@ import {
 import { authorizeLeaseMutation } from "./core/leases/lease-authorizer.mjs";
 
 const VALID_MODES = new Set(["session", "dual", "lease"]);
+const BINDINGS_SCHEMA = "orchestra.codex-work-lease-bindings.v1";
 const READ_ONLY_TOOL_NAMES = new Set([
   "read", "read_file", "view_file", "grep", "glob", "ls", "list_files", "search",
 ]);
@@ -48,6 +49,48 @@ function actorFor(sessionId) {
   const sid = clean(sessionId, 300);
   if (!sid) return null;
   return { provider: "codex", sessionIdHash: `sha256:${digest(sid)}` };
+}
+
+function bindingsPath(repoRoot) {
+  return join(repoRoot, ".codex", "orchestra-state", "work-lease-session-bindings.json");
+}
+
+function readBindings(repoRoot) {
+  const path = bindingsPath(repoRoot);
+  if (!existsSync(path)) return { schema: BINDINGS_SCHEMA, bindings: {} };
+  const value = readJson(path, null);
+  if (!value || value.schema !== BINDINGS_SCHEMA || !value.bindings || typeof value.bindings !== "object" || Array.isArray(value.bindings)) {
+    return null;
+  }
+  return value;
+}
+
+function writeBindings(repoRoot, value) {
+  const path = bindingsPath(repoRoot);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+}
+
+function readActorBinding(repoRoot, actor) {
+  const state = readBindings(repoRoot);
+  if (!state) return { valid: false, reason: "LEASE_BINDINGS_INVALID", binding: null, state: null };
+  return {
+    valid: true,
+    reason: null,
+    binding: state.bindings[actor.sessionIdHash] || null,
+    state,
+  };
+}
+
+function bindActorGeneration(repoRoot, actor, lease) {
+  const current = readBindings(repoRoot) || { schema: BINDINGS_SCHEMA, bindings: {} };
+  current.bindings[actor.sessionIdHash] = {
+    generation: lease.generation,
+    taskId: lease.taskId,
+    workspaceId: lease.workspaceId,
+    candidate: lease.candidate ?? null,
+  };
+  writeBindings(repoRoot, current);
 }
 
 function hasShellControlOperator(command) {
@@ -94,6 +137,33 @@ export function enterCodexWorkLease(repoRoot, { sessionId, mode = undefined } = 
   }
   const actor = actorFor(sessionId);
   if (!actor) return { handled: true, authoritative: false, reason: "CODEX_SESSION_ID_REQUIRED", mode: authorityMode, lease: null };
+
+  const actorBinding = readActorBinding(repoRoot, actor);
+  if (!actorBinding.valid) {
+    return { handled: true, authoritative: false, reason: actorBinding.reason, mode: authorityMode, lease: null };
+  }
+  const current = readWorkLease(repoRoot);
+  if (actorBinding.binding) {
+    if (!current.exists || !current.valid || !current.lease) {
+      return { handled: true, authoritative: false, reason: current.reason || "STALE_WORK_LEASE", mode: authorityMode, lease: current.lease || null };
+    }
+    const decision = authorizeLeaseMutation({
+      lease: current.lease,
+      actor,
+      generation: actorBinding.binding.generation,
+      capability: "CONTROL",
+    });
+    return {
+      handled: true,
+      authoritative: decision.allowed,
+      reason: decision.allowed ? null : (actorBinding.binding.generation !== current.lease.generation ? "STALE_WORK_LEASE" : decision.reason),
+      mode: authorityMode,
+      lease: current.lease,
+      taskId: current.lease.taskId,
+      candidate: current.lease.candidate,
+    };
+  }
+
   const context = activeContext(repoRoot);
   const claim = claimWorkLease(repoRoot, {
     workspaceId: "primary",
@@ -102,6 +172,7 @@ export function enterCodexWorkLease(repoRoot, { sessionId, mode = undefined } = 
     capabilities: ["CONTROL"],
     candidate: context.candidate,
   });
+  if (claim.claimed && claim.lease) bindActorGeneration(repoRoot, actor, claim.lease);
   return {
     handled: true,
     authoritative: Boolean(claim.claimed),
@@ -125,12 +196,19 @@ export function authorizeCodexLeaseCapability(repoRoot, {
   }
   const actor = actorFor(sessionId);
   if (!actor) return { handled: true, allowed: false, reason: "CODEX_SESSION_ID_REQUIRED", mode: authorityMode, lease: null };
+  const actorBinding = readActorBinding(repoRoot, actor);
+  if (!actorBinding.valid) return { handled: true, allowed: false, reason: actorBinding.reason, mode: authorityMode, lease: null };
+  if (!actorBinding.binding) return { handled: true, allowed: false, reason: "LEASE_BINDING_MISSING", mode: authorityMode, lease: null };
+
   const current = readWorkLease(repoRoot);
   if (!current.exists || !current.valid || !current.lease) {
     return { handled: true, allowed: false, reason: current.reason || "WORK_LEASE_NOT_INITIALIZED", mode: authorityMode, lease: current.lease || null };
   }
   const lease = current.lease;
-  const requestedGeneration = Number.isInteger(generation) ? generation : lease.generation;
+  const requestedGeneration = Number.isInteger(generation) ? generation : actorBinding.binding.generation;
+  if (requestedGeneration !== actorBinding.binding.generation) {
+    return { handled: true, allowed: false, reason: "STALE_WORK_LEASE", mode: authorityMode, lease };
+  }
 
   if (capability === "WORKSPACE_EDIT" && !lease.capabilities.includes("WORKSPACE_EDIT")) {
     const control = authorizeLeaseMutation({
