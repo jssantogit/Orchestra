@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -42,4 +42,13 @@ test("existing info exclude content is preserved and updates are idempotent", ()
   assert.equal(twice, once);
   assert.match(once, /^# user rule\n\*\.local\n/);
   assert.match(once, /\.orchestra\/state\/\*\*/);
+});
+
+test("non-git target does not get synthetic .git metadata", () => {
+  const root = mkdtempSync(join(tmpdir(), "orchestra-project-state-no-git-"));
+  const result = ensureProjectStateIgnored(root);
+  assert.equal(result.changed, false);
+  assert.equal(result.reason, "GIT_METADATA_UNAVAILABLE");
+  assert.equal(result.path, null);
+  assert.equal(existsSync(join(root, ".git")), false);
 });
