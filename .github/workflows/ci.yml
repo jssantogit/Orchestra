@@ -29,6 +29,9 @@ jobs:
       - name: Run Runtime Manifest Tests
         run: node --test tests/runtime/runtime-manifest.test.mjs
 
+      - name: Run Runtime Builder Tests
+        run: node --test tests/runtime/runtime-builder.test.mjs
+
       - name: Run Neutral Authorization Contract Tests
         run: node --test tests/core/capability-authorization.test.mjs tests/core/mutation-authorization.test.mjs
 
