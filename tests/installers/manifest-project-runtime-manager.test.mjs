@@ -107,3 +107,20 @@ for (const fixture of [
     }
   });
 }
+
+test("rollback rejects backup identifiers that can escape the runtime backup root", async () => {
+  const project = await makeGitProject("orchestra-backup-id-project-");
+  try {
+    const manifest = await loadRuntimeManifest("codex");
+    await assert.rejects(
+      () => rollbackProjectRuntime({ targetDir: project, runtimeManifest: manifest, backupId: "../../outside" }),
+      (error) => error?.code === "INVALID_BACKUP_ID",
+    );
+    await assert.rejects(
+      () => rollbackProjectRuntime({ targetDir: project, runtimeManifest: manifest, backupId: "/tmp/outside" }),
+      (error) => error?.code === "INVALID_BACKUP_ID",
+    );
+  } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
