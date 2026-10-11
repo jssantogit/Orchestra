@@ -64,6 +64,14 @@ for (const fixture of [
       assert.equal((await inspectProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 })).clean, true);
       assert.equal(await readFile(join(project, fixture.managedProbe), "utf8"), await readFile(join(builtV1, fixture.managedProbe), "utf8"));
 
+      git(project, "add", "-A");
+      git(
+        project,
+        "-c", "user.name=Orchestra Test",
+        "-c", "user.email=orchestra@example.invalid",
+        "commit", "-qm", "install runtime",
+      );
+
       await mkdir(join(project, fixture.stateFile, ".."), { recursive: true });
       await writeFile(join(project, fixture.stateFile), "{\"keep\":true}\n", "utf8");
       await mkdir(join(project, ".orchestra", "state"), { recursive: true });
