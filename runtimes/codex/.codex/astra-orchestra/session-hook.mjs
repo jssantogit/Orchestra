@@ -4,9 +4,18 @@ import { dirname, join, resolve } from "node:path";
 
 import {
   authorizeCodexSession,
+  bootstrapCodexSessionAuthority,
   enterCodexSession,
+  readCodexSessionAuthority,
 } from "./session-authority.mjs";
+import {
+  authorizeCodexLeaseCapability,
+  codexCapabilityForTool,
+  enterCodexWorkLease,
+  resolveCodexAuthorityMode,
+} from "./work-lease-authority.mjs";
 import { evaluateCodexVerificationTool } from "./verification-guard.mjs";
+
 function readStdin() {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
 }
@@ -45,7 +54,6 @@ function repoRootFrom(cwd) {
   }
 }
 
-
 function sessionStartOutput(context, { stop = false, stopReason = null, systemMessage = null } = {}) {
   const output = {
     continue: !stop,
@@ -70,7 +78,23 @@ function preToolDeny(reason, message = "Orchestra blocked this tool because this
   };
 }
 
-function handleSessionStart(repoRoot, payload) {
+function ensureCompatibilityProvenance(repoRoot, sessionId) {
+  const current = readCodexSessionAuthority(repoRoot);
+  if (current.exists) return current;
+  try {
+    bootstrapCodexSessionAuthority(repoRoot, { sessionId });
+    return readCodexSessionAuthority(repoRoot);
+  } catch (error) {
+    return {
+      exists: false,
+      valid: false,
+      reason: String(error?.message || error),
+      record: null,
+    };
+  }
+}
+
+function handleLegacySessionStart(repoRoot, payload) {
   const entered = enterCodexSession(repoRoot, {
     sessionId: payload.session_id,
     source: payload.source || null,
@@ -110,7 +134,53 @@ function handleSessionStart(repoRoot, payload) {
   return sessionStartOutput(authorityContext);
 }
 
-function handlePreToolUse(repoRoot, payload) {
+function handleLeaseSessionStart(repoRoot, payload, mode) {
+  const provenance = ensureCompatibilityProvenance(repoRoot, payload.session_id);
+  const entered = enterCodexWorkLease(repoRoot, {
+    sessionId: payload.session_id,
+    mode,
+  });
+
+  if (!entered.authoritative) {
+    return sessionStartOutput(
+      [
+        `ORCHESTRA CODEX WORK LEASE BLOCKED [${String(mode).toUpperCase()}].`,
+        `Lease status: ${entered.reason || "WORK_LEASE_DENIED"}.`,
+        "Session identity is provenance only; it cannot steal an active workspace writer lease.",
+        "Do not mutate project state until the active writer releases or advances its factual Work Lease.",
+      ].join(" "),
+      { systemMessage: "Orchestra: this Codex session does not currently hold the project Work Lease." },
+    );
+  }
+
+  const provenanceMismatch = Boolean(
+    provenance.valid
+    && provenance.record?.main_session_id
+    && provenance.record.main_session_id !== payload.session_id,
+  );
+  const compatibility = !provenance.exists
+    ? "missing"
+    : provenance.valid
+      ? (provenanceMismatch ? "historical-main-mismatch" : "matching")
+      : `invalid:${provenance.reason || "unknown"}`;
+
+  return sessionStartOutput([
+    `ORCHESTRA CODEX WORK LEASE AUTHORITY [${String(mode).toUpperCase()}]: generation=${entered.lease.generation}; task=${entered.lease.taskId}; state=${entered.lease.state}.`,
+    `Compatibility session provenance=${compatibility}.`,
+    "The factual Codex session_id is actor provenance; the Work Lease generation and capabilities are project authority.",
+    "A historical main_session_id mismatch is not an authority denial when the Work Lease claim is valid.",
+    "Manual session handoff remains a recovery/debug compatibility path and is not required for normal fresh-chat continuation.",
+    entered.lease.candidate ? `Candidate continuity=${entered.lease.candidate}.` : "Candidate continuity=none.",
+  ].join("\n"));
+}
+
+function handleSessionStart(repoRoot, payload) {
+  const mode = resolveCodexAuthorityMode();
+  if (mode === "session") return handleLegacySessionStart(repoRoot, payload);
+  return handleLeaseSessionStart(repoRoot, payload, mode);
+}
+
+function handleLegacyPreToolUse(repoRoot, payload) {
   const decision = authorizeCodexSession(repoRoot, payload.session_id);
   if (decision.allowed) {
     const verification = evaluateCodexVerificationTool(repoRoot, payload);
@@ -126,7 +196,50 @@ function handlePreToolUse(repoRoot, payload) {
   );
 }
 
-function handleUserPromptSubmit(repoRoot, payload) {
+function handleLeasePreToolUse(repoRoot, payload, mode) {
+  const control = authorizeCodexLeaseCapability(repoRoot, {
+    sessionId: payload.session_id,
+    capability: "CONTROL",
+    mode,
+  });
+  if (!control.allowed) {
+    return preToolDeny(
+      `CODEX_WORK_LEASE_AUTHORITY_DENIED:${control.reason || "UNKNOWN"}.`,
+      "Orchestra blocked this tool because the current Codex session does not hold the active Work Lease generation.",
+    );
+  }
+
+  const verification = evaluateCodexVerificationTool(repoRoot, payload);
+  if (!verification.allowed) {
+    return preToolDeny(verification.reason,
+      "Orchestra blocked a local command under this project's verification policy. Use the declared CI gate or revise the project policy.");
+  }
+
+  const capability = codexCapabilityForTool(payload);
+  if (capability === "WORKSPACE_EDIT") {
+    const mutation = authorizeCodexLeaseCapability(repoRoot, {
+      sessionId: payload.session_id,
+      generation: control.lease.generation,
+      capability,
+      mode,
+    });
+    if (!mutation.allowed) {
+      return preToolDeny(
+        `CODEX_WORK_LEASE_AUTHORITY_DENIED:${mutation.reason || "UNKNOWN"}.`,
+        "Orchestra blocked workspace mutation because this actor does not hold the current generation-fenced WORKSPACE_EDIT capability.",
+      );
+    }
+  }
+  return null;
+}
+
+function handlePreToolUse(repoRoot, payload) {
+  const mode = resolveCodexAuthorityMode();
+  if (mode === "session") return handleLegacyPreToolUse(repoRoot, payload);
+  return handleLeasePreToolUse(repoRoot, payload, mode);
+}
+
+function handleLegacyUserPromptSubmit(repoRoot, payload) {
   const decision = authorizeCodexSession(repoRoot, payload.session_id);
   if (decision.allowed) return null;
   return {
@@ -135,11 +248,28 @@ function handleUserPromptSubmit(repoRoot, payload) {
   };
 }
 
+function handleLeaseUserPromptSubmit(repoRoot, payload, mode) {
+  const decision = authorizeCodexLeaseCapability(repoRoot, {
+    sessionId: payload.session_id,
+    capability: "CONTROL",
+    mode,
+  });
+  if (decision.allowed) return null;
+  return {
+    decision: "block",
+    reason: `CODEX_WORK_LEASE_AUTHORITY_DENIED:${decision.reason || "UNKNOWN"}. This session does not hold the current Orchestra Work Lease generation.`,
+  };
+}
+
+function handleUserPromptSubmit(repoRoot, payload) {
+  const mode = resolveCodexAuthorityMode();
+  if (mode === "session") return handleLegacyUserPromptSubmit(repoRoot, payload);
+  return handleLeaseUserPromptSubmit(repoRoot, payload, mode);
+}
+
 function main() {
   const parsed = parsePayload();
   if (!parsed.ok) {
-    // PreToolUse treats exit code 2 as a hard block. SessionStart reports the
-    // hook failure instead of silently manufacturing session identity.
     process.stderr.write(`Orchestra Codex session hook failed closed: ${parsed.reason}\n`);
     process.exitCode = 2;
     return;
@@ -164,8 +294,6 @@ function main() {
     return;
   }
 
-  // This command is wired only to SessionStart, PreToolUse, and UserPromptSubmit. Unknown events
-  // fail closed rather than silently acquiring authority semantics.
   console.log(JSON.stringify({
     continue: false,
     stopReason: `CODEX_SESSION_HOOK_UNEXPECTED_EVENT:${event || "MISSING"}`,
