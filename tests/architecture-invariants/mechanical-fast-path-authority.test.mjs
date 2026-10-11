@@ -14,7 +14,7 @@ const read = (path) => readFileSync(resolve(root, path), "utf8");
 const fastPath = read("runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs");
 const preToolLegacy = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
 const preInvocation = read("runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs");
-const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
+const stop = read("runtimes/antigravity/.agents/hooks/stop-guard-legacy.mjs");
 const actionSpace = read("runtimes/antigravity/.agents/dream/action-space.mjs");
 
 function eligible(overrides = {}) {
