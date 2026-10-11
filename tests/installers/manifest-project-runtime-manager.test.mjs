@@ -62,7 +62,9 @@ for (const fixture of [
 
       const installed = await installProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 });
       assert.equal(installed.operation, "install");
+      if (diagnosticStop === "installed") return;
       assert.equal((await inspectProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 })).clean, true);
+      if (diagnosticStop === "inspect") return;
       assert.equal(await readFile(join(project, fixture.managedProbe), "utf8"), await readFile(join(builtV1, fixture.managedProbe), "utf8"));
       if (diagnosticStop === "install") return;
 
