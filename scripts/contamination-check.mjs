@@ -247,36 +247,43 @@ function listFilesRecursively(directory) {
 
 const sourceImportPattern = /\bimport\s*["']([^"']+)["']|\b(?:import|export)\s+(?:(?!["';])[\s\S])*?\s+from\s*["']([^"']+)["']|\b(?:import|require)\s*\(\s*["']([^"']+)["']/g;
 
-function runtimeNameForPath(path) {
+function providerNameForPath(path) {
   const normalized = path.replaceAll("\\", "/");
-  if (/(?:^|\/)runtimes\/codex\//i.test(normalized)) return "CODEX";
-  if (/(?:^|\/)runtimes\/antigravity\//i.test(normalized)) return "ANTIGRAVITY";
+  if (/(?:^|\/)(?:runtimes|providers)\/codex\//i.test(normalized)) return "CODEX";
+  if (/(?:^|\/)(?:runtimes|providers)\/antigravity\//i.test(normalized)) return "ANTIGRAVITY";
   return null;
 }
 
 export function scanProviderRuntimeImports(rootDir) {
   const violations = [];
   for (const provider of ["codex", "antigravity"]) {
-    const runtimeDir = join(rootDir, "runtimes", provider);
-    for (const file of listFilesRecursively(runtimeDir)) {
-      if (!/\.(?:mjs|cjs|js|ts|mts|cts)$/.test(file) || file.endsWith(".test.mjs")) continue;
-      const content = readFileSync(file, "utf8");
-      sourceImportPattern.lastIndex = 0;
-      let match;
-      while ((match = sourceImportPattern.exec(content))) {
-        const specifier = match[1] || match[2] || match[3];
-        const target = specifier.startsWith(".")
-          ? resolve(file, "..", specifier)
-          : resolve(rootDir, specifier);
-        const targetProvider = runtimeNameForPath(target)
-          || runtimeNameForPath(resolve(rootDir, specifier));
-        if (targetProvider && targetProvider !== provider.toUpperCase()) {
-          violations.push({
-            runtime: provider.toUpperCase(),
-            file: relative(rootDir, file),
-            line: content.slice(0, match.index).split("\n").length,
-            violation: `Provider runtime import of ${targetProvider} runtime: ${specifier}`,
-          });
+    const sources = [
+      { directory: join(rootDir, "runtimes", provider), kind: "runtime" },
+      { directory: join(rootDir, "providers", provider), kind: "provider" },
+    ];
+    for (const source of sources) {
+      for (const file of listFilesRecursively(source.directory)) {
+        if (!/\.(?:mjs|cjs|js|ts|mts|cts)$/.test(file) || file.endsWith(".test.mjs")) continue;
+        const content = readFileSync(file, "utf8");
+        sourceImportPattern.lastIndex = 0;
+        let match;
+        while ((match = sourceImportPattern.exec(content))) {
+          const specifier = match[1] || match[2] || match[3];
+          const target = specifier.startsWith(".")
+            ? resolve(file, "..", specifier)
+            : resolve(rootDir, specifier);
+          const targetProvider = providerNameForPath(target)
+            || providerNameForPath(resolve(rootDir, specifier));
+          if (targetProvider && targetProvider !== provider.toUpperCase()) {
+            violations.push({
+              runtime: provider.toUpperCase(),
+              file: relative(rootDir, file),
+              line: content.slice(0, match.index).split("\n").length,
+              violation: source.kind === "provider"
+                ? `Provider source import of ${targetProvider} provider: ${specifier}`
+                : `Provider runtime import of ${targetProvider} runtime: ${specifier}`,
+            });
+          }
         }
       }
     }
