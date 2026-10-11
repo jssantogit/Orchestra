@@ -66,7 +66,25 @@ function assertUnique(values, label) {
   }
 }
 
+function assertSemanticDuplicates(manifest) {
+  if (Array.isArray(manifest?.sourceRoots)) {
+    assertUnique(manifest.sourceRoots, "source root");
+  }
+  if (Array.isArray(manifest?.managedAssets)) {
+    const outputs = new Set();
+    for (const asset of manifest.managedAssets) {
+      if (typeof asset?.output !== "string") continue;
+      if (outputs.has(asset.output)) throw new Error(`managed asset output collision: ${asset.output}`);
+      outputs.add(asset.output);
+    }
+  }
+}
+
 export function validateRuntimeManifest(manifest) {
+  // Keep contract-specific fail-closed errors stable instead of leaking Ajv's
+  // implementation wording for duplicate ownership declarations.
+  assertSemanticDuplicates(manifest);
+
   if (!validateManifestSchema(manifest)) {
     throw new Error(`runtime manifest schema invalid: ${displayErrors(validateManifestSchema.errors)}`);
   }
