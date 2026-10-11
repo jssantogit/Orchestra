@@ -2004,8 +2004,15 @@ test("ARCH-027: Explicit Exploration Authority Is Non-Escalating", () => {
   assert.notEqual(sourceHooks["scope-enforcer"].PreToolUse[0].matcher, "*");
   assert.equal(
     sourceHooks["scope-enforcer"].PreToolUse[0].hooks[0].command,
-    "node hooks/pre-tool-enforce.mjs",
+    "node hooks/work-lease-pre-tool.mjs",
   );
+  const workLeasePreTool = readFileSync(
+    resolve(repoRoot, "runtimes/antigravity/.agents/hooks/work-lease-pre-tool.mjs"),
+    "utf8",
+  );
+  assert.match(workLeasePreTool, /pre-tool-enforce\.mjs/);
+  assert.match(workLeasePreTool, /delegate\(rawInput\)/);
+  assert.doesNotMatch(workLeasePreTool, /EXPLORATION_BUDGET|armExplorationCapture|buildSandboxedExplorationCommand/);
 
   assert.deepEqual(EXPLORATION_BUDGET, {
     max_sibling_branches: 1,
