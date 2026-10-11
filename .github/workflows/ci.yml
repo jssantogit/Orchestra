@@ -32,8 +32,11 @@ jobs:
       - name: Verify patch whitespace
         run: git diff --check
 
-      - name: Verify runtime manifest and builder tests
-        run: node --test tests/runtime/runtime-manifest.test.mjs tests/runtime/runtime-builder.test.mjs
+      - name: Verify runtime manifest tests
+        run: node --test tests/runtime/runtime-manifest.test.mjs
+
+      - name: Verify runtime builder tests
+        run: node --test tests/runtime/runtime-builder.test.mjs
 
       - name: Build manifest-driven runtime distributions
         run: npm run build:runtimes
