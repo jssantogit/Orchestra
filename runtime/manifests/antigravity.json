@@ -1,7 +1,7 @@
 {
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "antigravity",
-  "version": "0.10.0",
+  "version": "1.0.0-rc.0",
   "sourceRoots": ["core", "providers/antigravity", "runtimes/antigravity", "schemas"],
   "managedAssets": [
     { "type": "file", "source": "runtimes/antigravity/GEMINI.md", "output": "GEMINI.md" },
