@@ -1,23 +1,104 @@
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { dirname, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import Ajv2020 from "ajv/dist/2020.js";
-
 const runtimeDir = dirname(fileURLToPath(import.meta.url));
 const manifestDir = new URL("./manifests/", import.meta.url);
-const schemaUrl = new URL("../schemas/runtime-manifest.v1.schema.json", import.meta.url);
-const manifestSchema = JSON.parse(readFileSync(schemaUrl, "utf8"));
-const ajv = new Ajv2020({ allErrors: true, strict: true, validateSchema: true });
-const validateManifestSchema = ajv.compile(manifestSchema);
+const MANIFEST_SCHEMA = "orchestra.runtime-manifest.v1";
+const MANIFEST_KEYS = Object.freeze([
+  "schema",
+  "runtime",
+  "version",
+  "sourceRoots",
+  "managedAssets",
+  "preservedProjectPaths",
+  "generatedInputs",
+  "entrypoints",
+  "healthChecks",
+]);
+const MANAGED_ASSET_KEYS = Object.freeze(["type", "source", "output", "exclude"]);
+const MANAGED_ASSET_TYPES = new Set(["file", "tree", "symlink"]);
 
 export const RUNTIME_MANIFEST_NAMES = Object.freeze(["core", "codex", "antigravity"]);
 
-function displayErrors(errors = []) {
-  return errors
-    .map((error) => `${error.instancePath || "/"} ${error.message || error.keyword}`)
-    .join("; ");
+function schemaError(message) {
+  throw new Error(`runtime manifest schema invalid: ${message}`);
+}
+
+function assertObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    schemaError(`${label} must be an object`);
+  }
+}
+
+function assertAllowedKeys(value, allowed, label) {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!allowedSet.has(key)) schemaError(`${label} has unexpected property: ${key}`);
+  }
+}
+
+function assertRequiredKeys(value, required, label) {
+  for (const key of required) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      schemaError(`${label} is missing required property: ${key}`);
+    }
+  }
+}
+
+function assertNonEmptyString(value, label, pattern = null) {
+  if (typeof value !== "string" || value.length === 0) {
+    schemaError(`${label} must be a non-empty string`);
+  }
+  if (pattern && !pattern.test(value)) {
+    schemaError(`${label} has invalid format: ${value}`);
+  }
+}
+
+function assertStringArray(value, label, { minItems = 0, unique = false } = {}) {
+  if (!Array.isArray(value)) schemaError(`${label} must be an array`);
+  if (value.length < minItems) schemaError(`${label} must contain at least ${minItems} item(s)`);
+  for (let index = 0; index < value.length; index += 1) {
+    assertNonEmptyString(value[index], `${label}[${index}]`);
+  }
+  if (unique && new Set(value).size !== value.length) {
+    schemaError(`${label} must contain unique items`);
+  }
+}
+
+function validateManifestShape(manifest) {
+  assertObject(manifest, "manifest");
+  assertAllowedKeys(manifest, MANIFEST_KEYS, "manifest");
+  assertRequiredKeys(manifest, MANIFEST_KEYS, "manifest");
+
+  if (manifest.schema !== MANIFEST_SCHEMA) {
+    schemaError(`schema must equal ${MANIFEST_SCHEMA}`);
+  }
+  assertNonEmptyString(manifest.runtime, "runtime", /^[a-z0-9][a-z0-9-]*$/);
+  assertNonEmptyString(manifest.version, "version");
+  assertStringArray(manifest.sourceRoots, "sourceRoots", { minItems: 1, unique: true });
+
+  if (!Array.isArray(manifest.managedAssets)) schemaError("managedAssets must be an array");
+  for (let index = 0; index < manifest.managedAssets.length; index += 1) {
+    const asset = manifest.managedAssets[index];
+    const label = `managedAssets[${index}]`;
+    assertObject(asset, label);
+    assertAllowedKeys(asset, MANAGED_ASSET_KEYS, label);
+    assertRequiredKeys(asset, ["type", "source", "output"], label);
+    if (!MANAGED_ASSET_TYPES.has(asset.type)) {
+      schemaError(`${label}.type must be one of file, tree, symlink`);
+    }
+    assertNonEmptyString(asset.source, `${label}.source`);
+    assertNonEmptyString(asset.output, `${label}.output`);
+    if (Object.prototype.hasOwnProperty.call(asset, "exclude")) {
+      assertStringArray(asset.exclude, `${label}.exclude`, { unique: true });
+    }
+  }
+
+  assertStringArray(manifest.preservedProjectPaths, "preservedProjectPaths", { unique: true });
+  assertStringArray(manifest.generatedInputs, "generatedInputs", { unique: true });
+  assertStringArray(manifest.entrypoints, "entrypoints", { unique: true });
+  assertStringArray(manifest.healthChecks, "healthChecks", { unique: true });
 }
 
 function assertRelativePath(value, label) {
@@ -81,13 +162,10 @@ function assertSemanticDuplicates(manifest) {
 }
 
 export function validateRuntimeManifest(manifest) {
-  // Keep contract-specific fail-closed errors stable instead of leaking Ajv's
+  // Keep contract-specific fail-closed errors stable instead of leaking
   // implementation wording for duplicate ownership declarations.
   assertSemanticDuplicates(manifest);
-
-  if (!validateManifestSchema(manifest)) {
-    throw new Error(`runtime manifest schema invalid: ${displayErrors(validateManifestSchema.errors)}`);
-  }
+  validateManifestShape(manifest);
 
   const roots = manifest.sourceRoots.map((root) => assertRelativePath(root, "source root"));
   assertUnique(roots, "source root");
