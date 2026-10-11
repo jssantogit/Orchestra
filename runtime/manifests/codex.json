@@ -2,7 +2,7 @@
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "codex",
   "version": "1.0.0-rc.0",
-  "sourceRoots": ["core", "providers/codex", "runtimes/codex", "schemas"],
+  "sourceRoots": ["core", "providers/codex", "runtimes/codex", "runtime", "schemas"],
   "managedAssets": [
     { "type": "file", "source": "runtimes/codex/.codex/config.toml", "output": ".codex/config.toml" },
     { "type": "file", "source": "runtimes/codex/.codex/hooks.json", "output": ".codex/hooks.json" },
@@ -11,11 +11,15 @@
       "type": "tree",
       "source": "runtimes/codex/.codex/astra-orchestra",
       "output": ".codex/astra-orchestra",
-      "exclude": ["core/**", "provider/**"]
+      "exclude": ["core/**", "provider/**", "runtime/**"]
     },
     { "type": "tree", "source": "core", "output": ".codex/astra-orchestra/core" },
     { "type": "tree", "source": "schemas", "output": ".codex/astra-orchestra/core/schemas" },
-    { "type": "tree", "source": "providers/codex", "output": ".codex/astra-orchestra/provider/codex" }
+    { "type": "tree", "source": "providers/codex", "output": ".codex/astra-orchestra/provider/codex" },
+    { "type": "file", "source": "runtime/project-runtime-manager.mjs", "output": ".codex/astra-orchestra/runtime/project-runtime-manager.mjs" },
+    { "type": "file", "source": "runtime/project-state-ignore.mjs", "output": ".codex/astra-orchestra/runtime/project-state-ignore.mjs" },
+    { "type": "file", "source": "runtime/manifest-loader.mjs", "output": ".codex/astra-orchestra/runtime/manifest-loader.mjs" },
+    { "type": "file", "source": "runtime/manifests/codex.json", "output": ".codex/astra-orchestra/runtime/manifests/codex.json" }
   ],
   "preservedProjectPaths": [
     ".codex/orchestra-state",
@@ -25,14 +29,15 @@
     ".codex/runtime-management",
     ".orchestra/state"
   ],
-  "generatedInputs": ["core", "schemas", "providers/codex"],
+  "generatedInputs": ["core", "schemas", "providers/codex", "runtime/project-runtime-manager.mjs", "runtime/project-state-ignore.mjs", "runtime/manifest-loader.mjs", "runtime/manifests/codex.json"],
   "entrypoints": [
     ".codex/config.toml",
     ".codex/hooks.json",
     ".codex/astra-orchestra/routing-policy.mjs",
     ".codex/astra-orchestra/session-hook.mjs",
     ".codex/astra-orchestra/session-post-tool-hook.mjs",
-    ".codex/astra-orchestra/codex-runtime-cli.mjs"
+    ".codex/astra-orchestra/codex-runtime-cli.mjs",
+    ".codex/astra-orchestra/provider/codex/project-runtime-manager.mjs"
   ],
   "healthChecks": ["schema-freshness", "runtime-core-freshness", "provider-firewall", "contamination"]
 }
