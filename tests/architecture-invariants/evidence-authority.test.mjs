@@ -26,6 +26,7 @@ const federationAdapters = [
 const inspector = read("runtimes/antigravity/.agents/skills/orchestra/evidence-inspector.mjs");
 const providerRegistry = read("runtimes/antigravity/.agents/skills/orchestra/evidence-provider-registry.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
+const preToolLegacy = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
 const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
 
 test("ARCH-EVIDENCE-01: CI_WAIT and remote validation failure are first-class control-plane states", () => {
@@ -78,10 +79,18 @@ test("ARCH-EVIDENCE-05: missing child-owned local evidence is blocked before del
 });
 
 test("ARCH-EVIDENCE-06: structured requiredEvidence survives delegation and can explicitly clear inherited tests", () => {
-  assert.match(preTool, /hasRequiredEvidence/);
-  assert.match(preTool, /requiredEvidence:/);
-  assert.match(preTool, /extracted\.hasTestsRequired\s*\?\s*extracted\.testsRequired\s*:\s*baseTestsRequired/);
-  assert.match(preTool, /extracted\.hasRequiredEvidence\s*\?\s*extracted\.requiredEvidence\s*:\s*baseRequiredEvidence/);
+  assert.match(preToolLegacy, /hasRequiredEvidence/);
+  assert.match(preToolLegacy, /requiredEvidence:/);
+  assert.match(preToolLegacy, /extracted\.hasTestsRequired\s*\?\s*extracted\.testsRequired\s*:\s*baseTestsRequired/);
+  assert.match(preToolLegacy, /extracted\.hasRequiredEvidence\s*\?\s*extracted\.requiredEvidence\s*:\s*baseRequiredEvidence/);
+});
+
+test("ARCH-EVIDENCE-06B: public pre-tool facade owns global side-effect authorization before compatibility delegation", () => {
+  const boundaryAt = preTool.indexOf("if (enforceGlobalSideEffectBoundary(input)) return;");
+  const legacyAt = preTool.indexOf("const result = spawnSync(process.execPath, [legacyHook]");
+  assert.match(preTool, /authorizeToolCapability/);
+  assert.ok(boundaryAt >= 0, "public pre-tool facade must enforce the global side-effect boundary");
+  assert.ok(legacyAt > boundaryAt, "global side-effect authorization must run before compatibility delegation");
 });
 
 
