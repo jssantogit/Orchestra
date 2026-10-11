@@ -34,7 +34,7 @@ test("session identity is persisted as hashed provenance while generation is the
     assert.match(source, /STALE_WORK_LEASE/);
     assert.match(source, /generation/);
     assert.match(source, /WORKSPACE_EDIT/);
-    assert.match(source, /return "dual"/);
+    assert.match(source, /return "lease"/);
     assert.match(source, /return VALID_MODES\.has\(normalized\) \? normalized : "session"/);
   }
   assert.match(codex, /work-lease-session-bindings\.json/);
