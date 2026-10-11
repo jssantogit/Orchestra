@@ -53,6 +53,20 @@ function isExcluded(path, patterns = []) {
   });
 }
 
+function assertSafeOutputDir(outputDir) {
+  if (typeof outputDir !== "string" || outputDir.length === 0) {
+    throw new Error("outputDir must be a non-empty path");
+  }
+  const absoluteOutput = resolve(outputDir);
+  const containsRepo = absoluteOutput === repoRoot || repoRoot.startsWith(`${absoluteOutput}${sep}`);
+  if (containsRepo) {
+    const error = new Error(`UNSAFE_RUNTIME_OUTPUT_DIR: ${absoluteOutput}`);
+    error.code = "UNSAFE_RUNTIME_OUTPUT_DIR";
+    throw error;
+  }
+  return absoluteOutput;
+}
+
 async function ensureParent(path) {
   await mkdir(dirname(path), { recursive: true });
 }
@@ -160,12 +174,8 @@ async function listBuildFiles(root, current = root) {
 }
 
 export async function buildRuntime({ runtime, outputDir }) {
-  if (typeof outputDir !== "string" || outputDir.length === 0) {
-    throw new Error("outputDir must be a non-empty path");
-  }
-
+  const absoluteOutput = assertSafeOutputDir(outputDir);
   const manifest = await loadRuntimeManifest(runtime);
-  const absoluteOutput = resolve(outputDir);
   await rm(absoluteOutput, { recursive: true, force: true });
   await mkdir(absoluteOutput, { recursive: true });
 
