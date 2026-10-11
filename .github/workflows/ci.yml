@@ -202,3 +202,7 @@ jobs:
       - name: Regression Architecture Invariants
         if: always()
         run: npm run test:architecture-invariants
+
+      - name: Regression Full Wrapper
+        if: always()
+        run: npm test
