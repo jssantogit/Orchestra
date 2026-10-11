@@ -65,7 +65,7 @@ jobs:
 
       - name: Verify manifest project manager and self-contained installs
         run: |
-          node --test tests/installers/manifest-project-runtime-manager.test.mjs tests/leases/project-state-ignore.test.mjs
+          node --test tests/installers/provider-project-runtime-wrappers.test.mjs tests/installers/manifest-project-runtime-manager.test.mjs tests/leases/project-state-ignore.test.mjs
           npm run test:installers
 
       - name: Run manifest-driven Doctor
