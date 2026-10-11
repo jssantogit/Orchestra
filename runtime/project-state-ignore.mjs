@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const START = "# >>> orchestra managed state >>>";
@@ -17,13 +17,17 @@ function replaceManagedBlock(text) {
 }
 
 export function ensureProjectStateIgnored(targetDir) {
-  const infoDir = join(targetDir, ".git", "info");
+  const gitDir = join(targetDir, ".git");
+  if (!existsSync(gitDir) || !statSync(gitDir).isDirectory()) {
+    return { changed: false, path: null, reason: "GIT_METADATA_UNAVAILABLE" };
+  }
+  const infoDir = join(gitDir, "info");
   const path = join(infoDir, "exclude");
   mkdirSync(infoDir, { recursive: true });
   const before = existsSync(path) ? readFileSync(path, "utf8") : "";
   const after = replaceManagedBlock(before);
   const normalized = after.endsWith("\n") ? after : `${after}\n`;
-  if (normalized === before) return { changed: false, path };
+  if (normalized === before) return { changed: false, path, reason: null };
   writeFileSync(path, normalized, "utf8");
-  return { changed: true, path };
+  return { changed: true, path, reason: null };
 }
