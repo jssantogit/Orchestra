@@ -87,7 +87,7 @@ test("codex manifest owns the proven runtime image while core and provider stay 
   }
 });
 
-test("antigravity manifest owns hooks agents skills provider/core payload and compatibility entrypoints", async () => {
+test("antigravity manifest owns provider/core payload while Dream is sourced from Labs", async () => {
   const { loadRuntimeManifest } = await runtimeManifestApi();
   const manifest = await loadRuntimeManifest("antigravity");
 
@@ -95,12 +95,14 @@ test("antigravity manifest owns hooks agents skills provider/core payload and co
   assert.ok(manifest.sourceRoots.includes("core"));
   assert.ok(manifest.sourceRoots.includes("providers/antigravity"));
   assert.ok(manifest.sourceRoots.includes("runtimes/antigravity"));
+  assert.ok(manifest.sourceRoots.includes("labs/dream"));
   assert.ok(manifest.sourceRoots.includes("schemas"));
 
   assert.equal(findAsset(manifest, "GEMINI.md")?.source, "runtimes/antigravity/GEMINI.md");
   assert.equal(findAsset(manifest, ".agents/hooks.json")?.source, "runtimes/antigravity/.agents/hooks.json");
   assert.equal(findAsset(manifest, ".agents/hooks")?.source, "runtimes/antigravity/.agents/hooks");
   assert.equal(findAsset(manifest, ".agents/agents")?.source, "runtimes/antigravity/.agents/agents");
+  assert.equal(findAsset(manifest, ".agents/dream")?.source, "labs/dream/runtime");
   assert.equal(findAsset(manifest, ".agents/skills/orchestra/core")?.source, "core");
   assert.equal(findAsset(manifest, ".agents/skills/orchestra/core/schemas")?.source, "schemas");
   assert.equal(findAsset(manifest, ".agents/skills/orchestra/provider/antigravity")?.source, "providers/antigravity");
