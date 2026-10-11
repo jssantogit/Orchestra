@@ -23,11 +23,14 @@ jobs:
       - name: Install development dependencies
         run: npm ci --ignore-scripts
 
-      - name: Verify canonical generated artifacts
-        run: |
-          npm run check:schemas
-          npm run check:runtime-core
-          git diff --check
+      - name: Verify generated schema freshness
+        run: npm run check:schemas
+
+      - name: Verify runtime-core freshness
+        run: npm run check:runtime-core
+
+      - name: Verify patch whitespace
+        run: git diff --check
 
       - name: Verify manifest-driven runtime distributions
         run: |
