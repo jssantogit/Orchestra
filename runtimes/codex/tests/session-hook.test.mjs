@@ -25,17 +25,20 @@ function project() {
   cpSync(join(runtimeDir, "session-authority.mjs"), join(root, ".codex", "astra-orchestra", "session-authority.mjs"));
   cpSync(join(runtimeDir, "session-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-hook.mjs"));
   cpSync(join(runtimeDir, "verification-guard.mjs"), join(root, ".codex", "astra-orchestra", "verification-guard.mjs"));
+  cpSync(join(runtimeDir, "work-lease-authority.mjs"), join(root, ".codex", "astra-orchestra", "work-lease-authority.mjs"));
+  cpSync(join(runtimeDir, "core"), join(root, ".codex", "astra-orchestra", "core"), { recursive: true });
   git(root, "add", ".");
   git(root, "commit", "-qm", "init");
   mkdirSync(join(root, ".codex", "orchestra-state"), { recursive: true });
   return root;
 }
 
-function hook(root, payload) {
+function hook(root, payload, { authorityMode = "session" } = {}) {
   return spawnSync(process.execPath, [join(root, ".codex", "astra-orchestra", "session-hook.mjs")], {
     cwd: root,
     encoding: "utf8",
     input: JSON.stringify({ cwd: root, ...payload }),
+    env: { ...process.env, ORCHESTRA_AUTHORITY_MODE: authorityMode },
   });
 }
 
@@ -43,7 +46,7 @@ function jsonOut(result) {
   return result.stdout.trim() ? JSON.parse(result.stdout) : null;
 }
 
-test("SessionStart bootstrap plus PreToolUse enforce factual root identity", () => {
+test("SessionStart bootstrap plus PreToolUse enforce factual root identity in session rollback mode", () => {
   const root = project();
   try {
     const start = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" });
@@ -57,6 +60,39 @@ test("SessionStart bootstrap plus PreToolUse enforce factual root identity", () 
     const foreign = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } });
     assert.equal(foreign.status, 0);
     assert.equal(jsonOut(foreign).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("dual mode fresh root advances Work Lease control without prepared handoff and fences former root", () => {
+  const root = project();
+  try {
+    const first = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" }, { authorityMode: "dual" });
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(jsonOut(first).hookSpecificOutput.additionalContext, /WORK LEASE AUTHORITY/);
+
+    writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"), JSON.stringify({
+      taskId: "task-1",
+      state: "VERIFYING",
+      candidateId: "candidate-7",
+    }, null, 2) + "\n");
+
+    const second = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-b" }, { authorityMode: "dual" });
+    assert.equal(second.status, 0, second.stderr);
+    const context = jsonOut(second).hookSpecificOutput.additionalContext;
+    assert.match(context, /WORK LEASE AUTHORITY/);
+    assert.match(context, /generation=1/);
+    assert.doesNotMatch(context, /HANDOFF REQUIRED/);
+
+    const formerPrompt = hook(root, { hook_event_name: "UserPromptSubmit", session_id: "root-a", prompt: "keep working" }, { authorityMode: "dual" });
+    assert.equal(jsonOut(formerPrompt).decision, "block");
+    assert.match(jsonOut(formerPrompt).reason, /WORK_LEASE_AUTHORITY_DENIED/);
+
+    const currentRead = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "Bash", tool_input: { command: "git status --short" } }, { authorityMode: "dual" });
+    assert.equal(currentRead.status, 0, currentRead.stderr);
+    assert.equal(currentRead.stdout.trim(), "");
+
+    const persisted = readFileSync(join(root, ".orchestra", "state", "work-lease.json"), "utf8");
+    assert.doesNotMatch(persisted, /root-a|root-b/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -86,7 +122,7 @@ test("fresh Codex root claims an armed boundary automatically and former root lo
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("fresh Codex root without valid lease receives no current task capsule and cannot use tools", () => {
+test("fresh Codex root without valid handoff receives no current task capsule and cannot use tools in session mode", () => {
   const root = project();
   try {
     hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" });
