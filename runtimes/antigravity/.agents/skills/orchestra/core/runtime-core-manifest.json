@@ -162,6 +162,10 @@
       "sha256": "608543cc0e713c0d1fce027f69da5506d6906e625765e97aad272dca1b15350f"
     },
     {
+      "path": "schemas/runtime-manifest.v1.schema.json",
+      "sha256": "831174d88618ef22af3344b51ad1a3a27bb212dd35bc9a0f2a7c28d1522b08e9"
+    },
+    {
       "path": "schemas/scope-contract.v2.schema.json",
       "sha256": "b446884d83fdde0c6d86684c0d1058d5a1dc10e2b761f2e0eb769f81a28d0ffb"
     },
