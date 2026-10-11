@@ -37,6 +37,10 @@ jobs:
         run: |
           npm run test:direct-work
 
+      - name: Run Work Lease Authority Tests
+        run: |
+          npm run test:leases
+
       - name: Run Doctor & Health Checks
         run: |
           ./scripts/doctor.sh
