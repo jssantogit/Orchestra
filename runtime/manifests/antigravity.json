@@ -1,0 +1,42 @@
+{
+  "schema": "orchestra.runtime-manifest.v1",
+  "runtime": "antigravity",
+  "version": "0.10.0",
+  "sourceRoots": ["core", "providers/antigravity", "runtimes/antigravity", "schemas"],
+  "managedAssets": [
+    { "type": "file", "source": "runtimes/antigravity/GEMINI.md", "output": "GEMINI.md" },
+    { "type": "file", "source": "runtimes/antigravity/.agents/hooks.json", "output": ".agents/hooks.json" },
+    { "type": "tree", "source": "runtimes/antigravity/.agents/hooks", "output": ".agents/hooks" },
+    { "type": "tree", "source": "runtimes/antigravity/.agents/agents", "output": ".agents/agents" },
+    {
+      "type": "tree",
+      "source": "runtimes/antigravity/.agents/skills",
+      "output": ".agents/skills",
+      "exclude": ["orchestra/core/**", "orchestra/provider/**"]
+    },
+    { "type": "tree", "source": "runtimes/antigravity/.agents/dream", "output": ".agents/dream" },
+    { "type": "tree", "source": "core", "output": ".agents/skills/orchestra/core" },
+    { "type": "tree", "source": "schemas", "output": ".agents/skills/orchestra/core/schemas" },
+    { "type": "tree", "source": "providers/antigravity", "output": ".agents/skills/orchestra/provider/antigravity" }
+  ],
+  "preservedProjectPaths": [
+    ".agents/rules",
+    ".agents/state",
+    ".agents/telemetry",
+    ".agents/dream-data",
+    ".agents/artifacts",
+    ".agents/semantic",
+    ".agents/runtime-management",
+    ".orchestra/state"
+  ],
+  "generatedInputs": ["core", "schemas", "providers/antigravity"],
+  "entrypoints": [
+    "GEMINI.md",
+    ".agents/hooks/pre-tool-enforce.mjs",
+    ".agents/hooks/stop-guard.mjs",
+    ".agents/skills/orchestra/project-runtime-cli.mjs",
+    ".agents/skills/orchestra/orchestrator-handoff-cli.mjs",
+    ".agents/skills/agy-orchestra"
+  ],
+  "healthChecks": ["schema-freshness", "runtime-core-freshness", "provider-firewall", "contamination"]
+}

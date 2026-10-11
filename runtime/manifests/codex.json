@@ -1,0 +1,38 @@
+{
+  "schema": "orchestra.runtime-manifest.v1",
+  "runtime": "codex",
+  "version": "0.10.0",
+  "sourceRoots": ["core", "providers/codex", "runtimes/codex", "schemas"],
+  "managedAssets": [
+    { "type": "file", "source": "runtimes/codex/.codex/config.toml", "output": ".codex/config.toml" },
+    { "type": "file", "source": "runtimes/codex/.codex/hooks.json", "output": ".codex/hooks.json" },
+    { "type": "tree", "source": "runtimes/codex/.codex/agents", "output": ".codex/agents" },
+    {
+      "type": "tree",
+      "source": "runtimes/codex/.codex/astra-orchestra",
+      "output": ".codex/astra-orchestra",
+      "exclude": ["core/**", "provider/**"]
+    },
+    { "type": "tree", "source": "core", "output": ".codex/astra-orchestra/core" },
+    { "type": "tree", "source": "schemas", "output": ".codex/astra-orchestra/core/schemas" },
+    { "type": "tree", "source": "providers/codex", "output": ".codex/astra-orchestra/provider/codex" }
+  ],
+  "preservedProjectPaths": [
+    ".codex/orchestra-state",
+    ".codex/orchestra-telemetry",
+    ".codex/orchestra-artifacts",
+    ".codex/orchestra-semantic",
+    ".codex/runtime-management",
+    ".orchestra/state"
+  ],
+  "generatedInputs": ["core", "schemas", "providers/codex"],
+  "entrypoints": [
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/astra-orchestra/routing-policy.mjs",
+    ".codex/astra-orchestra/session-hook.mjs",
+    ".codex/astra-orchestra/session-post-tool-hook.mjs",
+    ".codex/astra-orchestra/codex-runtime-cli.mjs"
+  ],
+  "healthChecks": ["schema-freshness", "runtime-core-freshness", "provider-firewall", "contamination"]
+}
