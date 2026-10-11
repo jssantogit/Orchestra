@@ -1,9 +1,9 @@
 import { normalizeSessionActor } from "./session.mjs";
 
 const READ_TOOLS = new Set(["view_file", "read_file", "grep_search", "grep", "find_by_name", "list_dir", "list_files", "search"]);
-const WRITE_TOOLS = new Set(["replace_file_content", "multi_replace_file_content", "write_file", "apply_patch", "delete_file"]);
+const WRITE_TOOLS = new Set(["replace_file_content", "multi_replace_file_content", "write_file", "write_to_file", "edit_file", "create_file", "apply_patch", "delete_file"]);
 const COMMAND_TOOLS = new Set(["run_command", "shell", "exec"]);
-const CONTROL_TOOLS = new Set(["invoke_subagent", "send_message"]);
+const CONTROL_TOOLS = new Set(["invoke_subagent", "define_subagent", "manage_subagents", "manage_task", "schedule", "send_message"]);
 
 function clean(value, max = 500) {
   const text = String(value ?? "").trim();
@@ -47,7 +47,7 @@ export function normalizeToolEvent(providerPayload = {}) {
       sideEffectClass = "UNKNOWN";
       target = "shell";
     } else if (CONTROL_TOOLS.has(toolName)) {
-      operation = toolName === "invoke_subagent" ? "DELEGATE" : "MESSAGE";
+      operation = toolName === "invoke_subagent" ? "DELEGATE" : (toolName === "send_message" ? "MESSAGE" : "CONTROL");
       sideEffectClass = "CONTROL_PLANE";
       target = null;
     }
