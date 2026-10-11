@@ -54,8 +54,14 @@ jobs:
       - name: Verify Jev compatibility Lab
         run: npm run test:jev
 
-      - name: Verify canonical zero-authority Lab contracts
-        run: npm run test:labs
+      - name: Verify shared Lab authority boundary
+        run: node --test tests/labs/lab-authority.test.mjs
+
+      - name: Verify canonical Dream Lab source
+        run: node --test tests/labs/dream-canonical.test.mjs
+
+      - name: Verify canonical Jev Lab source
+        run: node --test tests/labs/jev-canonical.test.mjs
 
       - name: Verify manifest project manager and self-contained installs
         run: |
