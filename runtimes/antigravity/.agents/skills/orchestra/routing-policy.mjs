@@ -8,9 +8,96 @@ import * as legacyRouting from "./routing-policy-legacy.mjs";
 
 // Compatibility facade for the Antigravity runtime. Provider-neutral
 // classification/escalation live in core and concrete Gemini mapping lives in
-// the Antigravity catalog. The legacy engine remains the behavior oracle while
-// later plan tasks extract enforcement/state responsibilities behind owners.
-export * from "./routing-policy-legacy.mjs";
+// the provider catalog. Keep the historical API explicit so legacy additions
+// cannot cross the facade boundary without an intentional compatibility edit.
+export {
+  TASK_DOMAINS,
+  GEMINI_MODELS,
+  ANTIGRAVITY_MODELS,
+  FORBIDDEN_MODELS,
+  STATE_NAMES,
+  VALID_TRANSITIONS,
+  validateStateTransition,
+  createAstraEscalationPacket,
+  createUnresolvedDecisionPacket,
+  createAcceptanceGate,
+  createCrossDomainRequest,
+  createIntegrationContract,
+  createImplementationHandoff,
+  createIndependentReviewPacket,
+  createTwoKeyReviewPacket,
+  evaluateTwoKeyReview,
+  validateAcceptanceEligibility,
+  createRetryBudget,
+  createScopeContract,
+  createStateSnapshot,
+  createTelemetryEvent,
+  directWriteDecision,
+  consumeRetryBudget,
+  normalizeCriticality,
+  normalizeTaskDomain,
+  normalizeTaskAction,
+  reviewRoute,
+  requiresIntegration,
+  summarizePolicyDrift,
+  validateScopeContract,
+  PROGRESSIVE_TEST_STAGES,
+  RETRY_REASONS,
+  decideAntigravityRoute,
+  reviewAntigravityRoute,
+  getProgressiveTestStage,
+  createDeltaRetryPacket,
+  createOpusReviewPacket,
+  detectCoordinationOverhead,
+  detectContextBloat,
+  checkLoopCircuitBreakers,
+  calculateEfficiencyMetrics,
+  formatTestResultSummary,
+  CIRCUIT_BREAKER_THRESHOLDS,
+  extractRealShellRedirections,
+  classifyExecutionEvidence,
+  isHeavyExecution,
+  createHeavyExecutionHandoff,
+  createDisposableWorkerPacket,
+  validateDisposableWorkerResult,
+  checkPollingBudget,
+  calculateContextAmplification,
+  detectHookFriction,
+  TOOL_OUTPUT_LIMITS,
+  POLLING_POLICY,
+  SHELL_INTENTS,
+  TOOL_POLICY_THRESHOLDS,
+  classifyShellIntent,
+  createInitialToolMix,
+  calculateToolMixMetrics,
+  detectShellOveruse,
+  detectExplorationOverhead,
+  createMutationRecord,
+  recordMutation,
+  isPathDocsOrSpec,
+  isPathCore,
+  isPathApp,
+  checkEvidenceFreshness,
+  findReusableEvidence,
+  verifyWorkerValidation,
+  recordNativeToolFallback,
+  WORKER_PACKET_LIMITS,
+  validateWorkerPacket,
+  calculateViewTargetWindow,
+  classifyShellMutation,
+  trackGitInspection,
+  createAdvisory,
+  deliverPendingAdvisories,
+  consumeDeliveredAdvisories,
+  planVerificationBatch,
+  DIRECT_ACTION_TYPES,
+  normalizeDirectActionType,
+  classifyDirectActionIntent,
+  GIT_EFFECT_TAXONOMY,
+  classifyGitEffect,
+  detectDirectActionOverhead,
+  detectDirectActionOverthinking,
+} from "./routing-policy-legacy.mjs";
 
 function neutralRole(facts = {}) {
   const action = String(facts?.taskAction ?? facts?.nextTaskAction ?? facts?.action ?? "")
@@ -61,9 +148,6 @@ function runJsonCli() {
   console.log(JSON.stringify(decideRoute(facts)));
 }
 
-// Preserve the historical executable contract at the public entrypoint. The
-// legacy module's own main guard is intentionally false when it is imported by
-// this facade, so CLI ownership must stay here during staged extraction.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runJsonCli();
 }
