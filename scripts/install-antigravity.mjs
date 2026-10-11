@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
-import {
-  installProjectRuntime,
-} from "../runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs";
+import { buildRuntime } from "../runtime/runtime-builder.mjs";
+import { loadRuntimeManifest } from "../runtime/manifest-loader.mjs";
+import { installProjectRuntime } from "../runtime/project-runtime-manager.mjs";
 
 const args = process.argv.slice(2);
 if (args.length < 1) {
@@ -13,39 +15,35 @@ if (args.length < 1) {
 }
 
 const targetDir = resolve(args[0]);
-const scriptDir = fileURLToPath(new URL(".", import.meta.url));
-const orchestraRoot = resolve(scriptDir, "..");
-const sourceRuntimeRoot = resolve(orchestraRoot, "runtimes", "antigravity");
+if (!existsSync(targetDir)) {
+  console.error(`Error: Target directory '${targetDir}' does not exist.`);
+  process.exit(1);
+}
 
+let buildRoot;
 try {
-  console.log("Installing Orchestra Antigravity runtime into '" + targetDir + "'...");
-  const result = installProjectRuntime({
-    sourceRuntimeRoot,
-    targetDir,
-  });
+  console.log(`Installing Orchestra Antigravity runtime into '${targetDir}'...`);
+  buildRoot = await mkdtemp(join(tmpdir(), "orchestra-antigravity-install-"));
+  const builtRuntime = join(buildRoot, "antigravity");
+  const runtimeManifest = await loadRuntimeManifest("antigravity");
+  await buildRuntime({ runtime: "antigravity", outputDir: builtRuntime });
+  const result = await installProjectRuntime({ targetDir, runtimeManifest, builtRuntime });
 
-  console.log("Antigravity runtime successfully installed to '" + resolve(targetDir, ".agents") + "'.");
-  console.log("Runtime metadata: " + resolve(targetDir, ".agents", "orchestra-runtime.json"));
-  console.log("Source commit: " + (result.metadata?.sourceCommit || "unknown"));
+  console.log(`Antigravity runtime successfully installed to '${resolve(targetDir, ".agents")}'.`);
+  console.log(`Version: ${result.metadata.version || "unknown"}`);
   console.log(
-    "Verify installation by running: node --test "
-    + resolve(targetDir, ".agents", "skills", "orchestra", "routing-policy.test.mjs")
+    `Verify installation by running: node --test ${resolve(targetDir, ".agents", "skills", "orchestra", "routing-policy.test.mjs")}`,
   );
 } catch (error) {
-  if (error?.code === "INSTALL_CONFLICT") {
-    console.error(
-      "Conflict detected: '" + resolve(targetDir, ".agents")
-      + "' or '" + resolve(targetDir, "GEMINI.md")
-      + "' already exists in target project."
-    );
+  if (error?.code === "RUNTIME_INSTALL_CONFLICT" || /RUNTIME_INSTALL_CONFLICT/.test(String(error?.message || ""))) {
+    console.error(`Conflict detected: managed Antigravity runtime paths already exist in '${targetDir}'.`);
     console.error("Aborting installation to prevent destructive overwriting.");
-    console.error(
-      "Use the updater instead: node scripts/orchestra-project.mjs update "
-      + JSON.stringify(targetDir)
-    );
-    process.exit(2);
+    console.error(`Use the updater instead: node scripts/orchestra-project.mjs update ${JSON.stringify(targetDir)}`);
+    process.exitCode = 2;
+  } else {
+    console.error(String(error?.message || error));
+    process.exitCode = 1;
   }
-
-  console.error(String(error?.message || error));
-  process.exit(1);
+} finally {
+  if (buildRoot) await rm(buildRoot, { recursive: true, force: true });
 }
