@@ -47,6 +47,5 @@ export function resolveRoutingProfile(facts = {}) {
 }
 
 export function decideRoute(facts = {}) {
-  resolveRoutingProfile(facts);
   return legacyRouting.decideRoute(facts);
 }
