@@ -26,6 +26,10 @@
       "sha256": "f9c488874b22a018b1877dea37dc2883c6c848c4f27062d3f25f2bcfd731cc9e"
     },
     {
+      "path": "domain/logical-role.mjs",
+      "sha256": "e32be10897f4978e8f511e57d628563f691d30bda3924132d7f84f3e415a06b0"
+    },
+    {
       "path": "domain/runtime-event.mjs",
       "sha256": "8cd130d37fbcdf262e3ca1a8a660e3a68e69964a2f6bec66dba351788c160c24"
     },
