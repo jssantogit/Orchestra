@@ -199,3 +199,47 @@ Workers may modify tests only when explicitly authorized. They repair only failu
 Quick Audit is an independent cheap read-only session scoped to the candidate diff plus explicit packet requirements. A finding is valid only when causally tied to changed code or an explicit acceptance/preservation criterion. The auditor does not coordinate the implementer. Control confirms a valid blocking finding and, when needed, issues a bounded Delta Packet that preserves lineage and cannot grant investigative discovery.
 
 `ORCHESTRA_DIRECT_WORK_MODE` is provider-neutral: unset/empty defaults to `on`; explicit `shadow` computes the lane without changing legacy routing; explicit `off` preserves legacy routing for rollback; invalid explicit values fail safe to `shadow`. Sol/control remains the sole acceptance authority in every mode.
+
+---
+
+## 10. Work Lease Authority
+
+Orchestra 1.x separates **identity provenance** from **project authority**.
+Provider-native session/conversation identity tells Orchestra who acted; it does
+not permanently own a project. The primary authority object is a provider-neutral
+Work Lease with an atomic generation fence.
+
+```text
+project lineage
+  -> workspace
+  -> work unit / candidate
+  -> Work Lease generation
+       |-> CONTROL
+       `-> WORKSPACE_EDIT (exclusive incompatible writer)
+```
+
+The canonical lease lives under `.orchestra/state/work-lease.json`, with atomic
+claim coordination under `.orchestra/state/`. This namespace is project-owned
+volatile governance state: runtime updates preserve it, product workspace
+fingerprints exclude it, and Orchestra manages a local `.git/info/exclude`
+entry instead of modifying tracked `.gitignore`.
+
+`ORCHESTRA_AUTHORITY_MODE` supports `session | dual | lease`. Unset or empty now
+defaults to `lease`; `dual` remains the migration compatibility path and
+`session` the temporary rollback path. Invalid explicit values fail safe to
+`session`.
+
+A fresh provider root can continue a factual candidate/evidence lineage without
+preparing a chat handoff when no incompatible writer is active. An active
+`WORKSPACE_EDIT` capability blocks takeover with `WRITE_LEASE_ACTIVE`. When a
+new compatible root advances the lease, the prior generation is fenced and any
+stale mutation attempt fails as `STALE_WORK_LEASE`.
+
+Work continuation is bounded to factual task/work state, candidate identity,
+evidence/audit references, blockers, approved direction, and lease generation.
+Transcripts, prompts, summaries, arbitrary previous-chat prose, and hidden
+reasoning are never authority inputs.
+
+The 0.9/0.10 provider handoff mechanisms remain available only as explicit
+recovery/debug tools and for `session` rollback mode. They are no longer the
+normal UX for moving development to a fresh orchestrator chat.
