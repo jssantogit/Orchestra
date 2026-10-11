@@ -37,7 +37,7 @@ test("ARCH-O02: session hooks choose session rollback or generation-fenced Work 
   assert.match(hookSource, /authorizeCodexLeaseCapability/);
   assert.match(hookSource, /permissionDecision:\s*"deny"/);
   assert.match(hookSource, /decision:\s*"block"/);
-  assert.match(leaseSource, /return "dual"/);
+  assert.match(leaseSource, /return "lease"/);
   assert.match(leaseSource, /STALE_WORK_LEASE/);
 });
 
