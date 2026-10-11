@@ -36,8 +36,8 @@ function runHook(script, root, payload, mode = "dual") {
   }));
 }
 
-test("authority mode defaults to dual and invalid values fail safe to session", () => {
-  assert.equal(resolveAntigravityAuthorityMode(undefined), "dual");
+test("authority mode defaults to lease and invalid values fail safe to session", () => {
+  assert.equal(resolveAntigravityAuthorityMode(undefined), "lease");
   assert.equal(resolveAntigravityAuthorityMode("dual"), "dual");
   assert.equal(resolveAntigravityAuthorityMode("lease"), "lease");
   assert.equal(resolveAntigravityAuthorityMode("session"), "session");
