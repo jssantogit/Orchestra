@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
 import { classifyTask } from "./core/routing/task-classification.mjs";
 import { escalateTask } from "./core/routing/escalation.mjs";
 import { resolveModelProfile } from "./provider/antigravity/model-catalog.mjs";
@@ -48,4 +51,19 @@ export function resolveRoutingProfile(facts = {}) {
 
 export function decideRoute(facts = {}) {
   return legacyRouting.decideRoute(facts);
+}
+
+function runJsonCli() {
+  if (process.argv[2] !== "--json") {
+    throw new Error("Usage: node routing-policy.mjs --json < facts.json");
+  }
+  const facts = JSON.parse(readFileSync(0, "utf8"));
+  console.log(JSON.stringify(decideRoute(facts)));
+}
+
+// Preserve the historical executable contract at the public entrypoint. The
+// legacy module's own main guard is intentionally false when it is imported by
+// this facade, so CLI ownership must stay here during staged extraction.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runJsonCli();
 }
