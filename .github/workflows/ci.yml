@@ -118,3 +118,4 @@ jobs:
           node scripts/contamination-check.mjs
 
 # Harness revision: validate ARCH-027 composition after Work Lease wrapper fix.
+# Harness revision: RED gate for Work Lease as the default authority mode.
