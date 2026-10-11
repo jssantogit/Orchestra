@@ -97,7 +97,7 @@ test("critical acceptance boundary routes to independent critical reviewer", () 
 
   assert.deepEqual(result, {
     nextRole: LOGICAL_ROLES.CRITICAL_REVIEWER,
-    intensity: "specialist",
+    intensity: "standard",
     terminal: false,
     reason: "CRITICAL_ACCEPTANCE_REVIEW_REQUIRED",
   });
