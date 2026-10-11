@@ -27,7 +27,7 @@ const inspector = read("runtimes/antigravity/.agents/skills/orchestra/evidence-i
 const providerRegistry = read("runtimes/antigravity/.agents/skills/orchestra/evidence-provider-registry.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
 const preToolLegacy = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
-const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
+const stop = read("runtimes/antigravity/.agents/hooks/stop-guard-legacy.mjs");
 
 test("ARCH-EVIDENCE-01: CI_WAIT and remote validation failure are first-class control-plane states", () => {
   assert.match(routing, /"CI_WAIT"/);
