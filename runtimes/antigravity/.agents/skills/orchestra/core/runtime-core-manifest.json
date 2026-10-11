@@ -3,11 +3,11 @@
   "files": [
     {
       "path": "acceptance/direct-work.mjs",
-      "sha256": "d9ab76fa819302c0fe7d33fcc3e30afba223891545481617bef8b8f28c8b16ff"
+      "sha256": "316cb592988465012cf4d6f0704e6ff1fa44b513969900e6ada43d7377dc0646"
     },
     {
       "path": "audit/quick-audit.mjs",
-      "sha256": "a794f91bee59f98ee0676bbd0f4383fd0df74fd28e477de0e3cdc8c54885051e"
+      "sha256": "4522258d44b48a7b80aad72efd0cbab29f153db93f4a95452cf807f119c8449f"
     },
     {
       "path": "domain/audit-result.mjs",
@@ -51,11 +51,11 @@
     },
     {
       "path": "policy/discovery-authorization.mjs",
-      "sha256": "3db1c4b365c6cf2b9995f52e0068e5a14ed9ffe0f315ddcd6f41b29b685ce0a9"
+      "sha256": "f8abaf9e5e2af62d38897bb496cf6413dfff720f3976b0b48d1a7f5ea4ebffba"
     },
     {
       "path": "policy/test-mutation.mjs",
-      "sha256": "801787a1da9709cce5514a8afc7ef1fe7793ed1297aa0eddcf23659490b51e59"
+      "sha256": "4dc9f48cf8d3680e4af28a83c86977838e1ea22d65744fc221d1ef555f782715"
     },
     {
       "path": "schema/generated/audit-result.v1.mjs",
@@ -99,7 +99,7 @@
     },
     {
       "path": "schemas/delta-packet.v1.schema.json",
-      "sha256": "d7be57ca6728dcf6c1e72a97646e28fa76ce6cd2bb0e25c5797e0e8fb8684e69"
+      "sha256": "3a7295478c0933eef28eb88eff50ce49dae21c4770092b6728f6cb8d7200665c"
     },
     {
       "path": "schemas/evidence.v1.schema.json",
@@ -123,27 +123,27 @@
     },
     {
       "path": "workflow/delta-packet.mjs",
-      "sha256": "f458914393abe380402d65a9d57cdc0ec38bcf3c50008242c26b860497a15c77"
+      "sha256": "f8ee0c4f4907bce9b9b0b417b7bd7ebc0a3492d25e025a71502a2e8242d565d6"
     },
     {
       "path": "workflow/direct-work-policy.mjs",
-      "sha256": "20fa742d8716c717038956551200224243364b58350245733756170cc3e2708f"
+      "sha256": "78736e9fa5d8b0ec66492e96a455c29813094b28de00f2b25d57903b268d8d10"
     },
     {
       "path": "workflow/direct-work-state.mjs",
-      "sha256": "6715fcf3dc1902f150f35f73bd7718ba2087e2cadde74d88a2fcbdedec6bfae7"
+      "sha256": "aba8b2b8a4f9b910a7c36081f171162ae7098b7ce5801938f92e3a2842e23c94"
     },
     {
       "path": "workflow/implementation-packet.mjs",
-      "sha256": "eaf441af536b237162b86c5ba0b3e75ff9d53bb6056dd72339200b19403b5f7d"
+      "sha256": "9a4da9666159c9fcd19190766e48490e68c2d29606268b0cf908512f63d4d448"
     },
     {
       "path": "workflow/implementation-result.mjs",
-      "sha256": "89a36cde8e822817f30291cef73f4b9b9740425298672340704376041d602052"
+      "sha256": "9772b4363da8cd4b71d80f3b3a966b165e80a826a10a34127fc28f4e49e77189"
     },
     {
       "path": "workflow/verification-fanout.mjs",
-      "sha256": "ab3e5020a79db366c6837825ec397df77a7e3fc7abf314906e3e4d84fb0f7b14"
+      "sha256": "9693b12a1b5ec9882f5b1947af0d9067fcff4e1c42a09ac54dc3c9665c652f91"
     }
   ]
 }
