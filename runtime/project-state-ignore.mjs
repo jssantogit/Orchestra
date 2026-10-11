@@ -3,7 +3,21 @@ import { join } from "node:path";
 
 const START = "# >>> orchestra managed state >>>";
 const END = "# <<< orchestra managed state <<<";
-const BLOCK = `${START}\n.orchestra/state/**\n${END}`;
+const MANAGED_PATTERNS = Object.freeze([
+  ".orchestra/state/**",
+  ".codex/orchestra-state/**",
+  ".codex/orchestra-telemetry/**",
+  ".codex/orchestra-artifacts/**",
+  ".codex/orchestra-semantic/**",
+  ".codex/runtime-management/**",
+  ".agents/state/**",
+  ".agents/telemetry/**",
+  ".agents/dream-data/**",
+  ".agents/artifacts/**",
+  ".agents/semantic/**",
+  ".agents/runtime-management/**",
+]);
+const BLOCK = `${START}\n${MANAGED_PATTERNS.join("\n")}\n${END}`;
 
 function replaceManagedBlock(text) {
   const start = text.indexOf(START);
@@ -31,3 +45,5 @@ export function ensureProjectStateIgnored(targetDir) {
   writeFileSync(path, normalized, "utf8");
   return { changed: true, path, reason: null };
 }
+
+export { MANAGED_PATTERNS as ORCHESTRA_LOCAL_STATE_IGNORE_PATTERNS };
