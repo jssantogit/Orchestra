@@ -78,10 +78,17 @@ jobs:
       - name: Verify canonical Jev Lab source
         run: node --test tests/labs/jev-canonical.test.mjs
 
-      - name: Verify manifest project manager and self-contained installs
-        run: |
-          node --test tests/installers/provider-project-runtime-wrappers.test.mjs tests/installers/manifest-project-runtime-manager.test.mjs tests/leases/project-state-ignore.test.mjs
-          npm run test:installers
+      - name: Verify provider project runtime wrappers
+        run: node --test tests/installers/provider-project-runtime-wrappers.test.mjs
+
+      - name: Verify manifest project runtime manager
+        run: node --test tests/installers/manifest-project-runtime-manager.test.mjs
+
+      - name: Verify project-state ignore behavior
+        run: node --test tests/leases/project-state-ignore.test.mjs
+
+      - name: Verify full installer suite
+        run: npm run test:installers
 
       - name: Run manifest-driven Doctor
         run: npm run doctor
