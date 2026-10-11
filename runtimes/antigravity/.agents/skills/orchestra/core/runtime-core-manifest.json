@@ -82,6 +82,14 @@
       "sha256": "4dc9f48cf8d3680e4af28a83c86977838e1ea22d65744fc221d1ef555f782715"
     },
     {
+      "path": "routing/escalation.mjs",
+      "sha256": "06e5ad2af368bf65317da2d77815e0e468476964284e2a4dbbb998c1965f38c3"
+    },
+    {
+      "path": "routing/task-classification.mjs",
+      "sha256": "759f64c1cbd8f40938f1cd36e3a65b8dffcf0a459939edd15084c24a04cb9f07"
+    },
+    {
       "path": "schema/generated/audit-result.v1.mjs",
       "sha256": "f93fb0dd2310d1b831d183bb180a4be00e2d8d063d9e248a1cc0b97d96c526e9"
     },
