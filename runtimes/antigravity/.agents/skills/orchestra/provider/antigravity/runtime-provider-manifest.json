@@ -21,6 +21,10 @@
     {
       "path": "model-catalog.mjs",
       "sha256": "884bc5148ed71b3f1ef856741dd7c968e0a4b0491591f7f3d2cd82d6f5ece336"
+    },
+    {
+      "path": "project-runtime-manager.mjs",
+      "sha256": "def5aadc43d524c5c24b3f2ffb5cd13f82dd6e751826bfaa6b723254c6331f9d"
     }
   ]
 }
