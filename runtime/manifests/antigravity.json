@@ -2,7 +2,7 @@
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "antigravity",
   "version": "1.0.0-rc.0",
-  "sourceRoots": ["core", "providers/antigravity", "runtimes/antigravity", "labs/dream", "schemas"],
+  "sourceRoots": ["core", "providers/antigravity", "runtimes/antigravity", "labs/dream", "runtime", "schemas"],
   "managedAssets": [
     { "type": "file", "source": "runtimes/antigravity/GEMINI.md", "output": "GEMINI.md" },
     { "type": "file", "source": "runtimes/antigravity/.agents/hooks.json", "output": ".agents/hooks.json" },
@@ -12,12 +12,16 @@
       "type": "tree",
       "source": "runtimes/antigravity/.agents/skills",
       "output": ".agents/skills",
-      "exclude": ["orchestra/core/**", "orchestra/provider/**"]
+      "exclude": ["orchestra/core/**", "orchestra/provider/**", "orchestra/runtime/**"]
     },
     { "type": "tree", "source": "labs/dream/runtime", "output": ".agents/dream" },
     { "type": "tree", "source": "core", "output": ".agents/skills/orchestra/core" },
     { "type": "tree", "source": "schemas", "output": ".agents/skills/orchestra/core/schemas" },
-    { "type": "tree", "source": "providers/antigravity", "output": ".agents/skills/orchestra/provider/antigravity" }
+    { "type": "tree", "source": "providers/antigravity", "output": ".agents/skills/orchestra/provider/antigravity" },
+    { "type": "file", "source": "runtime/project-runtime-manager.mjs", "output": ".agents/skills/orchestra/runtime/project-runtime-manager.mjs" },
+    { "type": "file", "source": "runtime/project-state-ignore.mjs", "output": ".agents/skills/orchestra/runtime/project-state-ignore.mjs" },
+    { "type": "file", "source": "runtime/manifest-loader.mjs", "output": ".agents/skills/orchestra/runtime/manifest-loader.mjs" },
+    { "type": "file", "source": "runtime/manifests/antigravity.json", "output": ".agents/skills/orchestra/runtime/manifests/antigravity.json" }
   ],
   "preservedProjectPaths": [
     ".agents/rules",
@@ -29,14 +33,15 @@
     ".agents/runtime-management",
     ".orchestra/state"
   ],
-  "generatedInputs": ["core", "schemas", "providers/antigravity", "labs/dream/runtime"],
+  "generatedInputs": ["core", "schemas", "providers/antigravity", "labs/dream/runtime", "runtime/project-runtime-manager.mjs", "runtime/project-state-ignore.mjs", "runtime/manifest-loader.mjs", "runtime/manifests/antigravity.json"],
   "entrypoints": [
     "GEMINI.md",
     ".agents/hooks/pre-tool-enforce.mjs",
     ".agents/hooks/stop-guard.mjs",
     ".agents/skills/orchestra/project-runtime-cli.mjs",
     ".agents/skills/orchestra/orchestrator-handoff-cli.mjs",
-    ".agents/skills/agy-orchestra"
+    ".agents/skills/agy-orchestra",
+    ".agents/skills/orchestra/provider/antigravity/project-runtime-manager.mjs"
   ],
   "healthChecks": ["schema-freshness", "runtime-core-freshness", "provider-firewall", "contamination"]
 }
