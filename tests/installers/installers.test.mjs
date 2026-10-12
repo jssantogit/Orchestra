@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -66,15 +66,10 @@ test("installer: installs Antigravity runtime cleanly into empty project without
 test("installer: aborts on conflict without destructive overwrite (Codex)", () => {
   const tempProject = mkdtempSync(join(tmpdir(), "orch-test-conflict-"));
   try {
-    // Install first time
     runInstaller(installCodexScript, [tempProject], { encoding: "utf8" });
-
-    // Try second time -> must fail with code 2
     assert.throws(() => {
       runInstaller(installCodexScript, [tempProject], { stdio: "pipe" });
-    }, (err) => {
-      return err.status === 2;
-    });
+    }, (err) => err.status === 2);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
   }
@@ -83,15 +78,10 @@ test("installer: aborts on conflict without destructive overwrite (Codex)", () =
 test("installer: aborts on conflict without destructive overwrite (Antigravity)", () => {
   const tempProject = mkdtempSync(join(tmpdir(), "orch-test-conflict-"));
   try {
-    // Install first time
     runInstaller(installAgyScript, [tempProject], { encoding: "utf8" });
-
-    // Try second time -> must fail with code 2
     assert.throws(() => {
       runInstaller(installAgyScript, [tempProject], { stdio: "pipe" });
-    }, (err) => {
-      return err.status === 2;
-    });
+    }, (err) => err.status === 2);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
   }

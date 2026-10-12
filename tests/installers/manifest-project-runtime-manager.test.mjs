@@ -53,7 +53,6 @@ for (const fixture of [
     const project = await makeGitProject(`orchestra-${fixture.runtime}-project-`);
     const builtV1 = join(temp, "built-v1");
     const builtV2 = join(temp, "built-v2");
-    const diagnosticStop = fixture.runtime === "antigravity" ? process.env.ORCHESTRA_MANAGER_DIAGNOSTIC_STOP : null;
     try {
       const manifest = await loadRuntimeManifest(fixture.runtime);
       await buildRuntime({ runtime: fixture.runtime, outputDir: builtV1 });
@@ -62,26 +61,10 @@ for (const fixture of [
 
       const installed = await installProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 });
       assert.equal(installed.operation, "install");
-      if (diagnosticStop === "installed") return;
+
       const inspection = await inspectProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 });
-      const rootByDiagnostic = {
-        "inspect-hooks-json": ".agents/hooks.json",
-        "inspect-hooks": ".agents/hooks",
-        "inspect-agents": ".agents/agents",
-        "inspect-skills-link": ".agents/skills/agy-orchestra",
-        "inspect-skills": ".agents/skills",
-        "inspect-dream": ".agents/dream",
-      };
-      const diagnosticRoot = rootByDiagnostic[diagnosticStop];
-      if (diagnosticRoot) {
-        const mismatches = [...inspection.diff.added, ...inspection.diff.removed, ...inspection.diff.changed];
-        assert.equal(mismatches.some((path) => path === diagnosticRoot || path.startsWith(`${diagnosticRoot}/`)), false);
-        return;
-      }
       assert.equal(inspection.clean, true);
-      if (diagnosticStop === "inspect") return;
       assert.equal(await readFile(join(project, fixture.managedProbe), "utf8"), await readFile(join(builtV1, fixture.managedProbe), "utf8"));
-      if (diagnosticStop === "install") return;
 
       git(project, "add", "-A");
       git(
@@ -102,12 +85,10 @@ for (const fixture of [
       assert.match(exclude, /\.orchestra\/state\/\*\*/);
       assert.match(exclude, new RegExp(fixture.stateFile.split("/").slice(0, -1).join("\\/").replaceAll(".", "\\.") + "/\\*\\*"));
       assert.equal(git(project, "status", "--short"), "");
-      if (diagnosticStop === "state") return;
 
       const dry = await updateProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV2, dryRun: true });
       assert.equal(dry.changed, true);
       assert.equal((await readFile(join(project, fixture.marker), "utf8")).includes("fixture-v2"), false);
-      if (diagnosticStop === "dry") return;
 
       const updated = await updateProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV2 });
       assert.equal(updated.changed, true);
@@ -115,7 +96,6 @@ for (const fixture of [
       assert.match(await readFile(join(project, fixture.marker), "utf8"), /fixture-v2/);
       assert.equal(await readFile(join(project, fixture.stateFile), "utf8"), "{\"keep\":true}\n");
       assert.equal(await readFile(join(project, ".orchestra", "state", "lease.json"), "utf8"), "{\"keep\":true}\n");
-      if (diagnosticStop === "update") return;
 
       await writeFile(join(project, fixture.stateFile), "{\"keep\":\"new\"}\n", "utf8");
       const rolled = await rollbackProjectRuntime({ targetDir: project, runtimeManifest: manifest, backupId: updated.backupId });

@@ -23,134 +23,31 @@ jobs:
       - name: Install development dependencies
         run: npm ci --ignore-scripts
 
-      - name: Verify generated schema freshness
-        run: npm run check:schemas
-
-      - name: Verify runtime-core freshness
-        run: npm run check:runtime-core
-
-      - name: Verify patch whitespace
-        run: git diff --check
-
-      - name: Verify runtime manifest tests
-        run: node --test tests/runtime/runtime-manifest.test.mjs
-
-      - name: Verify runtime builder destructive-output guard
-        run: node --test --test-name-pattern="builder refuses destructive output directories" tests/runtime/runtime-builder.test.mjs
-
-      - name: Verify runtime builder self-contained distribution
-        run: node --test --test-name-pattern="builder emits deterministic self-contained provider runtimes" tests/runtime/runtime-builder.test.mjs
-
-      - name: Build manifest-driven runtime distributions
-        run: npm run build:runtimes
-
-      - name: Verify manifest-driven runtime freshness
-        run: npm run check:runtimes
-
-      - name: Verify Core, Direct Work, and Work Lease authority
+      - name: Build and verify generated artifacts
         run: |
-          npm run test:core
-          npm run test:direct-work
-          npm run test:leases
+          npm run build:schemas
+          npm run build:runtimes
+          npm run check:schemas
+          npm run check:runtimes
+          npm run check:runtime-core
+          git diff --check
 
-      - name: Verify provider policy and parity surfaces
+      - name: Run full regression
+        run: npm test
+
+      - name: Verify isolated runtimes, Doctor, contamination, and firewall
         run: |
-          node --test tests/provider-contract/*.test.mjs
-          npm run test:codex
-          npm run test:antigravity
-          npm run test:hooks
-
-      - name: Verify Dream compatibility Lab
-        run: npm run test:dream
-
-      - name: Verify Jev compatibility Lab
-        run: npm run test:jev
-
-      - name: Verify shared Lab authority boundary
-        run: node --test tests/labs/lab-authority.test.mjs
-
-      - name: Verify canonical Dream Lab source loadability
-        run: node --test --test-name-pattern="canonical Dream Lab source is loadable" tests/labs/dream-canonical.test.mjs
-
-      - name: Verify canonical Dream Lab authority boundary
-        run: node --test --test-name-pattern="Dream Lab canonical source remains observational" tests/labs/dream-canonical.test.mjs
-
-      - name: Verify canonical Jev Lab source
-        run: node --test tests/labs/jev-canonical.test.mjs
-
-      - name: Verify provider project runtime wrappers
-        run: node --test tests/installers/provider-project-runtime-wrappers.test.mjs
-
-      - name: Verify Codex manifest project manager
-        run: node --test --test-name-pattern="codex.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity install operation
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=installed node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity hooks.json parity
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-hooks-json node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity hooks parity
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-hooks node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity agents parity
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-agents node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity skill symlink parity
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-skills-link node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity skills parity
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-skills node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity Dream parity
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect-dream node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity clean inspection
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=inspect node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify Antigravity installed asset parity
-        run: ORCHESTRA_MANAGER_DIAGNOSTIC_STOP=install node --test --test-name-pattern="antigravity.*shared manifest manager" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify manifest project manager backup ID guard
-        run: node --test --test-name-pattern="rollback rejects backup identifiers" tests/installers/manifest-project-runtime-manager.test.mjs
-
-      - name: Verify project-state ignore behavior
-        run: node --test tests/leases/project-state-ignore.test.mjs
-
-      - name: Diagnose legacy installer harness
-        run: node --test tests/installers/installers.test.mjs
-
-      - name: Diagnose legacy project runtime manager
-        run: node --test tests/installers/project-runtime-manager.test.mjs
-
-      - name: Diagnose legacy Codex project runtime manager
-        run: node --test tests/installers/codex-project-runtime-manager.test.mjs
-
-      - name: Diagnose Codex runtime-state preservation
-        run: node --test tests/leases/codex-runtime-state-preservation.test.mjs
-
-      - name: Diagnose Antigravity runtime-state preservation
-        run: node --test tests/leases/antigravity-runtime-state-preservation.test.mjs
-
-      - name: Diagnose self-contained installed runtime
-        run: node --test tests/installers/self-contained-runtime.test.mjs
-
-      - name: Verify full installer suite
-        run: npm run test:installers
-
-      - name: Run manifest-driven Doctor
-        run: npm run doctor
-
-      - name: Verify architecture firewall and contamination
-        run: |
-          npm run test:architecture-invariants
-          npm run test:firewall
+          node --test tests/installers/self-contained-runtime.test.mjs
+          npm run doctor
           npm run check:contamination
+          npm run test:firewall
 
-      - name: Verify RC release readiness
+      - name: Verify release readiness
         run: |
           node --test tests/release/release-readiness.test.mjs
           npm run release:readiness
 
-      - name: Run full regression
-        run: npm test
+      - name: Verify representative turn-economy scenarios
+        run: |
+          node --test tests/direct-work/turn-economy-probes.test.mjs
+          npm run test:turn-economy
