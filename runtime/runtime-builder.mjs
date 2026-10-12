@@ -151,7 +151,6 @@ async function listBuildFiles(root, current = root) {
       files.push({
         path,
         sha256: sha256(`symlink:${await readlink(absolute)}`),
-        mode: (stat.mode & 0o777).toString(8).padStart(4, "0"),
         type: "symlink",
       });
       continue;
@@ -161,7 +160,6 @@ async function listBuildFiles(root, current = root) {
       files.push({
         path,
         sha256: sha256(await readFile(absolute)),
-        mode: (stat.mode & 0o777).toString(8).padStart(4, "0"),
         type: "file",
       });
       continue;

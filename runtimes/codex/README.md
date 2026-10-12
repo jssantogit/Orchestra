@@ -39,7 +39,7 @@ SOL MEDIUM (Global Control Plane)
 - `.codex/astra-orchestra/mechanical-fast-path.mjs` — bounded Luna Medium support.
 - `.codex/astra-orchestra/context-packet.mjs` — bounded reference-oriented worker packets.
 - `.codex/astra-orchestra/dream-lab.mjs` — isolated zero-authority Dream replay/shadow lab.
-- `.codex/astra-orchestra/codex-runtime-manager.mjs` — managed install/update/doctor/diff/backup/rollback lifecycle.
+- `.codex/astra-orchestra/codex-runtime-manager.mjs` — legacy compatibility lifecycle retained for rollback/recovery tests; canonical current lifecycle is the manifest-driven v2 provider manager invoked by `scripts/orchestra-codex-project.mjs`.
 - `.codex/agents/*.toml` — specialized Sol/Luna/Astra profiles.
 
 ---
@@ -116,6 +116,8 @@ node scripts/orchestra-codex-project.mjs evidence /path/to/project
 node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
 ```
 
+The source lifecycle uses canonical schema `orchestra.project-runtime.v2` at `.orchestra/state/runtimes/codex.json` and compares the installed runtime against the deterministic built payload. It does not create or require legacy `.codex/orchestra-runtime.json` metadata.
+
 Managed code is limited to `.codex/config.toml`, `.codex/hooks.json`, `.codex/agents/`, and `.codex/astra-orchestra/`. Provider state and neutral `.orchestra/state/**` remain project-owned and survive update/rollback.
 
 Orchestra manages `.orchestra/state/**` in local `.git/info/exclude`; it does not add this runtime state to the project's tracked `.gitignore`.
@@ -129,7 +131,8 @@ npm run test:codex
 npm run test:leases
 npm run test:architecture-invariants
 npm run test:firewall
-node --test tests/installers/codex-project-runtime-manager.test.mjs
+node --test tests/installers/codex-v2-doctor.test.mjs
+npm run test:installers
 ```
 
 The Codex runtime remains provider-isolated: it does not import or emulate Antigravity operational code.
