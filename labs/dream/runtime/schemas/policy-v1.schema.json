@@ -1,0 +1,751 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orchestra.dev/schemas/dream/policy-v1.json",
+  "title": "orchestra.exploration-policy.v1",
+  "description": "Declarative deterministic exploration policy specification",
+  "type": "object",
+  "required": [
+    "schema",
+    "policy_id",
+    "rules"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "orchestra.exploration-policy.v1"
+    },
+    "policy_id": {
+      "type": "string",
+      "pattern": "^policy-[a-f0-9]{64}$"
+    },
+    "base_policy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "description": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "decision_type",
+          "priority",
+          "when",
+          "choose"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decision_type": {
+            "type": "string",
+            "enum": [
+              "WORKER_TIER",
+              "INVESTIGATION_STRATEGY",
+              "RETRY_ACTION",
+              "EXPLORATION_BRANCHING",
+              "PARALLELISM",
+              "PRUNE_BRANCH",
+              "STOPPING"
+            ]
+          },
+          "priority": {
+            "type": "integer"
+          },
+          "when": {
+            "type": "object",
+            "properties": {
+              "task_action": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ORCHESTRATE",
+                    "INVESTIGATE",
+                    "IMPLEMENT",
+                    "TEST",
+                    "REVIEW",
+                    "MECHANICAL_FIX",
+                    "INTEGRATE",
+                    "ESCALATE",
+                    "HEAVY_EXECUTION",
+                    "DIRECT_ACTION"
+                  ]
+                }
+              },
+              "task_domain": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "CODE",
+                    "AUTOEQ_ALGORITHM",
+                    "DSP_CORE",
+                    "UI",
+                    "DATA",
+                    "INFRA",
+                    "TESTING",
+                    "DOCS",
+                    "RESEARCH",
+                    "ORCHESTRA",
+                    "GENERAL"
+                  ]
+                }
+              },
+              "criticality": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "NORMAL",
+                    "MAJOR",
+                    "CRITICAL"
+                  ]
+                }
+              },
+              "complexity": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "SIMPLE",
+                    "NORMAL",
+                    "DIFFICULT",
+                    "EXPERIMENTAL",
+                    "MECHANICAL",
+                    "INTEGRATION"
+                  ]
+                }
+              },
+              "state": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "INTAKE",
+                    "CLASSIFIED",
+                    "DIRECT_ACTION",
+                    "PLANNED",
+                    "DELEGATED",
+                    "EXECUTING",
+                    "EVIDENCE_READY",
+                    "ACCEPTANCE",
+                    "INTEGRATING",
+                    "DONE",
+                    "BLOCKED",
+                    "HUMAN_GATE",
+                    "CRITICAL_REVIEW"
+                  ]
+                }
+              },
+              "attempt": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "retry_remaining": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "retry_reason": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "MISINTERPRETED_REQUIREMENT",
+                    "INCOMPLETE_IMPLEMENTATION",
+                    "FAILED_TEST",
+                    "SCOPE_GAP",
+                    "MISSING_CONTEXT",
+                    "INTEGRATION_FAILURE"
+                  ]
+                }
+              },
+              "post_investigation": {
+                "type": "boolean"
+              },
+              "evidence": {
+                "type": "object",
+                "properties": {
+                  "tests": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    }
+                  },
+                  "typecheck": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN",
+                        "NOT_REQUIRED"
+                      ]
+                    }
+                  },
+                  "build": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN",
+                        "NOT_REQUIRED"
+                      ]
+                    }
+                  },
+                  "scope_check": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "PASS",
+                        "FAIL",
+                        "UNKNOWN"
+                      ]
+                    }
+                  },
+                  "validation_fresh": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "exploration_branches_started": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "exploration_branches_active": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "exploration_branches_remaining": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "feedback_unknown": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "feedback_observed": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "feedback_supported": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "feedback_falsified": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "feedback_causal": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "min",
+                      "max"
+                    ],
+                    "properties": {
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                ]
+              },
+              "branch_feedback_status": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "UNKNOWN",
+                    "OBSERVED",
+                    "SUPPORTED",
+                    "FALSIFIED",
+                    "CAUSALLY_VERIFIED"
+                  ]
+                }
+              },
+              "branch_invalid": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "choose": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "decision_type": {
+                  "const": "WORKER_TIER"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "FLASH_LOW",
+                    "FLASH_MEDIUM",
+                    "FLASH_HIGH"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "decision_type": {
+                  "const": "INVESTIGATION_STRATEGY"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "IMPLEMENT_DIRECT",
+                    "INVESTIGATE_FIRST"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "decision_type": {
+                  "const": "RETRY_ACTION"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "RETRY_SAME",
+                    "ESCALATE_WORKER",
+                    "INVESTIGATE_FIRST",
+                    "REPLAN"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "decision_type": {
+                  "const": "EXPLORATION_BRANCHING"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "NO_NEW_BRANCH",
+                    "OPEN_BRANCH"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "decision_type": {
+                  "const": "PARALLELISM"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "SERIAL",
+                    "PARALLEL_2"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "decision_type": {
+                  "const": "PRUNE_BRANCH"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "KEEP_BRANCH",
+                    "PRUNE_BRANCH"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "decision_type": {
+                  "const": "STOPPING"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "choose": {
+                  "type": "string",
+                  "enum": [
+                    "CONTINUE_EXPLORATION",
+                    "STOP_EXPLORATION"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

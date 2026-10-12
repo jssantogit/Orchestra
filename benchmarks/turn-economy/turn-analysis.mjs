@@ -18,6 +18,65 @@ export const ROLES = Object.freeze({
   UNKNOWN: "UNKNOWN",
 });
 
+const FOUNDATION_METRIC_FIELDS = Object.freeze([
+  "control_turns",
+  "worker_turns",
+  "repository_discovery_ops",
+  "redundant_reads",
+  "turns_to_first_edit",
+  "delegations",
+  "model_handoffs",
+  "approximate_cost",
+]);
+
+function finiteMetric(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Adds the Core Foundation metric vocabulary to a turn-economy result.
+ * Missing historical data stays null unless an existing field measures the
+ * same quantity directly.
+ *
+ * @param {Object} metrics - A current or historical turn-economy result
+ * @returns {Object} A copy of the result with all foundation metrics present
+ */
+export function normalizeTurnEconomyMetrics(metrics = {}) {
+  const result = { ...metrics };
+  const repeatedReadReasons = new Set([
+    "whole_file_read_after_targeted_read",
+    "same_file_read_repeatedly_without_mutation",
+  ]);
+
+  const knownRedundantReads = Array.isArray(metrics.potentiallyAvoidableToolCalls)
+    ? metrics.potentiallyAvoidableToolCalls.filter((call) => repeatedReadReasons.has(call.reason)).length
+    : null;
+  const knownControlTurns = finiteMetric(metrics.parent_model_turns);
+  const knownWorkerTurns = finiteMetric(metrics.worker_model_turns);
+  const knownDiscoveryOps = (
+    finiteMetric(metrics.parent_repository_search_attempts) !== null &&
+    finiteMetric(metrics.worker_repository_search_attempts) !== null
+  )
+    ? metrics.parent_repository_search_attempts + metrics.worker_repository_search_attempts
+    : null;
+
+  const values = {
+    control_turns: finiteMetric(metrics.control_turns) ?? knownControlTurns,
+    worker_turns: finiteMetric(metrics.worker_turns) ?? knownWorkerTurns,
+    repository_discovery_ops: finiteMetric(metrics.repository_discovery_ops) ?? knownDiscoveryOps,
+    redundant_reads: finiteMetric(metrics.redundant_reads) ?? knownRedundantReads,
+    turns_to_first_edit: finiteMetric(metrics.turns_to_first_edit) ?? finiteMetric(metrics.first_mutation_turn),
+    delegations: finiteMetric(metrics.delegations) ?? finiteMetric(metrics.subagent_invocations),
+    model_handoffs: finiteMetric(metrics.model_handoffs),
+    approximate_cost: finiteMetric(metrics.approximate_cost),
+  };
+
+  for (const field of FOUNDATION_METRIC_FIELDS) {
+    result[field] = values[field];
+  }
+  return result;
+}
+
 /**
  * Analyzes an Antigravity transcript or telemetry event sequence.
  *
@@ -46,6 +105,8 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
   let preMutationReadCalls = 0;
   let preMutationSearchCalls = 0;
   let preMutationValidationCalls = 0;
+  let repositoryDiscoveryOps = 0;
+  let observedDelegations = 0;
 
   const roleInvocations = {
     orchestrator: 0,
@@ -111,6 +172,12 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
         const isSearch = name === "grep_search" || name === "find_by_name";
         const isEdit = name === "replace_file_content" || name === "write_to_file";
         const isShell = name === "run_command";
+
+        if (isSearch) repositoryDiscoveryOps++;
+        if (name === "invoke_subagent") {
+          const requestedSubagents = args.Subagents;
+          observedDelegations += Array.isArray(requestedSubagents) ? requestedSubagents.length : 1;
+        }
 
         let isValidation = false;
         let isShellMutation = false;
@@ -239,7 +306,11 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
     throw new Error(`Tool count invariant failed: derivedToolSum ${derivedToolSum} !== totalTools ${totalTools}`);
   }
 
-  return {
+  const knownDelegations = finiteMetric(activeState.subagent_invocations) ?? observedDelegations;
+  const hasDelegatedWorkers = knownDelegations > 0 || workerInvocations > 0 || reviewerInvocations > 0;
+  const explicitControlTurns = finiteMetric(activeState.control_turns) ?? finiteMetric(activeState.parent_model_turns);
+
+  return normalizeTurnEconomyMetrics({
     model_turns_total: modelTurnsTotal,
     total_tool_calls: totalTools,
     tool_calls_per_turn_distribution: toolCallsPerTurnDistribution,
@@ -259,5 +330,16 @@ export function analyzeAgyConversation(steps = [], activeState = {}) {
     preMutationValidationCalls,
     potentiallyAvoidableToolCalls,
     role_invocations: roleInvocations,
-  };
+    control_turns: explicitControlTurns ?? (hasDelegatedWorkers ? null : modelTurnsTotal),
+    worker_turns: activeState.worker_model_turns,
+    repository_discovery_ops: repositoryDiscoveryOps,
+    redundant_reads: potentiallyAvoidableToolCalls.filter((call) => [
+      "whole_file_read_after_targeted_read",
+      "same_file_read_repeatedly_without_mutation",
+    ].includes(call.reason)).length,
+    turns_to_first_edit: firstMutationTurn,
+    delegations: knownDelegations,
+    model_handoffs: null,
+    approximate_cost: null,
+  });
 }

@@ -12,9 +12,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "../..");
 const read = (path) => readFileSync(resolve(root, path), "utf8");
 const fastPath = read("runtimes/antigravity/.agents/skills/orchestra/mechanical-fast-path.mjs");
-const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
+const preToolLegacy = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
 const preInvocation = read("runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs");
-const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
+const stop = read("runtimes/antigravity/.agents/hooks/stop-guard-legacy.mjs");
 const actionSpace = read("runtimes/antigravity/.agents/dream/action-space.mjs");
 
 function eligible(overrides = {}) {
@@ -79,11 +79,11 @@ test("ARCH-MECHANICAL-03: Dream worker-tier action space keeps MECHANICAL_FIX lo
 });
 
 test("ARCH-MECHANICAL-04: runtime enforces no side quests during active fast path", () => {
-  assert.match(preTool, /MECHANICAL_FAST_PATH_SIDE_QUEST/);
-  assert.match(preTool, /MECHANICAL_FAST_PATH_SEARCH_PROHIBITED/);
-  assert.match(preTool, /MECHANICAL_FAST_PATH_READ_SCOPE/);
-  assert.match(preTool, /MECHANICAL_FAST_PATH_SHELL_PROHIBITED/);
-  assert.match(preTool, /MECHANICAL_FAST_PATH_MUTATION_BUDGET/);
+  assert.match(preToolLegacy, /MECHANICAL_FAST_PATH_SIDE_QUEST/);
+  assert.match(preToolLegacy, /MECHANICAL_FAST_PATH_SEARCH_PROHIBITED/);
+  assert.match(preToolLegacy, /MECHANICAL_FAST_PATH_READ_SCOPE/);
+  assert.match(preToolLegacy, /MECHANICAL_FAST_PATH_SHELL_PROHIBITED/);
+  assert.match(preToolLegacy, /MECHANICAL_FAST_PATH_MUTATION_BUDGET/);
   assert.match(preInvocation, /MECHANICAL_FAST_PATH/);
 });
 
@@ -94,7 +94,7 @@ test("ARCH-MECHANICAL-05: fast path never grants acceptance authority", () => {
   assert.match(stop, /activeState\.acceptanceState = "ACCEPTED"/);
   assert.equal(fastPath.includes("acceptanceState"), false);
   assert.equal(fastPath.includes('state = "DONE"'), false);
-  assert.equal(preTool.includes("skipEvidenceCheck"), false);
+  assert.equal(preToolLegacy.includes("skipEvidenceCheck"), false);
 });
 
 test("ARCH-MECHANICAL-06: evidence failure or staleness exits short mode before recovery", () => {

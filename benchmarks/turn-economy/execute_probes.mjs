@@ -1,4 +1,4 @@
-import { runAgyProbe } from "./probes.mjs";
+import { DIRECT_WORK_PROBES, runAgyProbe } from "./probes.mjs";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,9 +28,10 @@ const probes = [
     name: "PROBE WORKER — AGY WORKER OBSERVABILITY",
     prompt: "According to orchestra routing policy, this task is an IMPLEMENTATION task. Create an implementation scope contract and invoke the flash-worker subagent using invoke_subagent to inspect src/formatter.js and test/formatter.test.js. Do not edit product code directly.",
   },
+  ...DIRECT_WORK_PROBES,
 ];
 
-console.log("Starting Antigravity Capability Probes (4 probes max)...");
+console.log(`Starting Antigravity Capability Probes (${probes.length} probes)...`);
 const results = [];
 
 for (const p of probes) {
@@ -44,9 +45,11 @@ for (const p of probes) {
     console.log(`  Max tools in single turn: ${res.maxToolsInSingleTurn}`);
     console.log(`  Multi-tool observed: ${res.multiToolObserved}`);
     console.log(`  Subagents invoked: ${res.subagentsCount}`);
+    if (res.directWorkEconomy) {
+      console.log(`  Direct Work economy: ${JSON.stringify(res.directWorkEconomy)}`);
+    }
     console.log(`  Usage: ${JSON.stringify(res.usage)}`);
 
-    // Check quota / error
     if (res.status === "FAILED" || res.exitCode !== 0) {
       console.warn(`Probe ${res.probeId} failed or exited with code ${res.exitCode}`);
     }

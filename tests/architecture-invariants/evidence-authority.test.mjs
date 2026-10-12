@@ -11,14 +11,23 @@ function read(path) {
   return readFileSync(resolve(root, path), "utf8");
 }
 
-const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-policy.mjs");
+const routing = read("runtimes/antigravity/.agents/skills/orchestra/routing-policy-legacy.mjs");
 const contract = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const collectors = read("runtimes/antigravity/.agents/skills/orchestra/evidence-collectors.mjs");
-const federation = read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs");
+const federation = read("core/evidence/evidence-federation.mjs");
+const federationMirrors = [
+  read("runtimes/codex/.codex/astra-orchestra/core/evidence/evidence-federation.mjs"),
+  read("runtimes/antigravity/.agents/skills/orchestra/core/evidence/evidence-federation.mjs"),
+];
+const federationAdapters = [
+  read("runtimes/codex/.codex/astra-orchestra/evidence-federation.mjs"),
+  read("runtimes/antigravity/.agents/skills/orchestra/evidence-federation.mjs"),
+];
 const inspector = read("runtimes/antigravity/.agents/skills/orchestra/evidence-inspector.mjs");
 const providerRegistry = read("runtimes/antigravity/.agents/skills/orchestra/evidence-provider-registry.mjs");
 const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
-const stop = read("runtimes/antigravity/.agents/hooks/stop-guard.mjs");
+const preToolLegacy = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
+const stop = read("runtimes/antigravity/.agents/hooks/stop-guard-legacy.mjs");
 
 test("ARCH-EVIDENCE-01: CI_WAIT and remote validation failure are first-class control-plane states", () => {
   assert.match(routing, /"CI_WAIT"/);
@@ -70,21 +79,37 @@ test("ARCH-EVIDENCE-05: missing child-owned local evidence is blocked before del
 });
 
 test("ARCH-EVIDENCE-06: structured requiredEvidence survives delegation and can explicitly clear inherited tests", () => {
-  assert.match(preTool, /hasRequiredEvidence/);
-  assert.match(preTool, /requiredEvidence:/);
-  assert.match(preTool, /extracted\.hasTestsRequired\s*\?\s*extracted\.testsRequired\s*:\s*baseTestsRequired/);
-  assert.match(preTool, /extracted\.hasRequiredEvidence\s*\?\s*extracted\.requiredEvidence\s*:\s*baseRequiredEvidence/);
+  assert.match(preToolLegacy, /hasRequiredEvidence/);
+  assert.match(preToolLegacy, /requiredEvidence:/);
+  assert.match(preToolLegacy, /extracted\.hasTestsRequired\s*\?\s*extracted\.testsRequired\s*:\s*baseTestsRequired/);
+  assert.match(preToolLegacy, /extracted\.hasRequiredEvidence\s*\?\s*extracted\.requiredEvidence\s*:\s*baseRequiredEvidence/);
+});
+
+test("ARCH-EVIDENCE-06B: public pre-tool facade owns global side-effect authorization before compatibility delegation", () => {
+  const boundaryAt = preTool.indexOf("if (enforceGlobalSideEffectBoundary(input)) return;");
+  const legacyAt = preTool.indexOf("const result = spawnSync(process.execPath, [legacyHook]");
+  assert.match(preTool, /authorizeToolCapability/);
+  assert.ok(boundaryAt >= 0, "public pre-tool facade must enforce the global side-effect boundary");
+  assert.ok(legacyAt > boundaryAt, "global side-effect authorization must run before compatibility delegation");
 });
 
 
 test("ARCH-EVIDENCE-07: delegated evidence federation requires factual identity and task binding", () => {
-  assert.match(federation, /confidence !== "HIGH"/);
-  assert.match(federation, /source !== "RUNTIME_IDENTITY"/);
-  assert.match(federation, /bindingTaskMatches/);
-  assert.match(federation, /bindingAttemptMatches/);
-  assert.match(federation, /ORCHESTRA_PARENT_EVIDENCE_FEDERATION/);
+  for (const source of [federation, ...federationMirrors]) {
+    assert.match(source, /confidence !== "HIGH"/);
+    assert.match(source, /source !== "RUNTIME_IDENTITY"/);
+    assert.match(source, /bindingTaskMatches/);
+    assert.match(source, /bindingAttemptMatches/);
+    assert.match(source, /ORCHESTRA_PARENT_EVIDENCE_FEDERATION/);
+  }
   assert.match(contract, /TASK_ID_MISMATCH/);
   assert.match(contract, /COMMIT_SHA_MISMATCH/);
+});
+
+test("evidence federation provider modules remain thin exports of their installed Core mirrors", () => {
+  for (const adapter of federationAdapters) {
+    assert.equal(adapter.trim(), 'export * from "./core/evidence/evidence-federation.mjs";');
+  }
 });
 
 test("ARCH-EVIDENCE-08: local evidence producers are explicit and reviewer/model claims are excluded", () => {
@@ -96,10 +121,12 @@ test("ARCH-EVIDENCE-08: local evidence producers are explicit and reviewer/model
 });
 
 test("ARCH-EVIDENCE-09: distinct command executions are merged by execution identity, not command text", () => {
-  assert.match(federation, /executionId/);
-  assert.match(federation, /transcriptEvidenceId/);
-  assert.match(federation, /exactEvidenceIdentity/);
-  assert.equal(federation.includes("command + type + scope"), false);
+  for (const source of [federation, ...federationMirrors]) {
+    assert.match(source, /executionId/);
+    assert.match(source, /transcriptEvidenceId/);
+    assert.match(source, /exactEvidenceIdentity/);
+    assert.equal(source.includes("command + type + scope"), false);
+  }
 });
 
 

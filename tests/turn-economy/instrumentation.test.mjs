@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, unlinkSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { analyzeAgyConversation, normalizeTurnEconomyMetrics } from "../../benchmarks/turn-economy/turn-analysis.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
@@ -27,6 +28,89 @@ test.beforeEach(() => {
 
 test.after(() => {
   cleanState();
+});
+
+test("turn metrics: normalizes new fields and preserves nullable semantics for legacy results", () => {
+  const legacyResults = JSON.parse(readFileSync(resolve(orchestraRoot, "benchmarks/turn-economy/results/baseline-v1.json"), "utf-8"));
+  const legacy = normalizeTurnEconomyMetrics(legacyResults[0]);
+
+  assert.equal(legacy.control_turns, null);
+  assert.equal(legacy.worker_turns, null);
+  assert.equal(legacy.repository_discovery_ops, null);
+  assert.equal(legacy.redundant_reads, null);
+  assert.equal(legacy.turns_to_first_edit, null);
+  assert.equal(legacy.delegations, 0);
+  assert.equal(legacy.model_handoffs, null);
+  assert.equal(legacy.approximate_cost, null);
+  assert.equal(legacy.model_invocations, 1, "normalization preserves legacy fields");
+
+  const current = normalizeTurnEconomyMetrics({
+    control_turns: 2,
+    worker_turns: 3,
+    repository_discovery_ops: 0,
+    redundant_reads: 1,
+    turns_to_first_edit: 4,
+    delegations: 1,
+    model_handoffs: 2,
+    approximate_cost: 0.05,
+  });
+  assert.deepEqual({
+    control_turns: current.control_turns,
+    worker_turns: current.worker_turns,
+    repository_discovery_ops: current.repository_discovery_ops,
+    redundant_reads: current.redundant_reads,
+    turns_to_first_edit: current.turns_to_first_edit,
+    delegations: current.delegations,
+    model_handoffs: current.model_handoffs,
+    approximate_cost: current.approximate_cost,
+  }, {
+    control_turns: 2,
+    worker_turns: 3,
+    repository_discovery_ops: 0,
+    redundant_reads: 1,
+    turns_to_first_edit: 4,
+    delegations: 1,
+    model_handoffs: 2,
+    approximate_cost: 0.05,
+  });
+});
+
+test("turn metrics: analyzer reports only values observable from its transcript and state", () => {
+  const analysis = analyzeAgyConversation([{
+    type: "PLANNER_RESPONSE",
+    source: "MODEL",
+    tool_calls: [
+      { name: "grep_search", args: { Query: "target" } },
+      { name: "write_to_file", args: { TargetFile: "src/target.js" } },
+    ],
+  }], {
+    subagent_invocations: 0,
+    worker_model_turns: 2,
+  });
+
+  assert.equal(analysis.control_turns, 1);
+  assert.equal(analysis.worker_turns, 2);
+  assert.equal(analysis.repository_discovery_ops, 1);
+  assert.equal(analysis.redundant_reads, 0);
+  assert.equal(analysis.turns_to_first_edit, 1);
+  assert.equal(analysis.delegations, 0);
+  assert.equal(analysis.model_handoffs, null);
+  assert.equal(analysis.approximate_cost, null);
+});
+
+test("turn metrics: worker invocation counts do not become worker turns or reduce control turns", () => {
+  const analysis = analyzeAgyConversation([{
+    type: "PLANNER_RESPONSE",
+    source: "MODEL",
+    tool_calls: [],
+  }], {
+    subagent_invocations: 1,
+    worker_invocations: 1,
+  });
+
+  assert.equal(analysis.control_turns, null);
+  assert.equal(analysis.worker_turns, null);
+  assert.equal(analysis.delegations, 1);
 });
 
 test("instrumentation: pre-invocation-guard counts invocations and records advisories", () => {

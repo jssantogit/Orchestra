@@ -6,18 +6,49 @@ import {
   cpSync,
   existsSync,
   readFileSync,
-  writeFileSync,
-  mkdirSync,
 } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { summarizeDirectWorkEconomy } from "./direct-work-metrics.mjs";
+import { analyzeAgyConversation } from "./turn-analysis.mjs";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const orchestraRoot = resolve(__dirname, "../..");
 const fixtureSource = resolve(orchestraRoot, "benchmarks/turn-economy/fixture");
-const resultsDir = resolve(orchestraRoot, "benchmarks/turn-economy/results");
 const brainDir = join(homedir(), ".gemini/antigravity-cli/brain");
+
+export const DIRECT_WORK_PROBES = Object.freeze([
+  Object.freeze({
+    probeId: "direct-work-bounded-bug-fix",
+    scenario: "BOUNDED_BUG_FIX",
+    name: "DIRECT WORK — BOUNDED BUG FIX",
+    directWork: true,
+    prompt: "Treat this as a bounded Direct Work bug fix. The formatter currently mishandles negative zero. Resolve direction in control, delegate one bounded implementation packet to the cheap implementer, validate the candidate, and use Quick Audit only for the resulting diff. Do not broaden repository discovery.",
+  }),
+  Object.freeze({
+    probeId: "direct-work-authorized-regression-test",
+    scenario: "AUTHORIZED_REGRESSION_TEST_CHANGE",
+    name: "DIRECT WORK — AUTHORIZED REGRESSION TEST",
+    directWork: true,
+    prompt: "Treat this as bounded Direct Work. Fix formatter sign preservation and explicitly authorize only the matching formatter regression test to change. The implementer must not rewrite unrelated tests or reinterpret the task.",
+  }),
+  Object.freeze({
+    probeId: "direct-work-unrelated-external-failure",
+    scenario: "UNRELATED_EXTERNAL_TEST_FAILURE",
+    name: "DIRECT WORK — UNRELATED EXTERNAL FAILURE",
+    directWork: true,
+    prompt: "Treat this as bounded Direct Work. Implement the requested formatter change. If validation exposes a failure that is unrelated or uncertain relative to the patch, the implementer must return factual evidence to control instead of investigating or repairing it.",
+  }),
+  Object.freeze({
+    probeId: "direct-work-quick-audit-delta",
+    scenario: "QUICK_AUDIT_DELTA_RETRY",
+    name: "DIRECT WORK — QUICK AUDIT DELTA RETRY",
+    directWork: true,
+    prompt: "Treat this as bounded Direct Work. Produce one candidate, run evidence and an independent diff-scoped Quick Audit in parallel, and if the auditor finds a causal blocking issue, have control confirm it and issue exactly one bounded Delta Packet before final acceptance.",
+  }),
+]);
 
 function createTempFixture(tag) {
   const tempProject = mkdtempSync(join(tmpdir(), `orch-probe-${tag}-`));
@@ -39,7 +70,7 @@ function installAgyRuntime(targetDir) {
   } catch {}
 }
 
-export function runAgyProbe({ probeId, name, prompt, timeoutMs = 90000 }) {
+export function runAgyProbe({ probeId, name, prompt, directWork = false, timeoutMs = 90000 }) {
   console.log(`\n==================================================`);
   console.log(`RUNNING AGY PROBE: [${probeId}] ${name}`);
   console.log(`Prompt: "${prompt}"`);
@@ -63,6 +94,7 @@ export function runAgyProbe({ probeId, name, prompt, timeoutMs = 90000 }) {
   const env = {
     ...process.env,
     BENCHMARK_PROBE_ID: probeId,
+    ...(directWork ? { ORCHESTRA_DIRECT_WORK_MODE: "on" } : {}),
   };
 
   const res = spawnSync(agyExe, args, {
@@ -90,7 +122,6 @@ export function runAgyProbe({ probeId, name, prompt, timeoutMs = 90000 }) {
     console.warn("Failed to parse agy output JSON:", err.message);
   }
 
-  // Load transcript if convId is known
   let steps = [];
   let modelTurns = [];
   let toolCallDistribution = { 0: 0, 1: 0, 2: 0, "3+": 0 };
@@ -116,12 +147,8 @@ export function runAgyProbe({ probeId, name, prompt, timeoutMs = 90000 }) {
             else if (count === 2) toolCallDistribution[2]++;
             else toolCallDistribution["3+"]++;
 
-            if (count > maxToolsInSingleTurn) {
-              maxToolsInSingleTurn = count;
-            }
-            if (count >= 2) {
-              multiToolObserved = true;
-            }
+            if (count > maxToolsInSingleTurn) maxToolsInSingleTurn = count;
+            if (count >= 2) multiToolObserved = true;
 
             modelTurns.push({
               step_index: step.step_index ?? i,
@@ -137,7 +164,6 @@ export function runAgyProbe({ probeId, name, prompt, timeoutMs = 90000 }) {
     }
   }
 
-  // Load active-state.json and telemetry events
   let state = {};
   const statePath = join(tempDir, ".agents/state/active-state.json");
   if (existsSync(statePath)) {
@@ -146,10 +172,21 @@ export function runAgyProbe({ probeId, name, prompt, timeoutMs = 90000 }) {
     } catch {}
   }
 
+  const turnEconomy = analyzeAgyConversation(steps, state);
+  const directWorkEconomy = directWork
+    ? summarizeDirectWorkEconomy({
+        lane: "DIRECT_WORK",
+        ...turnEconomy,
+        quick_audit_invocations: state.quick_audit_invocations,
+        candidate_generations: state.candidate_generations ?? state.candidate_generation,
+      })
+    : null;
+
   const result = {
     probeId,
     name,
     prompt,
+    directWork,
     durationMs,
     conversationId: convId,
     status: agyOutput?.status || (res.status === 0 ? "SUCCESS" : "FAILED"),
@@ -165,6 +202,8 @@ export function runAgyProbe({ probeId, name, prompt, timeoutMs = 90000 }) {
     subagentsCount: state.subagent_invocations || 0,
     workerInvocations: state.worker_invocations || 0,
     reviewerInvocations: state.reviewer_invocations || 0,
+    turnEconomy,
+    directWorkEconomy,
     usage: agyOutput?.usage || null,
     stdoutSample: stdout.slice(0, 500),
     stderrSample: stderr.slice(0, 500),

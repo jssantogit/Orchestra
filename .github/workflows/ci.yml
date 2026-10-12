@@ -8,7 +8,7 @@ on:
 
 jobs:
   verify:
-    name: Deterministic Policy & Firewall Verification
+    name: Orchestra 1.x RC Verification
     runs-on: ubuntu-latest
 
     steps:
@@ -20,70 +20,34 @@ jobs:
         with:
           node-version: 20
 
-      - name: Run Doctor & Health Checks
-        run: |
-          ./scripts/doctor.sh
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts
 
-      - name: Run Codex Policy Tests
+      - name: Build and verify generated artifacts
         run: |
-          node --test runtimes/codex/tests/routing-policy.test.mjs
+          npm run build:schemas
+          npm run build:runtimes
+          npm run check:schemas
+          npm run check:runtimes
+          npm run check:runtime-core
+          git diff --check
 
-      - name: Run Codex Parity Tests
-        run: |
-          npm run test:codex-parity
+      - name: Run full regression
+        run: npm test
 
-      - name: Run Antigravity Policy Tests
+      - name: Verify isolated runtimes, Doctor, contamination, and firewall
         run: |
-          node --test runtimes/antigravity/tests/routing-policy.test.mjs
+          node --test tests/installers/self-contained-runtime.test.mjs
+          npm run doctor
+          npm run check:contamination
+          npm run test:firewall
 
-      - name: Run Antigravity Hook Tests
+      - name: Verify release readiness
         run: |
-          node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+          node --test tests/release/release-readiness.test.mjs
+          npm run release:readiness
 
-      - name: Run Dream Layer Tests
+      - name: Verify representative turn-economy scenarios
         run: |
-          npm run test:dream
-
-      - name: Run Evidence Contract Tests
-        run: |
-          npm run test:evidence
-
-      - name: Run Attributable Feedback Tests
-        run: |
-          npm run test:feedback
-
-      - name: Run Context Trust Boundary Tests
-        run: |
-          npm run test:trust
-
-      - name: Run Orchestrator Session Handoff Tests
-        run: |
-          npm run test:handoff
-
-      - name: Run Jev Semantic Shadow Tests
-        run: |
-          npm run test:jev
-
-      - name: Run Mechanical Fast Path Tests
-        run: |
-          npm run test:mechanical
-
-      - name: Run Turn Economy Tests
-        run: |
+          node --test tests/direct-work/turn-economy-probes.test.mjs
           npm run test:turn-economy
-
-      - name: Run Architecture Invariants
-        run: |
-          npm run test:architecture-invariants
-
-      - name: Run Cross-Runtime Firewall Tests
-        run: |
-          node --test tests/cross-runtime/cross-runtime-firewall.test.mjs
-
-      - name: Run Project Runtime & Installer Tests
-        run: |
-          npm run test:installers
-
-      - name: Run Cross-Runtime Contamination Check
-        run: |
-          node scripts/contamination-check.mjs

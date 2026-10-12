@@ -18,12 +18,16 @@ const root = resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const read = (path) => readFileSync(resolve(root, path), "utf8");
 
 const handoff = read("runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff.mjs");
+const leaseAuthority = read("runtimes/antigravity/.agents/skills/orchestra/work-lease-authority.mjs");
 const preInvocation = read("runtimes/antigravity/.agents/hooks/pre-invocation-guard.mjs");
-const preTool = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
+const preInvocationLease = read("runtimes/antigravity/.agents/hooks/work-lease-pre-invocation.mjs");
+const preToolLegacy = read("runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
+const preToolLease = read("runtimes/antigravity/.agents/hooks/work-lease-pre-tool.mjs");
+const hooks = JSON.parse(read("runtimes/antigravity/.agents/hooks.json"));
 const evidence = read("runtimes/antigravity/.agents/skills/orchestra/evidence-contract.mjs");
 const codexPolicy = read("runtimes/codex/.codex/astra-orchestra/routing-policy.mjs");
 
-test("ARCH-N01: session handoff is single-use project authority, not transcript migration", () => {
+test("ARCH-N01: session handoff remains single-use recovery state, not transcript migration or primary lease authority", () => {
   assert.match(handoff, /orchestrator-handoff\.json/);
   assert.match(handoff, /ARMED/);
   assert.match(handoff, /CLAIMED/);
@@ -35,6 +39,8 @@ test("ARCH-N01: session handoff is single-use project authority, not transcript 
   for (const forbidden of ["transcript", "messages", "reasoning", "thinking", "stdout", "stderr", "credentials", "environment"]) {
     assert.match(handoff, new RegExp('"' + forbidden + '"'));
   }
+  assert.match(leaseAuthority, /sessionIdHash/);
+  assert.match(leaseAuthority, /STALE_WORK_LEASE/);
 });
 
 test("ARCH-N02: milestone boundary never carries old Scope Contract or evidence ledger", () => {
@@ -77,20 +83,30 @@ test("ARCH-N02: milestone boundary never carries old Scope Contract or evidence 
   assert.equal(encoded.includes("old-output"), false);
 });
 
-test("ARCH-N03: PreInvocation owns automatic root claim before legacy mismatch handling", () => {
+test("ARCH-N03: Work Lease wrapper owns normal fresh-root claim; legacy handoff claim remains recovery implementation", () => {
+  assert.equal(hooks["guard-rails"].PreInvocation[0].command, "node hooks/work-lease-pre-invocation.mjs");
+  assert.match(preInvocationLease, /enterAntigravityWorkLease/);
+  assert.match(preInvocationLease, /WORK LEASE AUTHORITY/);
+  assert.match(preInvocationLease, /Manual orchestrator handoff is recovery-only/);
+
   const claim = preInvocation.indexOf("claimProjectOrchestratorHandoff");
   const mismatch = preInvocation.indexOf("KNOWN_MAIN_MISMATCH");
   assert.ok(claim >= 0);
   assert.ok(mismatch > claim);
-  assert.match(preInvocation, /parentConversationId:\s*payload\.parentConversationId/);
   assert.match(preInvocation, /ORCHESTRATOR AUTHORITY HANDOFF CLAIMED/);
 });
 
-test("ARCH-N04: orchestrator authority requires current main conversation after transfer", () => {
-  assert.match(preTool, /actorIsCurrentMain/);
-  assert.match(preTool, /actor\.actorId\s*===\s*roleBindings\.mainConversationId/);
-  assert.match(preTool, /ORCHESTRATOR_AUTHORITY_TRANSFERRED/);
-  assert.match(preTool, /FORMER_ORCHESTRATOR/);
+test("ARCH-N04: mainConversationId is compatibility projection while Work Lease fences root tools", () => {
+  assert.match(preInvocationLease, /roleBindings\.mainConversationId = convId/);
+  assert.match(preInvocationLease, /workLeaseGeneration/);
+  assert.equal(hooks["scope-enforcer"].PreToolUse[0].hooks[0].command, "node hooks/work-lease-pre-tool.mjs");
+  assert.match(preToolLease, /authorizeAntigravityLeaseCapability/);
+  assert.match(preToolLease, /ORCHESTRA_WORK_LEASE_AUTHORITY_DENIED/);
+
+  assert.match(preToolLegacy, /actorIsCurrentMain/);
+  assert.match(preToolLegacy, /actor\.actorId\s*===\s*roleBindings\.mainConversationId/);
+  assert.match(preToolLegacy, /ORCHESTRATOR_AUTHORITY_TRANSFERRED/);
+  assert.match(preToolLegacy, /FORMER_ORCHESTRATOR/);
 });
 
 test("ARCH-N05: model-visible handoff control cannot manually claim or inject shell", () => {
@@ -124,10 +140,9 @@ test("ARCH-N06: handoff provenance is root-only evidence authority", () => {
   assert.doesNotMatch(delegatedBlock, /ORCHESTRATOR_HANDOFF/);
 });
 
-test("ARCH-N07: Codex runtime does not gain fake conversation handoff authority", () => {
+test("ARCH-N07: Codex runtime does not gain fake Antigravity conversation authority", () => {
   assert.doesNotMatch(codexPolicy, /ORCHESTRATOR_HANDOFF|mainConversationId|orchestrator-handoff\.json/);
   assert.doesNotMatch(handoff, /runtimes[\\/]codex|(?:from|import|require)\s+["'][^"']*\.codex/i);
-  // Mentioning project-local .codex state in Git fingerprint exclusions is
-  // hygiene only; it must never become a provider route or authority import.
+  assert.doesNotMatch(leaseAuthority, /runtimes[\\/]codex|\.codex\/astra-orchestra/);
   assert.doesNotMatch(handoff, /gpt-5\.6-|gpt-6-astra|CODEX_MODELS|codex-runtime-manager/i);
 });

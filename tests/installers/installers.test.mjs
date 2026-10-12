@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -26,9 +26,12 @@ test("installer: installs Codex runtime cleanly into empty project", () => {
     assert.equal(existsSync(join(tempProject, ".codex/agents/sol-high.toml")), true);
     assert.equal(existsSync(join(tempProject, ".codex/agents/sol-review-medium.toml")), true);
     assert.equal(existsSync(join(tempProject, ".codex/agents/terra-high.toml")), false);
-    assert.equal(existsSync(join(tempProject, ".codex/orchestra-runtime.json")), true);
-    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/.gitkeep")), true);
-    assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic/.gitkeep")), true);
+    assert.equal(existsSync(join(tempProject, ".orchestra/state/runtimes/codex.json")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-runtime.json")), false);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/.gitkeep")), false);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic/.gitkeep")), false);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/active-state.json")), false);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-telemetry/events.jsonl")), false);
   } finally {
@@ -46,11 +49,14 @@ test("installer: installs Antigravity runtime cleanly into empty project without
     assert.equal(existsSync(join(tempProject, ".agents/hooks/pre-tool-enforce.mjs")), true);
     assert.equal(existsSync(join(tempProject, ".agents/skills/orchestra/routing-policy.mjs")), true);
     assert.equal(existsSync(join(tempProject, "GEMINI.md")), true);
-    // Verify no state or telemetry was copied
+    assert.equal(existsSync(join(tempProject, ".orchestra/state/runtimes/antigravity.json")), true);
+    assert.equal(existsSync(join(tempProject, ".agents/orchestra-runtime.json")), false);
+    // Preserved mutable-state roots are created empty; no mutable state is copied.
     assert.equal(existsSync(join(tempProject, ".agents/state/active-state.json")), false);
     assert.equal(existsSync(join(tempProject, ".agents/telemetry/events.jsonl")), false);
     assert.equal(existsSync(join(tempProject, ".agents/dream/canonical.mjs")), true);
-    assert.equal(existsSync(join(tempProject, ".agents/dream-data")), false);
+    assert.equal(existsSync(join(tempProject, ".agents/dream-data")), true);
+    assert.deepEqual(readdirSync(join(tempProject, ".agents/dream-data")), []);
     assert.equal(existsSync(join(tempProject, ".agents/state/dream/pending-decisions")), false);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
@@ -60,15 +66,10 @@ test("installer: installs Antigravity runtime cleanly into empty project without
 test("installer: aborts on conflict without destructive overwrite (Codex)", () => {
   const tempProject = mkdtempSync(join(tmpdir(), "orch-test-conflict-"));
   try {
-    // Install first time
     runInstaller(installCodexScript, [tempProject], { encoding: "utf8" });
-
-    // Try second time -> must fail with code 2
     assert.throws(() => {
       runInstaller(installCodexScript, [tempProject], { stdio: "pipe" });
-    }, (err) => {
-      return err.status === 2;
-    });
+    }, (err) => err.status === 2);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
   }
@@ -77,16 +78,15 @@ test("installer: aborts on conflict without destructive overwrite (Codex)", () =
 test("installer: aborts on conflict without destructive overwrite (Antigravity)", () => {
   const tempProject = mkdtempSync(join(tmpdir(), "orch-test-conflict-"));
   try {
-    // Install first time
     runInstaller(installAgyScript, [tempProject], { encoding: "utf8" });
-
-    // Try second time -> must fail with code 2
     assert.throws(() => {
       runInstaller(installAgyScript, [tempProject], { stdio: "pipe" });
-    }, (err) => {
-      return err.status === 2;
-    });
+    }, (err) => err.status === 2);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
   }
 });
+
+// Phase 5 shared manifest-driven manager contract. Keep this imported by the
+// existing installer suite so the RED/green cycle is enforced by legacy CI too.
+await import("./manifest-project-runtime-manager.test.mjs");

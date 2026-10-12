@@ -9,8 +9,8 @@ const repoRoot = resolve(__dirname, "../..");
 const canaryPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-mode.mjs");
 const rolloutPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-rollout.mjs");
 const policyStorePath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/policy-store.mjs");
-const preToolPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/pre-tool-enforce.mjs");
-const stopPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/stop-guard.mjs");
+const preToolLegacyPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/pre-tool-enforce-legacy.mjs");
+const stopPath = resolve(repoRoot, "runtimes/antigravity/.agents/hooks/stop-guard-legacy.mjs");
 const outcomePath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/outcome-recorder.mjs");
 const cliPath = resolve(repoRoot, "runtimes/antigravity/.agents/dream/canary-cli.mjs");
 
@@ -25,7 +25,7 @@ test("ARCH-H01: Canary live authority is fixed to 5 percent NORMAL-only tasks", 
 });
 
 test("ARCH-H02: static/current policy is evaluated before Canary may overlay execution", () => {
-  const source = readFileSync(preToolPath, "utf8");
+  const source = readFileSync(preToolLegacyPath, "utf8");
   const staticEval = source.indexOf("const evalRes = evaluatePolicy({");
   const canaryEval = source.indexOf("const canary = evaluateCanaryPolicyOverlay({");
   assert.ok(staticEval >= 0);
@@ -35,12 +35,12 @@ test("ARCH-H02: static/current policy is evaluated before Canary may overlay exe
 });
 
 test("ARCH-H03: Canary has hard rollback hooks for side effects, governance, evidence and exact regression", () => {
-  const preTool = readFileSync(preToolPath, "utf8");
+  const preToolLegacy = readFileSync(preToolLegacyPath, "utf8");
   const stop = readFileSync(stopPath, "utf8");
   const outcome = readFileSync(outcomePath, "utf8");
   const canary = readFileSync(canaryPath, "utf8");
-  assert.match(preTool, /EXTERNAL_SIDE_EFFECT_ATTEMPT/);
-  assert.match(preTool, /GOVERNANCE_MODIFICATION_ATTEMPT/);
+  assert.match(preToolLegacy, /EXTERNAL_SIDE_EFFECT_ATTEMPT/);
+  assert.match(preToolLegacy, /GOVERNANCE_MODIFICATION_ATTEMPT/);
   assert.match(stop, /REQUIRED_EVIDENCE_BYPASS_ATTEMPT/);
   assert.match(outcome, /evaluateCanaryOutcome/);
   assert.match(canary, /EXACT_PROVEN_REGRESSION/);
