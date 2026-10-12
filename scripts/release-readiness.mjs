@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,24 @@ function readJson(path) {
 
 function check(id, ok, detail = "") {
   return { id, ok: Boolean(ok), detail: String(detail) };
+}
+
+function packageGate(root, script) {
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const result = spawnSync(npmCommand, ["run", "--silent", script], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  if (result.error) return { ok: false, detail: result.error.message };
+  const output = [result.stderr, result.stdout]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" | ");
+  return {
+    ok: result.status === 0,
+    detail: result.status === 0 ? `${script}: current` : `${script}: exit=${result.status}${output ? `; ${output.slice(-800)}` : ""}`,
+  };
 }
 
 export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion } = {}) {
@@ -79,6 +98,20 @@ export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion }
   const schemaSource = join(root, "schemas", "implementation-packet.v1.schema.json");
   const hasSchemaPair = existsSync(schemaValidator) && existsSync(schemaSource);
   checks.push(check("generated:schema-contract", hasSchemaPair, hasSchemaPair ? "canonical schema + generated validator present" : "missing canonical schema or generated validator"));
+
+  if (typeof packageJson?.scripts?.["check:schemas"] === "string") {
+    const result = packageGate(root, "check:schemas");
+    checks.push(check("generated:schema-freshness", result.ok, result.detail));
+  } else {
+    checks.push(check("generated:schema-freshness", false, "check:schemas gate unavailable"));
+  }
+
+  if (typeof packageJson?.scripts?.["check:runtimes"] === "string") {
+    const result = packageGate(root, "check:runtimes");
+    checks.push(check("generated:runtime-freshness", result.ok, result.detail));
+  } else {
+    checks.push(check("generated:runtime-freshness", false, "check:runtimes gate unavailable"));
+  }
 
   const migrationPath = join(root, "docs", "migrations", "0.10-to-1.x.md");
   if (!existsSync(migrationPath)) {
