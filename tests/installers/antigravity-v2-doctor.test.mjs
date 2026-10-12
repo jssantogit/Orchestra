@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -61,6 +61,29 @@ test("source-level Antigravity update keeps v2 metadata authoritative", () => {
     const update = parseJsonOutput(runNode([projectCli, "update", project, "--json"]));
     assert.equal(update.changed, false);
     assert.equal(update.operation, "noop");
+    assert.equal(existsSync(join(project, ".agents", "orchestra-runtime.json")), false);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("source-level Antigravity update remains blocked while runtime state is active", () => {
+  const project = makeProject();
+  try {
+    const install = runNode([installScript, project]);
+    assert.equal(install.status, 0, `install failed\nstdout:\n${install.stdout}\nstderr:\n${install.stderr}`);
+
+    const stateDir = join(project, ".agents", "state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "active-state.json"), JSON.stringify({ taskId: "active", state: "EXECUTING" }, null, 2));
+
+    const managedFile = join(project, ".agents", "skills", "orchestra", "routing-policy.mjs");
+    writeFileSync(managedFile, `${readFileSync(managedFile, "utf8")}\n// force-update\n`);
+
+    const update = runNode([projectCli, "update", project, "--json"]);
+    assert.equal(update.status, 2);
+    assert.match(update.stderr, /RUNTIME_NOT_QUIESCENT: RUNTIME_ACTIVE_EXECUTING/);
+    assert.match(readFileSync(managedFile, "utf8"), /force-update/);
     assert.equal(existsSync(join(project, ".agents", "orchestra-runtime.json")), false);
   } finally {
     rmSync(project, { recursive: true, force: true });
