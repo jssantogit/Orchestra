@@ -1,7 +1,7 @@
 {
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "codex",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "sourceRoots": ["core", "providers/codex", "runtimes/codex", "runtime", "schemas"],
   "managedAssets": [
     { "type": "file", "source": "runtimes/codex/.codex/config.toml", "output": ".codex/config.toml" },
