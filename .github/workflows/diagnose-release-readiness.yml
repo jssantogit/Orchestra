@@ -15,3 +15,5 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Targeted release-readiness contract
         run: node --test tests/release/release-readiness.test.mjs
+      - name: Targeted Doctor contract
+        run: node --test tests/runtime/doctor.test.mjs
