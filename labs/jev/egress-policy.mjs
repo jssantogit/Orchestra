@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,14 @@ function within(child, parent) {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+function physicallyWithin(child, parent) {
+  try {
+    return within(realpathSync(child), realpathSync(parent));
+  } catch {
+    return false;
+  }
+}
+
 export function evaluateLiveEgress({
   projectRoot,
   live = false,
@@ -19,7 +28,7 @@ export function evaluateLiveEgress({
     return { allowed: true, mode: "OFFLINE", reason: null };
   }
 
-  if (projectRoot && within(projectRoot, syntheticFixture)) {
+  if (projectRoot && physicallyWithin(projectRoot, syntheticFixture)) {
     return { allowed: true, mode: "SYNTHETIC_FIXTURE", reason: null };
   }
 
