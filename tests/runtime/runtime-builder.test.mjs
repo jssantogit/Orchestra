@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 
+import { loadRuntimeManifest } from "../../runtime/manifest-loader.mjs";
 import { buildRuntime, runtimeRepositoryRoot } from "../../runtime/runtime-builder.mjs";
 
 async function walkFiles(root, current = root) {
@@ -63,17 +64,21 @@ test("builder emits deterministic self-contained provider runtimes from manifest
     const codexB = join(base, "codex-b");
     const agy = join(base, "antigravity");
 
+    const [codexManifest, antigravityManifest] = await Promise.all([
+      loadRuntimeManifest("codex"),
+      loadRuntimeManifest("antigravity"),
+    ]);
     const first = await buildRuntime({ runtime: "codex", outputDir: codexA });
     const second = await buildRuntime({ runtime: "codex", outputDir: codexB });
     const antigravity = await buildRuntime({ runtime: "antigravity", outputDir: agy });
 
     assert.equal(first.runtime, "codex");
-    assert.equal(first.version, "1.0.0-rc.0");
+    assert.equal(first.version, codexManifest.version);
     assert.match(first.manifestHash, /^[a-f0-9]{64}$/);
     assert.deepEqual(first, second);
     assert.deepEqual(first.files, [...first.files].sort((a, b) => a.path.localeCompare(b.path)));
     assert.equal(antigravity.runtime, "antigravity");
-    assert.equal(antigravity.version, "1.0.0-rc.0");
+    assert.equal(antigravity.version, antigravityManifest.version);
 
     const codexFiles = await walkFiles(codexA);
     const agyFiles = await walkFiles(agy);
