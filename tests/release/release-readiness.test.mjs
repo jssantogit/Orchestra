@@ -24,7 +24,13 @@ const REQUIRED_SCRIPTS = [
   "doctor",
 ];
 
-function fixture({ version = "1.0.0-rc.0", migration = true, scripts = true } = {}) {
+function fixture({
+  version = "1.0.0-rc.0",
+  migration = true,
+  scripts = true,
+  schemaFresh = true,
+  runtimesFresh = true,
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), "orchestra-release-readiness-"));
   mkdirSync(join(root, "runtime/manifests"), { recursive: true });
   mkdirSync(join(root, "docs/migrations"), { recursive: true });
@@ -32,6 +38,8 @@ function fixture({ version = "1.0.0-rc.0", migration = true, scripts = true } = 
   mkdirSync(join(root, "core/schema/generated"), { recursive: true });
   mkdirSync(join(root, "schemas"), { recursive: true });
   const packageScripts = Object.fromEntries(REQUIRED_SCRIPTS.map((name) => [name, "node -e \"\""]));
+  packageScripts["check:schemas"] = schemaFresh ? "node -e \"\"" : "node -e \"process.exit(23)\"";
+  packageScripts["check:runtimes"] = runtimesFresh ? "node -e \"\"" : "node -e \"process.exit(24)\"";
   writeFileSync(join(root, "package.json"), JSON.stringify({ version, ...(scripts ? { scripts: packageScripts } : {}) }));
   writeFileSync(join(root, "package-lock.json"), JSON.stringify({ version, packages: { "": { version } } }));
   writeFileSync(join(root, "core/schema/generated/implementation-packet.v1.mjs"), "export default {};\n");
@@ -89,6 +97,28 @@ test("release readiness rejects missing executable release gates", () => {
     const report = checkReleaseReadiness({ repoRoot: root, expectedVersion: "1.0.0-rc.0" });
     assert.equal(report.ready, false);
     assert.ok(report.failures.some((item) => item.id === "gates:package-scripts"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("release readiness rejects stale generated schema validators", () => {
+  const root = fixture({ schemaFresh: false });
+  try {
+    const report = checkReleaseReadiness({ repoRoot: root, expectedVersion: "1.0.0-rc.0" });
+    assert.equal(report.ready, false);
+    assert.ok(report.failures.some((item) => item.id === "generated:schema-freshness"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("release readiness rejects stale manifest-driven runtime distributions", () => {
+  const root = fixture({ runtimesFresh: false });
+  try {
+    const report = checkReleaseReadiness({ repoRoot: root, expectedVersion: "1.0.0-rc.0" });
+    assert.equal(report.ready, false);
+    assert.ok(report.failures.some((item) => item.id === "generated:runtime-freshness"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
