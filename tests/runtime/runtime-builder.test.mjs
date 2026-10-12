@@ -104,8 +104,10 @@ test("builder emits deterministic self-contained provider runtimes from manifest
     await assertSelfContained(codexA);
     await assertSelfContained(agy);
 
-    const mode = (await lstat(join(codexA, ".codex/astra-orchestra/codex-runtime-cli.mjs"))).mode & 0o777;
-    assert.ok(mode & 0o100, "runtime CLI should remain owner-executable");
+    if (process.platform !== "win32") {
+      const mode = (await lstat(join(codexA, ".codex/astra-orchestra/codex-runtime-cli.mjs"))).mode & 0o777;
+      assert.ok(mode & 0o100, "runtime CLI should remain owner-executable on POSIX filesystems");
+    }
   } finally {
     await rm(base, { recursive: true, force: true });
   }
