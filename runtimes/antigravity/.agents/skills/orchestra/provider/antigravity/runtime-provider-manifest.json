@@ -23,8 +23,12 @@
       "sha256": "884bc5148ed71b3f1ef856741dd7c968e0a4b0491591f7f3d2cd82d6f5ece336"
     },
     {
+      "path": "project-runtime-adapter.mjs",
+      "sha256": "80b0b335d37574e3e9ecfd6ba0d547c72c80e13c568a056cdedb455fdaebac2b"
+    },
+    {
       "path": "project-runtime-manager.mjs",
-      "sha256": "def5aadc43d524c5c24b3f2ffb5cd13f82dd6e751826bfaa6b723254c6331f9d"
+      "sha256": "4cf7fcb1a8327936c956aaf1ad3849a98693b994475d7cef0042da5fe8f7bbda"
     }
   ]
 }
