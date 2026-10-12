@@ -19,6 +19,10 @@ function withFixture(files, callback) {
   }
 }
 
+function portable(path) {
+  return String(path).replaceAll("\\", "/");
+}
+
 test("live canonical Core and both generated runtime mirrors pass through the contamination gate", () => {
   const violations = runContaminationCheck();
   assert.deepEqual(violations.filter(({ runtime }) => runtime === "CORE"), []);
@@ -30,7 +34,7 @@ test("contamination gate rejects provider leakage from canonical schemas", () =>
   }, (root) => {
     const violations = runContaminationCheck(root).filter(({ runtime }) => runtime === "CORE");
     assert.ok(violations.length >= 3, JSON.stringify(violations, null, 2));
-    assert.ok(violations.some(({ file }) => file === "schemas/runtime-leak.schema.json"));
+    assert.ok(violations.some(({ file }) => portable(file) === "schemas/runtime-leak.schema.json"));
   });
 });
 
@@ -43,7 +47,7 @@ test("contamination gate rejects runtime imports and provider-to-provider coupli
     const violations = runContaminationCheck(root).filter(({ runtime }) => runtime === "CORE");
     assert.ok(violations.length >= 3);
     for (const file of ["from-codex.mjs", "from-antigravity.mjs", "cross-provider.mjs"]) {
-      assert.ok(violations.some((violation) => violation.file.endsWith(file)), `expected a Core firewall finding for ${file}`);
+      assert.ok(violations.some((violation) => portable(violation.file).endsWith(file)), `expected a Core firewall finding for ${file}`);
     }
   });
 });
@@ -56,7 +60,7 @@ test("contamination gate rejects concrete provider models and runtime hook/sessi
   }, (root) => {
     const violations = runContaminationCheck(root).filter(({ runtime }) => runtime === "CORE");
     assert.ok(violations.length >= 5, JSON.stringify(violations, null, 2));
-    assert.ok(violations.some(({ file, violation }) => file.includes("generated/agy-session") && /model|session|provider/i.test(violation)));
+    assert.ok(violations.some(({ file, violation }) => portable(file).includes("generated/agy-session") && /model|session|provider/i.test(violation)));
   });
 });
 
@@ -67,7 +71,7 @@ test("provider model and hook/session leakage is rejected in each runtime-local 
   }, (root) => {
     const violations = runContaminationCheck(root).filter(({ runtime }) => runtime === "CORE");
     for (const path of ["runtimes/codex/.codex/astra-orchestra/core/", "runtimes/antigravity/.agents/skills/orchestra/core/"]) {
-      assert.ok(violations.some(({ file }) => file.startsWith(path)), `expected a firewall finding under ${path}`);
+      assert.ok(violations.some(({ file }) => portable(file).startsWith(path)), `expected a firewall finding under ${path}`);
     }
   });
 });
@@ -111,7 +115,7 @@ test("provider runtimes cannot import each other through static, side-effect, dy
     const violations = runContaminationCheck(root);
     assert.equal(violations.filter(({ runtime }) => runtime === "CODEX").length, 6);
     assert.equal(violations.filter(({ runtime }) => runtime === "ANTIGRAVITY").length, 2);
-    assert.ok(violations.some(({ file, line }) => file.endsWith("codex.mjs") && line === 6));
-    assert.ok(violations.some(({ file, line }) => file.endsWith("codex.mjs") && line === 9));
+    assert.ok(violations.some(({ file, line }) => portable(file).endsWith("codex.mjs") && line === 6));
+    assert.ok(violations.some(({ file, line }) => portable(file).endsWith("codex.mjs") && line === 9));
   });
 });
