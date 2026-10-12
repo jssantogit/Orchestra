@@ -59,3 +59,19 @@ test("Doctor fails closed when a manifest-owned source asset is missing", async 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("Doctor exposes stale runtime distributions as a named failing health check", async () => {
+  const root = fixture();
+  try {
+    const commandRunner = (_repoRoot, id) => ({
+      id,
+      ok: id !== "runtime:build-freshness",
+      detail: id === "runtime:build-freshness" ? "stale runtime distribution" : "ok",
+    });
+    const report = await runDoctor({ repoRoot: root, runtime: "fixture", runCommands: true, commandRunner });
+    assert.equal(report.healthy, false);
+    assert.ok(report.checks.some((item) => item.id === "runtime:build-freshness" && !item.ok));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
