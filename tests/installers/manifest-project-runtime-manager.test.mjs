@@ -67,12 +67,7 @@ for (const fixture of [
       assert.equal(await readFile(join(project, fixture.managedProbe), "utf8"), await readFile(join(builtV1, fixture.managedProbe), "utf8"));
 
       git(project, "add", "-A");
-      git(
-        project,
-        "-c", "user.name=Orchestra Test",
-        "-c", "user.email=orchestra@example.invalid",
-        "commit", "-qm", "install runtime",
-      );
+      git(project, "-c", "user.name=Orchestra Test", "-c", "user.email=orchestra@example.invalid", "commit", "-qm", "install runtime");
 
       await mkdir(join(project, fixture.stateFile, ".."), { recursive: true });
       await writeFile(join(project, fixture.stateFile), "{\"keep\":true}\n", "utf8");
@@ -123,6 +118,43 @@ test("rollback rejects backup identifiers that can escape the runtime backup roo
       (error) => error?.code === "INVALID_BACKUP_ID",
     );
   } finally {
+    await rm(project, { recursive: true, force: true });
+  }
+});
+
+test("rollback rejects a corrupted backup before mutating the installed runtime", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "orchestra-corrupt-backup-"));
+  const project = await makeGitProject("orchestra-corrupt-backup-project-");
+  const builtV1 = join(temp, "built-v1");
+  const builtV2 = join(temp, "built-v2");
+  const marker = ".codex/astra-orchestra/routing-policy.mjs";
+  try {
+    const manifest = await loadRuntimeManifest("codex");
+    await buildRuntime({ runtime: "codex", outputDir: builtV1 });
+    const originalMarker = await readFile(join(builtV1, marker), "utf8");
+    await cloneBuiltRuntime(builtV1, builtV2, marker, `${originalMarker}\n// fixture-v2\n`);
+
+    await installProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV1 });
+    const updated = await updateProjectRuntime({ targetDir: project, runtimeManifest: manifest, builtRuntime: builtV2 });
+    assert.ok(updated.backupId);
+    const currentMarker = await readFile(join(project, marker), "utf8");
+    assert.match(currentMarker, /fixture-v2/);
+
+    const backupProbe = join(
+      project,
+      ".orchestra/state/runtime-management/codex/backups",
+      updated.backupId,
+      "runtime/.codex/config.toml",
+    );
+    await writeFile(backupProbe, "# corrupted backup\n", "utf8");
+
+    await assert.rejects(
+      () => rollbackProjectRuntime({ targetDir: project, runtimeManifest: manifest, backupId: updated.backupId }),
+      (error) => error?.code === "RUNTIME_BACKUP_INTEGRITY_ERROR",
+    );
+    assert.equal(await readFile(join(project, marker), "utf8"), currentMarker);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
     await rm(project, { recursive: true, force: true });
   }
 });
