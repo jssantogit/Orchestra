@@ -170,7 +170,13 @@ async function copyManagedRoots({ sourceDir, targetDir, roots }) {
     if (!await exists(source)) throw new Error(`BUILT_RUNTIME_PATH_MISSING: ${rel}`);
     const target = join(targetDir, rel);
     await mkdir(dirname(target), { recursive: true });
-    await cp(source, target, { recursive: true, force: true, dereference: false, preserveTimestamps: true });
+    await cp(source, target, {
+      recursive: true,
+      force: true,
+      dereference: false,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
   }
 }
 
@@ -234,7 +240,13 @@ async function createBackup({ targetDir, manifest, reason }) {
     if (!await exists(source)) continue;
     const target = join(dir, "runtime", rel);
     await mkdir(dirname(target), { recursive: true });
-    await cp(source, target, { recursive: true, force: true, dereference: false, preserveTimestamps: true });
+    await cp(source, target, {
+      recursive: true,
+      force: true,
+      dereference: false,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
   }
   const runtimeMetadata = await readJson(metadataPath(targetDir, manifest.runtime), null);
   await writeFile(join(dir, "backup.json"), `${JSON.stringify({
@@ -353,7 +365,13 @@ export async function rollbackProjectRuntime({ targetDir, runtimeManifest, backu
     if (!await exists(source)) continue;
     const target = join(targetDir, rel);
     await mkdir(dirname(target), { recursive: true });
-    await cp(source, target, { recursive: true, force: true, dereference: false, preserveTimestamps: true });
+    await cp(source, target, {
+      recursive: true,
+      force: true,
+      dereference: false,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
   }
   if (adapter?.afterInstall) await adapter.afterInstall(targetDir, runtimeManifest);
   await ensurePreservedDirs(targetDir, runtimeManifest);
