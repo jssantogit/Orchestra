@@ -68,6 +68,7 @@ for (const fixture of [
         "inspect-hooks-json": ".agents/hooks.json",
         "inspect-hooks": ".agents/hooks",
         "inspect-agents": ".agents/agents",
+        "inspect-skills-link": ".agents/skills/agy-orchestra",
         "inspect-skills": ".agents/skills",
         "inspect-dream": ".agents/dream",
       };
