@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "evidence_type": "orchestra-1x-turn-economy-contract-regression",
+  "measurement_mode": "deterministic-contract-regression",
+  "baseline": {
+    "phase": "Provider Adapters & Enforcement Decomposition",
+    "sha": "d7a81a20c73c5dbdf560763751bb321f6b476690",
+    "ci": {
+      "run_id": 38178233999,
+      "run_number": 677,
+      "conclusion": "success",
+      "direct_work": "success",
+      "work_lease": "success",
+      "turn_economy": "success",
+      "full_regression": "success"
+    }
+  },
+  "candidate_observation": {
+    "phase": "Packaging, Labs, Doctor & Release",
+    "sha": "eb04a3e6906b21e8ad76c3592f9379b162ae9096",
+    "ci": {
+      "run_id": 38188131341,
+      "run_number": 785,
+      "conclusion": "success",
+      "generated_artifacts": "success",
+      "full_regression": "success",
+      "runtime_isolation_doctor_contamination_firewall": "success",
+      "release_readiness": "success",
+      "representative_turn_economy": "success"
+    }
+  },
+  "direct_work_scenarios": [
+    {
+      "id": "BOUNDED_BUG_FIX",
+      "expected_shape": "single bounded implementer execution with evidence and independent Quick Audit; no repeated classification or rediscovery chain",
+      "verification": "tests/direct-work/turn-economy-probes.test.mjs",
+      "result": "pass"
+    },
+    {
+      "id": "AUTHORIZED_REGRESSION_TEST_CHANGE",
+      "expected_shape": "test mutation remains explicitly packet-authorized and bounded",
+      "verification": "tests/direct-work/turn-economy-probes.test.mjs",
+      "result": "pass"
+    },
+    {
+      "id": "UNRELATED_EXTERNAL_TEST_FAILURE",
+      "expected_shape": "unrelated failure returns to control rather than triggering implementer investigation or side-quest repair",
+      "verification": "tests/direct-work/turn-economy-probes.test.mjs",
+      "result": "pass"
+    },
+    {
+      "id": "QUICK_AUDIT_DELTA_RETRY",
+      "expected_shape": "one confirmed blocking finding produces one bounded Delta Packet rather than a broad rediscovery loop",
+      "verification": "tests/direct-work/turn-economy-probes.test.mjs",
+      "result": "pass"
+    }
+  ],
+  "work_lease_contract": {
+    "expected_shape": "fresh compatible control continuation advances lease generation without manual orchestrator handoff; active writer and stale generations remain fenced",
+    "verification": "npm run test:leases",
+    "baseline_result": "pass",
+    "candidate_result": "pass"
+  },
+  "live_external_metrics": null,
+  "live_external_metrics_reason": "No external Antigravity agy live benchmark was executed as part of the GitHub RC gate; token, latency, and monetary figures are therefore intentionally not synthesized.",
+  "verdict": "NO_SEMANTIC_TURN_ECONOMY_REGRESSION_DETECTED",
+  "verdict_scope": "The deterministic RC gates preserve the approved Direct Work and Work Lease execution shape across the Phase 4 checkpoint and the Phase 5 RC candidate. This verdict does not claim new live token, latency, or cost measurements."
+}
