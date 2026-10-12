@@ -79,6 +79,8 @@ test("builder emits deterministic self-contained provider runtimes from manifest
     assert.deepEqual(first.files, [...first.files].sort((a, b) => a.path.localeCompare(b.path)));
     assert.equal(antigravity.runtime, "antigravity");
     assert.equal(antigravity.version, antigravityManifest.version);
+    assert.ok(first.files.every((file) => !("mode" in file)), "build metadata must not encode platform-specific file modes");
+    assert.ok(antigravity.files.every((file) => !("mode" in file)), "Antigravity build metadata must not encode platform-specific file modes");
 
     const codexFiles = await walkFiles(codexA);
     const agyFiles = await walkFiles(agy);
