@@ -1,42 +1,40 @@
 # Orchestra Project Runtime Management
 
-Orchestra provides independent lifecycle managers for both active provider
-runtimes. They replace manual runtime copying with deterministic update,
-doctor, version, diff, backup, rollback, and quiescence checks while preserving
-each runtime's project-owned state.
+Orchestra uses one manifest-driven project-runtime contract for the active provider runtimes. Official installers build a deterministic provider payload, install only manifest-owned paths, preserve project-owned state, and record canonical runtime metadata under `.orchestra/state`.
 
-## Antigravity runtime
+## Canonical metadata and runtime-management state
 
-## Ownership boundary
+Current installations use schema `orchestra.project-runtime.v2`.
 
-Orchestra may replace only these runtime-owned paths:
+- Codex metadata: `.orchestra/state/runtimes/codex.json`
+- Antigravity metadata: `.orchestra/state/runtimes/antigravity.json`
+- Codex backups/history: `.orchestra/state/runtime-management/codex/`
+- Antigravity backups/history: `.orchestra/state/runtime-management/antigravity/`
 
-- `.agents/agents/`
-- `.agents/hooks/`
-- `.agents/skills/`
-- `.agents/dream/`
-- `.agents/hooks.json`
-- `GEMINI.md`
+The old provider-local metadata files `.codex/orchestra-runtime.json` and `.agents/orchestra-runtime.json` are legacy compatibility artifacts. Official v2 installers and source-level lifecycle commands do not create them.
 
-These project/state-owned paths are preserved across update and rollback:
+Metadata records the runtime version, canonical manifest hash, built runtime hash, timestamps, managed-path boundary, preserved paths, last operation, and previous backup ID. Doctor and update compare the installed tree to the same deterministic payload produced by the runtime builder rather than comparing it to an unbuilt source tree.
 
-- `.agents/rules/`
-- `.agents/state/`
-- `.agents/telemetry/`
-- `.agents/dream-data/`
-- `.agents/artifacts/`
-- `.agents/semantic/`
-- `.agents/runtime-management/`
+## Source-level lifecycle CLIs
 
-Dream history, task state, telemetry, project rules, and generated artifacts therefore survive Orchestra runtime upgrades.
+Run lifecycle operations from an Orchestra checkout. The source wrappers build the current runtime payload in a temporary directory and route all mutations and Doctor checks through the v2 provider managers.
 
-## Managed-runtime metadata
+### Codex
 
-Managed projects contain `.agents/orchestra-runtime.json`, recording the Orchestra version, source commit/branch, content-addressed runtime manifest, timestamps, managed path boundary, preserved paths, and previous backup ID.
+```bash
+node scripts/orchestra-codex-project.mjs install /path/to/project
+node scripts/orchestra-codex-project.mjs update /path/to/project --dry-run
+node scripts/orchestra-codex-project.mjs update /path/to/project
+node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
+node scripts/orchestra-codex-project.mjs doctor /path/to/project
+node scripts/orchestra-codex-project.mjs version /path/to/project
+node scripts/orchestra-codex-project.mjs backups /path/to/project
+node scripts/orchestra-codex-project.mjs evidence /path/to/project
+node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest --dry-run
+node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
+```
 
-## Source-repository CLI
-
-Run from the Orchestra checkout:
+### Antigravity
 
 ```bash
 node scripts/orchestra-project.mjs install /path/to/project
@@ -51,140 +49,98 @@ node scripts/orchestra-project.mjs rollback-runtime /path/to/project --backup la
 node scripts/orchestra-project.mjs rollback-runtime /path/to/project --backup latest
 ```
 
-The source wrapper automatically uses the current `runtimes/antigravity` checkout as source of truth.
-
-## Installed-project CLI
-
-A managed project can inspect itself without the Orchestra checkout:
+The dedicated installers use the same canonical managers:
 
 ```bash
-node .agents/skills/orchestra/project-runtime-cli.mjs doctor
-node .agents/skills/orchestra/project-runtime-cli.mjs version
-node .agents/skills/orchestra/project-runtime-cli.mjs backups
-node .agents/skills/orchestra/project-runtime-cli.mjs evidence
+node scripts/install-codex.mjs /path/to/project
+node scripts/install-antigravity.mjs /path/to/project
 ```
 
-Update/diff from the installed CLI require an explicit source runtime:
+A fresh install must be immediately recognizable by its corresponding source-level Doctor. No metadata migration or first-update adoption step is required.
 
-```bash
-node .agents/skills/orchestra/project-runtime-cli.mjs update . \
-  --source ~/projects/Orchestra/runtimes/antigravity
-```
+## Ownership boundaries
 
-## Automatic backups
+### Codex managed runtime
 
-Before every mutating update, Orchestra snapshots only the currently installed managed runtime under `.agents/runtime-management/backups/<backup-id>/`.
-
-Rollback restores only the managed runtime. It does not rewind `.agents/state`, telemetry, Dream data, rules, or artifacts. A safety backup of the current runtime is created before rollback.
-
-Runtime-management events are appended to `.agents/runtime-management/history.jsonl`.
-
-## Legacy adoption
-
-A project installed before `.agents/orchestra-runtime.json` existed can be adopted directly with `update`. Orchestra backs up the legacy managed runtime, preserves project state/history, installs the current runtime, and writes first-class metadata. No clean reinstall or Dream reset is required.
-
-## Quiescence guard
-
-Update and rollback fail closed while the runtime is actively executing. Active states include `PLANNED`, `DELEGATED`, `EXECUTING`, `EVIDENCE_READY`, `CI_WAIT`, `ACCEPTANCE`, `INTEGRATING`, and `CRITICAL_REVIEW`.
-
-`DONE`, `BLOCKED`, and `HUMAN_GATE` are quiescent. `HUMAN_GATE` is intentionally update-safe so a runtime bug can be repaired without deleting the blocked task or Dream history.
-
-`--force` bypasses this guard for explicit operator recovery and should not be the normal path.
-
-## Dry-run, diff, and doctor
-
-`update --dry-run` performs no writes and creates no backup. `diff-runtime` reports added/missing, removed/stale, changed, and unchanged managed paths.
-
-The project doctor checks runtime metadata, managed path presence, content integrity, current runtime state, available backups, preserved paths, and—when a source checkout is available—whether the installed runtime exactly matches that source.
-
-Local edits/corruption under runtime-owned paths are reported as runtime drift instead of being silently trusted.
-
-## Safety invariants
-
-- source repository task state, telemetry, Dream data, and artifacts are never copied into a target;
-- target project state/history is never deleted by update or rollback;
-- active runtimes are not replaced without explicit `--force`;
-- destructive managed-runtime replacement always has a pre-update/pre-rollback backup;
-- runtime content is content-addressed and drift-detectable;
-- project-owned data remains project-owned even though it lives under `.agents/`.
-
-## Semantic project state
-
-`.agents/semantic` is project-owned and preserved across runtime updates. It may contain local Jev Retrieval Assist approval artifacts; these are never shipped from the Orchestra source runtime.
-
----
-
-## Codex runtime
-
-Milestone M adds the same lifecycle guarantees to the independent Codex
-runtime without importing or modifying Antigravity state.
-
-### Ownership boundary
-
-Codex-managed paths are exactly:
+Manifest-owned paths include:
 
 - `.codex/config.toml`
 - `.codex/hooks.json`
 - `.codex/agents/`
 - `.codex/astra-orchestra/`
 
-Codex project-owned paths are preserved across update and rollback:
+Project-owned paths preserved across update and rollback include:
 
 - `.codex/orchestra-state/`
 - `.codex/orchestra-telemetry/`
 - `.codex/orchestra-artifacts/`
 - `.codex/orchestra-semantic/`
 - `.codex/runtime-management/`
+- `.orchestra/state/`
 
-Metadata lives at `.codex/orchestra-runtime.json`. The manifest covers only
-the managed paths, so project state cannot become runtime-owned by accident.
+### Antigravity managed runtime
 
-### Source CLI
+Manifest-owned paths include:
 
-From an Orchestra checkout:
+- `.agents/agents/`
+- `.agents/hooks/`
+- `.agents/skills/`
+- `.agents/dream/`
+- `.agents/hooks.json`
+- `GEMINI.md`
 
-```bash
-node scripts/orchestra-codex-project.mjs install /path/to/project
-node scripts/orchestra-codex-project.mjs update /path/to/project --dry-run
-node scripts/orchestra-codex-project.mjs update /path/to/project
-node scripts/orchestra-codex-project.mjs doctor /path/to/project
-node scripts/orchestra-codex-project.mjs version /path/to/project
-node scripts/orchestra-codex-project.mjs diff-runtime /path/to/project
-node scripts/orchestra-codex-project.mjs backups /path/to/project
-node scripts/orchestra-codex-project.mjs evidence /path/to/project
-node scripts/orchestra-codex-project.mjs rollback /path/to/project --backup latest
-```
+Project-owned paths preserved across update and rollback include:
 
-A pre-Milestone-M project that already contains an unmanaged `.codex` tree
-can be adopted with `update`: Orchestra backs it up first, installs only the
-managed Codex paths, writes metadata, and preserves any existing
-`.codex/orchestra-*/` project data.
+- `.agents/rules/`
+- `.agents/state/`
+- `.agents/telemetry/`
+- `.agents/dream-data/`
+- `.agents/artifacts/`
+- `.agents/semantic/`
+- `.agents/runtime-management/`
+- `.orchestra/state/`
 
-The Codex quiescence guard reads
-`.codex/orchestra-state/active-state.json`. `DONE`, `BLOCKED`, and
-`HUMAN_GATE` are update-safe; active execution states fail closed unless the
-operator explicitly supplies `--force`.
+The manifest defines the exact ownership boundary. Runtime updates never promote unrelated project files into Orchestra-owned state.
 
-### Clean install behavior
+## Quiescence guards
 
-`scripts/install-codex.mjs` and `scripts/install-codex.sh` now route through
-the same lifecycle manager. A fresh Codex installation therefore receives
-first-class runtime metadata immediately rather than becoming a legacy runtime
-that must be adopted on its first update.
+Provider adapters retain provider-native active-state locations while the generic v2 manager owns mutation mechanics.
 
+Codex reads `.codex/orchestra-state/active-state.json`. `INTAKE`, `DONE`, `BLOCKED`, and `HUMAN_GATE` are update-safe. Known execution states fail closed.
 
-## Orchestrator handoff state
+Antigravity reads `.agents/state/active-state.json`. `DONE`, `BLOCKED`, and `HUMAN_GATE` are update-safe. Known execution states fail closed.
 
-Antigravity session-transfer state lives at
-`.agents/state/orchestrator-handoff.json`. Codex session authority and handoff
-state live at `.codex/orchestra-state/session-authority.json` and
-`.codex/orchestra-state/session-handoff.json`.
+Malformed, empty, or unrecognized active state fails closed for both providers. `--force` is reserved for explicit operator recovery.
 
-Those namespaces are project-owned, so lineage and armed/claimed/cancelled
-handoff records survive Orchestra runtime updates and rollback. Codex
-`.codex/hooks.json` is different: it is managed runtime code and therefore is
-versioned, backed up, diffed, and restored with the Codex runtime.
+## Doctor and drift detection
 
-Runtime managers never manufacture, delete, or claim a handoff as part of an
-upgrade. Authority transition is owned by each provider-native handoff state
-machine at its invocation/session boundary.
+The provider Doctor validates:
+
+- that the provider runtime is installed;
+- canonical v2 metadata;
+- byte-level managed-runtime integrity against a freshly built payload;
+- metadata freshness against the current runtime manifest and payload.
+
+A runtime edit or corruption under managed paths makes Doctor unhealthy. Missing or stale metadata also makes Doctor unhealthy. Failed checks are evidence of an unhealthy installation; they are never silently normalized.
+
+## Backups and rollback
+
+Before a mutating runtime replacement, Orchestra creates a content-addressed backup under `.orchestra/state/runtime-management/<runtime>/backups/<backup-id>/`.
+
+Rollback verifies backup metadata, managed-path ownership, and runtime snapshot integrity before destructive mutation. Project-owned provider state is not rewound by runtime rollback.
+
+## Ignore behavior
+
+Project-runtime state is hidden from normal project Git status through Orchestra's canonical project-state ignore handling. Installers preserve user-owned ignore entries and do not modify `.gitignore` merely to hide Orchestra state.
+
+## Safety invariants
+
+- provider model identity never grants runtime authority;
+- official installers and source lifecycle commands share the same v2 metadata contract;
+- managed runtime is compared to the deterministic built payload;
+- active runtimes are not replaced without explicit `--force`;
+- runtime replacement is backup-protected;
+- backup restore is integrity-checked before mutation;
+- project-owned state survives update and rollback;
+- failed or missing validation is not accepted as evidence;
+- current lifecycle commands do not manufacture legacy provider-local metadata.
