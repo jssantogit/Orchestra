@@ -29,9 +29,7 @@ try {
 
   console.log(`Antigravity runtime successfully installed to '${resolve(targetDir, ".agents")}'.`);
   console.log(`Version: ${result.metadata.version || "unknown"}`);
-  console.log(
-    `Verify installation by running: node --test ${resolve(targetDir, ".agents", "skills", "orchestra", "routing-policy.test.mjs")}`,
-  );
+  console.log(`Verify with: node scripts/orchestra-project.mjs doctor ${JSON.stringify(targetDir)}`);
 } catch (error) {
   if (error?.code === "RUNTIME_INSTALL_CONFLICT" || /RUNTIME_INSTALL_CONFLICT/.test(String(error?.message || ""))) {
     console.error(`Conflict detected: managed Antigravity runtime paths already exist in '${targetDir}'.`);
