@@ -75,5 +75,8 @@ jobs:
       - name: Verify Codex project lifecycle and runtime portability
         run: node --test tests/installers/codex-v2-doctor.test.mjs tests/runtime/runtime-builder.test.mjs tests/runtime/doctor.test.mjs
 
+      - name: Build runtime distributions
+        run: npm run build:runtimes
+
       - name: Run Orchestra Doctor
         run: npm run doctor
