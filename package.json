@@ -1,6 +1,6 @@
 {
   "name": "orchestra",
-  "version": "1.0.0-rc.0",
+  "version": "1.0.0",
   "description": "Local multi-agent orchestration framework for coding agents",
   "license": "Apache-2.0",
   "type": "module",
@@ -26,7 +26,7 @@
     "test:architecture-invariants": "node --test tests/architecture-invariants/dream-authority.test.mjs tests/architecture-invariants/policy-lab-authority.test.mjs tests/architecture-invariants/shadow-authority.test.mjs tests/architecture-invariants/canary-authority.test.mjs tests/architecture-invariants/evidence-authority.test.mjs tests/architecture-invariants/project-runtime-authority.test.mjs tests/architecture-invariants/mechanical-fast-path-authority.test.mjs tests/architecture-invariants/evidence-provider-watch-authority.test.mjs tests/architecture-invariants/milestones-i-j-k-authority.test.mjs tests/architecture-invariants/jev-authority.test.mjs tests/architecture-invariants/codex-parity-authority.test.mjs tests/architecture-invariants/orchestrator-handoff-authority.test.mjs tests/architecture-invariants/codex-session-authority.test.mjs tests/architecture-invariants/work-lease-authority.test.mjs",
     "check:contamination": "node scripts/contamination-check.mjs",
     "doctor": "./scripts/doctor.sh",
-    "release:readiness": "node scripts/release-readiness.mjs --expected-version=1.0.0-rc.0",
+    "release:readiness": "node scripts/release-readiness.mjs --expected-version=1.0.0",
     "dream:explore": "node labs/dream/runtime/exploration-cli.mjs",
     "dream:policy-lab": "node labs/dream/runtime/policy-lab-cli.mjs",
     "dream:shadow": "node labs/dream/runtime/shadow-cli.mjs",
