@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 const START = "# >>> orchestra managed state >>>";
 const END = "# <<< orchestra managed state <<<";
@@ -30,14 +31,26 @@ function replaceManagedBlock(text) {
   return `${prefix}${BLOCK}\n`;
 }
 
+function resolveInfoExclude(targetDir) {
+  try {
+    const gitPath = execFileSync(
+      "git",
+      ["-C", targetDir, "rev-parse", "--git-path", "info/exclude"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    if (!gitPath) return null;
+    return isAbsolute(gitPath) ? gitPath : resolve(targetDir, gitPath);
+  } catch {
+    return null;
+  }
+}
+
 export function ensureProjectStateIgnored(targetDir) {
-  const gitDir = join(targetDir, ".git");
-  if (!existsSync(gitDir) || !statSync(gitDir).isDirectory()) {
+  const path = resolveInfoExclude(targetDir);
+  if (!path) {
     return { changed: false, path: null, reason: "GIT_METADATA_UNAVAILABLE" };
   }
-  const infoDir = join(gitDir, "info");
-  const path = join(infoDir, "exclude");
-  mkdirSync(infoDir, { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   const before = existsSync(path) ? readFileSync(path, "utf8") : "";
   const after = replaceManagedBlock(before);
   const normalized = after.endsWith("\n") ? after : `${after}\n`;
