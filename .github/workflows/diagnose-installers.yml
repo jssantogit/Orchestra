@@ -1,0 +1,23 @@
+name: Diagnose Installers
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  isolate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts
+      - name: Codex clean install
+        run: node --test --test-name-pattern="diagnostic codex clean install" tests/installers/legacy-installer-diagnostic.test.mjs
+      - name: Antigravity clean install
+        run: node --test --test-name-pattern="diagnostic antigravity clean install" tests/installers/legacy-installer-diagnostic.test.mjs
+      - name: Codex second install conflict
+        run: node --test --test-name-pattern="diagnostic codex second install conflict" tests/installers/legacy-installer-diagnostic.test.mjs
+      - name: Antigravity second install conflict
+        run: node --test --test-name-pattern="diagnostic antigravity second install conflict" tests/installers/legacy-installer-diagnostic.test.mjs
