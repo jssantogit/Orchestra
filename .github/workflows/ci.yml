@@ -117,6 +117,24 @@ jobs:
       - name: Verify project-state ignore behavior
         run: node --test tests/leases/project-state-ignore.test.mjs
 
+      - name: Diagnose legacy installer harness
+        run: node --test tests/installers/installers.test.mjs
+
+      - name: Diagnose legacy project runtime manager
+        run: node --test tests/installers/project-runtime-manager.test.mjs
+
+      - name: Diagnose legacy Codex project runtime manager
+        run: node --test tests/installers/codex-project-runtime-manager.test.mjs
+
+      - name: Diagnose Codex runtime-state preservation
+        run: node --test tests/leases/codex-runtime-state-preservation.test.mjs
+
+      - name: Diagnose Antigravity runtime-state preservation
+        run: node --test tests/leases/antigravity-runtime-state-preservation.test.mjs
+
+      - name: Diagnose self-contained installed runtime
+        run: node --test tests/installers/self-contained-runtime.test.mjs
+
       - name: Verify full installer suite
         run: npm run test:installers
 
