@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -28,8 +28,10 @@ test("installer: installs Codex runtime cleanly into empty project", () => {
     assert.equal(existsSync(join(tempProject, ".codex/agents/terra-high.toml")), false);
     assert.equal(existsSync(join(tempProject, ".orchestra/state/runtimes/codex.json")), true);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-runtime.json")), false);
-    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/.gitkeep")), true);
-    assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic/.gitkeep")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic")), true);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/.gitkeep")), false);
+    assert.equal(existsSync(join(tempProject, ".codex/orchestra-semantic/.gitkeep")), false);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-state/active-state.json")), false);
     assert.equal(existsSync(join(tempProject, ".codex/orchestra-telemetry/events.jsonl")), false);
   } finally {
@@ -49,11 +51,12 @@ test("installer: installs Antigravity runtime cleanly into empty project without
     assert.equal(existsSync(join(tempProject, "GEMINI.md")), true);
     assert.equal(existsSync(join(tempProject, ".orchestra/state/runtimes/antigravity.json")), true);
     assert.equal(existsSync(join(tempProject, ".agents/orchestra-runtime.json")), false);
-    // Verify no state or telemetry was copied
+    // Preserved mutable-state roots are created empty; no mutable state is copied.
     assert.equal(existsSync(join(tempProject, ".agents/state/active-state.json")), false);
     assert.equal(existsSync(join(tempProject, ".agents/telemetry/events.jsonl")), false);
     assert.equal(existsSync(join(tempProject, ".agents/dream/canonical.mjs")), true);
-    assert.equal(existsSync(join(tempProject, ".agents/dream-data")), false);
+    assert.equal(existsSync(join(tempProject, ".agents/dream-data")), true);
+    assert.deepEqual(readdirSync(join(tempProject, ".agents/dream-data")), []);
     assert.equal(existsSync(join(tempProject, ".agents/state/dream/pending-decisions")), false);
   } finally {
     rmSync(tempProject, { recursive: true, force: true });
