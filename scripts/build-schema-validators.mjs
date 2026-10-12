@@ -22,6 +22,10 @@ function outputName(schemaFile) {
   return schemaFile.replace(/\.schema\.json$/, ".mjs");
 }
 
+function normalizeLineEndings(value) {
+  return String(value).replace(/\r\n/g, "\n");
+}
+
 function makeDependencyFree(moduleCode, schemaFile) {
   const withInlineLength = moduleCode.replace(
     /const (func\d+) = require\("ajv\/dist\/runtime\/ucs2length"\)\.default;/g,
@@ -71,7 +75,7 @@ export async function buildSchemaValidators({
       if (error?.code !== "ENOENT") throw error;
     }
 
-    if (current === expected) continue;
+    if (current !== null && normalizeLineEndings(current) === expected) continue;
     if (current === null) missing.push(outputName(schemaFile));
     else changed.push(outputName(schemaFile));
     if (!checkOnly) await writeFile(outputPath, expected, "utf8");
