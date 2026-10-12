@@ -14,10 +14,10 @@ jobs:
           node-version: 20
       - run: npm ci --ignore-scripts
       - name: Codex clean install
-        run: node --test --test-name-pattern="diagnostic codex clean install" tests/installers/legacy-installer-diagnostic.test.mjs
+        run: node --test --test-name-pattern="installer: installs Codex runtime cleanly" tests/installers/installers.test.mjs
       - name: Antigravity clean install
-        run: node --test --test-name-pattern="diagnostic antigravity clean install" tests/installers/legacy-installer-diagnostic.test.mjs
+        run: node --test --test-name-pattern="installer: installs Antigravity runtime cleanly" tests/installers/installers.test.mjs
       - name: Codex second install conflict
-        run: node --test --test-name-pattern="diagnostic codex second install conflict" tests/installers/legacy-installer-diagnostic.test.mjs
+        run: node --test --test-name-pattern="installer: aborts on conflict without destructive overwrite \(Codex\)" tests/installers/installers.test.mjs
       - name: Antigravity second install conflict
-        run: node --test --test-name-pattern="diagnostic antigravity second install conflict" tests/installers/legacy-installer-diagnostic.test.mjs
+        run: node --test --test-name-pattern="installer: aborts on conflict without destructive overwrite \(Antigravity\)" tests/installers/installers.test.mjs
