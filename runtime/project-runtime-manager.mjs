@@ -357,8 +357,18 @@ export async function rollbackProjectRuntime({ targetDir, runtimeManifest, backu
     throw new Error(`RUNTIME_BACKUP_NOT_FOUND: ${safeBackupId}`);
   }
 
-  const safetyBackup = await createBackup({ targetDir, manifest: runtimeManifest, reason: `pre-rollback:${safeBackupId}` });
   const roots = managedRoots(runtimeManifest);
+  const backupRootsMatch = Array.isArray(backup.managedPaths)
+    && backup.managedPaths.length === roots.length
+    && backup.managedPaths.every((path, index) => path === roots[index]);
+  const backupSnapshot = await snapshot(join(backupDir, "runtime"), roots);
+  if (!backupRootsMatch || typeof backup.runtimeHash !== "string" || backupSnapshot.hash !== backup.runtimeHash) {
+    const error = new Error(`RUNTIME_BACKUP_INTEGRITY_ERROR: ${safeBackupId}`);
+    error.code = "RUNTIME_BACKUP_INTEGRITY_ERROR";
+    throw error;
+  }
+
+  const safetyBackup = await createBackup({ targetDir, manifest: runtimeManifest, reason: `pre-rollback:${safeBackupId}` });
   await removeManagedRoots(targetDir, roots);
   for (const rel of roots) {
     const source = join(backupDir, "runtime", rel);
