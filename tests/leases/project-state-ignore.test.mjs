@@ -44,6 +44,22 @@ test("existing info exclude content is preserved and updates are idempotent", ()
   assert.match(once, /\.orchestra\/state\/\*\*/);
 });
 
+test("linked git worktrees share the repository exclude and keep managed state hidden", () => {
+  const root = repo();
+  writeFileSync(join(root, "README.md"), "fixture\n");
+  git(root, "add", "README.md");
+  git(root, "-c", "user.name=Orchestra Test", "-c", "user.email=orchestra@example.invalid", "commit", "-qm", "fixture");
+  const worktree = join(tmpdir(), `orchestra-project-state-worktree-${process.pid}-${Date.now()}`);
+  git(root, "worktree", "add", "-q", "-b", `orchestra-ignore-${process.pid}-${Date.now()}`, worktree);
+
+  const result = ensureProjectStateIgnored(worktree);
+  assert.equal(result.changed, true);
+  mkdirSync(join(worktree, ".orchestra", "state"), { recursive: true });
+  writeFileSync(join(worktree, ".orchestra", "state", "work-lease.json"), "{}\n");
+  assert.equal(git(worktree, "status", "--short", "--", ".orchestra/state"), "");
+  assert.match(readFileSync(join(root, ".git", "info", "exclude"), "utf8"), /\.orchestra\/state\/\*\*/);
+});
+
 test("non-git target does not get synthetic .git metadata", () => {
   const root = mkdtempSync(join(tmpdir(), "orchestra-project-state-no-git-"));
   const result = ensureProjectStateIgnored(root);
