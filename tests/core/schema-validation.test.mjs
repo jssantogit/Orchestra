@@ -49,6 +49,50 @@ const validWorkLease = () => ({
   candidate: null,
 });
 
+const validDelegationRequest = () => ({
+  schema: "orchestra.delegation-request.v1",
+  delegationId: "delegation-17",
+  taskId: "chapter-refresh-fix",
+  source: { provider: "provider-a", actorIdHash: "sha256:source-actor" },
+  target: { provider: "provider-b", logicalRole: "CRITICAL_REVIEWER" },
+  purpose: "INDEPENDENT_REVIEW",
+  packet: validImplementationPacket(),
+  authority: {
+    capabilities: ["LOCAL_READ", "PROCESS_EXEC"],
+    mutation: "FORBIDDEN",
+    network: "FORBIDDEN",
+    mayDelegate: false,
+  },
+  workspace: {
+    sourceFingerprint: "sha256:workspace-fingerprint",
+    sourceRevision: "abcdef1234567890",
+    isolation: "EPHEMERAL_WORKTREE",
+  },
+  limits: {
+    timeoutMs: 120000,
+    maxOutputBytes: 65536,
+    delegationDepth: 1,
+  },
+});
+
+const validDelegationResult = () => ({
+  schema: "orchestra.delegation-result.v1",
+  delegationId: "delegation-17",
+  provider: "provider-b",
+  logicalRole: "CRITICAL_REVIEWER",
+  purpose: "INDEPENDENT_REVIEW",
+  status: "COMPLETED",
+  summary: "Candidate satisfies the bounded review packet.",
+  findings: [],
+  evidenceRefs: ["test:focused-suite"],
+  execution: { exitCode: 0, durationMs: 1200 },
+  workspace: {
+    initialFingerprint: "sha256:initial",
+    finalFingerprint: "sha256:final",
+    dirty: false,
+  },
+});
+
 test("implementation packet accepts the approved Direct Work shape", () => {
   const result = validateSchema("implementation-packet.v1.schema.json", validImplementationPacket());
   assert.equal(result.valid, true, JSON.stringify(result.errors));
@@ -88,6 +132,29 @@ test("work lease requires factual bounded authority fields and a non-negative ge
   const negativeGeneration = validWorkLease();
   negativeGeneration.generation = -1;
   assert.equal(validateSchema("work-lease.v1.schema.json", negativeGeneration).valid, false);
+});
+
+test("delegation request and result are first-class bounded canonical contracts", () => {
+  const request = validateSchema("delegation-request.v1.schema.json", validDelegationRequest());
+  const result = validateSchema("delegation-result.v1.schema.json", validDelegationResult());
+  assert.equal(request.valid, true, JSON.stringify(request.errors));
+  assert.equal(result.valid, true, JSON.stringify(result.errors));
+
+  const recursive = validDelegationRequest();
+  recursive.authority.mayDelegate = true;
+  assert.equal(validateSchema("delegation-request.v1.schema.json", recursive).valid, false);
+
+  const deep = validDelegationRequest();
+  deep.limits.delegationDepth = 2;
+  assert.equal(validateSchema("delegation-request.v1.schema.json", deep).valid, false);
+
+  const mutating = validDelegationRequest();
+  mutating.authority.mutation = "ALLOWED";
+  assert.equal(validateSchema("delegation-request.v1.schema.json", mutating).valid, false);
+
+  const raw = validDelegationResult();
+  raw.stdout = "provider transcript must not become canonical state";
+  assert.equal(validateSchema("delegation-result.v1.schema.json", raw).valid, false);
 });
 
 test("runtime event payload accepts empty data and rejects raw, provider-specific, and unknown fields", () => {
@@ -164,6 +231,8 @@ test("every canonical schema rejects unknown top-level properties", () => {
       actor: { provider: "codex", sessionIdHash: "sha256:abc123" },
       payload: {},
     },
+    "delegation-request.v1.schema.json": validDelegationRequest(),
+    "delegation-result.v1.schema.json": validDelegationResult(),
   };
 
   for (const [schemaFile, fixture] of Object.entries(fixtures)) {

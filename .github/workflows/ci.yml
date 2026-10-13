@@ -35,6 +35,9 @@ jobs:
       - name: Run full regression
         run: npm test
 
+      - name: Run cross-provider delegation feature tests
+        run: node --test tests/delegation/*.test.mjs
+
       - name: Verify isolated runtimes, Doctor, contamination, and firewall
         run: |
           node --test tests/installers/self-contained-runtime.test.mjs

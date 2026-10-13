@@ -14,12 +14,24 @@
       "sha256": "4522258d44b48a7b80aad72efd0cbab29f153db93f4a95452cf807f119c8449f"
     },
     {
+      "path": "delegation/policy.mjs",
+      "sha256": "57c84389b3da87a88d34e8f6d427b012e30308d29f7566e336e70b59ee9f5431"
+    },
+    {
+      "path": "delegation/worker-envelope.mjs",
+      "sha256": "6a5c2f5f3a169b51e7ef910484de41cc1cf6a7b8711f1bc0f9b094f339880359"
+    },
+    {
       "path": "domain/audit-result.mjs",
       "sha256": "a1ca3b369cb30b2d765700b437da55c4aad08d492f89f07bbd4b4189c6c6f9da"
     },
     {
       "path": "domain/candidate.mjs",
       "sha256": "b2ffd9b1aeb42b0faa1cdc1aa04d942d8935625f643442cf413773dd0a08ff25"
+    },
+    {
+      "path": "domain/delegation.mjs",
+      "sha256": "e4ff6b8ec6b27296d5ccef364ac7fd451e90c5a78ba530bdf2c1efcb0be8385a"
     },
     {
       "path": "domain/evidence.mjs",
@@ -98,6 +110,10 @@
       "sha256": "4dc9f48cf8d3680e4af28a83c86977838e1ea22d65744fc221d1ef555f782715"
     },
     {
+      "path": "routing/delegation-target.mjs",
+      "sha256": "108a0762b9d4599f84b862515c4e62bccaec2027a9b58fd289ed64414d4397fc"
+    },
+    {
       "path": "routing/escalation.mjs",
       "sha256": "06e5ad2af368bf65317da2d77815e0e468476964284e2a4dbbb998c1965f38c3"
     },
@@ -112,6 +128,14 @@
     {
       "path": "schema/generated/candidate.v1.mjs",
       "sha256": "8a974c53d178882419d410ba3d80ed2c7880c814c0616d6898ce78ea2fdd1af3"
+    },
+    {
+      "path": "schema/generated/delegation-request.v1.mjs",
+      "sha256": "bbee7e1706def7523f8951bc7e6b7c2ef63b781cda73380a0d60988f96237a2c"
+    },
+    {
+      "path": "schema/generated/delegation-result.v1.mjs",
+      "sha256": "fe878a9a44c0c2fb0f4a585ce610355acf02b06c0645efc2e3f9315453862dee"
     },
     {
       "path": "schema/generated/evidence.v1.mjs",
@@ -135,7 +159,7 @@
     },
     {
       "path": "schema/validator.mjs",
-      "sha256": "03d9d019b518b47db75c98d3f31d62ad4a3bf135c6696a5d03f939487c39715e"
+      "sha256": "2712ba1c727c45dc45f20d3fff5ec28c507aa44398fe53f3df55b315fa967dd1"
     },
     {
       "path": "schemas/audit-result.v1.schema.json",
@@ -144,6 +168,14 @@
     {
       "path": "schemas/candidate.v1.schema.json",
       "sha256": "21acbe231fff07c39a5fb68be9bc2ecb543b219be6c4fce706a66cc1791ea8e8"
+    },
+    {
+      "path": "schemas/delegation-request.v1.schema.json",
+      "sha256": "261d8522d90d7a5c0024e056b5019eda738e8e13c7525e74e2b8864350961a3e"
+    },
+    {
+      "path": "schemas/delegation-result.v1.schema.json",
+      "sha256": "2951b6ac600dcc61ced4a34471d70e0172c8514f3e877a78e83fff82c8fc0a3c"
     },
     {
       "path": "schemas/delta-packet.v1.schema.json",
