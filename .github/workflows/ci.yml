@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     name: Orchestra 1.x RC Verification
@@ -33,15 +36,19 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
-      - name: Capture generated delegation artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: delegation-generated-artifacts
-          if-no-files-found: error
-          path: |
-            core/schema/generated/delegation-request.v1.mjs
-            core/schema/generated/delegation-result.v1.mjs
-            runtimes/codex/.codex/astra-orchestra/core/runtime-core-manifest.json
+      - name: Materialize generated delegation artifacts
+        if: github.event_name == 'push' && github.ref == 'refs/heads/design/cross-provider-delegation'
+        shell: bash
+        run: |
+          git add core/schema/generated runtimes/codex/.codex/astra-orchestra/core runtimes/antigravity/.agents/skills/orchestra/core
+          if git diff --cached --quiet; then
+            echo "No generated runtime-core drift to materialize."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build: sync delegation runtime artifacts [skip ci]"
+          git push origin HEAD:design/cross-provider-delegation
 
       - name: Run full regression
         run: npm test
