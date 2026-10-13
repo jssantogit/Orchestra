@@ -92,6 +92,30 @@ test("antigravity manifest owns provider/core payload while Dream is sourced fro
   ]) assert.ok(manifest.entrypoints.includes(entrypoint), `missing Antigravity entrypoint ${entrypoint}`);
 });
 
+test("delegation manifest is a fourth independent neutral runtime with bounded provider payload", async () => {
+  const { loadRuntimeManifest, RUNTIME_MANIFEST_NAMES } = await runtimeManifestApi();
+  assert.deepEqual(RUNTIME_MANIFEST_NAMES, ["core", "codex", "antigravity", "delegation"]);
+
+  const manifest = await loadRuntimeManifest("delegation");
+  assert.equal(manifest.runtime, "delegation");
+  assert.ok(manifest.sourceRoots.includes("core"));
+  assert.ok(manifest.sourceRoots.includes("schemas"));
+  assert.ok(manifest.sourceRoots.includes("runtime"));
+  assert.ok(manifest.sourceRoots.includes("providers/antigravity"));
+  assert.equal(manifest.sourceRoots.includes("providers/codex"), false);
+
+  for (const asset of manifest.managedAssets) {
+    assert.match(asset.output, /^\.orchestra\/runtime\/delegation(?:\/|$)/);
+  }
+  assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/core")?.source, "core");
+  assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/core/schemas")?.source, "schemas");
+  assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/runtime/delegation")?.source, "runtime/delegation");
+  assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/providers/antigravity/delegation-executor.mjs")?.source, "providers/antigravity/delegation-executor.mjs");
+  assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs")?.source, "providers/antigravity/model-catalog.mjs");
+  assert.equal(manifest.managedAssets.some((asset) => asset.output.startsWith(".codex/") || asset.output.startsWith(".agents/") || asset.output === "GEMINI.md"), false);
+  assert.deepEqual(manifest.preservedProjectPaths, [".orchestra/state/delegations"]);
+});
+
 test("unknown runtime manifests fail closed", async () => {
   const { loadRuntimeManifest } = await runtimeManifestApi();
   await assert.rejects(() => loadRuntimeManifest("does-not-exist"), /unknown runtime manifest/i);
