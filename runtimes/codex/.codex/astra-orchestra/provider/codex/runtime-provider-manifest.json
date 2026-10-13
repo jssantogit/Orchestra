@@ -20,7 +20,7 @@
     },
     {
       "path": "delegation-executor.mjs",
-      "sha256": "cf022bd72f76f2dd71cf4cad3a4dd5da72fccd66ae57a48d8d48438741ffd3e4"
+      "sha256": "b193ec970ef830917dff6ba2a88723f5465aa3798591e45852543d98ffbb8a59"
     },
     {
       "path": "model-catalog.mjs",
