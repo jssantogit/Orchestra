@@ -120,9 +120,10 @@ function failureStatus(reason) {
 
 function failureResult(request, reason, context = {}) {
   const boundedReason = FAILURE_REASONS.has(reason) ? reason : "EXECUTION_FAILED";
+  const { status = failureStatus(boundedReason), ...facts } = context;
   return baseResult(request, {
-    ...context,
-    status: failureStatus(boundedReason),
+    ...facts,
+    status,
     reason: boundedReason,
     summary: "",
     findings: [],
@@ -347,8 +348,15 @@ export function createDelegationBroker({
 
       let result;
       const executorReason = executorFailureReason(executionResult);
-      if (inspection?.dirty === true) {
+      if (!inspection) {
+        result = failureResult(request, "EXECUTION_FAILED", {
+          status: "FAILED",
+          execution: executionResult?.execution,
+          initialFingerprint: workspaceContext.initialFingerprint,
+        });
+      } else if (inspection.dirty === true) {
         result = failureResult(request, "CAPABILITY_DENIED", {
+          status: "FAILED",
           execution: executionResult?.execution,
           initialFingerprint: workspaceContext.initialFingerprint,
           inspection,
