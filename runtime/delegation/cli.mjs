@@ -8,6 +8,7 @@ import {
   assertDelegationResult,
 } from "../../core/domain/delegation.mjs";
 import { createAntigravityDelegationExecutor } from "../../providers/antigravity/delegation-executor.mjs";
+import { createCodexDelegationExecutor } from "../../providers/codex/delegation-executor.mjs";
 import { createDelegationBroker } from "./broker.mjs";
 
 const USAGE_ERROR = "ORCHESTRA_DELEGATION_CLI_USAGE_INVALID";
@@ -68,11 +69,29 @@ function rootActorFor(request) {
   };
 }
 
+function defaultCreateExecutors() {
+  return [
+    createAntigravityDelegationExecutor(),
+    createCodexDelegationExecutor(),
+  ];
+}
+
+function composeExecutors({ createExecutor, createExecutors }) {
+  if (typeof createExecutor === "function") return [createExecutor()];
+  if (typeof createExecutors !== "function") throw new TypeError("DELEGATION_EXECUTOR_FACTORY_REQUIRED");
+  const executors = createExecutors();
+  if (!Array.isArray(executors) || executors.length === 0) {
+    throw new TypeError("DELEGATION_EXECUTORS_REQUIRED");
+  }
+  return executors;
+}
+
 export async function runDelegationCli({
   argv = process.argv.slice(2),
   stdout = process.stdout,
   stderr = process.stderr,
-  createExecutor = createAntigravityDelegationExecutor,
+  createExecutor = null,
+  createExecutors = defaultCreateExecutors,
   createBroker = createDelegationBroker,
 } = {}) {
   const args = parseArgs(argv);
@@ -81,21 +100,20 @@ export async function runDelegationCli({
   const request = readCanonicalRequest(args.requestPath);
   if (!request) return fail(stderr, REQUEST_ERROR);
 
-  let executor;
+  let executors;
   try {
-    executor = createExecutor();
+    executors = composeExecutors({ createExecutor, createExecutors });
   } catch {
     return fail(stderr, TARGET_ERROR);
   }
-  if (!executor
-      || typeof executor !== "object"
-      || executor.provider !== request.target.provider) {
+  if (executors.some((executor) => !executor || typeof executor !== "object" || typeof executor.provider !== "string")
+      || !executors.some((executor) => executor.provider === request.target.provider)) {
     return fail(stderr, TARGET_ERROR);
   }
 
   let broker;
   try {
-    broker = createBroker({ executors: [executor] });
+    broker = createBroker({ executors });
   } catch {
     return fail(stderr, EXECUTION_ERROR);
   }
