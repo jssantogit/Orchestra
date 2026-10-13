@@ -48,7 +48,7 @@ function capture(maxOutputBytes) {
   };
 }
 
-export function runBoundedProcess({
+export async function runBoundedProcess({
   command,
   args = [],
   cwd = process.cwd(),
