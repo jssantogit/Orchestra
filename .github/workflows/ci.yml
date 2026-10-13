@@ -26,6 +26,10 @@ jobs:
       - name: Build and verify generated artifacts
         run: |
           npm run build:schemas
+          npm run sync:runtime-core
+          echo "ORCHESTRA_ARTIFACT_REQUEST=$(base64 -w0 core/schema/generated/delegation-request.v1.mjs)"
+          echo "ORCHESTRA_ARTIFACT_RESULT=$(base64 -w0 core/schema/generated/delegation-result.v1.mjs)"
+          echo "ORCHESTRA_ARTIFACT_MANIFEST=$(base64 -w0 runtimes/codex/.codex/astra-orchestra/core/runtime-core-manifest.json)"
           npm run build:runtimes
           npm run check:schemas
           npm run check:runtimes
