@@ -1,5 +1,7 @@
 import validateAuditResult from "./generated/audit-result.v1.mjs";
 import validateCandidate from "./generated/candidate.v1.mjs";
+import validateDelegationRequest from "./generated/delegation-request.v1.mjs";
+import validateDelegationResult from "./generated/delegation-result.v1.mjs";
 import validateEvidence from "./generated/evidence.v1.mjs";
 import validateImplementationPacket from "./generated/implementation-packet.v1.mjs";
 import validateRuntimeEvent from "./generated/runtime-event.v1.mjs";
@@ -9,6 +11,8 @@ import validateWorkLease from "./generated/work-lease.v1.mjs";
 const validators = new Map([
   ["audit-result.v1.schema.json", validateAuditResult],
   ["candidate.v1.schema.json", validateCandidate],
+  ["delegation-request.v1.schema.json", validateDelegationRequest],
+  ["delegation-result.v1.schema.json", validateDelegationResult],
   ["evidence.v1.schema.json", validateEvidence],
   ["implementation-packet.v1.schema.json", validateImplementationPacket],
   ["runtime-event.v1.schema.json", validateRuntimeEvent],

@@ -22,6 +22,10 @@
       "sha256": "b2ffd9b1aeb42b0faa1cdc1aa04d942d8935625f643442cf413773dd0a08ff25"
     },
     {
+      "path": "domain/delegation.mjs",
+      "sha256": "94d746edefa766deb77a86e41296def02e455a0c904948d4bc715fd2342150b0"
+    },
+    {
       "path": "domain/evidence.mjs",
       "sha256": "b800541aca340a2ade1509e276e4c4ab1bb8364b9982c748b862def6e0e171ab"
     },
@@ -114,6 +118,14 @@
       "sha256": "8a974c53d178882419d410ba3d80ed2c7880c814c0616d6898ce78ea2fdd1af3"
     },
     {
+      "path": "schema/generated/delegation-request.v1.mjs",
+      "sha256": "b0203b73639081c2661ea2be386b8c97b6201dc2dcda113eab94b7218983e5f8"
+    },
+    {
+      "path": "schema/generated/delegation-result.v1.mjs",
+      "sha256": "c48b8cded2f67b5769a99e8c57a0bb47033293dd2109abc59231a49e5d5be9a3"
+    },
+    {
       "path": "schema/generated/evidence.v1.mjs",
       "sha256": "e8bfe0ab9ea4566614a3c522a99f0910ae8694b21626b35f2a7083cd2c377548"
     },
@@ -135,7 +147,7 @@
     },
     {
       "path": "schema/validator.mjs",
-      "sha256": "03d9d019b518b47db75c98d3f31d62ad4a3bf135c6696a5d03f939487c39715e"
+      "sha256": "2712ba1c727c45dc45f20d3fff5ec28c507aa44398fe53f3df55b315fa967dd1"
     },
     {
       "path": "schemas/audit-result.v1.schema.json",
@@ -144,6 +156,14 @@
     {
       "path": "schemas/candidate.v1.schema.json",
       "sha256": "21acbe231fff07c39a5fb68be9bc2ecb543b219be6c4fce706a66cc1791ea8e8"
+    },
+    {
+      "path": "schemas/delegation-request.v1.schema.json",
+      "sha256": "21f5663ce27e6d67352dec2fba7d35612977b8f92ba55a8e180ee0fbc2b8ccf4"
+    },
+    {
+      "path": "schemas/delegation-result.v1.schema.json",
+      "sha256": "d687905487b9424a287127779548242795747c2cd1110257f325c4ad3b1566c9"
     },
     {
       "path": "schemas/delta-packet.v1.schema.json",
