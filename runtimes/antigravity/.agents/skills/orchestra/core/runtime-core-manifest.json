@@ -14,6 +14,14 @@
       "sha256": "4522258d44b48a7b80aad72efd0cbab29f153db93f4a95452cf807f119c8449f"
     },
     {
+      "path": "delegation/policy.mjs",
+      "sha256": "57c84389b3da87a88d34e8f6d427b012e30308d29f7566e336e70b59ee9f5431"
+    },
+    {
+      "path": "delegation/worker-envelope.mjs",
+      "sha256": "6a5c2f5f3a169b51e7ef910484de41cc1cf6a7b8711f1bc0f9b094f339880359"
+    },
+    {
       "path": "domain/audit-result.mjs",
       "sha256": "a1ca3b369cb30b2d765700b437da55c4aad08d492f89f07bbd4b4189c6c6f9da"
     },
@@ -100,6 +108,10 @@
     {
       "path": "policy/test-mutation.mjs",
       "sha256": "4dc9f48cf8d3680e4af28a83c86977838e1ea22d65744fc221d1ef555f782715"
+    },
+    {
+      "path": "routing/delegation-target.mjs",
+      "sha256": "108a0762b9d4599f84b862515c4e62bccaec2027a9b58fd289ed64414d4397fc"
     },
     {
       "path": "routing/escalation.mjs",
