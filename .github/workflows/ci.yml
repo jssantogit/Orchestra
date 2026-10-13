@@ -10,10 +10,14 @@ jobs:
   verify:
     name: Orchestra 1.x RC Verification
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -28,14 +32,18 @@ jobs:
           npm run build:schemas
           npm run sync:runtime-core
 
-      - name: Upload generated delegation artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: delegation-generated-${{ github.sha }}
-          path: |
-            core/schema/generated
-            runtimes/codex/.codex/astra-orchestra/core
-            runtimes/antigravity/.agents/skills/orchestra/core
+      - name: Commit generated delegation artifacts to PR branch
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add core/schema/generated runtimes/codex/.codex/astra-orchestra/core runtimes/antigravity/.agents/skills/orchestra/core
+          if git diff --cached --quiet; then
+            echo "Generated artifacts already current"
+          else
+            git commit -m "chore(runtime): sync generated delegation artifacts"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
 
       - name: Build and verify generated artifacts
         run: |
