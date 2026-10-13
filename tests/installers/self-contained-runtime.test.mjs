@@ -83,16 +83,19 @@ test("delegation installed runtime is self-contained and contains no provider co
     const runner = join(target, "delegation-self-contained-smoke.mjs");
     const cliUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "cli.mjs")).href;
     const brokerUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "broker.mjs")).href;
-    const executorUrl = pathToFileURL(join(runtimeRoot, "providers", "antigravity", "delegation-executor.mjs")).href;
+    const antigravityExecutorUrl = pathToFileURL(join(runtimeRoot, "providers", "antigravity", "delegation-executor.mjs")).href;
+    const codexExecutorUrl = pathToFileURL(join(runtimeRoot, "providers", "codex", "delegation-executor.mjs")).href;
     const domainUrl = pathToFileURL(join(runtimeRoot, "core", "domain", "delegation.mjs")).href;
     writeFileSync(runner, [
       `const cli = await import(${JSON.stringify(cliUrl)});`,
       `const broker = await import(${JSON.stringify(brokerUrl)});`,
-      `const executor = await import(${JSON.stringify(executorUrl)});`,
+      `const antigravityExecutor = await import(${JSON.stringify(antigravityExecutorUrl)});`,
+      `const codexExecutor = await import(${JSON.stringify(codexExecutorUrl)});`,
       `const domain = await import(${JSON.stringify(domainUrl)});`,
       `if (typeof cli.runDelegationCli !== "function") throw new Error("DELEGATION_CLI_BROKEN");`,
       `if (typeof broker.createDelegationBroker !== "function") throw new Error("DELEGATION_BROKER_BROKEN");`,
-      `if (typeof executor.createAntigravityDelegationExecutor !== "function") throw new Error("DELEGATION_EXECUTOR_BROKEN");`,
+      `if (typeof antigravityExecutor.createAntigravityDelegationExecutor !== "function") throw new Error("ANTIGRAVITY_DELEGATION_EXECUTOR_BROKEN");`,
+      `if (typeof codexExecutor.createCodexDelegationExecutor !== "function") throw new Error("CODEX_DELEGATION_EXECUTOR_BROKEN");`,
       `if (typeof domain.assertDelegationRequest !== "function") throw new Error("DELEGATION_DOMAIN_BROKEN");`,
     ].join("\n") + "\n");
 
@@ -102,7 +105,7 @@ test("delegation installed runtime is self-contained and contains no provider co
     assert.equal(existsSync(join(target, ".codex")), false);
     assert.equal(existsSync(join(target, ".agents")), false);
     assert.equal(existsSync(join(target, "GEMINI.md")), false);
-    assert.equal(existsSync(join(runtimeRoot, "providers", "codex")), false);
+    assert.equal(existsSync(join(runtimeRoot, "providers", "codex", "adapter")), false);
     assert.equal(existsSync(join(runtimeRoot, "providers", "antigravity", "adapter")), false);
     assert.equal(git(target, "status", "--short", "--", ".orchestra/state"), "");
   } finally {
