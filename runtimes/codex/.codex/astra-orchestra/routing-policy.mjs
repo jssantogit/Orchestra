@@ -8,6 +8,11 @@ export {
   evaluateStopDecision,
 } from "./core/acceptance/stop-decision.mjs";
 export { createRuntimeEvent } from "./core/events/runtime-event.mjs";
+export {
+  buildCodexDelegationRequest,
+  decideCodexCrossProviderRoute,
+  executeCodexCrossProviderDelegation,
+} from "./cross-provider-delegation.mjs";
 
 // Compatibility facade for the Codex runtime. Provider-neutral classification,
 // escalation, acceptance and event ownership live in core; concrete
