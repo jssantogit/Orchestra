@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { buildRuntime, runtimeRepositoryRoot, verifyBuiltRuntime } from "../runtime/runtime-builder.mjs";
 
 const repoRoot = runtimeRepositoryRoot();
-const runtimes = ["codex", "antigravity"];
+const runtimes = ["codex", "antigravity", "delegation"];
 const tempRoot = await mkdtemp(join(tmpdir(), "orchestra-runtime-check-"));
 
 try {
