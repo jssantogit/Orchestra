@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, design/cross-provider-delegation ]
   pull_request:
     branches: [ main ]
 
