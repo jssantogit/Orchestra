@@ -2,7 +2,7 @@
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "delegation",
   "version": "1.0.1",
-  "sourceRoots": ["core", "runtime", "schemas", "providers/antigravity"],
+  "sourceRoots": ["core", "runtime", "schemas", "providers/antigravity", "providers/codex"],
   "managedAssets": [
     { "type": "tree", "source": "core", "output": ".orchestra/runtime/delegation/core" },
     { "type": "tree", "source": "schemas", "output": ".orchestra/runtime/delegation/core/schemas" },
@@ -12,7 +12,9 @@
     { "type": "file", "source": "runtime/manifest-loader.mjs", "output": ".orchestra/runtime/delegation/runtime/manifest-loader.mjs" },
     { "type": "file", "source": "runtime/manifests/delegation.json", "output": ".orchestra/runtime/delegation/runtime/manifests/delegation.json" },
     { "type": "file", "source": "providers/antigravity/delegation-executor.mjs", "output": ".orchestra/runtime/delegation/providers/antigravity/delegation-executor.mjs" },
-    { "type": "file", "source": "providers/antigravity/model-catalog.mjs", "output": ".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs" }
+    { "type": "file", "source": "providers/antigravity/model-catalog.mjs", "output": ".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs" },
+    { "type": "file", "source": "providers/codex/delegation-executor.mjs", "output": ".orchestra/runtime/delegation/providers/codex/delegation-executor.mjs" },
+    { "type": "file", "source": "providers/codex/model-catalog.mjs", "output": ".orchestra/runtime/delegation/providers/codex/model-catalog.mjs" }
   ],
   "preservedProjectPaths": [
     ".orchestra/state/delegations"
@@ -26,7 +28,9 @@
     "runtime/manifest-loader.mjs",
     "runtime/manifests/delegation.json",
     "providers/antigravity/delegation-executor.mjs",
-    "providers/antigravity/model-catalog.mjs"
+    "providers/antigravity/model-catalog.mjs",
+    "providers/codex/delegation-executor.mjs",
+    "providers/codex/model-catalog.mjs"
   ],
   "entrypoints": [
     ".orchestra/runtime/delegation/runtime/delegation/cli.mjs",
