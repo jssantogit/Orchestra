@@ -89,7 +89,7 @@ test("delegation manifest owns one independent project-wide neutral runtime", as
   assert.ok(manifest.sourceRoots.includes("runtime"));
   assert.ok(manifest.sourceRoots.includes("schemas"));
   assert.ok(manifest.sourceRoots.includes("providers/antigravity"));
-  assert.equal(manifest.sourceRoots.includes("providers/codex"), false);
+  assert.ok(manifest.sourceRoots.includes("providers/codex"));
 
   const outputs = manifest.managedAssets.map((asset) => asset.output);
   assert.ok(outputs.every((output) => output === ".orchestra/runtime/delegation" || output.startsWith(".orchestra/runtime/delegation/")));
@@ -98,6 +98,10 @@ test("delegation manifest owns one independent project-wide neutral runtime", as
   assert.ok(outputs.includes(".orchestra/runtime/delegation/runtime/delegation"));
   assert.ok(outputs.includes(".orchestra/runtime/delegation/providers/antigravity/delegation-executor.mjs"));
   assert.ok(outputs.includes(".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs"));
+  assert.ok(outputs.includes(".orchestra/runtime/delegation/providers/codex/delegation-executor.mjs"));
+  assert.ok(outputs.includes(".orchestra/runtime/delegation/providers/codex/model-catalog.mjs"));
+  assert.equal(outputs.some((output) => output.startsWith(".codex/") || output.startsWith(".agents/") || output === "GEMINI.md"), false);
+  assert.equal(outputs.some((output) => output.includes("/providers/codex/adapter/") || output.includes("/providers/antigravity/adapter/")), false);
   assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/cli.mjs"));
   assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegations"));
 });
