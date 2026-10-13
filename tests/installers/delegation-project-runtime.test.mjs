@@ -160,3 +160,5 @@ test("delegation runtime update preserves durable delegation records and does no
   assert.equal(existsSync(join(targetDir, ".agents")), false);
   assert.equal(existsSync(join(targetDir, "GEMINI.md")), false);
 });
+
+await import("./delegation-provider-integration.test.mjs");
