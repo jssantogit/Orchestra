@@ -137,7 +137,7 @@ test("clean source creates an external detached worktree at the exact requested 
   assert.equal(inside(baseDir, context.path), true);
   assert.equal(inside(repoRoot, context.path), false);
   assert.equal(git(context.path, "rev-parse", "HEAD"), request.workspace.sourceRevision);
-  assert.equal(git(context.path, "symbolic-ref", "-q", "HEAD"), "");
+  assert.equal(git(context.path, "rev-parse", "--abbrev-ref", "HEAD"), "HEAD");
 });
 
 test("linked-worktree source still delegates outside both canonical and linked worktrees", async (t) => {
