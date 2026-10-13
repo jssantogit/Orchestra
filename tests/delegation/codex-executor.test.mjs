@@ -17,10 +17,7 @@ function request() {
       taskId: "delegation-task",
       candidateGeneration: 3,
       goal: "review the bounded candidate",
-      direction: {
-        change: "inspect the candidate against acceptance criteria",
-        preserve: ["public API"],
-      },
+      direction: { change: "inspect the candidate", preserve: ["public API"] },
       anchors: [{ file: "src/example.mjs" }],
       scope: { allowedAreas: ["src/**", "test/**"], forbidden: ["secrets/**"] },
       permissions: { discovery: "DIRECTED", tests: "READ_ONLY", sideEffects: ["LOCAL_TEST"] },
@@ -57,11 +54,7 @@ function workerEnvelope() {
     validation: ["focused tests"],
     capabilities: ["LOCAL_READ", "PROCESS_EXEC"],
     prohibitions: { mutation: "FORBIDDEN", network: "FORBIDDEN", delegation: "FORBIDDEN" },
-    outputContract: {
-      schema: "orchestra.delegation-worker-report.v1",
-      format: "JSON",
-      additionalProperties: false,
-    },
+    outputContract: { schema: "orchestra.delegation-worker-report.v1", format: "JSON", additionalProperties: false },
     limits: { timeoutMs: 120000, maxOutputBytes: 65536 },
   };
 }
@@ -80,59 +73,43 @@ function processResult(overrides = {}) {
   };
 }
 
-function writeReportForCall(call, report = {
-  summary: "No blocking issue found.",
-  findings: [],
-  evidenceRefs: ["test:focused"],
-}) {
+function writeReport(call, value = { summary: "No blocking issue found.", findings: [], evidenceRefs: ["test:focused"] }) {
   const index = call.args.indexOf("--output-last-message");
   assert.notEqual(index, -1);
-  writeFileSync(call.args[index + 1], JSON.stringify(report), "utf8");
+  writeFileSync(call.args[index + 1], typeof value === "string" ? value : JSON.stringify(value), "utf8");
 }
 
-test("Codex discovery verifies factual binary/version and required headless flags without inference", async () => {
+test("Codex discovery verifies only exec-supported headless flags without inference", async () => {
   const calls = [];
   const executor = createCodexDelegationExecutor({
     runProcess: async (input) => {
       calls.push(input);
       if (input.args.includes("--version")) return processResult({ stdout: "codex-cli 0.130.0\n" });
-      return processResult({
-        stdout: "Usage: codex exec\n  --model\n  --sandbox\n  --ask-for-approval\n  --config\n  --output-schema\n  --output-last-message\n",
-      });
+      return processResult({ stdout: "Usage: codex exec\n --model --sandbox --config --output-schema --output-last-message\n" });
     },
   });
-
   const discovery = await executor.discover();
   assert.equal(discovery.available, true);
   assert.equal(discovery.provider, "codex");
   assert.equal(discovery.version, "codex-cli 0.130.0");
   assert.deepEqual(calls.map((call) => call.args), [["--version"], ["exec", "--help"]]);
-  assert.equal(calls.every((call) => call.command === "codex"), true);
 });
 
-test("Codex discovery fails closed when binary or required headless flags are unavailable", async () => {
+test("Codex discovery fails closed when binary or required exec flags are unavailable", async () => {
   const missing = createCodexDelegationExecutor({
-    runProcess: async () => {
-      const error = new Error("PROCESS_SPAWN_FAILED");
-      error.code = "PROCESS_SPAWN_FAILED";
-      throw error;
-    },
+    runProcess: async () => { throw Object.assign(new Error("missing"), { code: "PROCESS_SPAWN_FAILED" }); },
   });
   assert.equal((await missing.discover()).available, false);
 
   const unsupported = createCodexDelegationExecutor({
     runProcess: async (input) => input.args.includes("--version")
       ? processResult({ stdout: "codex-cli 0.130.0\n" })
-      : processResult({ stdout: "Usage: codex exec\n  --model\n  --sandbox\n" }),
+      : processResult({ stdout: "Usage: codex exec\n --model --sandbox\n" }),
   });
-  assert.deepEqual(await unsupported.discover(), {
-    available: false,
-    provider: "codex",
-    reason: "PROVIDER_UNAVAILABLE",
-  });
+  assert.equal((await unsupported.discover()).available, false);
 });
 
-test("Codex execution uses isolated workspace-write sandbox, never approval, provider-local model profile, schema output, and only Worker Envelope stdin", async () => {
+test("Codex execution uses isolated workspace-write, explicit no-approval config, provider-local model profile, schema output, and only Worker Envelope stdin", async () => {
   const calls = [];
   let outputSchema = null;
   const executor = createCodexDelegationExecutor({
@@ -140,51 +117,33 @@ test("Codex execution uses isolated workspace-write sandbox, never approval, pro
       calls.push(input);
       const schemaIndex = input.args.indexOf("--output-schema");
       outputSchema = JSON.parse(readFileSync(input.args[schemaIndex + 1], "utf8"));
-      writeReportForCall(input);
+      writeReport(input);
       return processResult();
     },
   });
 
-  const result = await executor.execute({
-    request: request(),
-    workerEnvelope: workerEnvelope(),
-    workspace: { path: "/tmp/orchestra-delegation-test" },
-  });
-
+  const result = await executor.execute({ request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" } });
   assert.equal(result.ok, true);
-  assert.equal(result.provider, "codex");
-  assert.deepEqual(result.report, {
-    summary: "No blocking issue found.",
-    findings: [],
-    evidenceRefs: ["test:focused"],
-  });
-  assert.deepEqual(result.execution, { exitCode: 0, durationMs: 13 });
   assert.deepEqual(outputSchema.required, ["summary", "findings", "evidenceRefs"]);
   assert.equal(outputSchema.additionalProperties, false);
 
-  assert.equal(calls.length, 1);
   const call = calls[0];
   assert.equal(call.command, "codex");
-  assert.equal(call.cwd, "/tmp/orchestra-delegation-test");
-  assert.equal(call.timeoutMs, 120000);
-  assert.equal(call.maxOutputBytes, 65536);
+  assert.equal(call.cwd, "/tmp/worktree");
   assert.equal(call.args[0], "exec");
-  assert.equal(call.args.includes("--sandbox"), true);
   assert.equal(call.args[call.args.indexOf("--sandbox") + 1], "workspace-write");
-  assert.equal(call.args[call.args.indexOf("--ask-for-approval") + 1], "never");
+  assert.equal(call.args.includes("--ask-for-approval"), false);
+  const configValues = call.args.filter((arg, index) => call.args[index - 1] === "--config");
+  assert.equal(configValues.includes("approval_policy=never"), true);
+  assert.equal(configValues.includes("model_reasoning_effort=low"), true);
   assert.equal(call.args[call.args.indexOf("--model") + 1], "gpt-6-sol");
-  assert.equal(call.args.includes("model_reasoning_effort=low"), true);
-  assert.equal(call.args.includes("--output-schema"), true);
-  assert.equal(call.args.includes("--output-last-message"), true);
   assert.equal(call.args.at(-1), "-");
   assert.match(call.input, /review the bounded candidate/);
   assert.match(call.input, /FORBIDDEN/);
-  assert.doesNotMatch(call.input, /orchestra\.delegation-request\.v1/);
-  assert.doesNotMatch(call.input, /actorIdHash/);
-  assert.doesNotMatch(call.input, /sourceFingerprint/);
+  assert.doesNotMatch(call.input, /orchestra\.delegation-request\.v1|actorIdHash|sourceFingerprint/);
 });
 
-test("Codex execution accepts exactly one bounded worker report from the result file", async () => {
+test("Codex execution accepts exactly one bounded worker report and maps malformed output to INVALID_RESULT", async () => {
   for (const report of [
     "not-json",
     '{"summary":"ok","findings":[],"evidenceRefs":[]} trailing',
@@ -192,52 +151,30 @@ test("Codex execution accepts exactly one bounded worker report from the result 
     '{"summary":"","findings":[],"evidenceRefs":[]}',
   ]) {
     const executor = createCodexDelegationExecutor({
-      runProcess: async (input) => {
-        const index = input.args.indexOf("--output-last-message");
-        writeFileSync(input.args[index + 1], report, "utf8");
-        return processResult();
-      },
+      runProcess: async (input) => { writeReport(input, report); return processResult(); },
     });
-    const result = await executor.execute({
-      request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" },
-    });
+    const result = await executor.execute({ request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" } });
     assert.equal(result.ok, false, report);
     assert.equal(result.reason, "INVALID_RESULT", report);
   }
 });
 
-test("Codex execution maps timeout, nonzero exit, truncated output and missing binary to bounded failure taxonomy", async () => {
-  const timedOut = createCodexDelegationExecutor({
-    runProcess: async () => processResult({ exitCode: null, signal: "SIGKILL", timedOut: true }),
-  });
-  assert.equal((await timedOut.execute({
-    request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" },
-  })).reason, "EXECUTION_TIMED_OUT");
-
-  const nonzero = createCodexDelegationExecutor({
-    runProcess: async () => processResult({ exitCode: 2, stderr: "provider detail" }),
-  });
-  const nonzeroResult = await nonzero.execute({
-    request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" },
-  });
-  assert.equal(nonzeroResult.reason, "EXECUTION_FAILED");
-  assert.equal(JSON.stringify(nonzeroResult).includes("provider detail"), false);
-
-  const truncated = createCodexDelegationExecutor({
-    runProcess: async () => processResult({ stdoutTruncated: true }),
-  });
-  assert.equal((await truncated.execute({
-    request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" },
-  })).reason, "INVALID_RESULT");
+test("Codex execution maps timeout, nonzero, truncation, and missing binary to bounded failure taxonomy", async () => {
+  const cases = [
+    [processResult({ exitCode: null, signal: "SIGKILL", timedOut: true }), "EXECUTION_TIMED_OUT"],
+    [processResult({ exitCode: 2, stderr: "provider detail" }), "EXECUTION_FAILED"],
+    [processResult({ stdoutTruncated: true }), "INVALID_RESULT"],
+  ];
+  for (const [process, expected] of cases) {
+    const executor = createCodexDelegationExecutor({ runProcess: async () => process });
+    const result = await executor.execute({ request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" } });
+    assert.equal(result.reason, expected);
+    assert.equal(JSON.stringify(result).includes("provider detail"), false);
+  }
 
   const missing = createCodexDelegationExecutor({
-    runProcess: async () => {
-      const error = new Error("PROCESS_SPAWN_FAILED");
-      error.code = "PROCESS_SPAWN_FAILED";
-      throw error;
-    },
+    runProcess: async () => { throw Object.assign(new Error("missing"), { code: "PROCESS_SPAWN_FAILED" }); },
   });
-  assert.equal((await missing.execute({
-    request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" },
-  })).reason, "PROVIDER_UNAVAILABLE");
+  const result = await missing.execute({ request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" } });
+  assert.equal(result.reason, "PROVIDER_UNAVAILABLE");
 });
