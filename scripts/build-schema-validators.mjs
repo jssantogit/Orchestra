@@ -28,19 +28,40 @@ function normalizeLineEndings(value) {
   return String(value).replace(/\r\n/g, "\n");
 }
 
+const INLINE_JSON_EQUAL = `(left, right) => {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) if (!arguments.callee(left[index], right[index])) return false;
+    return true;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (const key of leftKeys) {
+    if (!Object.prototype.hasOwnProperty.call(right, key) || !arguments.callee(left[key], right[key])) return false;
+  }
+  return true;
+}`;
+
 function makeDependencyFree(moduleCode, schemaFile) {
-  const withInlineLength = moduleCode.replace(
+  let dependencyFree = moduleCode.replace(
     /const (func\d+) = require\("ajv\/dist\/runtime\/ucs2length"\)\.default;/g,
     "const $1 = (value) => [...value].length;",
   );
+  dependencyFree = dependencyFree.replace(
+    /const (func\d+) = require\("ajv\/dist\/runtime\/equal"\)\.default;/g,
+    (_match, name) => `const ${name} = ${INLINE_JSON_EQUAL};`,
+  );
 
-  const runtimeDependencies = [...withInlineLength.matchAll(/(?:require\(|from\s+)["'](ajv\/[^"']+)["']/g)]
+  const runtimeDependencies = [...dependencyFree.matchAll(/(?:require\(|from\s+)["'](ajv\/[^"']+)["']/g)]
     .map((match) => match[1]);
   if (runtimeDependencies.length > 0) {
     throw new Error(`Generated validator still depends on Ajv runtime: ${schemaFile}: ${[...new Set(runtimeDependencies)].join(", ")}`);
   }
 
-  return withInlineLength;
+  return dependencyFree;
 }
 
 async function readSchemas(schemaDir) {
