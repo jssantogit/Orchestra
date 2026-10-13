@@ -27,24 +27,18 @@ function completedResult() {
   return {
     schema: "orchestra.delegation-result.v1",
     delegationId: "delegation-second-opinion",
-    taskId: "task-second-opinion",
-    sourceProvider: "codex",
-    targetProvider: "antigravity",
+    provider: "antigravity",
+    logicalRole: "CRITICAL_REVIEWER",
+    purpose: "SECOND_OPINION",
     status: "COMPLETED",
-    failureReason: null,
     summary: "Independent review completed",
     findings: [],
     evidenceRefs: [],
-    execution: { exitCode: 0, durationMs: 10, timedOut: false, outputTruncated: false },
+    execution: { exitCode: 0, durationMs: 10 },
     workspace: {
-      sourceRevision: "abcdef1234567890",
       initialFingerprint: "sha256:source",
       finalFingerprint: "sha256:source",
       dirty: false,
-      dirtyFileCount: 0,
-      cleaned: true,
-      cleanupReason: null,
-      recoverablePath: null,
     },
   };
 }
