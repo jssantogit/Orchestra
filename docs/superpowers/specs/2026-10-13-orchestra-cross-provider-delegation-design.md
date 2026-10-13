@@ -25,6 +25,7 @@ The first production use case is independent critical review. A second use case 
 7. Keep cross-provider routing conservative so token/turn economy is not degraded by opportunistic fan-out.
 8. Make the transport replaceable so CLI execution can later coexist with MCP or other transports without changing Core semantics.
 9. Keep CI deterministic and independent of real provider accounts, network access, or credentials.
+10. Distribute the broker as a project-wide neutral Orchestra surface rather than embedding the other provider inside either provider runtime.
 
 ## 3. Non-goals
 
@@ -90,6 +91,14 @@ Workers cannot call another provider worker.
 
 Every cross-provider execution MUST run in an ephemeral isolated worktree derived from a factual source revision/fingerprint. The canonical CONTROL workspace MUST NOT be the worker execution directory.
 
+The physical delegated worktree path MUST resolve outside the canonical worktree root. Merely placing an ignored directory inside the canonical checkout is insufficient isolation.
+
+### 4.8 Worker tool network authority is distinct from provider transport
+
+`network: FORBIDDEN` applies to network side effects available to the delegated worker's tools and commands. It does not prohibit the provider-local executor from using the provider's own authenticated transport required to obtain model inference.
+
+The broker/provider transport is control-plane infrastructure. It MUST NOT be exposed to the worker as general `NETWORK_READ`, `NETWORK_WRITE`, `REMOTE_REPO_WRITE`, or publication capability.
+
 ## 5. High-level architecture
 
 ```text
@@ -107,7 +116,7 @@ core/delegation/
         v
 runtime/delegation/
    |- broker.mjs
-   `- cli.mjs             <- neutral composition root
+   `- cli.mjs             <- neutral project-wide composition root
         |
         +--> providers/codex/delegation-executor.mjs
         |
@@ -126,6 +135,18 @@ runtime/delegation/
 The broker is provider-neutral in behavior but is allowed to compose provider executors. Core never imports the executors.
 
 Provider executors know only their own CLI surface.
+
+### 5.1 Project-wide neutral distribution
+
+The delegation broker is not part of either provider runtime's ownership boundary.
+
+The source-level composition root lives under a neutral project/runtime surface such as `runtime/delegation/**`. Packaging/installers MUST distribute the cross-provider delegation surface as project-wide Orchestra machinery that both provider runtimes may invoke through a stable neutral entrypoint.
+
+Provider runtime images MUST NOT gain the other provider's model catalog, hook code, session code, or provider runtime implementation merely to support cross-provider delegation.
+
+A project with only one provider/runtime installed remains fully valid. If the neutral delegation surface or the second provider CLI is absent, cross-provider delegation is unavailable while normal single-provider Orchestra behavior remains healthy.
+
+The implementation plan must define the exact manifest/install destination and self-contained runtime contract without violating current deterministic runtime ownership rules.
 
 ## 6. Delegation contracts
 
@@ -185,6 +206,8 @@ DelegationRequest {
 ```
 
 The initial production policy allows only the read/process-exec subset. `SPECIALIST_EXECUTION` is reserved in the contract but does not receive automatic routing in v1.
+
+The `network` field describes worker tool authority, not the provider executor's own authenticated model transport described in invariant 4.8.
 
 ### 6.2 `DelegationResult.v1`
 
@@ -274,6 +297,8 @@ Provider-specific execution details are encapsulated in:
 
 The initial transport is CLI-based because both providers expose non-interactive automation surfaces. Exact flags are provider implementation details and MUST be detected/validated by provider-local tests rather than encoded in Core.
 
+The executor may use provider-authenticated model transport as infrastructure, but it MUST prevent the delegated worker from treating that transport as general network authority.
+
 The transport boundary should permit future implementations such as:
 
 ```text
@@ -327,19 +352,29 @@ The broker records source revision and canonical workspace fingerprint using the
 
 ### 10.4 Create ephemeral worktree
 
-An isolated worktree is created for the factual source revision, for example under a project-owned ignored location such as:
+An isolated worktree is created for the factual source revision in a path that resolves outside the canonical checkout root. Acceptable implementation families include a bounded OS temp root or a bounded sibling/project-runtime-owned directory outside the checkout.
+
+Illustrative physical shape:
 
 ```text
-.orchestra-worktrees/delegation-<id>/
+<external-temp-or-runtime-root>/orchestra/<workspace-id>/delegation-<id>/
 ```
 
-The exact storage path is an implementation choice, but it MUST be outside the canonical working tree mutation surface and MUST be ignored from product ownership/fingerprints as appropriate.
+The exact storage path is an implementation choice, but it MUST:
+
+- resolve outside the canonical worktree root;
+- be attributable to one delegation ID;
+- avoid contaminating product fingerprints;
+- be recoverable by Doctor if cleanup fails;
+- work with linked Git worktrees and platform portability requirements.
 
 ### 10.5 Execute provider
 
 The provider executor runs in the ephemeral worktree with the Worker Envelope and bounded output contract.
 
 Although the logical authority is read/process-exec only, tests and tools may physically create temporary files. Such changes are confined to the ephemeral worktree and never promoted automatically.
+
+Commands executed *as worker tools* remain subject to delegated capability policy. Provider transport needed for model inference is not treated as worker tool network authority.
 
 ### 10.6 Normalize and validate result
 
@@ -546,15 +581,18 @@ It checks capability only; it MUST NOT automatically log in, install providers, 
 Conceptual output:
 
 ```text
-Codex CLI       detected / missing
-AGY CLI         detected / missing
-Codex version   supported / unsupported
-AGY version     supported / unsupported
-Git worktree    available / unavailable
-Delegation      ready / degraded / unavailable
+Neutral broker   installed / missing
+Codex CLI        detected / missing
+AGY CLI          detected / missing
+Codex version    supported / unsupported
+AGY version      supported / unsupported
+Git worktree     available / unavailable
+Delegation       ready / degraded / unavailable
 ```
 
-The absence of the second provider does not make normal single-provider Orchestra unhealthy. It only marks cross-provider delegation unavailable/degraded.
+The absence of the second provider or neutral broker does not make normal single-provider Orchestra unhealthy. It only marks cross-provider delegation unavailable/degraded.
+
+Doctor SHOULD identify stale delegated worktrees left by cleanup failure and report a bounded recovery action without performing destructive broad cleanup automatically.
 
 ## 16. Testing strategy
 
@@ -565,6 +603,7 @@ Deterministic tests cover:
 - request/result schema validation;
 - authority/capability subset validation;
 - mutation forbidden;
+- worker network capability forbidden while provider transport remains separate;
 - depth limit;
 - `mayDelegate=false`;
 - provider target required;
@@ -585,6 +624,7 @@ Provider executors use fake/stub CLIs in CI to cover:
 - process failure;
 - timeout;
 - non-zero exit;
+- provider transport vs worker network authority boundary;
 - cleanup behavior.
 
 No real provider account or credential is required in CI.
@@ -595,12 +635,14 @@ Temporary fixture repositories verify:
 
 - source revision is exact;
 - source fingerprint is recorded;
+- delegated path resolves outside the canonical checkout;
 - ephemeral worktree is isolated;
 - generated files remain confined;
 - canonical workspace is unchanged;
 - final fingerprint/dirty state is recorded;
 - cleanup succeeds on success/failure/timeout;
-- cleanup failure remains recoverable and non-destructive.
+- cleanup failure remains recoverable and non-destructive;
+- linked-worktree and platform-path behavior remains supported.
 
 ### 16.4 Routing tests
 
@@ -628,11 +670,19 @@ providers/antigravity/**
 core/**
   never imports either provider executor
 
+runtimes/codex/**
+  never embeds/imports Antigravity runtime implementation
+
+runtimes/antigravity/**
+  never embeds/imports Codex runtime implementation
+
 runtime/delegation/**
   may compose both provider executors
 ```
 
-Existing cross-runtime and contamination checks remain green.
+Packaging tests MUST additionally prove that the neutral broker is distributed through a project-wide neutral ownership surface rather than by copying one provider runtime into the other provider's image.
+
+Existing cross-runtime, contamination, deterministic-build, installer, and self-contained-runtime checks remain green.
 
 ### 16.6 Optional real-provider smoke
 
@@ -646,8 +696,9 @@ Deliver:
 
 - `DelegationRequest/Result` schemas/domain objects;
 - delegation policy and capability guard;
-- neutral broker/composition root;
-- ephemeral-worktree lifecycle;
+- neutral project-wide broker/composition root;
+- neutral packaging/install surface required to invoke the broker from either provider runtime;
+- ephemeral-worktree lifecycle outside the canonical checkout root;
 - provider discovery;
 - `AgyCliExecutor`;
 - bounded persistence/events;
@@ -659,6 +710,7 @@ Target proof:
 ```text
 Codex CONTROL
    -> ImplementationPacket
+   -> neutral broker
    -> AGY external worker
    -> DelegationResult
    -> CONTROL
@@ -685,19 +737,20 @@ Deliver:
 
 - `CodexCliExecutor`;
 - reverse-path tests and smoke;
-- parity checks proving both directions use the same request/result/lifecycle/authority semantics.
+- parity checks proving both directions use the same request/result/lifecycle/authority semantics and the same neutral broker surface.
 
 Target proof:
 
 ```text
 AGY CONTROL
    -> ImplementationPacket
+   -> neutral broker
    -> Codex external worker
    -> DelegationResult
    -> CONTROL
 ```
 
-**Abstraction gate:** if adding the reverse path requires provider-specific changes to `DelegationRequest`, authority semantics, or lifecycle semantics, the foundation is considered incorrectly abstracted and must be repaired before completion.
+**Abstraction gate:** if adding the reverse path requires provider-specific changes to `DelegationRequest`, authority semantics, lifecycle semantics, or project-wide broker ownership, the foundation is considered incorrectly abstracted and must be repaired before completion.
 
 ## 18. Compatibility and migration
 
@@ -709,7 +762,8 @@ When unavailable or disabled:
 - existing Work Lease authority remains unchanged;
 - existing provider-local routing remains unchanged;
 - normal implementation remains local;
-- release/runtime installation remains functional with only one provider.
+- release/runtime installation remains functional with only one provider;
+- provider runtime images preserve their existing isolation guarantees.
 
 No historical handoff/session authority behavior is reintroduced.
 
@@ -718,13 +772,15 @@ No historical handoff/session authority behavior is reintroduced.
 1. Provider output is untrusted until normalized and schema-validated.
 2. Raw model output cannot grant capabilities.
 3. Narrative prompt text cannot grant mutation/network/publication authority.
-4. Worker execution is isolated from the canonical workspace.
+4. Worker execution is isolated from the canonical workspace in a physical path outside that checkout.
 5. Provider-local credentials remain provider-owned and are never copied into Orchestra state.
 6. Persisted delegation records are bounded and exclude transcripts/secrets.
 7. Unknown provider capability or output semantics fail closed.
 8. Cleanup is non-destructive and recoverable.
 9. No silent provider substitution occurs.
 10. No worker-to-worker delegation occurs in v1.
+11. Provider-authenticated model transport is infrastructure, not delegated worker network authority.
+12. Cross-provider packaging does not smuggle one provider runtime into the other provider's image.
 
 ## 20. Acceptance criteria for the complete design
 
@@ -732,9 +788,11 @@ The three-milestone implementation is complete only when all of the following ar
 
 - Codex can delegate a bounded read/process-exec task to AGY and receive a validated result.
 - AGY can delegate the same class of task to Codex through the same canonical contract.
-- Every cross-provider delegation uses an ephemeral worktree.
+- Both directions use the same neutral project-wide broker/composition root.
+- Every cross-provider delegation uses an ephemeral worktree physically outside the canonical checkout root.
 - The canonical workspace remains unchanged by delegated execution.
-- External workers cannot obtain mutation, remote-write, publication, or delegation capability through role or prompt text.
+- External workers cannot obtain mutation, remote-write, publication, general network, or delegation capability through role or prompt text.
+- Provider inference transport remains functional without being promoted into worker network authority.
 - `DelegationResult` is not automatically treated as Evidence, Candidate, or Acceptance.
 - Critical review can route automatically to the other healthy provider.
 - Normal implementation remains same-provider by default.
@@ -742,7 +800,7 @@ The three-milestone implementation is complete only when all of the following ar
 - Missing/unavailable provider fails factually without silent fallback.
 - Doctor reports cross-provider capability without requiring model execution.
 - Deterministic CI requires no external provider login/account/network inference.
-- Firewall/contamination/runtime-isolation suites remain green.
+- Firewall/contamination/runtime-isolation/deterministic-packaging suites remain green.
 - Turn-economy instrumentation can distinguish local vs cross-provider use without inventing token/cost metrics.
 
 ## 21. Future extensions explicitly deferred
