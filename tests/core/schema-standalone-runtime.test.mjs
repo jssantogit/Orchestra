@@ -28,6 +28,46 @@ const validPacket = {
   },
 };
 
+const validDelegationRequest = {
+  schema: "orchestra.delegation-request.v1",
+  delegationId: "delegation-standalone",
+  taskId: "task-standalone",
+  source: { provider: "provider-a", actorIdHash: "sha256:source" },
+  target: { provider: "provider-b", logicalRole: "INVESTIGATOR" },
+  purpose: "SECOND_OPINION",
+  packet: validPacket,
+  authority: {
+    capabilities: ["LOCAL_READ", "PROCESS_EXEC"],
+    mutation: "FORBIDDEN",
+    network: "FORBIDDEN",
+    mayDelegate: false,
+  },
+  workspace: {
+    sourceFingerprint: "sha256:workspace",
+    sourceRevision: "abcdef1234567890",
+    isolation: "EPHEMERAL_WORKTREE",
+  },
+  limits: { timeoutMs: 120000, maxOutputBytes: 65536, delegationDepth: 1 },
+};
+
+const validDelegationResult = {
+  schema: "orchestra.delegation-result.v1",
+  delegationId: "delegation-standalone",
+  provider: "provider-b",
+  logicalRole: "INVESTIGATOR",
+  purpose: "SECOND_OPINION",
+  status: "COMPLETED",
+  summary: "bounded result",
+  findings: [],
+  evidenceRefs: [],
+  execution: { exitCode: 0, durationMs: 50 },
+  workspace: {
+    initialFingerprint: "sha256:initial",
+    finalFingerprint: "sha256:final",
+    dirty: false,
+  },
+};
+
 test("generated schema validators run in an isolated fixture with no node_modules", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "orchestra-schema-standalone-"));
   const copiedRoot = join(fixture, "core", "schema");
@@ -41,6 +81,16 @@ test("generated schema validators run in an isolated fixture with no node_module
 
     const invalid = validateSchema("implementation-packet.v1.schema.json", { ...validPacket, transcript: "forbidden" });
     assert.equal(invalid.valid, false);
+
+    assert.equal(validateSchema("delegation-request.v1.schema.json", validDelegationRequest).valid, true);
+    assert.equal(validateSchema("delegation-result.v1.schema.json", validDelegationResult).valid, true);
+
+    const recursive = structuredClone(validDelegationRequest);
+    recursive.authority.mayDelegate = true;
+    assert.equal(validateSchema("delegation-request.v1.schema.json", recursive).valid, false);
+
+    const rawResult = { ...validDelegationResult, transcript: "forbidden" };
+    assert.equal(validateSchema("delegation-result.v1.schema.json", rawResult).valid, false);
 
     const validEvent = {
       schema: "orchestra.runtime-event.v1",
