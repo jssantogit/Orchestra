@@ -17,7 +17,6 @@ const DISCOVERY_MAX_OUTPUT_BYTES = 64 * 1024;
 const REQUIRED_HELP_FLAGS = Object.freeze([
   "--model",
   "--sandbox",
-  "--ask-for-approval",
   "--config",
   "--output-schema",
   "--output-last-message",
@@ -189,7 +188,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
             "exec",
             "--model", profile.model,
             "--sandbox", "workspace-write",
-            "--ask-for-approval", "never",
+            "--config", "approval_policy=never",
             "--config", `model_reasoning_effort=${profile.reasoningEffort}`,
             "--output-schema", schemaPath,
             "--output-last-message", resultPath,
