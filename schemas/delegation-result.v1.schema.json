@@ -54,11 +54,20 @@
       }
     }
   },
-  "allOf": [
+  "oneOf": [
     {
-      "if": { "properties": { "status": { "const": "COMPLETED" } }, "required": ["status"] },
-      "then": { "not": { "required": ["reason"] } },
-      "else": { "required": ["reason"] }
+      "required": ["status"],
+      "properties": {
+        "status": { "const": "COMPLETED" },
+        "reason": false
+      }
+    },
+    {
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "enum": ["FAILED", "TIMED_OUT", "DENIED"] },
+        "reason": { "enum": ["PROVIDER_UNAVAILABLE", "CAPABILITY_DENIED", "WORKSPACE_PREP_FAILED", "EXECUTION_FAILED", "EXECUTION_TIMED_OUT", "INVALID_RESULT", "WORKSPACE_CLEANUP_FAILED"] }
+      }
     }
   ]
 }
