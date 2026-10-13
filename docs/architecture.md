@@ -243,3 +243,38 @@ reasoning are never authority inputs.
 The 0.9/0.10 provider handoff mechanisms remain available only as explicit
 recovery/debug tools and for `session` rollback mode. They are no longer the
 normal UX for moving development to a fresh orchestrator chat.
+
+---
+
+## 11. Cross-Provider Delegation
+
+Cross-provider delegation is an **external execution plane**, not a third control plane. A Codex or Antigravity root may ask the neutral delegation runtime to execute bounded work through the other installed provider without transferring project authority.
+
+```text
+Codex CONTROL ─┐
+               ├─ provider-local helper
+AGY CONTROL ───┘        │
+                        ▼
+             .orchestra/runtime/delegation
+                        │
+               ephemeral Git worktree
+                  ┌─────┴─────┐
+                  ▼           ▼
+             Codex executor  AGY executor
+                        │
+                        ▼
+                 DelegationResult
+                        │
+                        ▼
+              originating CONTROL
+```
+
+The invariant is **delegating execution does not delegate authority**. The originating root keeps its Work Lease generation and remains the only actor allowed to interpret the result, promote factual evidence, create or accept a candidate, retry, or finish the task. Provider identity is provenance only.
+
+A canonical `DelegationRequest` is reduced to a bounded Worker Envelope before it reaches the target provider. V1 grants at most `LOCAL_READ` plus `PROCESS_EXEC`; it does not grant workspace mutation, network write, remote-repository write, publication, Work Lease control, acceptance, or recursive delegation. Any incidental files produced by tests or tools exist only inside the disposable delegated worktree. A dirty delegated worktree is treated as a capability violation rather than as a candidate.
+
+Every cross-provider execution uses an external ephemeral Git worktree. The canonical source workspace must be clean enough for its factual source revision/fingerprint to be established; workspace preparation fails closed rather than guessing around dirty or unreadable state. Delegation records are stored under `.orchestra/state/delegations/` and the temporary worktree is removed after terminal execution. Cleanup failure is explicit and leaves a recoverable path instead of silently discarding state.
+
+Provider isolation remains strict. Codex runtime/provider code may not import or directly invoke Antigravity, and Antigravity runtime/provider code may not import or directly invoke Codex. Only the neutral composition root under `runtime/delegation/**` may know both external executor implementations. The packaged neutral image contains only Core/contracts, delegation runtime machinery, and the bounded executor/model-catalog files needed for the two providers; it contains no `.codex`, `.agents`, provider hooks, sessions, adapters, or control-plane trees.
+
+A completed external result is still a bounded worker claim. It never self-promotes to accepted evidence or task completion. Failures are normalized into the bounded taxonomy `PROVIDER_UNAVAILABLE`, `CAPABILITY_DENIED`, `WORKSPACE_PREP_FAILED`, `EXECUTION_FAILED`, `EXECUTION_TIMED_OUT`, `INVALID_RESULT`, and `WORKSPACE_CLEANUP_FAILED`; unknown executor failures collapse fail-closed to `INVALID_RESULT` or `EXECUTION_FAILED`.

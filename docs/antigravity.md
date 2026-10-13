@@ -1,6 +1,6 @@
 # Antigravity (AGY) Runtime Guide
 
-The Antigravity runtime provides a 100% **ALL-GEMINI** local multi-agent architecture integrated directly with the Antigravity CLI and IDE engine.
+The Antigravity runtime provides a 100% **ALL-GEMINI** local multi-agent architecture integrated directly with the Antigravity CLI and IDE engine. Optional cross-provider delegation is executed outside that provider-native tree through Orchestra's neutral delegation runtime, so the AGY control plane itself remains provider-pure.
 
 ---
 
@@ -128,7 +128,20 @@ Run the Antigravity and authority suites:
 ```bash
 node --test runtimes/antigravity/tests/routing-policy.test.mjs
 node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+npm run test:delegation
 npm run test:leases
 npm run test:handoff
 npm run test:architecture-invariants
 ```
+
+---
+
+## 6. Cross-Provider Delegation
+
+Antigravity CONTROL may delegate a bounded independent review or an explicitly requested second opinion to Codex through `.orchestra/runtime/delegation/**`. The provider-native `.agents/**` tree remains ALL-GEMINI: it never imports Codex runtime code and never launches the `codex` CLI directly. Its helper crosses only into the neutral Orchestra composition root, which owns the external executor.
+
+The AGY root keeps its Work Lease generation, candidate/evidence authority, acceptance decision, and retry/finish authority. The Codex worker receives a reduced envelope with at most `LOCAL_READ + PROCESS_EXEC` and runs in an ephemeral Git worktree. Recursive delegation and external workspace mutation are forbidden; a dirty delegated worktree fails closed rather than becoming a candidate.
+
+Normal AGY work remains local. Automatic cross-provider routing is reserved for an independent CRITICAL review slot; a user-explicit `SECOND_OPINION` may also cross. A missing or failed Codex target returns a normalized failure to AGY CONTROL. Orchestra does not silently fall back to another provider or treat provider failure as review approval.
+
+Prerequisites are Git worktree support plus an already installed/authenticated `codex` CLI. Discovery uses only version/help surfaces and never installs Codex, authenticates an account, or performs inference. `npm run doctor` reports this optional readiness separately, so an AGY-only project remains structurally healthy when Codex is unavailable.
