@@ -15,9 +15,7 @@
     { "type": "file", "source": "providers/antigravity/model-catalog.mjs", "output": ".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs" }
   ],
   "preservedProjectPaths": [
-    ".orchestra/state/delegations",
-    ".orchestra/state/runtimes/delegation.json",
-    ".orchestra/state/runtime-management/delegation"
+    ".orchestra/state/delegations"
   ],
   "generatedInputs": [
     "core",
