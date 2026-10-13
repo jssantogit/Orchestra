@@ -34,8 +34,10 @@ function makeDependencyFree(moduleCode, schemaFile) {
     "const $1 = (value) => [...value].length;",
   );
 
-  if (/require\(["']ajv\//.test(withInlineLength) || /from ["']ajv\//.test(withInlineLength)) {
-    throw new Error(`Generated validator still depends on Ajv runtime: ${schemaFile}`);
+  const runtimeDependencies = [...withInlineLength.matchAll(/(?:require\(|from\s+)["'](ajv\/[^"']+)["']/g)]
+    .map((match) => match[1]);
+  if (runtimeDependencies.length > 0) {
+    throw new Error(`Generated validator still depends on Ajv runtime: ${schemaFile}: ${[...new Set(runtimeDependencies)].join(", ")}`);
   }
 
   return withInlineLength;
