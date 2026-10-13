@@ -92,7 +92,7 @@ test("antigravity manifest owns provider/core payload while Dream is sourced fro
   ]) assert.ok(manifest.entrypoints.includes(entrypoint), `missing Antigravity entrypoint ${entrypoint}`);
 });
 
-test("delegation manifest is a fourth independent neutral runtime with bounded provider payload", async () => {
+test("delegation manifest is a fourth independent neutral runtime with bounded provider executor payload", async () => {
   const { loadRuntimeManifest, RUNTIME_MANIFEST_NAMES } = await runtimeManifestApi();
   assert.deepEqual(RUNTIME_MANIFEST_NAMES, ["core", "codex", "antigravity", "delegation"]);
 
@@ -102,7 +102,7 @@ test("delegation manifest is a fourth independent neutral runtime with bounded p
   assert.ok(manifest.sourceRoots.includes("schemas"));
   assert.ok(manifest.sourceRoots.includes("runtime"));
   assert.ok(manifest.sourceRoots.includes("providers/antigravity"));
-  assert.equal(manifest.sourceRoots.includes("providers/codex"), false);
+  assert.ok(manifest.sourceRoots.includes("providers/codex"));
 
   for (const asset of manifest.managedAssets) {
     assert.match(asset.output, /^\.orchestra\/runtime\/delegation(?:\/|$)/);
@@ -112,7 +112,10 @@ test("delegation manifest is a fourth independent neutral runtime with bounded p
   assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/runtime/delegation")?.source, "runtime/delegation");
   assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/providers/antigravity/delegation-executor.mjs")?.source, "providers/antigravity/delegation-executor.mjs");
   assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs")?.source, "providers/antigravity/model-catalog.mjs");
+  assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/providers/codex/delegation-executor.mjs")?.source, "providers/codex/delegation-executor.mjs");
+  assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/providers/codex/model-catalog.mjs")?.source, "providers/codex/model-catalog.mjs");
   assert.equal(manifest.managedAssets.some((asset) => asset.output.startsWith(".codex/") || asset.output.startsWith(".agents/") || asset.output === "GEMINI.md"), false);
+  assert.equal(manifest.managedAssets.some((asset) => asset.output.includes("/providers/codex/adapter/") || asset.output.includes("/providers/antigravity/adapter/")), false);
   assert.deepEqual(manifest.preservedProjectPaths, [".orchestra/state/delegations"]);
 });
 
