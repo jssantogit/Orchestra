@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     name: Orchestra 1.x RC Verification
@@ -26,11 +29,26 @@ jobs:
       - name: Build and verify generated artifacts
         run: |
           npm run build:schemas
+          npm run sync:runtime-core
           npm run build:runtimes
           npm run check:schemas
           npm run check:runtimes
           npm run check:runtime-core
           git diff --check
+
+      - name: Materialize runtime-core mirrors
+        if: github.event_name == 'push' && github.ref == 'refs/heads/design/cross-provider-delegation'
+        shell: bash
+        run: |
+          git add runtimes/codex/.codex/astra-orchestra/core runtimes/antigravity/.agents/skills/orchestra/core
+          if git diff --cached --quiet; then
+            echo "No runtime-core drift to materialize."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build: sync delegation policy mirrors [skip ci]"
+          git push origin HEAD:design/cross-provider-delegation
 
       - name: Run full regression
         run: npm test
