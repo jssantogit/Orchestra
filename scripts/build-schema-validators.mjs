@@ -11,6 +11,8 @@ const defaultRepoRoot = resolve(scriptDir, "..");
 export const SCHEMA_FILES = Object.freeze([
   "audit-result.v1.schema.json",
   "candidate.v1.schema.json",
+  "delegation-request.v1.schema.json",
+  "delegation-result.v1.schema.json",
   "evidence.v1.schema.json",
   "implementation-packet.v1.schema.json",
   "runtime-event.v1.schema.json",
@@ -39,15 +41,30 @@ function makeDependencyFree(moduleCode, schemaFile) {
   return withInlineLength;
 }
 
+async function readSchemas(schemaDir) {
+  const schemas = new Map();
+  for (const schemaFile of SCHEMA_FILES) {
+    schemas.set(schemaFile, JSON.parse(await readFile(join(schemaDir, schemaFile), "utf8")));
+  }
+  return schemas;
+}
+
 async function compileSchema(schemaFile, schemaDir) {
-  const schema = JSON.parse(await readFile(join(schemaDir, schemaFile), "utf8"));
+  const schemas = await readSchemas(schemaDir);
+  const target = schemas.get(schemaFile);
   const ajv = new Ajv2020({
     allErrors: true,
     strict: true,
     validateSchema: true,
     code: { source: true, esm: true, optimize: true },
   });
-  const validate = ajv.compile(schema);
+
+  for (const [name, schema] of schemas) {
+    if (name === schemaFile) continue;
+    ajv.addSchema(schema);
+  }
+
+  const validate = ajv.compile(target);
   const moduleCode = standaloneCode(ajv, validate);
   return `${makeDependencyFree(moduleCode, schemaFile).trimEnd()}\n`;
 }

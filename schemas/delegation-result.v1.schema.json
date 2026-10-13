@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.delegation-result.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "delegationId", "provider", "logicalRole", "purpose", "status", "summary", "findings", "evidenceRefs", "execution", "workspace"],
+  "properties": {
+    "schema": { "const": "orchestra.delegation-result.v1" },
+    "delegationId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "provider": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "logicalRole": { "enum": ["IMPLEMENTER", "INVESTIGATOR", "QUICK_AUDITOR", "CRITICAL_REVIEWER", "MANUAL_ESCALATION"] },
+    "purpose": { "enum": ["INDEPENDENT_REVIEW", "SECOND_OPINION", "SPECIALIST_EXECUTION", "MANUAL"] },
+    "status": { "enum": ["COMPLETED", "FAILED", "TIMED_OUT", "DENIED"] },
+    "reason": { "enum": ["PROVIDER_UNAVAILABLE", "CAPABILITY_DENIED", "WORKSPACE_PREP_FAILED", "EXECUTION_FAILED", "EXECUTION_TIMED_OUT", "INVALID_RESULT", "WORKSPACE_CLEANUP_FAILED"] },
+    "summary": { "type": "string", "maxLength": 8192 },
+    "findings": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "message": { "type": "string", "minLength": 1, "maxLength": 2048 },
+          "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "reference": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      }
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exitCode", "durationMs"],
+      "properties": {
+        "exitCode": { "type": ["integer", "null"] },
+        "durationMs": { "type": "integer", "minimum": 0, "maximum": 86400000 }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initialFingerprint", "finalFingerprint", "dirty"],
+      "properties": {
+        "initialFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "finalFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "dirty": { "type": "boolean" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "COMPLETED" } }, "required": ["status"] },
+      "then": { "not": { "required": ["reason"] } },
+      "else": { "required": ["reason"] }
+    }
+  ]
+}
