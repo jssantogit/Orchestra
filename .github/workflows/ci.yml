@@ -32,8 +32,80 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
-      - name: Run full regression
-        run: npm test
+      # Diagnostic decomposition of `npm test`: each command below is one of the
+      # existing regression components, kept separate so Actions exposes the first
+      # failing boundary even when raw job logs are unavailable.
+      - name: Regression — runtime
+        run: npm run test:runtime
+
+      - name: Regression — core
+        run: npm run test:core
+
+      - name: Regression — delegation
+        run: npm run test:delegation
+
+      - name: Regression — direct work
+        run: npm run test:direct-work
+
+      - name: Regression — leases
+        run: npm run test:leases
+
+      - name: Regression — Codex
+        run: npm run test:codex
+
+      - name: Regression — Antigravity routing
+        run: node --test runtimes/antigravity/tests/routing-policy.test.mjs
+
+      - name: Regression — Antigravity hooks
+        run: node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+
+      - name: Regression — dream
+        run: npm run test:dream
+
+      - name: Regression — evidence
+        run: npm run test:evidence
+
+      - name: Regression — feedback
+        run: npm run test:feedback
+
+      - name: Regression — trust
+        run: npm run test:trust
+
+      - name: Regression — handoff
+        run: npm run test:handoff
+
+      - name: Regression — JEV
+        run: npm run test:jev
+
+      - name: Regression — labs
+        run: npm run test:labs
+
+      - name: Regression — mechanical
+        run: npm run test:mechanical
+
+      - name: Regression — firewall
+        run: npm run test:firewall
+
+      - name: Regression — installers
+        run: npm run test:installers
+
+      - name: Regression — turn-economy instrumentation
+        run: node --test tests/turn-economy/instrumentation.test.mjs
+
+      - name: Regression — token semantics
+        run: node --test tests/turn-economy/token-semantics.test.mjs
+
+      - name: Regression — turn-economy fidelity
+        run: node --test tests/turn-economy/fidelity.test.mjs
+
+      - name: Regression — turn diet
+        run: node --test tests/turn-economy/turn-diet.test.mjs
+
+      - name: Regression — critical-review consensus
+        run: node --test tests/turn-economy/critical-review-consensus.test.mjs
+
+      - name: Regression — architecture invariants
+        run: npm run test:architecture-invariants
 
       - name: Verify isolated runtimes, Doctor, contamination, and firewall
         run: |
