@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { buildSchemaValidators } from "../../scripts/build-schema-validators.mjs";
+import { buildSchemaValidators, SCHEMA_FILES } from "../../scripts/build-schema-validators.mjs";
 import { checkRuntimeCore } from "../../scripts/check-runtime-core.mjs";
 import { syncRuntimeCore } from "../../scripts/sync-runtime-core.mjs";
 
@@ -180,7 +180,7 @@ test("schema validator check-only mode does not create a missing output director
   try {
     await rm(outputDir, { recursive: true, force: true });
     const result = await buildSchemaValidators({ checkOnly: true, repoRoot: root, outputDir });
-    assert.equal(result.missing.length, 7);
+    assert.equal(result.missing.length, SCHEMA_FILES.length);
     await assert.rejects(access(outputDir), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
