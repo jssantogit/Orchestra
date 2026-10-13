@@ -38,7 +38,7 @@
           "minItems": 2,
           "maxItems": 2,
           "uniqueItems": true,
-          "items": { "enum": ["LOCAL_READ", "PROCESS_EXEC"] },
+          "items": { "type": "string", "enum": ["LOCAL_READ", "PROCESS_EXEC"] },
           "allOf": [
             { "contains": { "const": "LOCAL_READ" }, "minContains": 1, "maxContains": 1 },
             { "contains": { "const": "PROCESS_EXEC" }, "minContains": 1, "maxContains": 1 }
