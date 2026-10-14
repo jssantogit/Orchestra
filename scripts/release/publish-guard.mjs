@@ -4,9 +4,17 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseStableVersion } from "./versioning.mjs";
 
-export function evaluateExistingPublication({ sha, tagSha = "", releaseExists = false }) {
+export function evaluateExistingPublication({ sha, tagSha = "", releaseExists = false, releaseSha = "" }) {
   const tagExists = Boolean(tagSha);
   if (tagExists && releaseExists) {
+    if (!releaseSha || tagSha !== releaseSha) {
+      return {
+        action: "fail",
+        tagExists: true,
+        releaseExists: true,
+        reason: `Published tag does not point to the release integration SHA (${releaseSha || "missing"})`,
+      };
+    }
     return { action: "noop", tagExists: true, releaseExists: true, reason: "already-published" };
   }
   if (!tagExists && releaseExists) {
