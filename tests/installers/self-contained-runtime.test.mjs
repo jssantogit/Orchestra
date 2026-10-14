@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
-  readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -31,6 +31,18 @@ function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function listInstalledModules(root, current = root) {
+  const modules = [];
+  const entries = readdirSync(current, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    const absolute = join(current, entry.name);
+    if (entry.isDirectory()) modules.push(...listInstalledModules(root, absolute));
+    else if (entry.isFile() && entry.name.endsWith(".mjs")) modules.push(pathToFileURL(absolute).href);
+  }
+  return modules.sort();
+}
+
 for (const [runtime, layout] of Object.entries(PROVIDERS)) {
   test(`${runtime} installed runtime is self-contained`, async () => {
     const root = mkdtempSync(join(tmpdir(), `orchestra-self-contained-${runtime}-`));
@@ -47,11 +59,9 @@ for (const [runtime, layout] of Object.entries(PROVIDERS)) {
       await installProjectRuntime({ targetDir: target, runtimeManifest, builtRuntime });
 
       const providerRoot = join(target, layout.provider);
-      const providerManifest = JSON.parse(readFileSync(join(providerRoot, "runtime-provider-manifest.json"), "utf8"));
-      const providerModuleUrls = providerManifest.files
-        .map((entry) => entry.path)
-        .filter((path) => path.endsWith(".mjs"))
-        .map((path) => pathToFileURL(join(providerRoot, path)).href);
+      const providerModuleUrls = listInstalledModules(providerRoot);
+      assert.equal(providerModuleUrls.length > 0, true);
+      assert.equal(existsSync(join(providerRoot, "delegation-executor.mjs")), false);
 
       const runner = join(target, "self-contained-smoke.mjs");
       const validatorUrl = pathToFileURL(join(target, layout.core, "schema", "validator.mjs")).href;
