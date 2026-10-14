@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { buildRuntime } from "../runtime/runtime-builder.mjs";
-import { ensureDelegationProjectRuntime } from "../runtime/delegation/project-runtime-manager.mjs";
+import {
+  doctorDelegationProjectRuntime,
+  ensureDelegationProjectRuntime,
+} from "../runtime/delegation/project-runtime-manager.mjs";
 import {
   doctorAntigravityProjectRuntime,
   inspectAntigravityProjectRuntime,
@@ -68,6 +71,19 @@ function composedRuntimeResult(providerRuntime, providerResult, delegationResult
   };
 }
 
+function composedDoctorResult(providerResult, delegationResult) {
+  const checks = [...providerResult.checks, ...delegationResult.checks];
+  const healthy = providerResult.healthy && delegationResult.healthy;
+  return {
+    ...providerResult,
+    healthy,
+    status: healthy ? "HEALTHY" : "UNHEALTHY",
+    checks,
+    providerRuntime: providerResult.inspection,
+    delegationRuntime: delegationResult.inspection,
+  };
+}
+
 async function installAntigravityWithDelegation({ targetDir, dryRun }) {
   return withBuiltAntigravityAndDelegationRuntimes(async ({ providerBuiltRuntime, delegationBuiltRuntime }) => {
     const providerInspection = await inspectAntigravityProjectRuntime({ targetDir, builtRuntime: providerBuiltRuntime });
@@ -106,6 +122,14 @@ async function updateAntigravityWithDelegation({ targetDir, dryRun, force }) {
       force,
     });
     return composedRuntimeResult("antigravity", providerResult, delegationResult);
+  });
+}
+
+async function doctorAntigravityWithDelegation({ targetDir }) {
+  return withBuiltAntigravityAndDelegationRuntimes(async ({ providerBuiltRuntime, delegationBuiltRuntime }) => {
+    const providerResult = await doctorAntigravityProjectRuntime({ targetDir, builtRuntime: providerBuiltRuntime });
+    const delegationResult = await doctorDelegationProjectRuntime({ targetDir, builtRuntime: delegationBuiltRuntime });
+    return composedDoctorResult(providerResult, delegationResult);
   });
 }
 
@@ -160,7 +184,7 @@ async function run(args) {
       result = await updateAntigravityWithDelegation({ targetDir, dryRun, force });
       break;
     case "doctor":
-      result = await withBuiltAntigravityRuntime((builtRuntime) => doctorAntigravityProjectRuntime({ targetDir, builtRuntime }));
+      result = await doctorAntigravityWithDelegation({ targetDir });
       break;
     case "version":
       result = await withBuiltAntigravityRuntime(async (builtRuntime) => {
