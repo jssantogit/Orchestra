@@ -4,8 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
+import { inspectDelegationCapabilities } from "./delegation/discovery.mjs";
+
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const CANONICAL_RUNTIMES = Object.freeze(["core", "codex", "antigravity"]);
+const CANONICAL_RUNTIMES = Object.freeze(["core", "codex", "antigravity", "delegation"]);
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -34,11 +36,20 @@ function manifestNames(repoRoot, runtime) {
   return CANONICAL_RUNTIMES.filter((name) => existsSync(join(repoRoot, "runtime", "manifests", `${name}.json`)));
 }
 
+function unavailableDelegationReport() {
+  return {
+    status: "UNAVAILABLE",
+    gitWorktree: { available: false },
+    providers: [],
+  };
+}
+
 export async function runDoctor({
   repoRoot = moduleRoot,
   runtime = "all",
   runCommands = true,
   commandRunner = commandCheck,
+  delegationInspector = inspectDelegationCapabilities,
 } = {}) {
   const root = resolve(repoRoot);
   const checks = [];
@@ -104,10 +115,20 @@ export async function runDoctor({
     checks.push(commandRunner(root, "runtime:self-contained", process.execPath, ["--test", "tests/installers/self-contained-runtime.test.mjs"]));
   }
 
+  let delegation = null;
+  if (root === moduleRoot || delegationInspector !== inspectDelegationCapabilities) {
+    try {
+      delegation = await delegationInspector();
+    } catch {
+      delegation = unavailableDelegationReport();
+    }
+  }
+
   return {
     healthy: checks.length > 0 && checks.every((item) => item.ok),
     runtime,
     checks,
+    delegation,
   };
 }
 
@@ -117,6 +138,12 @@ async function main() {
   const report = await runDoctor({ runtime });
   for (const item of report.checks) {
     console.log(`${item.ok ? "PASS" : "FAIL"} ${item.id}${item.detail ? ` — ${item.detail}` : ""}`);
+  }
+  if (report.delegation) {
+    const providerSummary = report.delegation.providers
+      .map((provider) => `${provider.provider}=${provider.available ? "available" : "unavailable"}`)
+      .join(", ");
+    console.log(`INFO delegation:readiness — ${report.delegation.status}; gitWorktree=${report.delegation.gitWorktree.available ? "available" : "unavailable"}${providerSummary ? `; ${providerSummary}` : ""}`);
   }
   console.log(report.healthy ? "Orchestra Doctor: healthy" : "Orchestra Doctor: unhealthy");
   if (!report.healthy) process.exitCode = 1;

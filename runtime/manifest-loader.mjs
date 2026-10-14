@@ -20,7 +20,7 @@ const MANAGED_ASSET_KEYS = Object.freeze(["type", "source", "output", "exclude"]
 const MANAGED_ASSET_TYPES = new Set(["file", "tree", "symlink"]);
 const DRIVE_ABSOLUTE = /^[A-Za-z]:\//;
 
-export const RUNTIME_MANIFEST_NAMES = Object.freeze(["core", "codex", "antigravity"]);
+export const RUNTIME_MANIFEST_NAMES = Object.freeze(["core", "codex", "antigravity", "delegation"]);
 
 function schemaError(message) {
   throw new Error(`runtime manifest schema invalid: ${message}`);

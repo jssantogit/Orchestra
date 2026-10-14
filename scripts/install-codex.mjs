@@ -4,7 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { installCodexProjectRuntime } from "../providers/codex/project-runtime-manager.mjs";
+import {
+  inspectCodexProjectRuntime,
+  installCodexProjectRuntime,
+} from "../providers/codex/project-runtime-manager.mjs";
+import { ensureDelegationProjectRuntime } from "../runtime/delegation/project-runtime-manager.mjs";
 import { buildRuntime } from "../runtime/runtime-builder.mjs";
 
 const args = process.argv.slice(2);
@@ -24,9 +28,22 @@ try {
   console.log(`Installing Orchestra Codex runtime into '${targetDir}'...`);
   buildRoot = await mkdtemp(join(tmpdir(), "orchestra-codex-install-"));
   const builtRuntime = join(buildRoot, "codex");
+  const delegationBuiltRuntime = join(buildRoot, "delegation");
   await buildRuntime({ runtime: "codex", outputDir: builtRuntime });
+  await buildRuntime({ runtime: "delegation", outputDir: delegationBuiltRuntime });
+
+  const inspection = await inspectCodexProjectRuntime({ targetDir, builtRuntime });
+  if (inspection.installed) {
+    await installCodexProjectRuntime({ targetDir, builtRuntime });
+  }
+
+  const delegationResult = await ensureDelegationProjectRuntime({
+    targetDir,
+    builtRuntime: delegationBuiltRuntime,
+  });
   const result = await installCodexProjectRuntime({ targetDir, builtRuntime });
   console.log(`Codex runtime successfully installed to '${targetDir}/.codex'.`);
+  console.log(`Delegation runtime: ${delegationResult.operation}.`);
   console.log(`Version: ${result.metadata.version || "unknown"}`);
   console.log("Verify with: node scripts/orchestra-codex-project.mjs doctor <project>");
 } catch (error) {

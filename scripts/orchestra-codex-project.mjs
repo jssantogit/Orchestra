@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { buildRuntime } from "../runtime/runtime-builder.mjs";
+import { ensureDelegationProjectRuntime } from "../runtime/delegation/project-runtime-manager.mjs";
 import {
   doctorCodexProjectRuntime,
   inspectCodexProjectRuntime,
@@ -43,6 +44,69 @@ async function withBuiltCodexRuntime(callback) {
   } finally {
     await rm(buildRoot, { recursive: true, force: true });
   }
+}
+
+async function withBuiltCodexAndDelegationRuntimes(callback) {
+  const buildRoot = await mkdtemp(join(tmpdir(), "orchestra-codex-project-"));
+  try {
+    const providerBuiltRuntime = join(buildRoot, "codex");
+    const delegationBuiltRuntime = join(buildRoot, "delegation");
+    await buildRuntime({ runtime: "codex", outputDir: providerBuiltRuntime });
+    await buildRuntime({ runtime: "delegation", outputDir: delegationBuiltRuntime });
+    return await callback({ providerBuiltRuntime, delegationBuiltRuntime });
+  } finally {
+    await rm(buildRoot, { recursive: true, force: true });
+  }
+}
+
+function composedRuntimeResult(providerRuntime, providerResult, delegationResult) {
+  return {
+    ...providerResult,
+    changed: providerResult.changed === true || delegationResult.changed === true,
+    providerRuntime: { ...providerResult, runtime: providerRuntime },
+    delegationRuntime: { ...delegationResult, runtime: "delegation" },
+  };
+}
+
+async function installCodexWithDelegation({ targetDir, dryRun }) {
+  return withBuiltCodexAndDelegationRuntimes(async ({ providerBuiltRuntime, delegationBuiltRuntime }) => {
+    const providerInspection = await inspectCodexProjectRuntime({ targetDir, builtRuntime: providerBuiltRuntime });
+    const providerResult = dryRun
+      ? { operation: "install", changed: !providerInspection.clean, dryRun: true, targetDir: resolve(targetDir), inspection: providerInspection }
+      : null;
+
+    if (!dryRun && providerInspection.installed) {
+      return installCodexProjectRuntime({ targetDir, builtRuntime: providerBuiltRuntime });
+    }
+
+    const delegationResult = await ensureDelegationProjectRuntime({
+      targetDir,
+      builtRuntime: delegationBuiltRuntime,
+      dryRun,
+    });
+    const installedProvider = providerResult ?? await installCodexProjectRuntime({
+      targetDir,
+      builtRuntime: providerBuiltRuntime,
+    });
+    return composedRuntimeResult("codex", installedProvider, delegationResult);
+  });
+}
+
+async function updateCodexWithDelegation({ targetDir, dryRun, force }) {
+  return withBuiltCodexAndDelegationRuntimes(async ({ providerBuiltRuntime, delegationBuiltRuntime }) => {
+    const delegationResult = await ensureDelegationProjectRuntime({
+      targetDir,
+      builtRuntime: delegationBuiltRuntime,
+      dryRun,
+    });
+    const providerResult = await updateCodexProjectRuntime({
+      targetDir,
+      builtRuntime: providerBuiltRuntime,
+      dryRun,
+      force,
+    });
+    return composedRuntimeResult("codex", providerResult, delegationResult);
+  });
 }
 
 async function listCodexRuntimeBackups(targetDir) {
@@ -90,21 +154,10 @@ async function run(args) {
   let result;
   switch (command) {
     case "install":
-      result = await withBuiltCodexRuntime(async (builtRuntime) => {
-        if (dryRun) {
-          const inspection = await inspectCodexProjectRuntime({ targetDir, builtRuntime });
-          return { operation: "install", changed: !inspection.clean, dryRun: true, targetDir: resolve(targetDir), inspection };
-        }
-        return installCodexProjectRuntime({ targetDir, builtRuntime });
-      });
+      result = await installCodexWithDelegation({ targetDir, dryRun });
       break;
     case "update":
-      result = await withBuiltCodexRuntime((builtRuntime) => updateCodexProjectRuntime({
-        targetDir,
-        builtRuntime,
-        dryRun,
-        force,
-      }));
+      result = await updateCodexWithDelegation({ targetDir, dryRun, force });
       break;
     case "doctor":
       result = await withBuiltCodexRuntime((builtRuntime) => doctorCodexProjectRuntime({ targetDir, builtRuntime }));

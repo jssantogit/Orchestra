@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { buildRuntime, runtimeRepositoryRoot } from "../runtime/runtime-builder.mjs";
 
 const repoRoot = runtimeRepositoryRoot();
-const runtimes = ["codex", "antigravity"];
+const runtimes = ["codex", "antigravity", "delegation"];
 
 for (const runtime of runtimes) {
   const outputDir = resolve(repoRoot, "dist", "runtime", runtime);

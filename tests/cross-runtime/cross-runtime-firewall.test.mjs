@@ -134,11 +134,8 @@ test("Codex scan fails if .codex/ imports or references AGY Dream runtime paths"
     return !dreamRefPattern.test(text);
   }
 
-  // Valid codex content passes
   assert.equal(scanContentForDream('const model = "gpt-6-sol";'), true);
   assert.equal(scanContentForDream('model = "gpt-6-astra"'), true);
-
-  // Foreign AGY dream imports/references fail
   assert.equal(scanContentForDream('import { buildSnapshot } from ".agents/dream/snapshot.mjs";'), false);
   assert.equal(scanContentForDream('import { sealWorld } from "runtimes/antigravity/.agents/dream/world-sealer.mjs";'), false);
   assert.equal(scanContentForDream('const store = ".agents/dream-data/world.json";'), false);
@@ -224,4 +221,36 @@ test("AGY Dream source contains no benchmark-specific contamination", () => {
       );
     }
   }
+});
+
+test("live cross-provider composition exists only in the neutral delegation CLI", () => {
+  const neutralCli = readFileSync(fileURLToPath(new URL("../../runtime/delegation/cli.mjs", import.meta.url)), "utf8");
+  assert.match(neutralCli, /providers\/antigravity\/delegation-executor\.mjs/);
+  assert.match(neutralCli, /providers\/codex\/delegation-executor\.mjs/);
+
+  const providerHelpers = [
+    ["codex", fileURLToPath(new URL("../../runtimes/codex/.codex/astra-orchestra/cross-provider-delegation.mjs", import.meta.url))],
+    ["antigravity", fileURLToPath(new URL("../../runtimes/antigravity/.agents/skills/orchestra/cross-provider-delegation.mjs", import.meta.url))],
+  ];
+  for (const [provider, file] of providerHelpers) {
+    const content = readFileSync(file, "utf8");
+    assert.equal(/providers\/(?:codex|antigravity)\/delegation-executor\.mjs/.test(content), false, `${provider} helper must enter through the neutral runtime`);
+    const sibling = provider === "codex" ? "agy" : "codex";
+    assert.equal(new RegExp(`\\bcommand\\s*:\\s*["']${sibling}["']`).test(content), false, `${provider} helper must not invoke sibling CLI directly`);
+  }
+});
+
+test("delegation manifest mirrors only bounded provider-local executor assets", () => {
+  const manifest = JSON.parse(readFileSync(fileURLToPath(new URL("../../runtime/manifests/delegation.json", import.meta.url)), "utf8"));
+  const providerAssets = manifest.managedAssets
+    .filter(({ source }) => source.startsWith("providers/"))
+    .map(({ source }) => source)
+    .sort();
+  assert.deepEqual(providerAssets, [
+    "providers/antigravity/delegation-executor.mjs",
+    "providers/antigravity/model-catalog.mjs",
+    "providers/codex/delegation-executor.mjs",
+    "providers/codex/model-catalog.mjs",
+  ]);
+  assert.equal(manifest.managedAssets.some(({ source, output }) => /(?:adapter|hooks?|sessions?|control-plane)/i.test(source) || /(?:\.codex|\.agents|GEMINI\.md)/i.test(output)), false);
 });

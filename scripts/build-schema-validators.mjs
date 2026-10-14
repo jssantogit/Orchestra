@@ -11,6 +11,8 @@ const defaultRepoRoot = resolve(scriptDir, "..");
 export const SCHEMA_FILES = Object.freeze([
   "audit-result.v1.schema.json",
   "candidate.v1.schema.json",
+  "delegation-request.v1.schema.json",
+  "delegation-result.v1.schema.json",
   "evidence.v1.schema.json",
   "implementation-packet.v1.schema.json",
   "runtime-event.v1.schema.json",
@@ -26,28 +28,62 @@ function normalizeLineEndings(value) {
   return String(value).replace(/\r\n/g, "\n");
 }
 
+const INLINE_JSON_EQUAL = `function jsonEqual(left, right) {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) if (!jsonEqual(left[index], right[index])) return false;
+    return true;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (const key of leftKeys) {
+    if (!Object.prototype.hasOwnProperty.call(right, key) || !jsonEqual(left[key], right[key])) return false;
+  }
+  return true;
+}`;
+
 function makeDependencyFree(moduleCode, schemaFile) {
-  const withInlineLength = moduleCode.replace(
+  let dependencyFree = moduleCode.replace(
     /const (func\d+) = require\("ajv\/dist\/runtime\/ucs2length"\)\.default;/g,
     "const $1 = (value) => [...value].length;",
   );
+  dependencyFree = dependencyFree.replace(
+    /const (func\d+) = require\("ajv\/dist\/runtime\/equal"\)\.default;/g,
+    (_match, name) => `const ${name} = ${INLINE_JSON_EQUAL};`,
+  );
 
-  if (/require\(["']ajv\//.test(withInlineLength) || /from ["']ajv\//.test(withInlineLength)) {
-    throw new Error(`Generated validator still depends on Ajv runtime: ${schemaFile}`);
+  const runtimeDependencies = [...dependencyFree.matchAll(/(?:require\(|from\s+)["'](ajv\/[^"']+)["']/g)]
+    .map((match) => match[1]);
+  if (runtimeDependencies.length > 0) {
+    throw new Error(`Generated validator still depends on Ajv runtime: ${schemaFile}: ${[...new Set(runtimeDependencies)].join(", ")}`);
   }
 
-  return withInlineLength;
+  return dependencyFree;
+}
+
+async function readSchemas(schemaDir) {
+  const entries = await Promise.all(SCHEMA_FILES.map(async (schemaFile) => [
+    schemaFile,
+    JSON.parse(await readFile(join(schemaDir, schemaFile), "utf8")),
+  ]));
+  return new Map(entries);
 }
 
 async function compileSchema(schemaFile, schemaDir) {
-  const schema = JSON.parse(await readFile(join(schemaDir, schemaFile), "utf8"));
+  const schemas = await readSchemas(schemaDir);
+  const target = schemas.get(schemaFile);
   const ajv = new Ajv2020({
     allErrors: true,
     strict: true,
     validateSchema: true,
     code: { source: true, esm: true, optimize: true },
   });
-  const validate = ajv.compile(schema);
+  for (const schema of schemas.values()) ajv.addSchema(schema);
+  const validate = ajv.getSchema(target.$id);
+  if (!validate) throw new Error(`Unable to resolve schema validator: ${schemaFile}`);
   const moduleCode = standaloneCode(ajv, validate);
   return `${makeDependencyFree(moduleCode, schemaFile).trimEnd()}\n`;
 }

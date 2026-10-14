@@ -128,6 +128,8 @@ The neutral `.orchestra/state/**` Work Lease namespace is also project-owned,
 preserved across runtime replacement, and locally ignored through managed
 `.git/info/exclude` rather than a tracked `.gitignore` entry.
 
+Codex `install` and `update` also ensure the independent neutral delegation image under `.orchestra/runtime/delegation/**`. This does not make Antigravity part of the Codex runtime: the provider tree remains OpenAI-only and reaches an external provider only through the neutral broker boundary.
+
 ---
 
 ## 8. Work Lease authority and session recovery
@@ -185,6 +187,19 @@ Run the complete deterministic Codex verification:
 ```bash
 npm run test:codex
 npm run test:leases
+npm run test:delegation
 npm run test:architecture-invariants
 node --test tests/installers/codex-project-runtime-manager.test.mjs
 ```
+
+---
+
+## 10. Cross-Provider Delegation
+
+Codex CONTROL may delegate a bounded independent review or an explicitly requested second opinion to Antigravity through `.orchestra/runtime/delegation/**`. Codex never imports Antigravity runtime code and never calls `agy` directly from `.codex/**`; the provider-local helper enters the neutral runtime, which owns the target-specific executor.
+
+Cross-provider execution does not transfer the Codex root Work Lease, mutation fence, candidate ownership, Evidence Ledger acceptance, retry decision, or task-completion authority. The external worker receives a reduced envelope with at most `LOCAL_READ + PROCESS_EXEC` and runs in an ephemeral Git worktree. Any target-side workspace mutation is a capability violation rather than a candidate.
+
+Normal work stays on Codex. Automatic cross-provider routing is reserved for an independent CRITICAL review slot; an explicit user `SECOND_OPINION` may also cross. A target failure or unavailable AGY CLI returns to Codex CONTROL without automatic fallback or silent provider switching.
+
+Prerequisites are intentionally external to Orchestra: Git worktree support plus an already installed/authenticated `agy` CLI. Orchestra detects readiness via version/help probes; it does not install Antigravity, log in, or make a model call during discovery. `npm run doctor` reports the optional delegation readiness separately, so a Codex-only project remains structurally healthy when AGY is unavailable.

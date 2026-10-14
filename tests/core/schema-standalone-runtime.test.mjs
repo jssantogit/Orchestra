@@ -28,6 +28,46 @@ const validPacket = {
   },
 };
 
+const validDelegationRequest = {
+  schema: "orchestra.delegation-request.v1",
+  delegationId: "delegation-standalone",
+  taskId: "task-standalone",
+  source: { provider: "provider-a", actorIdHash: "sha256:source" },
+  target: { provider: "provider-b", logicalRole: "CRITICAL_REVIEWER" },
+  purpose: "INDEPENDENT_REVIEW",
+  packet: validPacket,
+  authority: {
+    capabilities: ["LOCAL_READ", "PROCESS_EXEC"],
+    mutation: "FORBIDDEN",
+    network: "FORBIDDEN",
+    mayDelegate: false,
+  },
+  workspace: {
+    sourceFingerprint: "sha256:fingerprint",
+    sourceRevision: "abcdef1234567890",
+    isolation: "EPHEMERAL_WORKTREE",
+  },
+  limits: { timeoutMs: 120000, maxOutputBytes: 65536, delegationDepth: 1 },
+};
+
+const validDelegationResult = {
+  schema: "orchestra.delegation-result.v1",
+  delegationId: "delegation-standalone",
+  provider: "provider-b",
+  logicalRole: "CRITICAL_REVIEWER",
+  purpose: "INDEPENDENT_REVIEW",
+  status: "COMPLETED",
+  summary: "standalone delegation validation passed",
+  findings: [],
+  evidenceRefs: [],
+  execution: { exitCode: 0, durationMs: 1 },
+  workspace: {
+    initialFingerprint: "sha256:initial",
+    finalFingerprint: "sha256:final",
+    dirty: false,
+  },
+};
+
 test("generated schema validators run in an isolated fixture with no node_modules", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "orchestra-schema-standalone-"));
   const copiedRoot = join(fixture, "core", "schema");
@@ -41,6 +81,17 @@ test("generated schema validators run in an isolated fixture with no node_module
 
     const invalid = validateSchema("implementation-packet.v1.schema.json", { ...validPacket, transcript: "forbidden" });
     assert.equal(invalid.valid, false);
+
+    const request = validateSchema("delegation-request.v1.schema.json", validDelegationRequest);
+    assert.equal(request.valid, true, JSON.stringify(request.errors));
+    const result = validateSchema("delegation-result.v1.schema.json", validDelegationResult);
+    assert.equal(result.valid, true, JSON.stringify(result.errors));
+
+    const invalidDelegation = {
+      ...validDelegationRequest,
+      authority: { ...validDelegationRequest.authority, mayDelegate: true },
+    };
+    assert.equal(validateSchema("delegation-request.v1.schema.json", invalidDelegation).valid, false);
 
     const validEvent = {
       schema: "orchestra.runtime-event.v1",

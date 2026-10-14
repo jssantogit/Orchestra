@@ -126,3 +126,15 @@ objects. Outputs above 64 KiB or 300 lines are classified
 
 These are deterministic packet/output decisions. Provider-native transcript
 management remains owned by Codex.
+
+---
+
+## 9. Cross-Provider Turn Economy
+
+Cross-provider execution is deliberately **not** the default worker lane. The local provider remains cheaper in coordination turns and avoids an unnecessary model handoff; the extra provider is used only when independent critical review or an explicit second opinion justifies that cost.
+
+The neutral request reuses the canonical task/Implementation Packet facts and reduces them to a bounded Worker Envelope. It does not ship the originating transcript, hidden reasoning, arbitrary chat summaries, raw environment objects, or the full Work Lease. The external provider returns a bounded `DelegationResult`; raw provider output is not promoted into authority merely because another model produced it.
+
+Capability discovery is model-free. Orchestra probes Git worktree support and provider CLI version/help surfaces only; it does not install a provider, log in, or spend an inference call just to determine readiness. If the optional sibling is absent, normal same-provider execution continues without cross-provider model cost.
+
+Recursion is denied and the routing policy permits at most one cross-provider delegation per logical stage. This prevents a second-opinion or review request from becoming an unbounded provider ping-pong. Provider-reported usage or cost may be retained when factual; Orchestra does not synthesize token, latency, or cost values that the target did not report.

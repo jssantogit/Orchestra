@@ -4,7 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { installAntigravityProjectRuntime } from "../providers/antigravity/project-runtime-manager.mjs";
+import {
+  inspectAntigravityProjectRuntime,
+  installAntigravityProjectRuntime,
+} from "../providers/antigravity/project-runtime-manager.mjs";
+import { ensureDelegationProjectRuntime } from "../runtime/delegation/project-runtime-manager.mjs";
 import { buildRuntime } from "../runtime/runtime-builder.mjs";
 
 const args = process.argv.slice(2);
@@ -24,10 +28,23 @@ try {
   console.log(`Installing Orchestra Antigravity runtime into '${targetDir}'...`);
   buildRoot = await mkdtemp(join(tmpdir(), "orchestra-antigravity-install-"));
   const builtRuntime = join(buildRoot, "antigravity");
+  const delegationBuiltRuntime = join(buildRoot, "delegation");
   await buildRuntime({ runtime: "antigravity", outputDir: builtRuntime });
+  await buildRuntime({ runtime: "delegation", outputDir: delegationBuiltRuntime });
+
+  const inspection = await inspectAntigravityProjectRuntime({ targetDir, builtRuntime });
+  if (inspection.installed) {
+    await installAntigravityProjectRuntime({ targetDir, builtRuntime });
+  }
+
+  const delegationResult = await ensureDelegationProjectRuntime({
+    targetDir,
+    builtRuntime: delegationBuiltRuntime,
+  });
   const result = await installAntigravityProjectRuntime({ targetDir, builtRuntime });
 
   console.log(`Antigravity runtime successfully installed to '${resolve(targetDir, ".agents")}'.`);
+  console.log(`Delegation runtime: ${delegationResult.operation}.`);
   console.log(`Version: ${result.metadata.version || "unknown"}`);
   console.log(`Verify with: node scripts/orchestra-project.mjs doctor ${JSON.stringify(targetDir)}`);
 } catch (error) {

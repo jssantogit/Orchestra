@@ -58,7 +58,7 @@ The migration gate is `ORCHESTRA_DIRECT_WORK_MODE=off|shadow|on`:
 - `off` → preserve legacy routing exactly;
 - an invalid explicit value fails safe to `shadow` rather than silently enabling a new behavior.
 
-The implementer receives only `NONE` or `DIRECTED` discovery. It cannot reinterpret the request, perform broad repository exploration, mutate tests without explicit packet authorization, investigate unrelated/uncertain failures, spawn workers, or self-accept.
+The implementer receives only `NONE` or semantic `DIRECTED` discovery. It cannot reinterpret the request, perform broad repository exploration, mutate tests without explicit packet authorization, investigate unrelated/uncertain failures, spawn workers, or self-accept.
 
 After a candidate exists, required evidence and an independent cheap **Quick Audit** may start in parallel. Quick Audit is diff/task scoped and emits only `PASS` or a causal `BLOCKING_FINDING`. Sol/control confirms findings, issues bounded Delta Packets when necessary, and remains the sole acceptance authority.
 
@@ -71,3 +71,24 @@ When a task involves `criticality == CRITICAL` (e.g. database schema migrations,
 - **Reviewer A** checks requirement satisfaction and correctness.
 - **Reviewer B** performs adversarial analysis (security, regressions, edge cases).
 - Both must return `ACCEPT`. Any disagreement or `BLOCK` transitions immediately to `HUMAN_GATE`.
+
+---
+
+## 5. Cross-Provider Delegation
+
+Cross-provider routing is intentionally conservative. Normal implementation, investigation, Quick Audit, and routine review stay on the current provider. The presence of another installed provider is a capability, not a reason to add a model handoff.
+
+Automatic cross-provider use is limited to an **independent critical-review slot** where provider diversity materially increases independence. A user may also explicitly request a cross-provider `SECOND_OPINION`. These are execution routes only: the originating CONTROL keeps Work Lease authority and all acceptance decisions.
+
+A cross-provider route must satisfy all of the following:
+
+- the target provider differs from the origin provider;
+- the logical purpose is an allowed bounded review/investigation purpose;
+- the target capability has been discovered as available;
+- the delegation remains `LOCAL_READ + PROCESS_EXEC` in V1;
+- the worker may not delegate again;
+- at most one cross-provider delegation is allowed for the same logical stage.
+
+If the sibling provider is absent, unauthenticated at execution time, times out, returns malformed output, violates capability bounds, or otherwise fails, Orchestra returns the normalized result to CONTROL. It does **not** silently switch to another provider, reinterpret the route, or treat failure as approval. Provider unavailability therefore degrades an optional route rather than changing the authority model.
+
+Critical review remains subject to the existing independent-review and Human Gate semantics. Cross-provider diversity can supply one reviewer, but it never weakens the requirement for factual evidence or grants the external worker self-acceptance authority.

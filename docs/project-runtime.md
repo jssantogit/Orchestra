@@ -8,8 +8,10 @@ Current installations use schema `orchestra.project-runtime.v2`.
 
 - Codex metadata: `.orchestra/state/runtimes/codex.json`
 - Antigravity metadata: `.orchestra/state/runtimes/antigravity.json`
+- Delegation metadata: `.orchestra/state/runtimes/delegation.json`
 - Codex backups/history: `.orchestra/state/runtime-management/codex/`
 - Antigravity backups/history: `.orchestra/state/runtime-management/antigravity/`
+- Delegation backups/history: `.orchestra/state/runtime-management/delegation/`
 
 The old provider-local metadata files `.codex/orchestra-runtime.json` and `.agents/orchestra-runtime.json` are legacy compatibility artifacts. Official v2 installers and source-level lifecycle commands do not create them.
 
@@ -58,6 +60,8 @@ node scripts/install-antigravity.mjs /path/to/project
 
 A fresh install must be immediately recognizable by its corresponding source-level Doctor. No metadata migration or first-update adoption step is required.
 
+Both provider `install`/`update` flows also build and ensure the neutral `delegation` runtime. The public provider rollback commands remain provider-specific; they do not implicitly rewind `.orchestra/runtime/delegation`. The neutral manager has its own backup-protected rollback primitive for recovery/integration code, but Orchestra does not currently expose a standalone neutral rollback CLI.
+
 ## Ownership boundaries
 
 ### Codex managed runtime
@@ -100,6 +104,12 @@ Project-owned paths preserved across update and rollback include:
 - `.agents/runtime-management/`
 - `.orchestra/state/`
 
+### Neutral delegation runtime
+
+The independent delegation manifest owns only `.orchestra/runtime/delegation/**`. Its built image contains the provider-neutral Core/contracts, delegation runtime machinery, and the bounded Codex/Antigravity delegation executor plus model-catalog files required to launch external workers. It does not own `.codex/**`, `.agents/**`, `GEMINI.md`, provider adapters, hooks, session state, or either provider control plane.
+
+Durable delegation records under `.orchestra/state/delegations/**` are project-owned and preserved across runtime replacement. Temporary delegated worktrees are execution artifacts, not managed project runtime paths.
+
 The manifest defines the exact ownership boundary. Runtime updates never promote unrelated project files into Orchestra-owned state.
 
 ## Quiescence guards
@@ -110,7 +120,9 @@ Codex reads `.codex/orchestra-state/active-state.json`. `INTAKE`, `DONE`, `BLOCK
 
 Antigravity reads `.agents/state/active-state.json`. `DONE`, `BLOCKED`, and `HUMAN_GATE` are update-safe. Known execution states fail closed.
 
-Malformed, empty, or unrecognized active state fails closed for both providers. `--force` is reserved for explicit operator recovery.
+The neutral delegation adapter inspects `.orchestra/state/delegations/`. Any delegation still in flight blocks neutral runtime replacement with `DELEGATION_IN_FLIGHT`; unreadable delegation state also fails closed. A completed delegation does not block update, and its durable record survives the replacement.
+
+Malformed, empty, or unrecognized active state fails closed for both providers. `--force` is reserved for explicit operator recovery. Provider `--force` does not silently bypass delegation quiescence when the provider wrapper is ensuring the neutral runtime.
 
 ## Doctor and drift detection
 
@@ -121,13 +133,17 @@ The provider Doctor validates:
 - byte-level managed-runtime integrity against a freshly built payload;
 - metadata freshness against the current runtime manifest and payload.
 
-A runtime edit or corruption under managed paths makes Doctor unhealthy. Missing or stale metadata also makes Doctor unhealthy. Failed checks are evidence of an unhealthy installation; they are never silently normalized.
+The repository-level `npm run doctor` additionally validates the neutral delegation manifest/image and reports **delegation readiness separately from structural health**. Readiness probes only Git worktree support and provider CLI version/help surfaces. Orchestra does not install a CLI, authenticate an account, or perform an inference call during discovery.
+
+`READY` means the required Git worktree support and both provider executors are discoverable; `DEGRADED` means the optional cross-provider surface is only partially available; `UNAVAILABLE` means delegation cannot currently execute. Missing optional provider CLIs therefore remain advisory and do not make an otherwise healthy single-provider Orchestra installation unhealthy.
+
+A runtime edit or corruption under managed paths makes Doctor unhealthy. Missing or stale metadata also makes Doctor unhealthy. Failed structural checks are evidence of an unhealthy installation; optional delegation readiness is not silently promoted into structural health.
 
 ## Backups and rollback
 
 Before a mutating runtime replacement, Orchestra creates a content-addressed backup under `.orchestra/state/runtime-management/<runtime>/backups/<backup-id>/`.
 
-Rollback verifies backup metadata, managed-path ownership, and runtime snapshot integrity before destructive mutation. Project-owned provider state is not rewound by runtime rollback.
+Rollback verifies backup metadata, managed-path ownership, and runtime snapshot integrity before destructive mutation. Project-owned provider state is not rewound by runtime rollback. The same generic backup/rollback mechanics back the neutral delegation manager, but provider-facing rollback commands currently target only their own provider runtime.
 
 ## Ignore behavior
 
@@ -137,10 +153,13 @@ Project-runtime state is hidden from normal project Git status through Orchestra
 
 - provider model identity never grants runtime authority;
 - official installers and source lifecycle commands share the same v2 metadata contract;
+- provider install/update ensures the independent neutral delegation image without merging control planes;
 - managed runtime is compared to the deterministic built payload;
-- active runtimes are not replaced without explicit `--force`;
+- active runtimes are not replaced without explicit recovery authority;
+- in-flight delegation blocks neutral runtime replacement;
 - runtime replacement is backup-protected;
 - backup restore is integrity-checked before mutation;
-- project-owned state survives update and rollback;
+- project-owned state, including delegation records, survives update and rollback;
 - failed or missing validation is not accepted as evidence;
+- optional provider absence degrades delegation readiness without making the base provider runtime unhealthy;
 - current lifecycle commands do not manufacture legacy provider-local metadata.

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.delegation-request.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "delegationId", "taskId", "source", "target", "purpose", "packet", "authority", "workspace", "limits"],
+  "properties": {
+    "schema": { "const": "orchestra.delegation-request.v1" },
+    "delegationId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "taskId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "actorIdHash"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorIdHash": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "logicalRole"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "logicalRole": {
+          "enum": ["IMPLEMENTER", "INVESTIGATOR", "QUICK_AUDITOR", "CRITICAL_REVIEWER", "MANUAL_ESCALATION"]
+        }
+      }
+    },
+    "purpose": {
+      "enum": ["INDEPENDENT_REVIEW", "SECOND_OPINION", "SPECIALIST_EXECUTION", "MANUAL"]
+    },
+    "packet": { "$ref": "orchestra.implementation-packet.v1" },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capabilities", "mutation", "network", "mayDelegate"],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["LOCAL_READ", "PROCESS_EXEC"] }
+        },
+        "mutation": { "const": "FORBIDDEN" },
+        "network": { "const": "FORBIDDEN" },
+        "mayDelegate": { "const": false }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceFingerprint", "sourceRevision", "isolation"],
+      "properties": {
+        "sourceFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sourceRevision": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "isolation": { "const": "EPHEMERAL_WORKTREE" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeoutMs", "maxOutputBytes", "delegationDepth"],
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "delegationDepth": { "const": 1 }
+      }
+    }
+  }
+}

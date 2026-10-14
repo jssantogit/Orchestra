@@ -11,6 +11,11 @@ export {
   evaluateStopDecision,
 } from "./core/acceptance/stop-decision.mjs";
 export { createRuntimeEvent } from "./core/events/runtime-event.mjs";
+export {
+  buildAntigravityDelegationRequest,
+  decideAntigravityCrossProviderRoute,
+  executeAntigravityCrossProviderDelegation,
+} from "./cross-provider-delegation.mjs";
 
 // Compatibility facade for the Antigravity runtime. Provider-neutral
 // classification, escalation, acceptance and event ownership live in core and

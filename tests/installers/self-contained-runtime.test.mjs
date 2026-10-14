@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -64,3 +64,51 @@ for (const [runtime, layout] of Object.entries(PROVIDERS)) {
     }
   });
 }
+
+test("delegation installed runtime is self-contained and contains no provider control-plane trees", async () => {
+  const root = mkdtempSync(join(tmpdir(), "orchestra-self-contained-delegation-"));
+  const target = join(root, "project");
+  const builtRuntime = join(root, "built-runtime");
+  try {
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(target, { recursive: true }));
+    git(target, "init", "-q");
+    git(target, "config", "user.name", "Test");
+    git(target, "config", "user.email", "test@example.invalid");
+
+    await buildRuntime({ runtime: "delegation", outputDir: builtRuntime });
+    const runtimeManifest = await loadRuntimeManifest("delegation");
+    await installProjectRuntime({ targetDir: target, runtimeManifest, builtRuntime });
+
+    const runtimeRoot = join(target, ".orchestra", "runtime", "delegation");
+    const runner = join(target, "delegation-self-contained-smoke.mjs");
+    const cliUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "cli.mjs")).href;
+    const brokerUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "broker.mjs")).href;
+    const antigravityExecutorUrl = pathToFileURL(join(runtimeRoot, "providers", "antigravity", "delegation-executor.mjs")).href;
+    const codexExecutorUrl = pathToFileURL(join(runtimeRoot, "providers", "codex", "delegation-executor.mjs")).href;
+    const domainUrl = pathToFileURL(join(runtimeRoot, "core", "domain", "delegation.mjs")).href;
+    writeFileSync(runner, [
+      `const cli = await import(${JSON.stringify(cliUrl)});`,
+      `const broker = await import(${JSON.stringify(brokerUrl)});`,
+      `const antigravityExecutor = await import(${JSON.stringify(antigravityExecutorUrl)});`,
+      `const codexExecutor = await import(${JSON.stringify(codexExecutorUrl)});`,
+      `const domain = await import(${JSON.stringify(domainUrl)});`,
+      `if (typeof cli.runDelegationCli !== "function") throw new Error("DELEGATION_CLI_BROKEN");`,
+      `if (typeof broker.createDelegationBroker !== "function") throw new Error("DELEGATION_BROKER_BROKEN");`,
+      `if (typeof antigravityExecutor.createAntigravityDelegationExecutor !== "function") throw new Error("ANTIGRAVITY_DELEGATION_EXECUTOR_BROKEN");`,
+      `if (typeof codexExecutor.createCodexDelegationExecutor !== "function") throw new Error("CODEX_DELEGATION_EXECUTOR_BROKEN");`,
+      `if (typeof domain.assertDelegationRequest !== "function") throw new Error("DELEGATION_DOMAIN_BROKEN");`,
+    ].join("\n") + "\n");
+
+    const env = { ...process.env, NODE_PATH: "", ORCHESTRA_ROOT: "", ORCHESTRA_SOURCE_ROOT: "" };
+    execFileSync(process.execPath, [runner], { cwd: target, env, encoding: "utf8" });
+
+    assert.equal(existsSync(join(target, ".codex")), false);
+    assert.equal(existsSync(join(target, ".agents")), false);
+    assert.equal(existsSync(join(target, "GEMINI.md")), false);
+    assert.equal(existsSync(join(runtimeRoot, "providers", "codex", "adapter")), false);
+    assert.equal(existsSync(join(runtimeRoot, "providers", "antigravity", "adapter")), false);
+    assert.equal(git(target, "status", "--short", "--", ".orchestra/state"), "");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -19,6 +19,10 @@
       "sha256": "08261c62be2c9fe6ca25af02e5579b9ecad8f27727586a0a47d4a43149315ede"
     },
     {
+      "path": "delegation-executor.mjs",
+      "sha256": "b193ec970ef830917dff6ba2a88723f5465aa3798591e45852543d98ffbb8a59"
+    },
+    {
       "path": "model-catalog.mjs",
       "sha256": "c6bcc952843c45c289a30abb0abd8b3080575fce9ab1d1e738a2f2d24cbcf7f8"
     },

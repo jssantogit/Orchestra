@@ -119,3 +119,41 @@ test("provider runtimes cannot import each other through static, side-effect, dy
     assert.ok(violations.some(({ file, line }) => portable(file).endsWith("codex.mjs") && line === 9));
   });
 });
+
+test("provider runtimes cannot directly invoke the sibling provider CLI", () => {
+  withFixture({
+    "runtimes/codex/direct-spawn.mjs": `
+      import { spawn } from "node:child_process";
+      spawn("agy", ["--print", "review this"]);
+    `,
+    "providers/antigravity/direct-spawn.mjs": `
+      export async function run(runProcess) {
+        return runProcess({ command: "codex", args: ["exec"] });
+      }
+    `,
+  }, (root) => {
+    const violations = runContaminationCheck(root);
+    assert.ok(violations.some(({ runtime, file, violation }) => runtime === "CODEX"
+      && portable(file).endsWith("runtimes/codex/direct-spawn.mjs")
+      && /sibling provider cli/i.test(violation)), JSON.stringify(violations, null, 2));
+    assert.ok(violations.some(({ runtime, file, violation }) => runtime === "ANTIGRAVITY"
+      && portable(file).endsWith("providers/antigravity/direct-spawn.mjs")
+      && /sibling provider cli/i.test(violation)), JSON.stringify(violations, null, 2));
+  });
+});
+
+test("only runtime/delegation may compose both external delegation executors", () => {
+  const imports = `
+    import { createAntigravityDelegationExecutor } from "../providers/antigravity/delegation-executor.mjs";
+    import { createCodexDelegationExecutor } from "../providers/codex/delegation-executor.mjs";
+  `;
+  withFixture({
+    "runtime/not-delegation.mjs": imports,
+    "runtime/delegation/cli.mjs": imports.replaceAll("../providers/", "../../providers/"),
+  }, (root) => {
+    const violations = runContaminationCheck(root).filter(({ runtime }) => runtime === "DELEGATION_FIREWALL");
+    assert.equal(violations.length, 1, JSON.stringify(violations, null, 2));
+    assert.equal(portable(violations[0].file), "runtime/not-delegation.mjs");
+    assert.match(violations[0].violation, /neutral delegation composition root/i);
+  });
+});

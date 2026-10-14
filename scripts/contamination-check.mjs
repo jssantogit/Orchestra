@@ -12,6 +12,7 @@ export function runContaminationCheck(rootDir = root) {
   // on Core, while Core itself must never depend on a runtime implementation.
   violations.push(...scanCoreProviderFirewall(rootDir));
   violations.push(...scanProviderRuntimeImports(rootDir));
+  violations.push(...scanCrossProviderDelegationFirewall(rootDir));
 
   // 1. Scan Codex Active Runtime Files
   const codexDir = join(rootDir, "runtimes/codex/.codex");
@@ -246,12 +247,42 @@ function listFilesRecursively(directory) {
 }
 
 const sourceImportPattern = /\bimport\s*["']([^"']+)["']|\b(?:import|export)\s+(?:(?!["';])[\s\S])*?\s+from\s*["']([^"']+)["']|\b(?:import|require)\s*\(\s*["']([^"']+)["']/g;
+const SOURCE_FILE_PATTERN = /\.(?:mjs|cjs|js|ts|mts|cts)$/;
 
 function providerNameForPath(path) {
   const normalized = path.replaceAll("\\", "/");
   if (/(?:^|\/)(?:runtimes|providers)\/codex\//i.test(normalized)) return "CODEX";
   if (/(?:^|\/)(?:runtimes|providers)\/antigravity\//i.test(normalized)) return "ANTIGRAVITY";
   return null;
+}
+
+function sourceLineAt(content, index) {
+  return content.slice(0, index).split("\n").length;
+}
+
+function scanSiblingCliInvocations(rootDir, provider, source) {
+  const violations = [];
+  const sibling = provider === "codex" ? "agy" : "codex";
+  const directCallPattern = new RegExp(`\\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync)\\s*\\(\\s*["'\\x60]${sibling}["'\\x60]`, "g");
+  const commandObjectPattern = new RegExp(`\\bcommand\\s*:\\s*["'\\x60]${sibling}["'\\x60]`, "g");
+
+  for (const file of listFilesRecursively(source.directory)) {
+    if (!SOURCE_FILE_PATTERN.test(file) || file.endsWith(".test.mjs")) continue;
+    const content = readFileSync(file, "utf8");
+    for (const pattern of [directCallPattern, commandObjectPattern]) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(content))) {
+        violations.push({
+          runtime: provider.toUpperCase(),
+          file: relative(rootDir, file),
+          line: sourceLineAt(content, match.index),
+          violation: `${source.kind === "provider" ? "Provider source" : "Provider runtime"} direct invocation of sibling provider CLI: ${sibling}`,
+        });
+      }
+    }
+  }
+  return violations;
 }
 
 export function scanProviderRuntimeImports(rootDir) {
@@ -262,8 +293,9 @@ export function scanProviderRuntimeImports(rootDir) {
       { directory: join(rootDir, "providers", provider), kind: "provider" },
     ];
     for (const source of sources) {
+      violations.push(...scanSiblingCliInvocations(rootDir, provider, source));
       for (const file of listFilesRecursively(source.directory)) {
-        if (!/\.(?:mjs|cjs|js|ts|mts|cts)$/.test(file) || file.endsWith(".test.mjs")) continue;
+        if (!SOURCE_FILE_PATTERN.test(file) || file.endsWith(".test.mjs")) continue;
         const content = readFileSync(file, "utf8");
         sourceImportPattern.lastIndex = 0;
         let match;
@@ -278,13 +310,53 @@ export function scanProviderRuntimeImports(rootDir) {
             violations.push({
               runtime: provider.toUpperCase(),
               file: relative(rootDir, file),
-              line: content.slice(0, match.index).split("\n").length,
+              line: sourceLineAt(content, match.index),
               violation: source.kind === "provider"
                 ? `Provider source import of ${targetProvider} provider: ${specifier}`
                 : `Provider runtime import of ${targetProvider} runtime: ${specifier}`,
             });
           }
         }
+      }
+    }
+  }
+  return violations;
+}
+
+function delegationExecutorProvider(target) {
+  const normalized = target.replaceAll("\\", "/");
+  if (/\/providers\/codex\/delegation-executor\.mjs$/i.test(normalized)) return "codex";
+  if (/\/providers\/antigravity\/delegation-executor\.mjs$/i.test(normalized)) return "antigravity";
+  return null;
+}
+
+export function scanCrossProviderDelegationFirewall(rootDir) {
+  const violations = [];
+  const productionRoots = ["runtime", "scripts", "providers", "runtimes"];
+  for (const productionRoot of productionRoots) {
+    for (const file of listFilesRecursively(join(rootDir, productionRoot))) {
+      if (!SOURCE_FILE_PATTERN.test(file) || file.endsWith(".test.mjs")) continue;
+      const relativeFile = relative(rootDir, file).replaceAll("\\", "/");
+      if (relativeFile.startsWith("runtime/delegation/")) continue;
+
+      const content = readFileSync(file, "utf8");
+      const providers = new Set();
+      sourceImportPattern.lastIndex = 0;
+      let match;
+      while ((match = sourceImportPattern.exec(content))) {
+        const specifier = match[1] || match[2] || match[3];
+        const target = specifier.startsWith(".")
+          ? resolve(file, "..", specifier)
+          : resolve(rootDir, specifier);
+        const executorProvider = delegationExecutorProvider(target);
+        if (executorProvider) providers.add(executorProvider);
+      }
+      if (providers.size > 1) {
+        violations.push({
+          runtime: "DELEGATION_FIREWALL",
+          file: relative(rootDir, file),
+          violation: "Both external delegation executors may be composed only by the neutral delegation composition root under runtime/delegation/",
+        });
       }
     }
   }

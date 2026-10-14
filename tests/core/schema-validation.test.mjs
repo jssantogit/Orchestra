@@ -34,6 +34,46 @@ const validImplementationPacket = () => ({
   },
 });
 
+const validDelegationRequest = () => ({
+  schema: "orchestra.delegation-request.v1",
+  delegationId: "delegation-schema-1",
+  taskId: "chapter-refresh-fix",
+  source: { provider: "provider-a", actorIdHash: "sha256:source" },
+  target: { provider: "provider-b", logicalRole: "CRITICAL_REVIEWER" },
+  purpose: "INDEPENDENT_REVIEW",
+  packet: validImplementationPacket(),
+  authority: {
+    capabilities: ["LOCAL_READ", "PROCESS_EXEC"],
+    mutation: "FORBIDDEN",
+    network: "FORBIDDEN",
+    mayDelegate: false,
+  },
+  workspace: {
+    sourceFingerprint: "sha256:fingerprint",
+    sourceRevision: "abcdef1234567890",
+    isolation: "EPHEMERAL_WORKTREE",
+  },
+  limits: { timeoutMs: 120000, maxOutputBytes: 65536, delegationDepth: 1 },
+});
+
+const validDelegationResult = () => ({
+  schema: "orchestra.delegation-result.v1",
+  delegationId: "delegation-schema-1",
+  provider: "provider-b",
+  logicalRole: "CRITICAL_REVIEWER",
+  purpose: "INDEPENDENT_REVIEW",
+  status: "COMPLETED",
+  summary: "bounded review completed",
+  findings: [],
+  evidenceRefs: ["focused-test"],
+  execution: { exitCode: 0, durationMs: 100 },
+  workspace: {
+    initialFingerprint: "sha256:initial",
+    finalFingerprint: "sha256:final",
+    dirty: false,
+  },
+});
+
 const validWorkLease = () => ({
   schema: "orchestra.work-lease.v1",
   projectLineage: "tsuzuki",
@@ -73,6 +113,17 @@ test("implementation packet fails closed on missing identity, invalid discovery,
       `${forbiddenField} must be rejected`,
     );
   }
+});
+
+test("delegation schemas validate bounded provider-neutral request and result shapes", () => {
+  assert.deepEqual(validateSchema("delegation-request.v1.schema.json", validDelegationRequest()), { valid: true, errors: [] });
+  assert.deepEqual(validateSchema("delegation-result.v1.schema.json", validDelegationResult()), { valid: true, errors: [] });
+});
+
+test("delegation request embeds canonical implementation packet validation", () => {
+  const request = validDelegationRequest();
+  request.packet.permissions.discovery = "BROAD";
+  assert.equal(validateSchema("delegation-request.v1.schema.json", request).valid, false);
 });
 
 test("work lease requires factual bounded authority fields and a non-negative generation", () => {
@@ -118,6 +169,8 @@ test("runtime event payload accepts empty data and rejects raw, provider-specifi
 test("every canonical schema rejects unknown top-level properties", () => {
   const fixtures = {
     "implementation-packet.v1.schema.json": validImplementationPacket(),
+    "delegation-request.v1.schema.json": validDelegationRequest(),
+    "delegation-result.v1.schema.json": validDelegationResult(),
     "scope-contract.v2.schema.json": {
       schema: "orchestra.scope-contract.v2",
       taskId: "task-1",
