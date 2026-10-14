@@ -107,8 +107,19 @@ test("prepareRelease fails closed when the base tag and package version disagree
 
 test("existing published versions no-op on later main commits while partial conflicting state fails closed", () => {
   assert.deepEqual(evaluateExistingPublication({
-    sha: "new-main-sha", tagSha: "older-release-sha", releaseExists: true,
+    sha: "new-main-sha",
+    tagSha: "older-release-sha",
+    releaseExists: true,
+    releaseSha: "older-release-sha",
   }), { action: "noop", tagExists: true, releaseExists: true, reason: "already-published" });
+
+  const missingReleaseProvenance = evaluateExistingPublication({
+    sha: "new-main-sha",
+    tagSha: "older-release-sha",
+    releaseExists: true,
+  });
+  assert.equal(missingReleaseProvenance.action, "fail");
+  assert.match(missingReleaseProvenance.reason, /release integration SHA/i);
 
   const partialConflict = evaluateExistingPublication({
     sha: "new-main-sha", tagSha: "older-release-sha", releaseExists: false,
