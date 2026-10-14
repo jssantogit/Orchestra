@@ -3,8 +3,11 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
   cp,
+  lstat,
   mkdir,
   mkdtemp,
+  readlink,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -163,6 +166,55 @@ async function materializeSourceSnapshot(sourceRoot, targetRoot, source) {
   }
 }
 
+async function assertSnapshotSymlinkSafety(targetRoot) {
+  const specs = productPathspecs();
+  const paths = nulPaths(await gitStdout(targetRoot, [
+    "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", ...specs,
+  ]));
+
+  for (const relPath of paths) {
+    const absolute = resolve(targetRoot, relPath);
+    if (!inside(targetRoot, absolute)) {
+      throw prepFailure("WORKSPACE_SNAPSHOT_PATH_INVALID");
+    }
+
+    let stat;
+    try {
+      stat = await lstat(absolute);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw prepFailure("WORKSPACE_SNAPSHOT_PATH_INVALID", error);
+    }
+    if (!stat.isSymbolicLink()) continue;
+
+    let rawTarget;
+    try {
+      rawTarget = await readlink(absolute);
+    } catch (error) {
+      throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS", error);
+    }
+
+    const lexicalTarget = isAbsolute(rawTarget)
+      ? resolve(rawTarget)
+      : resolve(dirname(absolute), rawTarget);
+    if (!inside(targetRoot, lexicalTarget)) {
+      throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS");
+    }
+
+    try {
+      const resolvedTarget = await realpath(lexicalTarget);
+      if (!inside(targetRoot, resolvedTarget)) {
+        throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS");
+      }
+    } catch (error) {
+      if (error?.code === "WORKSPACE_PREP_FAILED") throw error;
+      if (error?.code !== "ENOENT") {
+        throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS", error);
+      }
+    }
+  }
+}
+
 function attribution(context) {
   if (!context || typeof context.cleanupToken !== "string") return null;
   const expected = activeWorktrees.get(context.cleanupToken);
@@ -196,6 +248,7 @@ export async function prepareDelegationWorkspace({ repoRoot, request, baseDir = 
     await git(root, ["worktree", "add", "--detach", allocated.path, request.workspace.sourceRevision]);
     added = true;
     await materializeSourceSnapshot(root, allocated.path, source);
+    await assertSnapshotSymlinkSafety(allocated.path);
 
     const initial = readProductFingerprint(allocated.path);
     if (!initial.available
