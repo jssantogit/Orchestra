@@ -1,9 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { assertDelegationRequest } from "../../core/domain/delegation.mjs";
@@ -36,20 +42,32 @@ async function git(cwd, args) {
   });
 }
 
+async function gitStdout(cwd, args) {
+  const result = await git(cwd, args);
+  return String(result.stdout ?? "");
+}
+
 function readProductFingerprint(repoRoot) {
   return readWorkspaceFingerprint(repoRoot, {
     excludedPaths: PRODUCT_FINGERPRINT_EXCLUDES,
   });
 }
 
+function productPathspecs() {
+  return [
+    ".",
+    ...PRODUCT_FINGERPRINT_EXCLUDES.map((path) => `:(exclude)${path}`),
+  ];
+}
+
 function sourceIdentity(repoRoot, request) {
   const identity = readProductFingerprint(repoRoot);
   if (!identity.available) throw prepFailure("SOURCE_GIT_UNAVAILABLE");
-  if (identity.dirtyFileCount !== 0) throw prepFailure("SOURCE_WORKSPACE_DIRTY");
   if (identity.head !== request.workspace.sourceRevision) {
     throw prepFailure("SOURCE_REVISION_MISMATCH");
   }
   if (identity.fingerprint !== request.workspace.sourceFingerprint) {
+    if (identity.dirtyFileCount !== 0) throw prepFailure("SOURCE_WORKSPACE_DIRTY");
     throw prepFailure("SOURCE_FINGERPRINT_MISMATCH");
   }
   return identity;
@@ -63,6 +81,67 @@ async function allocatePath(baseDir) {
     if (!existsSync(candidate)) return { root, path: candidate };
   }
   throw prepFailure("WORKSPACE_PATH_UNAVAILABLE");
+}
+
+function nulPaths(value) {
+  return String(value ?? "").split("\0").filter(Boolean);
+}
+
+async function copyUntrackedPath(sourceRoot, targetRoot, relPath) {
+  const source = resolve(sourceRoot, relPath);
+  const target = resolve(targetRoot, relPath);
+  if (!inside(sourceRoot, source) || !inside(targetRoot, target)) {
+    throw prepFailure("WORKSPACE_SNAPSHOT_PATH_INVALID");
+  }
+  await mkdir(dirname(target), { recursive: true });
+  await cp(source, target, {
+    recursive: true,
+    dereference: false,
+    errorOnExist: true,
+    force: false,
+    preserveTimestamps: true,
+    verbatimSymlinks: true,
+  });
+}
+
+async function materializeSourceSnapshot(sourceRoot, targetRoot, source) {
+  if (source.dirtyFileCount === 0) return;
+
+  const scratch = await mkdtemp(join(tmpdir(), "orchestra-delegation-snapshot-"));
+  const cachedPatchPath = join(scratch, "cached.patch");
+  const unstagedPatchPath = join(scratch, "unstaged.patch");
+  const specs = productPathspecs();
+
+  try {
+    const cachedPatch = await gitStdout(sourceRoot, [
+      "diff", "--cached", "--binary", "HEAD", "--", ...specs,
+    ]);
+    const unstagedPatch = await gitStdout(sourceRoot, [
+      "diff", "--binary", "--", ...specs,
+    ]);
+    const untracked = nulPaths(await gitStdout(sourceRoot, [
+      "ls-files", "--others", "--exclude-standard", "-z", "--", ...specs,
+    ]));
+
+    if (cachedPatch.length > 0) {
+      await writeFile(cachedPatchPath, cachedPatch, "utf8");
+      await git(targetRoot, ["apply", "--index", "--binary", cachedPatchPath]);
+    }
+    if (unstagedPatch.length > 0) {
+      await writeFile(unstagedPatchPath, unstagedPatch, "utf8");
+      await git(targetRoot, ["apply", "--binary", unstagedPatchPath]);
+    }
+    for (const relPath of untracked) {
+      await copyUntrackedPath(sourceRoot, targetRoot, relPath);
+    }
+
+    const sourceAfter = readProductFingerprint(sourceRoot);
+    if (!sourceAfter.available || sourceAfter.fingerprint !== source.fingerprint) {
+      throw prepFailure("SOURCE_CHANGED_DURING_SNAPSHOT");
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 }
 
 function attribution(context) {
@@ -97,11 +176,11 @@ export async function prepareDelegationWorkspace({ repoRoot, request, baseDir = 
   try {
     await git(root, ["worktree", "add", "--detach", allocated.path, request.workspace.sourceRevision]);
     added = true;
+    await materializeSourceSnapshot(root, allocated.path, source);
 
     const initial = readProductFingerprint(allocated.path);
     if (!initial.available
         || initial.head !== request.workspace.sourceRevision
-        || initial.dirtyFileCount !== 0
         || initial.fingerprint !== source.fingerprint) {
       throw prepFailure("WORKSPACE_IDENTITY_MISMATCH");
     }
