@@ -47,5 +47,7 @@ export function buildDelegationProcessEnvironment({
   for (const [key, value] of Object.entries(extra)) {
     if (typeof value === "string") environment[key] = value;
   }
+  environment.ORCHESTRA_DELEGATION_ACTIVE = "1";
+  environment.ORCHESTRA_DELEGATION_DEPTH = "1";
   return environment;
 }
