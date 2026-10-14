@@ -50,6 +50,12 @@ jobs:
             exit 0
           fi
 
+          RELEASE_SHA=$(git log --first-parent --diff-filter=A --format=%H -n 1 -- "$NOTES")
+          if [ -z "$RELEASE_SHA" ]; then
+            echo "Could not establish the main integration SHA for ${NOTES}." >&2
+            exit 4
+          fi
+
           TAG_SHA=$(git rev-list -n 1 "$TAG" 2>/dev/null || true)
           TAG_EXISTS=false
           if [ -n "$TAG_SHA" ]; then
@@ -64,21 +70,30 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "notes=${NOTES}" >> "$GITHUB_OUTPUT"
+          echo "release_sha=${RELEASE_SHA}" >> "$GITHUB_OUTPUT"
           echo "tag_exists=${TAG_EXISTS}" >> "$GITHUB_OUTPUT"
           echo "release_exists=${RELEASE_EXISTS}" >> "$GITHUB_OUTPUT"
 
           if [ "$TAG_EXISTS" = true ] && [ "$RELEASE_EXISTS" = true ]; then
+            if [ "$TAG_SHA" != "$RELEASE_SHA" ]; then
+              echo "Published tag ${TAG} points to ${TAG_SHA}, not release integration SHA ${RELEASE_SHA}." >&2
+              exit 5
+            fi
             echo "publish_needed=false" >> "$GITHUB_OUTPUT"
-            echo "${TAG} is already published; later main commits are not new releases." >> "$GITHUB_STEP_SUMMARY"
+            echo "${TAG} is already published from ${RELEASE_SHA}; later main commits are not new releases." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           if [ "$TAG_EXISTS" = false ] && [ "$RELEASE_EXISTS" = true ]; then
             echo "GitHub Release ${TAG} exists without its tag." >&2
-            exit 5
+            exit 6
+          fi
+          if [ "$SHA" != "$RELEASE_SHA" ]; then
+            echo "Current successful CI SHA ${SHA} is not release integration SHA ${RELEASE_SHA}." >&2
+            exit 7
           fi
           if [ "$TAG_EXISTS" = true ] && [ "$TAG_SHA" != "$SHA" ]; then
             echo "Existing unpublished tag ${TAG} points to ${TAG_SHA}, not authorized SHA ${SHA}." >&2
-            exit 6
+            exit 8
           fi
           echo "publish_needed=true" >> "$GITHUB_OUTPUT"
 
