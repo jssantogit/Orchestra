@@ -6,6 +6,8 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readFile,
+  readdir,
   readlink,
   realpath,
   rm,
@@ -57,17 +59,68 @@ function readProductFingerprint(repoRoot) {
   });
 }
 
+async function appendHooksFingerprint(hash, hooksRoot, relRoot = "") {
+  let entries;
+  try {
+    entries = await readdir(hooksRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      hash.update("hooks:none\0");
+      return;
+    }
+    throw error;
+  }
+
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    const relPath = relRoot ? `${relRoot}/${entry.name}` : entry.name;
+    const absolute = join(hooksRoot, entry.name);
+    const stat = await lstat(absolute);
+    hash
+      .update("path\0")
+      .update(relPath)
+      .update("\0mode\0")
+      .update(String(stat.mode & 0o7777))
+      .update("\0");
+
+    if (stat.isSymbolicLink()) {
+      hash.update("symlink\0").update(await readlink(absolute)).update("\0");
+    } else if (stat.isDirectory()) {
+      hash.update("dir\0");
+      await appendHooksFingerprint(hash, absolute, relPath);
+    } else if (stat.isFile()) {
+      hash.update("file\0").update(await readFile(absolute)).update("\0");
+    } else {
+      hash.update("other\0");
+    }
+  }
+}
+
+async function readCanonicalHooksFingerprint(repoRoot) {
+  const commonDirText = (await gitStdout(repoRoot, ["rev-parse", "--git-common-dir"])).trim();
+  if (!commonDirText) throw new Error("GIT_COMMON_DIR_UNAVAILABLE");
+  const commonDir = isAbsolute(commonDirText)
+    ? resolve(commonDirText)
+    : resolve(repoRoot, commonDirText);
+  const hash = createHash("sha256").update("orchestra.delegation.git-hooks.v1\0");
+  await appendHooksFingerprint(hash, join(commonDir, "hooks"));
+  return hash.digest("hex");
+}
+
 async function readCanonicalGitFingerprint(repoRoot) {
   try {
-    const [refs, config] = await Promise.all([
+    const [refs, config, hooks] = await Promise.all([
       gitStdout(repoRoot, ["show-ref", "--head"]),
       gitStdout(repoRoot, ["config", "--local", "--null", "--list"]),
+      readCanonicalHooksFingerprint(repoRoot),
     ]);
     const fingerprint = createHash("sha256")
-      .update("orchestra.delegation.git-boundary.v1\0")
+      .update("orchestra.delegation.git-boundary.v2\0")
       .update(refs)
       .update("\0config\0")
       .update(config)
+      .update("\0hooks\0")
+      .update(hooks)
       .digest("hex");
     return { available: true, fingerprint };
   } catch {
