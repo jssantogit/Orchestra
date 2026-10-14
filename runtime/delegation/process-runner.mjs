@@ -102,7 +102,7 @@ export async function runBoundedProcess({
     try {
       child = spawn(command, args, {
         cwd,
-        env: env === undefined ? process.env : { ...process.env, ...env },
+        env: env === undefined ? process.env : env,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
         detached: !IS_WINDOWS,
