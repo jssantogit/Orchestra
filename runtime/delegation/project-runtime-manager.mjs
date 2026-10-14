@@ -17,6 +17,42 @@ export async function inspectDelegationProjectRuntime({ targetDir, builtRuntime 
   return inspectProjectRuntime({ targetDir, builtRuntime, runtimeManifest: await manifest() });
 }
 
+export async function doctorDelegationProjectRuntime({ targetDir, builtRuntime }) {
+  const inspection = await inspectDelegationProjectRuntime({ targetDir, builtRuntime });
+  const checks = [
+    {
+      id: "DELEGATION_RUNTIME_INSTALLED",
+      ok: inspection.installed,
+      detail: inspection.installed ? "delegation runtime is installed" : "delegation runtime is not installed",
+    },
+    {
+      id: "DELEGATION_RUNTIME_METADATA",
+      ok: inspection.managed && inspection.metadata?.schema === "orchestra.project-runtime.v2",
+      detail: inspection.metadata?.schema || "missing .orchestra/state/runtimes/delegation.json",
+    },
+    {
+      id: "DELEGATION_RUNTIME_INTEGRITY",
+      ok: inspection.diff.clean,
+      detail: inspection.diff.clean ? "installed delegation runtime matches built payload" : "delegation runtime drift detected",
+    },
+    {
+      id: "DELEGATION_RUNTIME_METADATA_CURRENT",
+      ok: inspection.metadataCurrent,
+      detail: inspection.metadataCurrent ? "delegation runtime metadata matches current manifest and payload" : "delegation runtime metadata is stale or inconsistent",
+    },
+  ];
+  const healthy = checks.every((check) => check.ok);
+  return {
+    healthy,
+    status: healthy ? "HEALTHY" : "UNHEALTHY",
+    targetDir,
+    runtime: "DELEGATION",
+    metadata: inspection.metadata,
+    inspection,
+    checks,
+  };
+}
+
 export async function installDelegationProjectRuntime({
   targetDir,
   builtRuntime,
