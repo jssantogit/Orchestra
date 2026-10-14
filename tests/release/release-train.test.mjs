@@ -169,7 +169,7 @@ test("publish guard accepts only a successful exact-main release PR association"
   }).ok, false);
 });
 
-test("prepare workflow requires an operator bump and opens a release PR without publishing", () => {
+test("prepare workflow requires an operator bump, full preflight, and clean PR-creation failure", () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const workflow = readFileSync(join(root, ".github/workflows/prepare-release.yml"), "utf8");
   assert.match(workflow, /workflow_dispatch:/);
@@ -178,9 +178,13 @@ test("prepare workflow requires an operator bump and opens a release PR without 
   assert.match(workflow, /pull-requests:\s*write/);
   assert.match(workflow, /scripts\/release\/prepare-release\.mjs/);
   assert.match(workflow, /npm run build:runtimes/);
+  assert.match(workflow, /npm test/);
+  assert.match(workflow, /npm run doctor/);
+  assert.match(workflow, /npm run check:contamination/);
   assert.match(workflow, /npm run release:readiness/);
   assert.match(workflow, /release\/\$\{TAG\}/);
   assert.match(workflow, /gh pr create/);
+  assert.match(workflow, /if ! gh pr create[\s\S]*git push origin --delete/);
   assert.match(workflow, /Create a merge commit/);
   assert.doesNotMatch(workflow, /gh release create/);
 });
