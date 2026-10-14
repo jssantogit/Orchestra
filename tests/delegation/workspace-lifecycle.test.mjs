@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -183,26 +184,30 @@ test("source revision and fingerprint must match before any worktree is created"
   assert.deepEqual(readdirSync(baseDir), []);
 });
 
-test("tracked and untracked source dirtiness fail closed", async (t) => {
-  const trackedRoot = createRepo();
-  const trackedBase = mkdtempSync(join(tmpdir(), "orchestra-delegation-root-"));
-  const trackedRequest = requestFor(trackedRoot);
-  writeFileSync(join(trackedRoot, "tracked.txt"), "dirty\n");
+test("dirty candidate snapshot preserves HEAD, staged state, working-tree state, and untracked files", async (t) => {
+  const repoRoot = createRepo();
+  const baseDir = mkdtempSync(join(tmpdir(), "orchestra-delegation-root-"));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  t.after(() => rmSync(baseDir, { recursive: true, force: true }));
 
-  const untrackedRoot = createRepo();
-  const untrackedBase = mkdtempSync(join(tmpdir(), "orchestra-delegation-root-"));
-  const untrackedRequest = requestFor(untrackedRoot);
-  writeFileSync(join(untrackedRoot, "untracked.txt"), "dirty\n");
+  writeFileSync(join(repoRoot, "tracked.txt"), "staged\n");
+  git(repoRoot, "add", "tracked.txt");
+  writeFileSync(join(repoRoot, "tracked.txt"), "working\n");
+  writeFileSync(join(repoRoot, "untracked.txt"), "untracked\n");
+  const request = requestFor(repoRoot);
 
-  t.after(() => rmSync(trackedRoot, { recursive: true, force: true }));
-  t.after(() => rmSync(untrackedRoot, { recursive: true, force: true }));
-  t.after(() => rmSync(trackedBase, { recursive: true, force: true }));
-  t.after(() => rmSync(untrackedBase, { recursive: true, force: true }));
+  const context = await prepareDelegationWorkspace({ repoRoot, request, baseDir });
+  t.after(async () => { await cleanupDelegationWorkspace(context); });
 
-  await expectPrepFailure({ repoRoot: trackedRoot, request: trackedRequest, baseDir: trackedBase }, "SOURCE_WORKSPACE_DIRTY");
-  await expectPrepFailure({ repoRoot: untrackedRoot, request: untrackedRequest, baseDir: untrackedBase }, "SOURCE_WORKSPACE_DIRTY");
-  assert.deepEqual(readdirSync(trackedBase), []);
-  assert.deepEqual(readdirSync(untrackedBase), []);
+  assert.equal(git(context.path, "rev-parse", "HEAD"), request.workspace.sourceRevision);
+  assert.equal(readFileSync(join(context.path, "tracked.txt"), "utf8"), "working\n");
+  assert.equal(readFileSync(join(context.path, "untracked.txt"), "utf8"), "untracked\n");
+  assert.equal(git(context.path, "diff", "--cached", "--name-only"), "tracked.txt");
+  assert.equal(git(context.path, "diff", "--name-only"), "tracked.txt");
+  assert.equal(readWorkspaceFingerprint(context.path, {
+    excludedPaths: [".orchestra/state/**"],
+  }).fingerprint, request.workspace.sourceFingerprint);
+  assert.equal(context.initialFingerprint, request.workspace.sourceFingerprint);
 });
 
 test("governance state excluded from the product fingerprint does not make a clean source dirty", async (t) => {
