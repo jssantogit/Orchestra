@@ -7,6 +7,29 @@ export function parseStableVersion(version) {
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
 }
 
+function compareVersions(left, right) {
+  for (const key of ["major", "minor", "patch"]) {
+    if (left[key] !== right[key]) return left[key] - right[key];
+  }
+  return 0;
+}
+
+export function selectLatestStableTag(tags = []) {
+  const stable = [];
+  for (const tag of tags) {
+    const match = /^v(.+)$/.exec(String(tag || "").trim());
+    if (!match) continue;
+    try {
+      stable.push({ tag: `v${match[1]}`, version: parseStableVersion(match[1]) });
+    } catch {
+      // Ignore prerelease, malformed, and unrelated tags.
+    }
+  }
+  stable.sort((a, b) => compareVersions(b.version, a.version));
+  if (!stable.length) throw new Error("No stable release tag (vX.Y.Z) is reachable from HEAD");
+  return stable[0].tag;
+}
+
 export function bumpVersion(version, bump) {
   if (!VALID_BUMPS.has(bump)) throw new Error("Release bump must be patch, minor, or major");
   const current = parseStableVersion(version);
