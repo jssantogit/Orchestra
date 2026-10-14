@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -40,11 +46,19 @@ for (const [runtime, layout] of Object.entries(PROVIDERS)) {
       const runtimeManifest = await loadRuntimeManifest(runtime);
       await installProjectRuntime({ targetDir: target, runtimeManifest, builtRuntime });
 
+      const providerRoot = join(target, layout.provider);
+      const providerManifest = JSON.parse(readFileSync(join(providerRoot, "runtime-provider-manifest.json"), "utf8"));
+      const providerModuleUrls = providerManifest.files
+        .map((entry) => entry.path)
+        .filter((path) => path.endsWith(".mjs"))
+        .map((path) => pathToFileURL(join(providerRoot, path)).href);
+
       const runner = join(target, "self-contained-smoke.mjs");
       const validatorUrl = pathToFileURL(join(target, layout.core, "schema", "validator.mjs")).href;
       const catalogUrl = pathToFileURL(join(target, layout.provider, "model-catalog.mjs")).href;
       const adapterUrl = pathToFileURL(join(target, layout.provider, "adapter", "session.mjs")).href;
       writeFileSync(runner, [
+        `for (const url of ${JSON.stringify(providerModuleUrls)}) await import(url);`,
         `const validator = await import(${JSON.stringify(validatorUrl)});`,
         `const catalog = await import(${JSON.stringify(catalogUrl)});`,
         `const adapter = await import(${JSON.stringify(adapterUrl)});`,
