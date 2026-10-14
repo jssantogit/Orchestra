@@ -207,10 +207,11 @@ export async function inspectDelegationWorkspace(context) {
   if (!attribution(context)) throw prepFailure("WORKSPACE_CONTEXT_INVALID");
   const identity = readProductFingerprint(context.path);
   if (!identity.available) throw prepFailure("WORKSPACE_INSPECTION_FAILED");
+  const changed = identity.fingerprint !== context.initialFingerprint;
   return {
     finalFingerprint: identity.fingerprint,
-    dirty: identity.dirtyFileCount > 0,
-    dirtyFileCount: identity.dirtyFileCount,
+    dirty: changed,
+    dirtyFileCount: changed ? identity.dirtyFileCount : 0,
   };
 }
 
