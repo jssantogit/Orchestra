@@ -19,7 +19,7 @@
     },
     {
       "path": "delegation/worker-envelope.mjs",
-      "sha256": "77a660969aee1219253c3b6fd8da427e20d0f299e7cad8a602070562de571044"
+      "sha256": "638d32fb2410b5af037c4d1661a67b561a332db5eb00ee6cba7a0e5c0c263f8a"
     },
     {
       "path": "domain/audit-result.mjs",
@@ -151,7 +151,7 @@
     },
     {
       "path": "schema/generated/scope-contract.v2.mjs",
-      "sha256": "275e2896f238ef3bed6749952bc3968edc8669b438468a441d0bf68383f2f32a"
+      "sha256": "275e2896f238ef3bed6749952bc3968edc86684c0e2b761f2e0eb769f81a28d0ffb"
     },
     {
       "path": "schema/generated/work-lease.v1.mjs",
