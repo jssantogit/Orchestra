@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
@@ -52,6 +52,24 @@ function readProductFingerprint(repoRoot) {
   return readWorkspaceFingerprint(repoRoot, {
     excludedPaths: PRODUCT_FINGERPRINT_EXCLUDES,
   });
+}
+
+async function readCanonicalGitFingerprint(repoRoot) {
+  try {
+    const [refs, config] = await Promise.all([
+      gitStdout(repoRoot, ["show-ref", "--head"]),
+      gitStdout(repoRoot, ["config", "--local", "--null", "--list"]),
+    ]);
+    const fingerprint = createHash("sha256")
+      .update("orchestra.delegation.git-boundary.v1\0")
+      .update(refs)
+      .update("\0config\0")
+      .update(config)
+      .digest("hex");
+    return { available: true, fingerprint };
+  } catch {
+    return { available: false, fingerprint: null };
+  }
 }
 
 function productPathspecs() {
@@ -185,16 +203,24 @@ export async function prepareDelegationWorkspace({ repoRoot, request, baseDir = 
         || initial.fingerprint !== source.fingerprint) {
       throw prepFailure("WORKSPACE_IDENTITY_MISMATCH");
     }
+    const canonicalGit = await readCanonicalGitFingerprint(root);
+    if (!canonicalGit.available) throw prepFailure("SOURCE_GIT_UNAVAILABLE");
 
     const cleanupToken = randomBytes(32).toString("hex");
-    const record = Object.freeze({ repoRoot: root, path: resolve(allocated.path) });
+    const record = Object.freeze({
+      repoRoot: root,
+      path: resolve(allocated.path),
+      initialFingerprint: initial.fingerprint,
+      sourceFingerprint: source.fingerprint,
+      canonicalGitFingerprint: canonicalGit.fingerprint,
+    });
     activeWorktrees.set(cleanupToken, record);
 
     return {
       repoRoot: root,
       path: record.path,
       sourceRevision: request.workspace.sourceRevision,
-      initialFingerprint: initial.fingerprint,
+      initialFingerprint: record.initialFingerprint,
       cleanupToken,
     };
   } catch (error) {
@@ -205,14 +231,33 @@ export async function prepareDelegationWorkspace({ repoRoot, request, baseDir = 
 }
 
 export async function inspectDelegationWorkspace(context) {
-  if (!attribution(context)) throw prepFailure("WORKSPACE_CONTEXT_INVALID");
-  const identity = readProductFingerprint(context.path);
-  if (!identity.available) throw prepFailure("WORKSPACE_INSPECTION_FAILED");
-  const changed = identity.fingerprint !== context.initialFingerprint;
+  const expected = attribution(context);
+  if (!expected) throw prepFailure("WORKSPACE_CONTEXT_INVALID");
+
+  const [identity, canonicalSource, canonicalGit] = await Promise.all([
+    Promise.resolve(readProductFingerprint(expected.path)),
+    Promise.resolve(readProductFingerprint(expected.repoRoot)),
+    readCanonicalGitFingerprint(expected.repoRoot),
+  ]);
+  if (!identity.available || !canonicalSource.available || !canonicalGit.available) {
+    throw prepFailure("WORKSPACE_INSPECTION_FAILED");
+  }
+
+  const workspaceChanged = identity.fingerprint !== expected.initialFingerprint;
+  const canonicalWorkspaceChanged = canonicalSource.fingerprint !== expected.sourceFingerprint;
+  const canonicalGitChanged = canonicalGit.fingerprint !== expected.canonicalGitFingerprint;
+  const changed = workspaceChanged || canonicalWorkspaceChanged || canonicalGitChanged;
+  const dirtyFileCount = Math.max(
+    workspaceChanged ? identity.dirtyFileCount : 0,
+    canonicalWorkspaceChanged ? canonicalSource.dirtyFileCount : 0,
+  );
+
   return {
     finalFingerprint: identity.fingerprint,
     dirty: changed,
-    dirtyFileCount: changed ? identity.dirtyFileCount : 0,
+    dirtyFileCount,
+    canonicalWorkspaceChanged,
+    canonicalGitChanged,
   };
 }
 
