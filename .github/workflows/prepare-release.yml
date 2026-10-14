@@ -1,0 +1,143 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semantic-version bump to prepare"
+        required: true
+        type: choice
+        options:
+          - select
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: orchestra-prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release pull request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require an explicit bump choice
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          if [ "$BUMP" = "select" ]; then
+            echo "Choose patch, minor, or major before preparing a release." >&2
+            exit 2
+          fi
+
+      - name: Check out main with release history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify current main release metadata
+        run: npm run release:readiness
+
+      - name: Prepare release metadata and notes
+        id: prepare
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: node scripts/release/prepare-release.mjs --bump="$BUMP"
+
+      - name: Regenerate and verify deterministic runtime artifacts
+        run: |
+          npm run build:runtimes
+          npm run check:runtimes
+          npm run check:runtime-core
+          npm run release:readiness
+          node --test tests/release/*.test.mjs
+          git diff --check
+
+      - name: Refuse duplicate release refs
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          BRANCH="release/${TAG}"
+          if git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists." >&2
+            exit 3
+          fi
+          if git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1; then
+            echo "Branch ${BRANCH} already exists." >&2
+            exit 4
+          fi
+
+      - name: Commit and push release branch
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          BRANCH="release/${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add --all
+          git commit -m "chore(release): prepare ${TAG}"
+          git push origin "HEAD:${BRANCH}"
+
+      - name: Open operator release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+          BASE_TAG: ${{ steps.prepare.outputs.base_tag }}
+          REQUESTED_BUMP: ${{ steps.prepare.outputs.requested_bump }}
+          SUGGESTED_BUMP: ${{ steps.prepare.outputs.suggested_bump }}
+        run: |
+          BRANCH="release/${TAG}"
+          cat > "$RUNNER_TEMP/release-pr.md" <<EOF_PR
+          ## Orchestra Release Train
+
+          - Base: \`${BASE_TAG}\`
+          - Target: \`${TAG}\`
+          - Requested bump: \`${REQUESTED_BUMP}\`
+          - Suggested bump from conventional commits: \`${SUGGESTED_BUMP}\`
+
+          Review the generated release notes and the complete diff. **Merging this PR is the operator authorization to publish ${TAG}.**
+
+          After this PR is merged into \`main\`, publication remains blocked until the canonical **CI** workflow succeeds on the exact resulting \`main\` SHA. The publisher then creates the annotated tag and GitHub Release automatically.
+
+          Do not use a rebase merge for release PRs; use merge or squash so the exact authorized merge SHA remains attributable to this PR.
+          EOF_PR
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore(release): Orchestra ${TAG}" \
+            --body-file "$RUNNER_TEMP/release-pr.md"
+
+      - name: Write release summary
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+          BASE_TAG: ${{ steps.prepare.outputs.base_tag }}
+          REQUESTED_BUMP: ${{ steps.prepare.outputs.requested_bump }}
+          SUGGESTED_BUMP: ${{ steps.prepare.outputs.suggested_bump }}
+        run: |
+          {
+            echo "## Release PR prepared"
+            echo
+            echo "- Base: \`${BASE_TAG}\`"
+            echo "- Target: \`${TAG}\`"
+            echo "- Requested bump: \`${REQUESTED_BUMP}\`"
+            echo "- Suggested bump: \`${SUGGESTED_BUMP}\`"
+            if [ "$REQUESTED_BUMP" != "$SUGGESTED_BUMP" ] && [ "$SUGGESTED_BUMP" != "none" ]; then
+              echo "- ⚠️ Requested bump differs from the conventional-commit suggestion; review before merging."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
