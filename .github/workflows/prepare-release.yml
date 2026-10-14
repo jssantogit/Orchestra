@@ -63,6 +63,7 @@ jobs:
         run: node scripts/release/prepare-release.mjs --bump="$BUMP"
 
       - name: Create local release candidate
+        id: candidate
         env:
           TAG: ${{ steps.prepare.outputs.tag }}
         run: |
@@ -72,6 +73,7 @@ jobs:
           git switch -c "$BRANCH"
           git add --all
           git commit -m "chore(release): prepare ${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Run full prepared-release preflight
         run: |
@@ -85,10 +87,22 @@ jobs:
           git diff --check
 
       - name: Require clean validated candidate
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
         run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "Prepared-release preflight mutated the local candidate; refusing to push an unvalidated tree." >&2
+          if ! git diff --quiet HEAD -- . || ! git diff --cached --quiet; then
+            echo "Prepared-release preflight mutated tracked candidate content; refusing to publish it." >&2
             git status --short >&2
+            exit 6
+          fi
+          rm -rf dist
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Prepared-release preflight left unexpected files after removing disposable dist output; refusing to push." >&2
+            git status --short >&2
+            exit 6
+          fi
+          if [ "$(git rev-parse HEAD)" != "$CANDIDATE_SHA" ]; then
+            echo "Prepared-release candidate HEAD changed during preflight; refusing to push." >&2
             exit 6
           fi
 
