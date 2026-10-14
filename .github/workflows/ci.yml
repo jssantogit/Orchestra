@@ -26,20 +26,11 @@ jobs:
       - name: Build and verify generated artifacts
         run: |
           npm run build:schemas
-          npm run sync:runtime-core
           npm run build:runtimes
           npm run check:schemas
           npm run check:runtimes
           npm run check:runtime-core
           git diff --check
-
-      - name: Export generated runtime-core manifests
-        uses: actions/upload-artifact@v4
-        with:
-          name: runtime-core-manifests
-          path: |
-            runtimes/codex/.codex/astra-orchestra/core/runtime-core-manifest.json
-            runtimes/antigravity/.agents/skills/orchestra/core/runtime-core-manifest.json
 
       - name: Run full regression
         run: npm test
