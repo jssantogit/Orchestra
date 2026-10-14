@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
 import {
   cleanupDelegationWorkspace,
+  inspectDelegationWorkspace,
   prepareDelegationWorkspace,
 } from "../../runtime/delegation/workspace.mjs";
 
@@ -92,7 +93,7 @@ function requestFor(repoRoot) {
   };
 }
 
-test("dirty tracked and untracked candidate is materialized exactly in the delegated worktree", async (t) => {
+test("dirty tracked and untracked candidate is materialized exactly and only worker changes count as delegation dirtiness", async (t) => {
   const repoRoot = createRepo();
   const baseDir = mkdtempSync(join(tmpdir(), "orchestra-dirty-delegation-root-"));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
@@ -109,6 +110,18 @@ test("dirty tracked and untracked candidate is materialized exactly in the deleg
   assert.equal(context.initialFingerprint, request.workspace.sourceFingerprint);
   assert.equal(readFileSync(join(context.path, "tracked.txt"), "utf8"), "candidate\n");
   assert.equal(readFileSync(join(context.path, "new-file.txt"), "utf8"), "new candidate file\n");
+
+  const unchanged = await inspectDelegationWorkspace(context);
+  assert.equal(unchanged.finalFingerprint, context.initialFingerprint);
+  assert.equal(unchanged.dirty, false);
+  assert.equal(unchanged.dirtyFileCount, 0);
+
+  writeFileSync(join(context.path, "worker-output.txt"), "worker mutation\n");
+  const changed = await inspectDelegationWorkspace(context);
+  assert.equal(changed.dirty, true);
+  assert.equal(changed.dirtyFileCount > 0, true);
+  assert.notEqual(changed.finalFingerprint, context.initialFingerprint);
+
   assert.equal(git(repoRoot, "status", "--porcelain=v1"), sourceStatusBefore);
   assert.equal(readFileSync(join(repoRoot, "tracked.txt"), "utf8"), "candidate\n");
   assert.equal(existsSync(join(repoRoot, "new-file.txt")), true);
