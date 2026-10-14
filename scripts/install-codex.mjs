@@ -23,6 +23,13 @@ if (!existsSync(targetDir)) {
   process.exit(1);
 }
 
+function installConflict(paths = []) {
+  const error = new Error(`RUNTIME_INSTALL_CONFLICT: ${paths.join(", ") || "codex runtime already installed"}`);
+  error.code = "RUNTIME_INSTALL_CONFLICT";
+  error.paths = paths;
+  return error;
+}
+
 let buildRoot;
 try {
   console.log(`Installing Orchestra Codex runtime into '${targetDir}'...`);
@@ -34,7 +41,11 @@ try {
 
   const inspection = await inspectCodexProjectRuntime({ targetDir, builtRuntime });
   if (inspection.installed) {
-    await installCodexProjectRuntime({ targetDir, builtRuntime });
+    throw installConflict([
+      ...inspection.diff.removed,
+      ...inspection.diff.changed,
+      ...inspection.diff.unchanged,
+    ]);
   }
 
   const delegationResult = await ensureDelegationProjectRuntime({

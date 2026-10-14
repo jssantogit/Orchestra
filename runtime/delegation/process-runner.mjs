@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const MAX_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_CAPTURE_BYTES = 16 * 1024 * 1024;
+const IS_WINDOWS = process.platform === "win32";
 
 function fail(code, cause = undefined) {
   const error = new Error(code);
@@ -48,6 +49,36 @@ function capture(maxOutputBytes) {
   };
 }
 
+function killProcessTree(child) {
+  const pid = child?.pid;
+  if (!Number.isInteger(pid) || pid <= 0) return;
+
+  if (IS_WINDOWS) {
+    try {
+      const result = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      if (result.status === 0) return;
+    } catch {
+      // Fall through to the direct child kill below.
+    }
+  } else {
+    try {
+      process.kill(-pid, "SIGKILL");
+      return;
+    } catch {
+      // Fall through to the direct child kill below.
+    }
+  }
+
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // The close/error path remains authoritative.
+  }
+}
+
 export async function runBoundedProcess({
   command,
   args = [],
@@ -71,9 +102,10 @@ export async function runBoundedProcess({
     try {
       child = spawn(command, args, {
         cwd,
-        env: env === undefined ? process.env : { ...process.env, ...env },
+        env: env === undefined ? process.env : env,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        detached: !IS_WINDOWS,
       });
     } catch (cause) {
       const error = new Error("PROCESS_SPAWN_FAILED");
@@ -87,11 +119,7 @@ export async function runBoundedProcess({
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // The close/error path below remains authoritative.
-      }
+      killProcessTree(child);
     }, timeoutMs);
     timer.unref?.();
 

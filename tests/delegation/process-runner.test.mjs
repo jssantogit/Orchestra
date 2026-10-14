@@ -96,6 +96,36 @@ test("timeout kills the child and it cannot later complete healthy work", async 
   assert.equal(existsSync(heartbeat), false, existsSync(heartbeat) ? readFileSync(heartbeat, "utf8") : "");
 });
 
+test("timeout kills descendant processes instead of waiting for their inherited pipes", async (t) => {
+  const root = tempRoot(t);
+  const heartbeat = join(root, "grandchild-heartbeat.txt");
+  const grandchild = [
+    "const fs=require('fs');",
+    "const p=process.argv[1];",
+    "setTimeout(() => fs.writeFileSync(p, 'orphaned'), 300);",
+    "setTimeout(() => process.exit(0), 360);",
+  ].join(" ");
+  const parent = [
+    "const {spawn}=require('child_process');",
+    `spawn(process.execPath, ['-e', ${JSON.stringify(grandchild)}, process.argv[1]], {stdio:'inherit'});`,
+    "setInterval(() => {}, 1000);",
+  ].join(" ");
+
+  const started = Date.now();
+  const result = await runBoundedProcess({
+    command: process.execPath,
+    args: ["-e", parent, heartbeat],
+    timeoutMs: 50,
+    maxOutputBytes: 1024,
+  });
+  const elapsed = Date.now() - started;
+
+  assert.equal(result.timedOut, true);
+  assert.equal(elapsed < 250, true, `process tree took ${elapsed}ms to terminate`);
+  await new Promise((resolve) => setTimeout(resolve, 380));
+  assert.equal(existsSync(heartbeat), false, existsSync(heartbeat) ? readFileSync(heartbeat, "utf8") : "");
+});
+
 test("invalid limits and spawn failures fail closed", async () => {
   await assert.rejects(
     () => runBoundedProcess({ command: process.execPath, timeoutMs: 0, maxOutputBytes: 10 }),

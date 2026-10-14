@@ -127,7 +127,7 @@ test("authority binds source provider and workspace fingerprint without transfer
   );
 });
 
-test("Worker Envelope exposes bounded work facts but omits CONTROL, lease, source identity, and canonical workspace internals", () => {
+test("Worker Envelope exposes bounded work facts while withholding CONTROL authority and preserving internal prohibitions", () => {
   const envelope = buildWorkerEnvelope(validRequest());
 
   assert.deepEqual(Object.keys(envelope), [
@@ -156,6 +156,8 @@ test("Worker Envelope exposes bounded work facts but omits CONTROL, lease, sourc
     maxOutputBytes: 65536,
   });
   assert.equal(envelope.outputContract.schema, WORKER_REPORT_SCHEMA.$id);
+  assert.ok(envelope.scope.forbidden.includes(".orchestra/state/**"));
+  assert.ok(envelope.scope.forbidden.includes(".git/**"));
 
   const serialized = JSON.stringify(envelope);
   for (const forbidden of [
@@ -166,7 +168,6 @@ test("Worker Envelope exposes bounded work facts but omits CONTROL, lease, sourc
     "mayDelegate",
     "delegationDepth",
     "Work Lease",
-    ".orchestra/state",
     "transcript",
     "conversationHistory",
   ]) {

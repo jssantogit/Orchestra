@@ -27,6 +27,7 @@ const CORE_MANIFEST_FILE = "runtime-core-manifest.json";
 const CORE_MANIFEST_SCHEMA = "orchestra.runtime-core-manifest.v1";
 const PROVIDER_MANIFEST_FILE = "runtime-provider-manifest.json";
 const PROVIDER_MANIFEST_SCHEMA = "orchestra.runtime-provider-manifest.v1";
+const PROVIDER_MIRROR_EXCLUDES = new Set(["delegation-executor.mjs"]);
 
 function posix(path) {
   return path.split(sep).join("/");
@@ -92,6 +93,7 @@ async function canonicalProviderPayload(repoRoot, config) {
   const payload = new Map();
   for (const absolute of await walkFiles(absoluteRoot)) {
     const rel = posix(relative(absoluteRoot, absolute));
+    if (PROVIDER_MIRROR_EXCLUDES.has(rel)) continue;
     payload.set(rel, await readFile(absolute));
   }
   return appendManifest(payload, {

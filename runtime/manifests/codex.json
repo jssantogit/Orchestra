@@ -15,7 +15,12 @@
     },
     { "type": "tree", "source": "core", "output": ".codex/astra-orchestra/core" },
     { "type": "tree", "source": "schemas", "output": ".codex/astra-orchestra/core/schemas" },
-    { "type": "tree", "source": "providers/codex", "output": ".codex/astra-orchestra/provider/codex" },
+    {
+      "type": "tree",
+      "source": "providers/codex",
+      "output": ".codex/astra-orchestra/provider/codex",
+      "exclude": ["delegation-executor.mjs"]
+    },
     { "type": "file", "source": "runtime/project-runtime-manager.mjs", "output": ".codex/astra-orchestra/runtime/project-runtime-manager.mjs" },
     { "type": "file", "source": "runtime/project-state-ignore.mjs", "output": ".codex/astra-orchestra/runtime/project-state-ignore.mjs" },
     { "type": "file", "source": "runtime/manifest-loader.mjs", "output": ".codex/astra-orchestra/runtime/manifest-loader.mjs" },

@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { buildRuntime } from "../runtime/runtime-builder.mjs";
-import { ensureDelegationProjectRuntime } from "../runtime/delegation/project-runtime-manager.mjs";
+import {
+  doctorDelegationProjectRuntime,
+  ensureDelegationProjectRuntime,
+} from "../runtime/delegation/project-runtime-manager.mjs";
 import {
   doctorCodexProjectRuntime,
   inspectCodexProjectRuntime,
@@ -68,6 +71,19 @@ function composedRuntimeResult(providerRuntime, providerResult, delegationResult
   };
 }
 
+function composedDoctorResult(providerResult, delegationResult) {
+  const checks = [...providerResult.checks, ...delegationResult.checks];
+  const healthy = providerResult.healthy && delegationResult.healthy;
+  return {
+    ...providerResult,
+    healthy,
+    status: healthy ? "HEALTHY" : "UNHEALTHY",
+    checks,
+    providerRuntime: providerResult.inspection,
+    delegationRuntime: delegationResult.inspection,
+  };
+}
+
 async function installCodexWithDelegation({ targetDir, dryRun }) {
   return withBuiltCodexAndDelegationRuntimes(async ({ providerBuiltRuntime, delegationBuiltRuntime }) => {
     const providerInspection = await inspectCodexProjectRuntime({ targetDir, builtRuntime: providerBuiltRuntime });
@@ -106,6 +122,14 @@ async function updateCodexWithDelegation({ targetDir, dryRun, force }) {
       force,
     });
     return composedRuntimeResult("codex", providerResult, delegationResult);
+  });
+}
+
+async function doctorCodexWithDelegation({ targetDir }) {
+  return withBuiltCodexAndDelegationRuntimes(async ({ providerBuiltRuntime, delegationBuiltRuntime }) => {
+    const providerResult = await doctorCodexProjectRuntime({ targetDir, builtRuntime: providerBuiltRuntime });
+    const delegationResult = await doctorDelegationProjectRuntime({ targetDir, builtRuntime: delegationBuiltRuntime });
+    return composedDoctorResult(providerResult, delegationResult);
   });
 }
 
@@ -160,7 +184,7 @@ async function run(args) {
       result = await updateCodexWithDelegation({ targetDir, dryRun, force });
       break;
     case "doctor":
-      result = await withBuiltCodexRuntime((builtRuntime) => doctorCodexProjectRuntime({ targetDir, builtRuntime }));
+      result = await doctorCodexWithDelegation({ targetDir });
       break;
     case "version":
       result = await withBuiltCodexRuntime(async (builtRuntime) => {

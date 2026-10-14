@@ -183,7 +183,7 @@ test("source revision and fingerprint must match before any worktree is created"
   assert.deepEqual(readdirSync(baseDir), []);
 });
 
-test("tracked and untracked source dirtiness fail closed", async (t) => {
+test("tracked and untracked source changes after request snapshot fail closed", async (t) => {
   const trackedRoot = createRepo();
   const trackedBase = mkdtempSync(join(tmpdir(), "orchestra-delegation-root-"));
   const trackedRequest = requestFor(trackedRoot);

@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -25,6 +31,18 @@ function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function listInstalledModules(root, current = root) {
+  const modules = [];
+  const entries = readdirSync(current, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    const absolute = join(current, entry.name);
+    if (entry.isDirectory()) modules.push(...listInstalledModules(root, absolute));
+    else if (entry.isFile() && entry.name.endsWith(".mjs")) modules.push(pathToFileURL(absolute).href);
+  }
+  return modules.sort();
+}
+
 for (const [runtime, layout] of Object.entries(PROVIDERS)) {
   test(`${runtime} installed runtime is self-contained`, async () => {
     const root = mkdtempSync(join(tmpdir(), `orchestra-self-contained-${runtime}-`));
@@ -40,11 +58,17 @@ for (const [runtime, layout] of Object.entries(PROVIDERS)) {
       const runtimeManifest = await loadRuntimeManifest(runtime);
       await installProjectRuntime({ targetDir: target, runtimeManifest, builtRuntime });
 
+      const providerRoot = join(target, layout.provider);
+      const providerModuleUrls = listInstalledModules(providerRoot);
+      assert.equal(providerModuleUrls.length > 0, true);
+      assert.equal(existsSync(join(providerRoot, "delegation-executor.mjs")), false);
+
       const runner = join(target, "self-contained-smoke.mjs");
       const validatorUrl = pathToFileURL(join(target, layout.core, "schema", "validator.mjs")).href;
       const catalogUrl = pathToFileURL(join(target, layout.provider, "model-catalog.mjs")).href;
       const adapterUrl = pathToFileURL(join(target, layout.provider, "adapter", "session.mjs")).href;
       writeFileSync(runner, [
+        `for (const url of ${JSON.stringify(providerModuleUrls)}) await import(url);`,
         `const validator = await import(${JSON.stringify(validatorUrl)});`,
         `const catalog = await import(${JSON.stringify(catalogUrl)});`,
         `const adapter = await import(${JSON.stringify(adapterUrl)});`,

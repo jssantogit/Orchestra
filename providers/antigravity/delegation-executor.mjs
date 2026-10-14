@@ -1,10 +1,19 @@
 import { WORKER_REPORT_SCHEMA } from "../../core/delegation/policy.mjs";
+import { buildDelegationProcessEnvironment } from "../../runtime/delegation/process-environment.mjs";
 import { runBoundedProcess } from "../../runtime/delegation/process-runner.mjs";
 import { resolveModelProfile } from "./model-catalog.mjs";
 
 const PROVIDER = "antigravity";
 const DISCOVERY_TIMEOUT_MS = 5000;
 const DISCOVERY_MAX_OUTPUT_BYTES = 64 * 1024;
+const PROVIDER_ENV_KEYS = Object.freeze([
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_GENAI_USE_VERTEXAI",
+]);
 const REQUIRED_HELP_FLAGS = Object.freeze([
   "--print",
   "--print-timeout",
@@ -12,6 +21,10 @@ const REQUIRED_HELP_FLAGS = Object.freeze([
   "--model",
 ]);
 const REPORT_KEYS = new Set(Object.keys(WORKER_REPORT_SCHEMA.properties));
+
+function processEnvironment() {
+  return buildDelegationProcessEnvironment({ providerKeys: PROVIDER_ENV_KEYS });
+}
 
 function unavailable() {
   return { available: false, provider: PROVIDER, reason: "PROVIDER_UNAVAILABLE" };
@@ -113,11 +126,13 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
 
     async discover() {
       try {
+        const env = processEnvironment();
         const versionResult = await runProcess({
           command: "agy",
           args: ["--version"],
           timeoutMs: DISCOVERY_TIMEOUT_MS,
           maxOutputBytes: DISCOVERY_MAX_OUTPUT_BYTES,
+          env,
         });
         if (versionResult.timedOut
             || versionResult.exitCode !== 0
@@ -128,6 +143,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
           args: ["--help"],
           timeoutMs: DISCOVERY_TIMEOUT_MS,
           maxOutputBytes: DISCOVERY_MAX_OUTPUT_BYTES,
+          env,
         });
         if (helpResult.timedOut
             || helpResult.exitCode !== 0
@@ -183,6 +199,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
           cwd: workspace.path,
           timeoutMs: request.limits.timeoutMs,
           maxOutputBytes: request.limits.maxOutputBytes,
+          env: processEnvironment(),
         });
       } catch (error) {
         if (error?.code === "PROCESS_SPAWN_FAILED") {

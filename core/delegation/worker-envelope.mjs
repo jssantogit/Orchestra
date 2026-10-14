@@ -1,9 +1,27 @@
 import { assertDelegationRequest } from "../domain/delegation.mjs";
 import { WORKER_REPORT_SCHEMA } from "./policy.mjs";
 
+const REQUIRED_FORBIDDEN_PATHS = Object.freeze([
+  ".orchestra/state/**",
+  ".git/**",
+]);
+
+function normalizeScopePath(value) {
+  if (typeof value !== "string") return value;
+  let normalized = value.replaceAll("\\", "/");
+  while (normalized.startsWith("./")) normalized = normalized.slice(2);
+  normalized = normalized.replace(/\/{2,}/g, "/");
+  return normalized;
+}
+
 function isCanonicalStatePath(value) {
-  return typeof value === "string"
-    && (value === ".orchestra/state" || value.startsWith(".orchestra/state/"));
+  const normalized = normalizeScopePath(value);
+  return typeof normalized === "string"
+    && (normalized === ".orchestra/state" || normalized.startsWith(".orchestra/state/"));
+}
+
+function normalizedUnique(values) {
+  return [...new Set(values.map(normalizeScopePath))];
 }
 
 function copyAnchor(anchor) {
@@ -14,6 +32,13 @@ export function buildWorkerEnvelope(request) {
   assertDelegationRequest(request);
 
   const packet = request.packet;
+  const allowedAreas = normalizedUnique(packet.scope.allowedAreas)
+    .filter((entry) => !isCanonicalStatePath(entry));
+  const forbidden = normalizedUnique([
+    ...packet.scope.forbidden,
+    ...REQUIRED_FORBIDDEN_PATHS,
+  ]);
+
   return {
     objective: packet.goal,
     logicalRole: request.target.logicalRole,
@@ -29,8 +54,8 @@ export function buildWorkerEnvelope(request) {
       tests: packet.permissions.tests,
     },
     scope: {
-      allowedAreas: packet.scope.allowedAreas.filter((entry) => !isCanonicalStatePath(entry)),
-      forbidden: packet.scope.forbidden.filter((entry) => !isCanonicalStatePath(entry)),
+      allowedAreas,
+      forbidden,
     },
     validation: [...packet.validation],
     capabilities: [...request.authority.capabilities],

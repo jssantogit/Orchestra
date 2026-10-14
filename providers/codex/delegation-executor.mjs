@@ -8,12 +8,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { WORKER_REPORT_SCHEMA } from "../../core/delegation/policy.mjs";
+import { buildDelegationProcessEnvironment } from "../../runtime/delegation/process-environment.mjs";
 import { runBoundedProcess } from "../../runtime/delegation/process-runner.mjs";
 import { resolveModelProfile } from "./model-catalog.mjs";
 
 const PROVIDER = "codex";
 const DISCOVERY_TIMEOUT_MS = 5000;
 const DISCOVERY_MAX_OUTPUT_BYTES = 64 * 1024;
+const PROVIDER_ENV_KEYS = Object.freeze([
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "OPENAI_ORG_ID",
+  "OPENAI_PROJECT_ID",
+  "CODEX_HOME",
+]);
 const REQUIRED_HELP_FLAGS = Object.freeze([
   "--model",
   "--sandbox",
@@ -22,6 +30,10 @@ const REQUIRED_HELP_FLAGS = Object.freeze([
   "--output-last-message",
 ]);
 const REPORT_KEYS = new Set(Object.keys(WORKER_REPORT_SCHEMA.properties));
+
+function processEnvironment() {
+  return buildDelegationProcessEnvironment({ providerKeys: PROVIDER_ENV_KEYS });
+}
 
 function unavailable() {
   return { available: false, provider: PROVIDER, reason: "PROVIDER_UNAVAILABLE" };
@@ -121,11 +133,13 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
 
     async discover() {
       try {
+        const env = processEnvironment();
         const versionResult = await runProcess({
           command: "codex",
           args: ["--version"],
           timeoutMs: DISCOVERY_TIMEOUT_MS,
           maxOutputBytes: DISCOVERY_MAX_OUTPUT_BYTES,
+          env,
         });
         if (versionResult.timedOut
             || versionResult.exitCode !== 0
@@ -136,6 +150,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
           args: ["exec", "--help"],
           timeoutMs: DISCOVERY_TIMEOUT_MS,
           maxOutputBytes: DISCOVERY_MAX_OUTPUT_BYTES,
+          env,
         });
         if (helpResult.timedOut
             || helpResult.exitCode !== 0
@@ -198,6 +213,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
           input: promptFor(workerEnvelope),
           timeoutMs: request.limits.timeoutMs,
           maxOutputBytes: request.limits.maxOutputBytes,
+          env: processEnvironment(),
         });
       } catch (error) {
         rmSync(scratch, { recursive: true, force: true });
