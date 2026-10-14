@@ -8,7 +8,7 @@ on:
 
 jobs:
   verify:
-    name: Orchestra 1.x RC Verification
+    name: Orchestra 1.x Verification
     runs-on: ubuntu-latest
 
     steps:
@@ -42,9 +42,9 @@ jobs:
           npm run check:contamination
           npm run test:firewall
 
-      - name: Verify release readiness
+      - name: Verify release readiness and Release Train contracts
         run: |
-          node --test tests/release/release-readiness.test.mjs
+          npm run test:release
           npm run release:readiness
 
       - name: Verify representative turn-economy scenarios
