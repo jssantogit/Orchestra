@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { inspectDelegationCapabilities } from "./delegation/discovery.mjs";
+import { listDelegationRecords } from "./delegation/store.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CANONICAL_RUNTIMES = Object.freeze(["core", "codex", "antigravity", "delegation"]);
@@ -42,6 +43,36 @@ function unavailableDelegationReport() {
     gitWorktree: { available: false },
     providers: [],
   };
+}
+
+function delegationRecovery(repoRoot) {
+  try {
+    const records = listDelegationRecords(repoRoot);
+    const cleanupFailures = records
+      .filter((record) => record.status === "CLEANUP_FAILED")
+      .map((record) => ({
+        delegationId: record.delegationId,
+        recoverablePath: record.workspace.recoverablePath,
+      }));
+    const inFlight = records
+      .filter((record) => record.status === "STARTED")
+      .map((record) => ({ delegationId: record.delegationId, startedAt: record.startedAt }));
+    return {
+      stateReadable: true,
+      required: cleanupFailures.length > 0,
+      cleanupFailures,
+      inFlight,
+      reason: cleanupFailures.length > 0 ? "WORKSPACE_CLEANUP_FAILED" : null,
+    };
+  } catch {
+    return {
+      stateReadable: false,
+      required: true,
+      cleanupFailures: [],
+      inFlight: [],
+      reason: "DELEGATION_STATE_UNREADABLE",
+    };
+  }
 }
 
 export async function runDoctor({
@@ -122,6 +153,10 @@ export async function runDoctor({
     } catch {
       delegation = unavailableDelegationReport();
     }
+    delegation = {
+      ...delegation,
+      recovery: delegationRecovery(root),
+    };
   }
 
   return {
@@ -144,6 +179,11 @@ async function main() {
       .map((provider) => `${provider.provider}=${provider.available ? "available" : "unavailable"}`)
       .join(", ");
     console.log(`INFO delegation:readiness — ${report.delegation.status}; gitWorktree=${report.delegation.gitWorktree.available ? "available" : "unavailable"}${providerSummary ? `; ${providerSummary}` : ""}`);
+    if (report.delegation.recovery?.required) {
+      const recovery = report.delegation.recovery;
+      const paths = recovery.cleanupFailures.map((entry) => entry.recoverablePath).filter(Boolean);
+      console.log(`INFO delegation:recovery — ${recovery.reason || "RECOVERY_REQUIRED"}${paths.length ? `; paths=${paths.join(",")}` : ""}`);
+    }
   }
   console.log(report.healthy ? "Orchestra Doctor: healthy" : "Orchestra Doctor: unhealthy");
   if (!report.healthy) process.exitCode = 1;
