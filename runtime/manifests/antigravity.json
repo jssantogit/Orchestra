@@ -17,7 +17,12 @@
     { "type": "tree", "source": "labs/dream/runtime", "output": ".agents/dream" },
     { "type": "tree", "source": "core", "output": ".agents/skills/orchestra/core" },
     { "type": "tree", "source": "schemas", "output": ".agents/skills/orchestra/core/schemas" },
-    { "type": "tree", "source": "providers/antigravity", "output": ".agents/skills/orchestra/provider/antigravity" },
+    {
+      "type": "tree",
+      "source": "providers/antigravity",
+      "output": ".agents/skills/orchestra/provider/antigravity",
+      "exclude": ["delegation-executor.mjs"]
+    },
     { "type": "file", "source": "runtime/project-runtime-manager.mjs", "output": ".agents/skills/orchestra/runtime/project-runtime-manager.mjs" },
     { "type": "file", "source": "runtime/project-state-ignore.mjs", "output": ".agents/skills/orchestra/runtime/project-state-ignore.mjs" },
     { "type": "file", "source": "runtime/manifest-loader.mjs", "output": ".agents/skills/orchestra/runtime/manifest-loader.mjs" },
