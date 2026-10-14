@@ -56,9 +56,9 @@ function renderNotes({ version, baseTag, bump, suggestedBump, commits, generated
     ...sections.flatMap((section) => [section, ""]),
     "## Publication gate",
     "",
-    "Merging the corresponding `release/vX.Y.Z` pull request is the operator authorization to publish. Publication occurs only after the exact `main` SHA produced by that merge completes the canonical `CI` workflow successfully.",
+    "Merging the corresponding `release/vX.Y.Z` pull request with GitHub's **Create a merge commit** option is the operator authorization to publish. Publication occurs only after the exact two-parent `main` merge SHA produced by that merge completes the canonical `CI` workflow successfully.",
     "",
-    "The publisher creates an annotated tag and GitHub Release idempotently. If the tag already exists, it must point at the exact authorized SHA; a conflicting tag fails closed.",
+    "Squash and rebase merges fail closed. The publisher creates an annotated tag and GitHub Release idempotently. If the tag already exists, it must point at the exact authorized release integration SHA; a conflicting tag fails closed.",
     "",
   ].join("\n");
 }

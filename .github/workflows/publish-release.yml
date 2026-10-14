@@ -114,10 +114,12 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
+          PARENT_COUNT=$(git rev-list --parents -n 1 "$SHA" | awk '{print NF - 1}')
           node scripts/release/publish-guard.mjs \
             --version="${{ steps.state.outputs.version }}" \
             --sha="$SHA" \
             --ci-conclusion="$CI_CONCLUSION" \
+            --parent-count="$PARENT_COUNT" \
             --prs-file="$RUNNER_TEMP/associated-prs.json"
 
       - name: Create annotated release tag

@@ -26,7 +26,7 @@ export function evaluateExistingPublication({ sha, tagSha = "", releaseExists = 
   return { action: "publish", tagExists, releaseExists: false };
 }
 
-export function validatePublishAuthorization({ version, sha, ciConclusion, pullRequests = [] }) {
+export function validatePublishAuthorization({ version, sha, ciConclusion, parentCount, pullRequests = [] }) {
   try {
     parseStableVersion(version);
   } catch (error) {
@@ -46,6 +46,13 @@ export function validatePublishAuthorization({ version, sha, ciConclusion, pullR
   if (!match) {
     return { ok: false, tag, reason: `No merged ${expectedHead} pull request authorizes exact main SHA ${sha}` };
   }
+  if (parentCount !== 2) {
+    return {
+      ok: false,
+      tag,
+      reason: `Release authorization requires a two-parent merge commit; exact main SHA ${sha} has ${Number.isInteger(parentCount) ? parentCount : "unknown"} parent(s)`,
+    };
+  }
   return { ok: true, tag, pullRequestNumber: match.number ?? null };
 }
 
@@ -61,10 +68,15 @@ function main() {
   const version = argValue(argv, "--version");
   const sha = argValue(argv, "--sha");
   const ciConclusion = argValue(argv, "--ci-conclusion");
+  const parentCountRaw = argValue(argv, "--parent-count");
   const prsFile = argValue(argv, "--prs-file");
-  if (!version || !sha || !ciConclusion || !prsFile) throw new Error("Missing --version, --sha, --ci-conclusion, or --prs-file");
+  if (!version || !sha || !ciConclusion || parentCountRaw === null || !prsFile) {
+    throw new Error("Missing --version, --sha, --ci-conclusion, --parent-count, or --prs-file");
+  }
+  const parentCount = Number(parentCountRaw);
+  if (!Number.isInteger(parentCount) || parentCount < 0) throw new Error(`Invalid --parent-count: ${parentCountRaw}`);
   const pullRequests = JSON.parse(readFileSync(resolve(prsFile), "utf8"));
-  const result = validatePublishAuthorization({ version, sha, ciConclusion, pullRequests });
+  const result = validatePublishAuthorization({ version, sha, ciConclusion, parentCount, pullRequests });
   if (!result.ok) throw new Error(result.reason);
   if (process.env.GITHUB_OUTPUT) {
     writeFileSync(process.env.GITHUB_OUTPUT, `tag=${result.tag}\n`, { flag: "a" });

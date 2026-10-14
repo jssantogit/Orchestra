@@ -84,7 +84,9 @@ test("prepareRelease updates canonical version sources and writes reviewable not
     assert.match(notes, /provider-neutral release train/);
     assert.match(notes, /## Fixes/);
     assert.match(notes, /stale release tag/);
-    assert.match(notes, /exact `main` SHA/);
+    assert.match(notes, /exact.*main.*SHA/i);
+    assert.match(notes, /Create a merge commit/);
+    assert.match(notes, /Squash and rebase merges fail closed/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -137,6 +139,7 @@ test("publish guard accepts only a successful exact-main release PR association"
     version: "1.1.0",
     sha: "deadbeef",
     ciConclusion: "success",
+    parentCount: 2,
     pullRequests: [{
       merged_at: "2026-10-14T19:00:00Z",
       merge_commit_sha: "deadbeef",
@@ -148,18 +151,20 @@ test("publish guard accepts only a successful exact-main release PR association"
   assert.equal(authorized.tag, "v1.1.0");
 
   assert.equal(validatePublishAuthorization({
-    version: "1.1.0", sha: "deadbeef", ciConclusion: "failure", pullRequests: [],
+    version: "1.1.0", sha: "deadbeef", ciConclusion: "failure", parentCount: 2, pullRequests: [],
   }).ok, false);
   assert.equal(validatePublishAuthorization({
     version: "1.1.0",
     sha: "deadbeef",
     ciConclusion: "success",
+    parentCount: 2,
     pullRequests: [{ merged_at: "x", merge_commit_sha: "deadbeef", base: { ref: "main" }, head: { ref: "feat/not-release" } }],
   }).ok, false);
   assert.equal(validatePublishAuthorization({
     version: "1.1.0",
     sha: "deadbeef",
     ciConclusion: "success",
+    parentCount: 2,
     pullRequests: [{ merged_at: "x", merge_commit_sha: "cafebabe", base: { ref: "main" }, head: { ref: "release/v1.1.0" } }],
   }).ok, false);
 });
@@ -176,6 +181,7 @@ test("prepare workflow requires an operator bump and opens a release PR without 
   assert.match(workflow, /npm run release:readiness/);
   assert.match(workflow, /release\/\$\{TAG\}/);
   assert.match(workflow, /gh pr create/);
+  assert.match(workflow, /Create a merge commit/);
   assert.doesNotMatch(workflow, /gh release create/);
 });
 
@@ -188,6 +194,8 @@ test("publish workflow waits for successful main CI and verifies the exact SHA r
   assert.match(workflow, /head_branch == 'main'/);
   assert.match(workflow, /github\.event\.workflow_run\.head_sha/);
   assert.match(workflow, /commits\/\$\{SHA\}\/pulls/);
+  assert.match(workflow, /git rev-list --parents/);
+  assert.match(workflow, /--parent-count/);
   assert.match(workflow, /publish-guard\.mjs/);
   assert.match(workflow, /git tag -a/);
   assert.match(workflow, /gh release create/);

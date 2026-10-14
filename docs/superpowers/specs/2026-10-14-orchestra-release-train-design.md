@@ -46,9 +46,10 @@ Publication is permitted only when all of the following are true:
 3. the publisher checks out exactly `github.event.workflow_run.head_sha`;
 4. generated notes exist for the `package.json` version;
 5. the exact SHA is associated through GitHub's commit-to-PR API with a merged PR whose base is `main` and whose head is exactly `release/vX.Y.Z`;
-6. the PR's merge commit SHA matches the exact verified SHA.
+6. the PR's merge commit SHA matches the exact verified SHA;
+7. the exact verified SHA is a two-parent merge commit.
 
-Release PRs therefore must use merge or squash, not rebase.
+Release PRs therefore must use GitHub's **Create a merge commit** option. Squash and rebase merges fail closed because a single-parent integration cannot satisfy the publication topology gate.
 
 The publisher then creates an annotated `vX.Y.Z` tag and a GitHub Release using the generated notes, augmented at publication time with the exact main SHA and canonical CI run URL.
 
@@ -58,15 +59,15 @@ The publisher must distinguish three states:
 
 - tag absent + release absent: create both;
 - tag present on the exact authorized SHA + release absent: create only the release;
-- tag and release both present for the exact authorized SHA: no-op success.
+- tag and release both present for the exact authorized release integration SHA: no-op success, including later `main` CI runs for the same already-published package version.
 
-If an existing tag points anywhere other than the exact authorized SHA, publication fails closed.
+If an existing tag points anywhere other than the exact authorized release integration SHA, publication fails closed.
 
 A successful ordinary `main` CI run with no generated notes for the current package version is a no-op, not a release.
 
 ## Security boundary
 
-The `workflow_run` publisher receives write authority only after a successful `main` CI run. It must not publish from pull-request CI, feature branches, failed CI, or an unassociated commit.
+The `workflow_run` publisher receives write authority only after a successful `main` CI run. It must not publish from pull-request CI, feature branches, failed CI, an unassociated commit, or a single-parent release integration.
 
 No third-party release action is required. The implementation uses repository-owned Node scripts, official GitHub Actions checkout/setup-node actions, Git, the GitHub CLI, and the workflow `GITHUB_TOKEN`.
 
@@ -79,5 +80,6 @@ Permanent tests must cover:
 - canonical version-source updates and generated notes;
 - latest-tag/package-version mismatch rejection;
 - exact-SHA release PR authorization;
+- rejection of single-parent release integrations and acceptance of two-parent release merge commits;
 - prepare workflow authority boundaries;
 - publish workflow CI and exact-SHA boundaries.

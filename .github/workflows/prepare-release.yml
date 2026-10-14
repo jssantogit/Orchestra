@@ -115,7 +115,7 @@ jobs:
 
           After this PR is merged into \`main\`, publication remains blocked until the canonical **CI** workflow succeeds on the exact resulting \`main\` SHA. The publisher then creates the annotated tag and GitHub Release automatically.
 
-          Do not use a rebase merge for release PRs; use merge or squash so the exact authorized merge SHA remains attributable to this PR.
+          Use GitHub's **Create a merge commit** option for release PRs. Squash or rebase merges fail closed because the publisher requires the exact authorized \`main\` SHA to be a two-parent merge commit attributable to this PR.
           EOF_PR
           gh pr create \
             --base main \
@@ -137,6 +137,7 @@ jobs:
             echo "- Target: \`${TAG}\`"
             echo "- Requested bump: \`${REQUESTED_BUMP}\`"
             echo "- Suggested bump: \`${SUGGESTED_BUMP}\`"
+            echo "- Required merge method: \`Create a merge commit\`"
             if [ "$REQUESTED_BUMP" != "$SUGGESTED_BUMP" ] && [ "$SUGGESTED_BUMP" != "none" ]; then
               echo "- ⚠️ Requested bump differs from the conventional-commit suggestion; review before merging."
             fi
