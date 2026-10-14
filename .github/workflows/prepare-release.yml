@@ -59,13 +59,15 @@ jobs:
           BUMP: ${{ inputs.bump }}
         run: node scripts/release/prepare-release.mjs --bump="$BUMP"
 
-      - name: Regenerate and verify deterministic runtime artifacts
+      - name: Run full prepared-release preflight
         run: |
           npm run build:runtimes
           npm run check:runtimes
           npm run check:runtime-core
+          npm test
+          npm run doctor
+          npm run check:contamination
           npm run release:readiness
-          node --test tests/release/*.test.mjs
           git diff --check
 
       - name: Refuse duplicate release refs
@@ -110,6 +112,7 @@ jobs:
           - Target: \`${TAG}\`
           - Requested bump: \`${REQUESTED_BUMP}\`
           - Suggested bump from conventional commits: \`${SUGGESTED_BUMP}\`
+          - Prepared-release preflight: full regression, Doctor, contamination, runtime checks, and release-readiness passed before this branch was pushed.
 
           Review the generated release notes and the complete diff. **Merging this PR is the operator authorization to publish ${TAG}.**
 
@@ -117,11 +120,15 @@ jobs:
 
           Use GitHub's **Create a merge commit** option for release PRs. Squash or rebase merges fail closed because the publisher requires the exact authorized \`main\` SHA to be a two-parent merge commit attributable to this PR.
           EOF_PR
-          gh pr create \
+          if ! gh pr create \
             --base main \
             --head "$BRANCH" \
             --title "chore(release): Orchestra ${TAG}" \
-            --body-file "$RUNNER_TEMP/release-pr.md"
+            --body-file "$RUNNER_TEMP/release-pr.md"; then
+            echo "Could not create the release PR. Ensure Settings > Actions > General allows GitHub Actions to create pull requests." >&2
+            git push origin --delete "$BRANCH" || true
+            exit 5
+          fi
 
       - name: Write release summary
         env:
@@ -137,6 +144,7 @@ jobs:
             echo "- Target: \`${TAG}\`"
             echo "- Requested bump: \`${REQUESTED_BUMP}\`"
             echo "- Suggested bump: \`${SUGGESTED_BUMP}\`"
+            echo "- Prepared-release preflight: \`green\`"
             echo "- Required merge method: \`Create a merge commit\`"
             if [ "$REQUESTED_BUMP" != "$SUGGESTED_BUMP" ] && [ "$SUGGESTED_BUMP" != "none" ]; then
               echo "- ⚠️ Requested bump differs from the conventional-commit suggestion; review before merging."

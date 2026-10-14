@@ -4,7 +4,7 @@
 
 **Goal:** Automate Orchestra release preparation and publication while keeping release PR merge as the explicit operator authorization boundary.
 
-**Architecture:** A manual preparation workflow calls repository-owned Node release tooling to compute/update version metadata, generate release notes, validate, push `release/vX.Y.Z`, and open a PR. A separate publisher runs only after successful canonical CI on `main`, proves the exact SHA came from the matching release PR, then idempotently creates the annotated tag and GitHub Release.
+**Architecture:** A manual preparation workflow calls repository-owned Node release tooling to compute/update version metadata, generate release notes, validate the complete prepared state, push `release/vX.Y.Z`, and open a PR. A separate publisher runs only after successful canonical CI on `main`, proves the exact SHA came from the matching release PR and is a two-parent merge commit, then idempotently creates the annotated tag and GitHub Release.
 
 **Tech Stack:** Node.js 20, `node:test`, Git, GitHub Actions, GitHub CLI.
 
@@ -13,10 +13,12 @@
 ## Global Constraints
 
 - Ordinary green merges to `main` must not publish releases.
-- Operator authorization is the merge of a dedicated `release/vX.Y.Z` PR.
+- Operator authorization is the merge-commit integration of a dedicated `release/vX.Y.Z` PR.
 - Preparation requires an explicit `patch`, `minor`, or `major` choice.
 - Conventional Commits inference is advisory only.
+- Prepared release state must pass full regression, Doctor, contamination, runtime integrity, and release-readiness checks before push.
 - Publication requires successful canonical `CI` on the exact resulting `main` SHA.
+- Release authorization requires that exact SHA to be the two-parent merge commit of the matching release PR; squash and rebase fail closed.
 - Existing conflicting tags fail closed.
 - Do not add a third-party release action.
 
@@ -26,7 +28,8 @@
 - Partial publication where tag exists but GitHub Release does not must recover idempotently.
 - A normal `main` CI run at the current already-released version must no-op.
 - Requested bump differing from inferred bump must remain reviewable and operator-controlled.
-- Release PRs merged by rebase must not accidentally satisfy exact-SHA authorization.
+- Release PRs merged by squash or rebase must not accidentally satisfy exact-SHA authorization.
+- Failed automated PR creation must not strand a release branch that blocks a clean rerun.
 
 ---
 
@@ -51,14 +54,15 @@
 **Files:**
 - Create: `scripts/release/publish-guard.mjs`
 - Test: `tests/release/release-train.test.mjs`
+- Test: `tests/release/release-merge-method.test.mjs`
 
 **Interfaces:**
-- Consumes: package version resolved by the publisher workflow.
-- Produces: `validatePublishAuthorization({ version, sha, ciConclusion, pullRequests })`.
+- Consumes: package version resolved by the publisher workflow and exact Git topology from the checked-out main SHA.
+- Produces: `validatePublishAuthorization({ version, sha, ciConclusion, parentCount, pullRequests })`.
 
-- [ ] **Step 1: Add failing tests that require successful CI plus a merged `release/vX.Y.Z` PR whose merge SHA is the exact verified main SHA.**
+- [ ] **Step 1: Add failing tests that require successful CI plus a merged `release/vX.Y.Z` PR whose merge SHA is the exact verified main SHA, and reject single-parent integration.**
 - [ ] **Step 2: Run the release-train tests and verify RED.**
-- [ ] **Step 3: Implement the fail-closed publication guard.**
+- [ ] **Step 3: Implement the fail-closed publication guard including the two-parent merge-commit requirement.**
 - [ ] **Step 4: Re-run the release-train tests and verify GREEN.**
 
 ### Task 3: GitHub release workflows
@@ -72,10 +76,10 @@
 - Consumes: release preparation and publish-guard CLIs.
 - Produces: manual Release PR creation and exact-CI-gated publication.
 
-- [ ] **Step 1: Add failing textual contract tests for workflow triggers, permissions, exact SHA checkout, PR association, tagging, publication, and prepare/publish separation.**
-- [ ] **Step 2: Run the release-train tests and verify RED because the workflows do not exist.**
-- [ ] **Step 3: Implement `Prepare Release` with explicit bump selection, release metadata generation, runtime regeneration, validation, branch push, and PR creation.**
-- [ ] **Step 4: Implement `Publish Release` on successful `workflow_run` for `CI`, with exact-SHA PR proof and idempotent tag/release handling.**
+- [ ] **Step 1: Add failing textual contract tests for workflow triggers, permissions, exact SHA checkout, PR association, tagging, publication, prepare/publish separation, prepared-state preflight, and failure cleanup.**
+- [ ] **Step 2: Run the release-train tests and verify RED because the workflows do not exist or do not satisfy the hardened contract.**
+- [ ] **Step 3: Implement `Prepare Release` with explicit bump selection, release metadata generation, runtime regeneration, full prepared-state preflight, branch push, PR creation, and branch cleanup on PR-creation failure.**
+- [ ] **Step 4: Implement `Publish Release` on successful `workflow_run` for `CI`, with exact-SHA PR proof, merge-topology proof, and idempotent tag/release handling.**
 - [ ] **Step 5: Re-run the release-train tests and verify GREEN.**
 
 ### Task 4: Integrate release gates and documentation
@@ -90,6 +94,6 @@
 - Produces: permanent CI coverage and documented operator workflow.
 
 - [ ] **Step 1: Add `test:release`, make `release:readiness` version-generic, and include release tests in full regression/CI.**
-- [ ] **Step 2: Update the release checklist so merge of the release PR is the explicit operator approval and manual tag/release creation is no longer routine.**
+- [ ] **Step 2: Update the release checklist so merge-commit integration of the release PR is the explicit operator approval and manual tag/release creation is no longer routine.**
 - [ ] **Step 3: Run release tests plus existing release-readiness tests.**
 - [ ] **Step 4: Run full repository CI on the branch and perform final review before integration.**

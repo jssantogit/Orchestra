@@ -13,6 +13,12 @@ Automation executes release mechanics; the operator authorizes publication by me
 
 A normal feature, fix, documentation, or hardening merge to `main` must never publish a release merely because CI is green.
 
+## Repository prerequisite
+
+The repository must allow `GITHUB_TOKEN` to create pull requests. This is the GitHub Actions setting **Allow GitHub Actions to create and approve pull requests** under repository workflow permissions.
+
+If PR creation fails, preparation must fail without publishing and remove the release branch created by that run so the operator can correct the setting and rerun cleanly.
+
 ## Preparation flow
 
 `Prepare Release` is a manual GitHub Actions workflow.
@@ -29,11 +35,13 @@ Preparation must:
 - make `release:readiness` derive its expected version from `package.json` rather than a hardcoded version;
 - generate reviewable release notes under `docs/release/vX.Y.Z.md`;
 - regenerate deterministic runtime artifacts;
-- run release-focused validation before pushing;
+- run the full regression, Doctor, contamination, runtime integrity, and release-readiness checks on the prepared state before pushing;
 - create branch `release/vX.Y.Z` and open a PR to `main`;
 - never create a tag or GitHub Release.
 
 For the current repository state, `v1.0.1` plus the post-release feature work should lead the Conventional Commits heuristic to suggest a `minor` bump, i.e. `v1.1.0`.
+
+GitHub can place `pull_request` workflow runs created by `GITHUB_TOKEN` into an approval-required state. Those PR-triggered runs are not part of the publication authority chain: the prepared state has already passed the preparation preflight, and publication still requires canonical `CI` on the exact merged `main` SHA.
 
 ## Publication flow
 
@@ -81,5 +89,7 @@ Permanent tests must cover:
 - latest-tag/package-version mismatch rejection;
 - exact-SHA release PR authorization;
 - rejection of single-parent release integrations and acceptance of two-parent release merge commits;
+- full prepared-release preflight before branch push;
+- cleanup of a newly created release branch if PR creation fails;
 - prepare workflow authority boundaries;
 - publish workflow CI and exact-SHA boundaries.
