@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { bumpVersion, parseStableVersion, suggestBump } from "./versioning.mjs";
+import { bumpVersion, parseStableVersion, selectLatestStableTag, suggestBump } from "./versioning.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const RUNTIMES = Object.freeze(["core", "codex", "antigravity"]);
@@ -106,7 +106,12 @@ function git(root, args) {
 }
 
 export function latestReleaseTag(repoRoot = moduleRoot) {
-  return git(resolve(repoRoot), ["describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"]);
+  const root = resolve(repoRoot);
+  const tags = git(root, ["tag", "--merged", "HEAD", "--list", "v*"])
+    .split("\n")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  return selectLatestStableTag(tags);
 }
 
 export function commitsSince(repoRoot, baseTag) {
