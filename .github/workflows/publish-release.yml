@@ -49,10 +49,6 @@ jobs:
           TAG_EXISTS=false
           if [ -n "$TAG_SHA" ]; then
             TAG_EXISTS=true
-            if [ "$TAG_SHA" != "$SHA" ]; then
-              echo "Existing tag ${TAG} points to ${TAG_SHA}, not authorized SHA ${SHA}." >&2
-              exit 5
-            fi
           fi
 
           RELEASE_EXISTS=false
@@ -65,12 +61,21 @@ jobs:
           echo "notes=${NOTES}" >> "$GITHUB_OUTPUT"
           echo "tag_exists=${TAG_EXISTS}" >> "$GITHUB_OUTPUT"
           echo "release_exists=${RELEASE_EXISTS}" >> "$GITHUB_OUTPUT"
+
           if [ "$TAG_EXISTS" = true ] && [ "$RELEASE_EXISTS" = true ]; then
             echo "publish_needed=false" >> "$GITHUB_OUTPUT"
-            echo "${TAG} is already published from exact SHA ${SHA}." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "publish_needed=true" >> "$GITHUB_OUTPUT"
+            echo "${TAG} is already published; later main commits are not new releases." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          if [ "$TAG_EXISTS" = false ] && [ "$RELEASE_EXISTS" = true ]; then
+            echo "GitHub Release ${TAG} exists without its tag." >&2
+            exit 5
+          fi
+          if [ "$TAG_EXISTS" = true ] && [ "$TAG_SHA" != "$SHA" ]; then
+            echo "Existing unpublished tag ${TAG} points to ${TAG_SHA}, not authorized SHA ${SHA}." >&2
+            exit 6
+          fi
+          echo "publish_needed=true" >> "$GITHUB_OUTPUT"
 
       - name: Fetch pull requests associated with the exact SHA
         if: steps.state.outputs.publish_needed == 'true'

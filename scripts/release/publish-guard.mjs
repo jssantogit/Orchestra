@@ -1,8 +1,22 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseStableVersion } from "./versioning.mjs";
+
+export function evaluateExistingPublication({ sha, tagSha = "", releaseExists = false }) {
+  const tagExists = Boolean(tagSha);
+  if (tagExists && releaseExists) {
+    return { action: "noop", tagExists: true, releaseExists: true, reason: "already-published" };
+  }
+  if (!tagExists && releaseExists) {
+    return { action: "fail", tagExists: false, releaseExists: true, reason: "GitHub Release exists without a corresponding tag" };
+  }
+  if (tagExists && tagSha !== sha) {
+    return { action: "fail", tagExists: true, releaseExists: false, reason: `Existing tag points to a different SHA (${tagSha})` };
+  }
+  return { action: "publish", tagExists, releaseExists: false };
+}
 
 export function validatePublishAuthorization({ version, sha, ciConclusion, pullRequests = [] }) {
   try {

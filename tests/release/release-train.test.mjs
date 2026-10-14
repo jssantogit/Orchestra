@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { bumpVersion, suggestBump } from "../../scripts/release/versioning.mjs";
 import { prepareRelease } from "../../scripts/release/prepare-release.mjs";
-import { validatePublishAuthorization } from "../../scripts/release/publish-guard.mjs";
+import { evaluateExistingPublication, validatePublishAuthorization } from "../../scripts/release/publish-guard.mjs";
 
 function fixture(version = "1.0.1") {
   const root = mkdtempSync(join(tmpdir(), "orchestra-release-train-"));
@@ -103,6 +103,22 @@ test("prepareRelease fails closed when the base tag and package version disagree
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("existing published versions no-op on later main commits while partial conflicting state fails closed", () => {
+  assert.deepEqual(evaluateExistingPublication({
+    sha: "new-main-sha", tagSha: "older-release-sha", releaseExists: true,
+  }), { action: "noop", tagExists: true, releaseExists: true, reason: "already-published" });
+
+  const partialConflict = evaluateExistingPublication({
+    sha: "new-main-sha", tagSha: "older-release-sha", releaseExists: false,
+  });
+  assert.equal(partialConflict.action, "fail");
+  assert.match(partialConflict.reason, /different SHA/);
+
+  assert.deepEqual(evaluateExistingPublication({
+    sha: "release-sha", tagSha: "release-sha", releaseExists: false,
+  }), { action: "publish", tagExists: true, releaseExists: false });
 });
 
 test("publish guard accepts only a successful exact-main release PR association", () => {
