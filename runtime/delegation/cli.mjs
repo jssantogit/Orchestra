@@ -15,11 +15,19 @@ const USAGE_ERROR = "ORCHESTRA_DELEGATION_CLI_USAGE_INVALID";
 const REQUEST_ERROR = "ORCHESTRA_DELEGATION_CLI_REQUEST_INVALID";
 const TARGET_ERROR = "ORCHESTRA_DELEGATION_CLI_TARGET_UNAVAILABLE";
 const EXECUTION_ERROR = "ORCHESTRA_DELEGATION_CLI_EXECUTION_FAILED";
+const RECURSION_ERROR = "ORCHESTRA_DELEGATION_CLI_RECURSION_DENIED";
 const EXPECTED_FLAGS = Object.freeze(["--request", "--repo-root", "--generation"]);
 
 function fail(stderr, code) {
   stderr.write(`${code}\n`);
   return 2;
+}
+
+function delegatedContext(env) {
+  if (!env || typeof env !== "object") return false;
+  if (env.ORCHESTRA_DELEGATION_ACTIVE === "1") return true;
+  const depth = Number(env.ORCHESTRA_DELEGATION_DEPTH);
+  return Number.isFinite(depth) && depth >= 1;
 }
 
 function parseArgs(argv) {
@@ -90,10 +98,13 @@ export async function runDelegationCli({
   argv = process.argv.slice(2),
   stdout = process.stdout,
   stderr = process.stderr,
+  env = process.env,
   createExecutor = null,
   createExecutors = defaultCreateExecutors,
   createBroker = createDelegationBroker,
 } = {}) {
+  if (delegatedContext(env)) return fail(stderr, RECURSION_ERROR);
+
   const args = parseArgs(argv);
   if (!args) return fail(stderr, USAGE_ERROR);
 
