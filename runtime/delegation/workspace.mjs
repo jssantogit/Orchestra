@@ -17,6 +17,7 @@ import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprin
 
 const execFileAsync = promisify(execFile);
 const PRODUCT_FINGERPRINT_EXCLUDES = Object.freeze([".orchestra/state/**"]);
+const GIT_NO_HOOKS_PREFIX = Object.freeze(["-c", "core.hooksPath="]);
 const activeWorktrees = new Map();
 
 function inside(parent, child) {
@@ -33,7 +34,7 @@ function prepFailure(reason, cause = undefined) {
 }
 
 async function git(cwd, args) {
-  return execFileAsync("git", args, {
+  return execFileAsync("git", [...GIT_NO_HOOKS_PREFIX, ...args], {
     cwd,
     encoding: "utf8",
     windowsHide: true,
