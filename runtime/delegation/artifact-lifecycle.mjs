@@ -18,6 +18,7 @@ import { inspectMutableDelegationWorkspace } from "./mutable-workspace.mjs";
 import { readDelegationProductFingerprint } from "./source-snapshot.mjs";
 import {
   readDelegationArtifact,
+  recordDelegationArtifactCleanup,
   transitionDelegationArtifactState,
   writeDelegationArtifact,
 } from "./artifact-store.mjs";
@@ -447,6 +448,23 @@ async function cleanupRetainedWorkspace(repoRoot, delegatedPath) {
   }
 }
 
+function cleanupState(cleanup, recoverablePath) {
+  return cleanup?.cleaned === true
+    ? { cleaned: true, reason: null, recoverablePath: null }
+    : { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED", recoverablePath };
+}
+
+function persistCleanupState(repoRoot, artifactId, cleanup, recoverablePath) {
+  const update = recordDelegationArtifactCleanup(
+    repoRoot,
+    artifactId,
+    cleanupState(cleanup, recoverablePath),
+  );
+  return update.updated
+    ? cleanup
+    : { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
+}
+
 async function canonicalStillAtArtifactBaseline(repoRoot, manifest) {
   const product = readDelegationProductFingerprint(repoRoot);
   const gitBoundary = await readDelegationGitBoundary(repoRoot);
@@ -511,6 +529,7 @@ export async function promoteDelegationArtifact({
   artifactId,
   generation,
   actor,
+  cleanupWorkspace = cleanupRetainedWorkspace,
 } = {}) {
   const lock = acquireArtifactLock(repoRoot, artifactId, actor);
   if (!lock.acquired) {
@@ -579,6 +598,11 @@ export async function promoteDelegationArtifact({
     const transition = transitionDelegationArtifactState(repoRoot, artifactId, {
       expectedState: "READY_FOR_REVIEW",
       nextState: "PROMOTED",
+      cleanup: {
+        cleaned: false,
+        reason: "WORKSPACE_CLEANUP_FAILED",
+        recoverablePath: manifest.delegatedPath,
+      },
     });
     if (!transition.transitioned) {
       const rolledBack = await rollbackAppliedPatch(
@@ -592,7 +616,12 @@ export async function promoteDelegationArtifact({
     }
     patchApplied = false;
 
-    const cleanup = await cleanupRetainedWorkspace(repoRoot, manifest.delegatedPath);
+    const cleanup = persistCleanupState(
+      repoRoot,
+      artifactId,
+      await cleanupWorkspace(repoRoot, manifest.delegatedPath),
+      manifest.delegatedPath,
+    );
     return {
       promoted: true,
       reason: cleanup.cleaned ? null : cleanup.reason,
@@ -612,6 +641,7 @@ export async function discardDelegationArtifact({
   artifactId,
   generation,
   actor,
+  cleanupWorkspace = cleanupRetainedWorkspace,
 } = {}) {
   const lock = acquireArtifactLock(repoRoot, artifactId, actor);
   if (!lock.acquired) return { discarded: false, reason: "PROMOTION_FAILED" };
@@ -641,10 +671,20 @@ export async function discardDelegationArtifact({
     const transition = transitionDelegationArtifactState(repoRoot, artifactId, {
       expectedState: "READY_FOR_REVIEW",
       nextState: "DISCARDED",
+      cleanup: {
+        cleaned: false,
+        reason: "WORKSPACE_CLEANUP_FAILED",
+        recoverablePath: manifest.delegatedPath,
+      },
     });
     if (!transition.transitioned) return { discarded: false, reason: "PROMOTION_FAILED" };
 
-    const cleanup = await cleanupRetainedWorkspace(repoRoot, manifest.delegatedPath);
+    const cleanup = persistCleanupState(
+      repoRoot,
+      artifactId,
+      await cleanupWorkspace(repoRoot, manifest.delegatedPath),
+      manifest.delegatedPath,
+    );
     return { discarded: true, reason: cleanup.cleaned ? null : cleanup.reason };
   } finally {
     releaseAtomicLock(leaseFence.handle);
