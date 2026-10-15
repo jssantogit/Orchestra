@@ -1,0 +1,53 @@
+name: Diagnose v1.1.0 Prepared Preflight 2
+
+on:
+  push:
+    branches:
+      - ops/diagnose-v1.1.0-preflight-2
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 90fee3d9c2441457c5c88b1b6226dd142c3fa86d
+          fetch-depth: 0
+      - name: Require accepted main SHA
+        run: test "$(git rev-parse HEAD)" = "90fee3d9c2441457c5c88b1b6226dd142c3fa86d"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts
+      - name: Build baseline runtimes
+        run: npm run build:runtimes
+      - name: Verify baseline release metadata
+        run: npm run release:readiness
+      - name: Prepare v1.1.0
+        run: node scripts/release/prepare-release.mjs --bump=minor
+      - name: Create local candidate commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c release/v1.1.0-diagnostic
+          git add --all
+          git commit -m "chore(release): diagnostic v1.1.0 candidate"
+      - name: Preflight 1 - build runtimes
+        run: npm run build:runtimes
+      - name: Preflight 2 - check runtimes
+        run: npm run check:runtimes
+      - name: Preflight 3 - check runtime core
+        run: npm run check:runtime-core
+      - name: Preflight 4 - full test suite
+        run: npm test
+      - name: Preflight 5 - doctor
+        run: npm run doctor
+      - name: Preflight 6 - contamination
+        run: npm run check:contamination
+      - name: Preflight 7 - release readiness
+        run: npm run release:readiness
+      - name: Preflight 8 - whitespace
+        run: git diff --check
