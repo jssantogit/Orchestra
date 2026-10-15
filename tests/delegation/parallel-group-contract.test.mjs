@@ -68,18 +68,24 @@ function validate(value) {
   return validateSchema("parallel-implementation-group.v1.schema.json", value);
 }
 
+async function loadDomain() {
+  try {
+    return await import("../../core/domain/parallel-implementation.mjs");
+  } catch (error) {
+    assert.fail(`parallel implementation domain module is required: ${error.code || error.message}`);
+  }
+}
+
 test("parallel implementation group schema accepts exactly two bounded implementation members", () => {
   const result = validate(group());
   assert.equal(result.valid, true, JSON.stringify(result.errors));
 });
 
-test("parallel implementation group schema rejects cardinality, duplicate identities, and unknown fields", () => {
+test("parallel implementation group schema rejects cardinality and unknown fields", () => {
   const valid = group();
   const cases = [
     { ...valid, members: [valid.members[0]] },
     { ...valid, members: [...valid.members, member({ memberId: "third", targetProvider: "other", area: "src/c/**" })] },
-    { ...valid, members: [{ ...valid.members[0] }, { ...valid.members[1], memberId: valid.members[0].memberId }] },
-    { ...valid, members: [{ ...valid.members[0] }, { ...valid.members[1], targetProvider: valid.members[0].targetProvider }] },
     { ...valid, unexpected: true },
   ];
 
@@ -87,13 +93,7 @@ test("parallel implementation group schema rejects cardinality, duplicate identi
 });
 
 test("parallel implementation group domain enforces shared task and generation facts", async () => {
-  let domain;
-  try {
-    domain = await import("../../core/domain/parallel-implementation.mjs");
-  } catch (error) {
-    assert.fail(`parallel implementation domain module is required: ${error.code || error.message}`);
-  }
-
+  const domain = await loadDomain();
   assert.equal(domain.validateParallelImplementationGroup(group()).valid, true);
 
   const wrongTask = group();
@@ -111,20 +111,21 @@ test("parallel implementation group domain enforces shared task and generation f
   assert.equal(domain.validateParallelImplementationGroup(wrongGeneration).valid, false);
 });
 
-test("parallel implementation group domain accepts a same-provider member but requires two distinct target providers", async () => {
-  let domain;
-  try {
-    domain = await import("../../core/domain/parallel-implementation.mjs");
-  } catch (error) {
-    assert.fail(`parallel implementation domain module is required: ${error.code || error.message}`);
-  }
-
+test("parallel implementation group domain accepts a same-provider member but requires unique member and target-provider identities", async () => {
+  const domain = await loadDomain();
   assert.equal(domain.validateParallelImplementationGroup(group()).valid, true);
+
+  const duplicateMember = group();
+  duplicateMember.members[1] = {
+    ...duplicateMember.members[1],
+    memberId: duplicateMember.members[0].memberId,
+  };
+  assert.equal(domain.validateParallelImplementationGroup(duplicateMember).valid, false);
 
   const duplicateProvider = group();
   duplicateProvider.members[1] = {
     ...duplicateProvider.members[1],
-    targetProvider: "codex",
+    targetProvider: duplicateProvider.members[0].targetProvider,
   };
   assert.equal(domain.validateParallelImplementationGroup(duplicateProvider).valid, false);
 });
