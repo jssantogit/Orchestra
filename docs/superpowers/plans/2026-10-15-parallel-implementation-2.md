@@ -90,12 +90,12 @@
 - Discovery help text is the bounded concatenation of `helpResult.stdout` and `helpResult.stderr` after timeout/exit/truncation validation.
 - Required flags stay `--print`, `--print-timeout`, `--sandbox`, `--model`; `--mode` remains the sole factual signal for `capabilities.implementation`.
 
-- [ ] **Step 1: Add RED regression `AGY discovery accepts required help flags emitted entirely on stderr`** — fake `--version` returns `agy 1.3.5` on stdout; fake `--help` returns stdout empty and all required flags plus `--mode` on stderr; expect `available=true` and `implementation=true`.
-- [ ] **Step 2: Add RED mixed-stream and stderr-truncation cases** — split flags across stdout/stderr and expect success; `stderrTruncated=true` must return exact `PROVIDER_UNAVAILABLE`; retain existing stdout truncation/nonzero/timeout failures.
-- [ ] **Step 3: Run RED** — `node --test tests/delegation/antigravity-executor.test.mjs`; expected new stderr-help test FAIL on v1.2.0 behavior.
-- [ ] **Step 4: Implement the minimal discovery change** — reject `helpResult.stdoutTruncated || helpResult.stderrTruncated`, then compute `const help = `${helpResult.stdout ?? ""}\n${helpResult.stderr ?? ""}`; do not change execution arguments or environment.
-- [ ] **Step 5: Run GREEN** — focused test plus `node --test tests/delegation/provider-executors-v2.test.mjs tests/delegation/provider-environment.test.mjs`.
-- [ ] **Step 6: Commit** — `fix(delegation): discover AGY help from stderr`.
+- [x] **Step 1: Add RED regression `AGY discovery accepts required help flags emitted entirely on stderr`** — fake `--version` returns `agy 1.3.5` on stdout; fake `--help` returns stdout empty and all required flags plus `--mode` on stderr; expect `available=true` and `implementation=true`.
+- [x] **Step 2: Add RED mixed-stream and stderr-truncation cases** — split flags across stdout/stderr and expect success; `stderrTruncated=true` must return exact `PROVIDER_UNAVAILABLE`; retain existing stdout truncation/nonzero/timeout failures.
+- [x] **Step 3: Run RED** — `node --test tests/delegation/antigravity-executor.test.mjs`; expected new stderr-help test FAIL on v1.2.0 behavior.
+- [x] **Step 4: Implement the minimal discovery change** — reject `helpResult.stdoutTruncated || helpResult.stderrTruncated`, then compute `const help = `${helpResult.stdout ?? ""}\n${helpResult.stderr ?? ""}`; do not change execution arguments or environment.
+- [x] **Step 5: Run GREEN** — focused test plus `node --test tests/delegation/provider-executors-v2.test.mjs tests/delegation/provider-environment.test.mjs`.
+- [x] **Step 6: Commit** — `fix(delegation): discover AGY help from stderr`.
 
 ---
 
@@ -118,12 +118,12 @@
 - `members` has exactly 2 entries; member IDs and target providers are unique; each member contains `memberId`, `targetProvider`, `packet`, and `mutationScope`.
 - Each packet has group `taskId` and `candidateGeneration === generation`.
 
-- [ ] **Step 1: Write RED contract tests** — valid Codex+Antigravity group; reject one/three members, duplicate IDs/providers, mismatched task/generation, missing baseline facts, invalid packet/scope, extra properties.
-- [ ] **Step 2: Add Review Focus authority facts** — source provider/actor required; member target may equal source provider but members must be distinct from each other; group itself does not carry mutable CONTROL capabilities.
-- [ ] **Step 3: Run RED** — `node --test tests/delegation/parallel-group-contract.test.mjs tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs`.
-- [ ] **Step 4: Implement schema/domain dispatch and regenerate validators** — no provider-specific names in `core/**`.
-- [ ] **Step 5: Run GREEN** — focused tests + `npm run check:schemas`.
-- [ ] **Step 6: Commit** — `feat(delegation): add parallel implementation group contract`.
+- [x] **Step 1: Write RED contract tests** — valid Codex+Antigravity group; reject one/three members, duplicate IDs/providers, mismatched task/generation, missing baseline facts, invalid packet/scope, extra properties.
+- [x] **Step 2: Add Review Focus authority facts** — source provider/actor required; member target may equal source provider but members must be distinct from each other; group itself does not carry mutable CONTROL capabilities.
+- [x] **Step 3: Run RED** — `node --test tests/delegation/parallel-group-contract.test.mjs tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs`.
+- [x] **Step 4: Implement schema/domain dispatch and regenerate validators** — no provider-specific names in `core/**`.
+- [x] **Step 5: Run GREEN** — focused tests + `npm run check:schemas`.
+- [x] **Step 6: Commit** — `feat(delegation): add parallel implementation group contract`.
 
 ---
 
@@ -140,13 +140,13 @@
 - `assessChangedPathIndependence(leftPaths, rightPaths) -> { independent, overlaps[] }` accepts factual repo-relative paths only and returns sorted exact intersections.
 - Standalone `authorizeDelegationRequest()` signature/behavior does not gain a same-provider escape hatch.
 
-- [ ] **Step 1: Write RED scope tests** — accept `app/home/**` vs `app/library/**`, exact file vs different exact file, cross-tree paths; reject `app/**` vs `app/src/**`, exact inside subtree, `**` vs anything, equal normalized paths, invalid traversal/absolute patterns.
-- [ ] **Step 2: Write RED factual overlap tests** — exact intersection rejected even when original scopes were disjoint; duplicate input facts normalize deterministically; invalid changed path fails closed.
-- [ ] **Step 3: Add regression that standalone same-provider v2 is still denied** — both Codex→Codex and Antigravity→Antigravity ordinary requests remain `CAPABILITY_DENIED`.
-- [ ] **Step 4: Run RED** — `node --test tests/delegation/parallel-scope.test.mjs tests/delegation/delegation-v2-policy.test.mjs`.
-- [ ] **Step 5: Implement conservative prefix/exact overlap proof using existing mutation-scope grammar**.
-- [ ] **Step 6: Run GREEN** — focused tests + `npm run test:delegation`.
-- [ ] **Step 7: Commit** — `feat(delegation): prove parallel mutation scopes are independent`.
+- [x] **Step 1: Write RED scope tests** — accept `app/home/**` vs `app/library/**`, exact file vs different exact file, cross-tree paths; reject `app/**` vs `app/src/**`, exact inside subtree, `**` vs anything, equal normalized paths, invalid traversal/absolute patterns.
+- [x] **Step 2: Write RED factual overlap tests** — exact intersection rejected even when original scopes were disjoint; duplicate input facts normalize deterministically; invalid changed path fails closed.
+- [x] **Step 3: Add regression that standalone same-provider v2 is still denied** — both Codex→Codex and Antigravity→Antigravity ordinary requests remain `CAPABILITY_DENIED`.
+- [x] **Step 4: Run RED** — `node --test tests/delegation/parallel-scope.test.mjs tests/delegation/delegation-v2-policy.test.mjs`.
+- [x] **Step 5: Implement conservative prefix/exact overlap proof using existing mutation-scope grammar**.
+- [x] **Step 6: Run GREEN** — focused tests + `npm run test:delegation`; exact branch CI #1175 also passed full regression, generated/runtime checks, Doctor/firewall/contamination, release readiness, turn-economy, Ubuntu and Windows on `f329432b22564afbba868657349a305a391552dc`.
+- [x] **Step 7: Commit** — `feat(delegation): prove parallel mutation scopes are independent`.
 
 ---
 
@@ -162,14 +162,15 @@
 **Interfaces:**
 - Group state root: `.orchestra/state/delegation/parallel-groups/<groupId>/group.json`.
 - States: `CREATED | RUNNING | MEMBERS_READY | COMPOSING | READY_FOR_REVIEW | FAILED | PROMOTED | DISCARDED`.
-- Exact transitions: `CREATED -> RUNNING | FAILED`; `RUNNING -> MEMBERS_READY | FAILED`; `MEMBERS_READY -> COMPOSING | FAILED`; `COMPOSING -> READY_FOR_REVIEW | FAILED`; `READY_FOR_REVIEW -> PROMOTED | DISCARDED`. `FAILED`, `PROMOTED`, and `DISCARDED` are terminal.
+- Exact allowed transitions: `CREATED -> RUNNING | FAILED`; `RUNNING -> MEMBERS_READY | FAILED`; `MEMBERS_READY -> COMPOSING | FAILED`; `COMPOSING -> READY_FOR_REVIEW | FAILED`; `READY_FOR_REVIEW -> PROMOTED | DISCARDED | FAILED`. `FAILED`, `PROMOTED`, and `DISCARDED` are terminal for lifecycle state; only bounded cleanup metadata may be updated afterward.
 - `createParallelGroup(repoRoot, group)`, `readParallelGroup(repoRoot, groupId)`, `transitionParallelGroupState(repoRoot, groupId, transition)` use safe IDs and atomic replace semantics.
 - Ordinary mutation artifact manifest gains optional `parallelGroupId` and `parallelMemberId` together; bound member state gains `CONSUMED` as a terminal non-promotable state.
 - `promoteDelegationArtifact()` returns `CAPABILITY_DENIED` for any artifact bound to a parallel group; only the composite lifecycle may consume it.
+- If a group fails after exactly one member artifact was sealed, that bound artifact must transition `READY_FOR_REVIEW -> DISCARDED`, cleanup of its retained clone is attempted, and it must never remain independently promotable. `CONSUMED` is reserved for members incorporated into a durably sealed composite.
 
-- [ ] **Step 1: Write RED store tests** — safe IDs/path traversal, atomic creation, exact transition map, terminal-state immutability, malformed state rejection, duplicate group creation, no transcript/prompt/reasoning persistence.
+- [ ] **Step 1: Write RED store tests** — safe IDs/path traversal, atomic creation, exact state transitions above, malformed state rejection, duplicate group creation, no transcript/prompt/reasoning persistence.
 - [ ] **Step 2: Write RED member binding tests** — bound artifact validates only with both group/member IDs; direct ordinary promotion denied; ordinary unbound v2 promotion remains unchanged.
-- [ ] **Step 3: Add cleanup/recovery state tests** — failed groups retain only explicitly recoverable workspace paths and never report READY member artifact as independently promotable.
+- [ ] **Step 3: Add cleanup/recovery state tests** — failed groups retain only explicitly recoverable workspace paths; a successful sibling in a failed group becomes `DISCARDED` with bounded cleanup state and never remains READY/promotable.
 - [ ] **Step 4: Run RED** — focused group/member artifact tests plus existing artifact store/lifecycle tests.
 - [ ] **Step 5: Implement minimal group store and optional artifact binding without changing unbound artifact schema semantics**.
 - [ ] **Step 6: Run GREEN** — focused tests + existing `artifact-*.test.mjs`.
@@ -191,11 +192,10 @@
 - The function requires root CONTROL actor matching group source and current Work Lease generation before any worker starts.
 - It proves pre-dispatch scope independence, discovers both exact target providers, prepares two independent mutable clones from the same validated source snapshot, and starts both executor promises before awaiting completion.
 - Internal `authorizeParallelMember({ group, member, actor, sourceFingerprint })` permits a member whose target equals source provider only after the full group contract/authority/baseline/scope checks; it is not exported through ordinary delegation CLI.
-- If one member fails after the sibling already sealed a bound artifact, that successful sibling artifact transitions to `DISCARDED` before cleanup. Cleanup failure is recorded on the discarded artifact/group as recoverable state; it never returns to `READY_FOR_REVIEW` and never becomes individually promotable.
 
 - [ ] **Step 1: Write RED concurrency test** — two fake executors block on barriers; assert both `execute()` calls started before either is released; each receives a different clone path but identical source revision/fingerprint/synthetic snapshot facts.
 - [ ] **Step 2: Write RED same-provider group test** — Codex CONTROL may run Codex member + Antigravity member; Antigravity CONTROL may run Antigravity member + Codex member; standalone same-provider remains denied from Task 2.
-- [ ] **Step 3: Write RED atomic failure tests** — unavailable/timeout/invalid result/scope violation of either member closes group `FAILED`, transitions any sealed sibling artifact to `DISCARDED`, cleans both attributable clones when possible, returns no composite, and leaves canonical product/Git unchanged.
+- [ ] **Step 3: Write RED atomic failure tests** — unavailable/timeout/invalid result/scope violation of either member closes group `FAILED`, cleans both attributable clones when possible, returns no composite, and leaves canonical product/Git unchanged. If the sibling already sealed an artifact, apply Task 3's `DISCARDED` rule before returning failure.
 - [ ] **Step 4: Add dirty baseline test** — pre-existing staged/unstaged/untracked canonical state appears identically in both synthetic baselines and neither member artifact contains it as worker delta.
 - [ ] **Step 5: Run RED** — focused parallel broker tests.
 - [ ] **Step 6: Implement concurrent preparation/execution/sealing by reusing v1.2.0 hardened mutable workspace and factual artifact sealing** — do not add a second provider executor implementation.
@@ -216,12 +216,11 @@
 
 **Interfaces:**
 - Composite state root: `.orchestra/state/delegation/composite-artifacts/<artifactId>/{manifest.json,candidate.patch}`.
-- Composite states are exactly `READY_FOR_REVIEW | PROMOTED | DISCARDED`; only `READY_FOR_REVIEW -> PROMOTED | DISCARDED` is allowed.
 - `composeParallelArtifacts({ repoRoot, group, memberArtifactIds }) -> Promise<{ artifactId, changedPaths, patchSha256, mutationDigest, state: "READY_FOR_REVIEW" }>`.
 - `prepareCompositionWorkspace(...)` creates a fresh hardened clone from the same exact source snapshot, never from member workspaces.
 - Composite manifest schema string: `orchestra.parallel-composite-artifact.v1`; it records `groupId`, source/generation/Git facts, exactly two member artifact IDs, combined factual changed paths, patch hash/digest, retained review path, state.
 
-- [ ] **Step 1: Write RED store integrity tests** — safe IDs, exact two members, exact composite state transition map, malformed/tampered patch hash rejection, immutable source/group facts, READY artifact retains review path.
+- [ ] **Step 1: Write RED store integrity tests** — safe IDs, exact two members, malformed/tampered patch hash rejection, immutable source/group facts, READY artifact retains review path.
 - [ ] **Step 2: Write RED successful composition tests** — disjoint text+text, text+binary, create+delete, executable mode, contained symlink; apply members in deterministic member-ID order and derive one binary/full-index patch from original synthetic baseline.
 - [ ] **Step 3: Write RED overlap/conflict tests** — factual changed-path intersection fails before patch application; patch apply conflict fails closed even when paths differ; combined facts must equal sorted union of member facts.
 - [ ] **Step 4: Add tamper tests** — changed member patch/manifest/review workspace after sealing returns artifact-tampered failure and no composite.
