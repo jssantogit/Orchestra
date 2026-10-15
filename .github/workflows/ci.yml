@@ -6,19 +6,14 @@ on:
   pull_request:
     branches: [ main ]
 
-permissions:
-  contents: write
-
 jobs:
   verify:
     name: Orchestra 1.x Verification
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out pull request head
+      - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -31,22 +26,11 @@ jobs:
       - name: Build and verify generated artifacts
         run: |
           npm run build:schemas
-          npm run sync:runtime-core
           npm run build:runtimes
           npm run check:schemas
           npm run check:runtimes
           npm run check:runtime-core
           git diff --check
-
-      - name: Commit generated Task 1 artifacts
-        run: |
-          git config user.name "Orchestra CI"
-          git config user.email "orchestra-ci@users.noreply.github.com"
-          git add core/schema/generated runtimes/codex/.codex/astra-orchestra/core runtimes/antigravity/.agents/skills/orchestra/core
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(runtime): sync delegation v2 core mirrors"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
 
       - name: Run full regression
         run: npm test
@@ -77,10 +61,8 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Check out pull request head
+      - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
