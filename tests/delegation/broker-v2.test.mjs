@@ -101,7 +101,12 @@ function executor({ onExecute = null, outcome = null, available = true } = {}) {
     provider: "antigravity",
     async discover() {
       return available
-        ? { available: true, provider: "antigravity", version: "agy-test" }
+        ? {
+          available: true,
+          provider: "antigravity",
+          version: "agy-test",
+          capabilities: { implementation: true },
+        }
         : { available: false, provider: "antigravity", reason: "PROVIDER_UNAVAILABLE" };
     },
     async execute(context) {
