@@ -4,6 +4,7 @@ import {
   buildImplementationPacket,
   assessImplementationReadiness,
 } from './core/workflow/implementation-packet.mjs';
+import { assessParallelScopeIndependence } from './core/delegation/parallel-scope.mjs';
 
 const DIRECT_WORK_GATES = new Set(['off', 'shadow', 'on']);
 
@@ -28,13 +29,53 @@ function laneFacts(facts = {}) {
   };
 }
 
-function directWorkMetadata(gate, lane) {
+function implementationParallelism(facts = {}) {
+  const request = facts.parallelImplementation;
+  if (request?.requestedMode !== 'PARALLEL_2') {
+    return { mode: 'SERIAL', reason: 'SERIAL_DEFAULT' };
+  }
+
+  const shards = request.shards;
+  const prerequisites = facts.bounded === true
+    && facts.independentWorkstreams === 2
+    && facts.unresolvedDiagnosis !== true
+    && facts.openEndedDiagnosis !== true
+    && Array.isArray(shards)
+    && shards.length === 2
+    && shards.every((shard) => shard?.resolved === true
+      && shard?.bounded === true
+      && shard.mutationScope
+      && typeof shard.mutationScope === 'object');
+  if (!prerequisites) {
+    return { mode: 'SERIAL', reason: 'PARALLEL_PREREQUISITES_UNMET' };
+  }
+
+  try {
+    const independence = assessParallelScopeIndependence(
+      shards[0].mutationScope,
+      shards[1].mutationScope,
+    );
+    if (independence.independent !== true) {
+      return { mode: 'SERIAL', reason: 'PARALLEL_PREREQUISITES_UNMET' };
+    }
+  } catch {
+    return { mode: 'SERIAL', reason: 'PARALLEL_PREREQUISITES_UNMET' };
+  }
+
+  return { mode: 'PARALLEL_2', reason: 'EXPLICIT_PARALLEL_2' };
+}
+
+function directWorkMetadata(gate, lane, parallel) {
+  const parallelActive = gate === 'on' && parallel.mode === 'PARALLEL_2';
   return {
     gate,
     mode: lane.mode,
     reason: lane.reason,
     auditRequired: lane.auditRequired,
-    primaryWorkerCount: lane.mode === EXECUTION_MODES.DIRECT_WORK ? 1 : 0,
+    implementationParallelism: parallel,
+    primaryWorkerCount: parallelActive
+      ? 2
+      : lane.mode === EXECUTION_MODES.DIRECT_WORK ? 1 : 0,
     spawnInvestigator: false,
     spawnReviewerBeforeCandidate: false,
     quickAuditorProfile:
@@ -53,11 +94,12 @@ export function decideAntigravityWork(facts = {}, { env = process.env } = {}) {
   if (!applicable) return { ...baseline, directWork: { gate, applicable: false } };
 
   const lane = selectExecutionMode(laneFacts(facts));
+  const parallel = implementationParallelism(facts);
   if (gate === 'shadow') {
     return {
       ...baseline,
       directWork: {
-        ...directWorkMetadata(gate, lane),
+        ...directWorkMetadata(gate, lane, parallel),
         applicable: true,
         shadow: true,
         actualExecutor: baseline.executor,
@@ -65,11 +107,11 @@ export function decideAntigravityWork(facts = {}, { env = process.env } = {}) {
     };
   }
 
-  if (lane.mode === EXECUTION_MODES.DIRECT_WORK) {
+  if (lane.mode === EXECUTION_MODES.DIRECT_WORK && parallel.mode !== 'PARALLEL_2') {
     return {
       ...baseline,
       directWork: {
-        ...directWorkMetadata(gate, lane),
+        ...directWorkMetadata(gate, lane, parallel),
         applicable: true,
         shadow: false,
         implementationReadyRequired: true,
@@ -82,7 +124,7 @@ export function decideAntigravityWork(facts = {}, { env = process.env } = {}) {
   return {
     ...control,
     directWork: {
-      ...directWorkMetadata(gate, lane),
+      ...directWorkMetadata(gate, lane, parallel),
       applicable: true,
       shadow: false,
       controlReturned: true,
