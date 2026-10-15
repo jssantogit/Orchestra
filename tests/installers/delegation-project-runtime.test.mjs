@@ -83,8 +83,9 @@ function completedRecord() {
 
 test("delegation manifest owns one independent project-wide neutral runtime", async () => {
   const manifest = await loadRuntimeManifest("delegation");
+  const packageVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
   assert.equal(manifest.runtime, "delegation");
-  assert.equal(manifest.version, "1.0.1");
+  assert.equal(manifest.version, packageVersion);
   assert.ok(manifest.sourceRoots.includes("core"));
   assert.ok(manifest.sourceRoots.includes("runtime"));
   assert.ok(manifest.sourceRoots.includes("schemas"));
