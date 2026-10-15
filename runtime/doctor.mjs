@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { inspectDelegationCapabilities } from "./delegation/discovery.mjs";
+import { listDelegationArtifacts } from "./delegation/artifact-store.mjs";
 import { listDelegationRecords } from "./delegation/store.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,6 +49,7 @@ function unavailableDelegationReport() {
 function delegationRecovery(repoRoot) {
   try {
     const records = listDelegationRecords(repoRoot);
+    const artifacts = listDelegationArtifacts(repoRoot);
     const cleanupFailures = records
       .filter((record) => record.status === "CLEANUP_FAILED")
       .map((record) => ({
@@ -57,11 +59,19 @@ function delegationRecovery(repoRoot) {
     const inFlight = records
       .filter((record) => record.status === "STARTED")
       .map((record) => ({ delegationId: record.delegationId, startedAt: record.startedAt }));
+    const retainedArtifacts = artifacts
+      .filter((artifact) => artifact.state === "READY_FOR_REVIEW")
+      .map((artifact) => ({
+        artifactId: artifact.artifactId,
+        state: artifact.state,
+        reviewPath: artifact.delegatedPath,
+      }));
     return {
       stateReadable: true,
       required: cleanupFailures.length > 0,
       cleanupFailures,
       inFlight,
+      retainedArtifacts,
       reason: cleanupFailures.length > 0 ? "WORKSPACE_CLEANUP_FAILED" : null,
     };
   } catch {
@@ -70,6 +80,7 @@ function delegationRecovery(repoRoot) {
       required: true,
       cleanupFailures: [],
       inFlight: [],
+      retainedArtifacts: [],
       reason: "DELEGATION_STATE_UNREADABLE",
     };
   }
@@ -183,6 +194,12 @@ async function main() {
       const recovery = report.delegation.recovery;
       const paths = recovery.cleanupFailures.map((entry) => entry.recoverablePath).filter(Boolean);
       console.log(`INFO delegation:recovery — ${recovery.reason || "RECOVERY_REQUIRED"}${paths.length ? `; paths=${paths.join(",")}` : ""}`);
+    }
+    if (report.delegation.recovery?.retainedArtifacts?.length > 0) {
+      const retained = report.delegation.recovery.retainedArtifacts
+        .map((entry) => entry.artifactId)
+        .join(",");
+      console.log(`INFO delegation:retained-artifacts — ${retained}`);
     }
   }
   console.log(report.healthy ? "Orchestra Doctor: healthy" : "Orchestra Doctor: unhealthy");
