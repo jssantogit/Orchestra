@@ -275,6 +275,40 @@ export function transitionCompositeArtifactState(repoRoot, artifactId, {
   return { transitioned: true, reason: null, manifest };
 }
 
+export function restoreCompositeArtifactReadyState(repoRoot, artifactId, {
+  expectedState,
+  manifest,
+} = {}) {
+  assertCompositeArtifactId(artifactId);
+  if (expectedState !== "PROMOTED" && expectedState !== "DISCARDED") {
+    invalid("COMPOSITE_ARTIFACT_STATE_INVALID");
+  }
+  const ready = normalizeManifest(manifest);
+  if (ready.state !== "READY_FOR_REVIEW" || Object.hasOwn(ready, "cleanup")) {
+    invalid("COMPOSITE_ARTIFACT_STATE_INVALID");
+  }
+
+  const current = readCompositeArtifact(repoRoot, artifactId);
+  if (!current.exists) {
+    return { restored: false, reason: "COMPOSITE_ARTIFACT_NOT_FOUND", manifest: null };
+  }
+  if (!current.valid) {
+    return { restored: false, reason: current.reason ?? "COMPOSITE_ARTIFACT_INVALID", manifest: current.manifest };
+  }
+  if (current.manifest.state !== expectedState) {
+    return { restored: false, reason: "COMPOSITE_ARTIFACT_STATE_MISMATCH", manifest: current.manifest };
+  }
+
+  const expectedReady = { ...current.manifest, state: "READY_FOR_REVIEW" };
+  delete expectedReady.cleanup;
+  if (JSON.stringify(expectedReady) !== JSON.stringify(ready)) {
+    return { restored: false, reason: "COMPOSITE_ARTIFACT_STATE_MISMATCH", manifest: current.manifest };
+  }
+
+  const restored = replaceManifest(repoRoot, artifactId, ready);
+  return { restored: true, reason: null, manifest: restored };
+}
+
 export function recordCompositeArtifactCleanup(repoRoot, artifactId, cleanup) {
   assertCompositeArtifactId(artifactId);
   const current = readCompositeArtifact(repoRoot, artifactId);
