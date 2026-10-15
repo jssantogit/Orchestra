@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { bumpVersion, parseStableVersion, selectLatestStableTag, suggestBump } from "./versioning.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const RUNTIMES = Object.freeze(["core", "codex", "antigravity"]);
+const RUNTIMES = Object.freeze(["core", "codex", "antigravity", "delegation"]);
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
