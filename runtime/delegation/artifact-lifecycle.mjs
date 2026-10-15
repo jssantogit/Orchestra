@@ -546,6 +546,14 @@ export async function promoteDelegationArtifact({
   let sourceFingerprint = null;
   let patchPath = null;
   try {
+    const stored = readDelegationArtifact(repoRoot, artifactId);
+    if (stored.exists
+        && stored.valid
+        && stored.manifest?.parallelGroupId
+        && stored.manifest?.parallelMemberId) {
+      return { promoted: false, reason: "CAPABILITY_DENIED", changedPaths: [] };
+    }
+
     const checked = await artifactIntegrity(repoRoot, artifactId);
     const manifest = checked.manifest;
     if (!manifest || manifest.state !== "READY_FOR_REVIEW") {
