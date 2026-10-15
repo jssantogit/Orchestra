@@ -4,13 +4,13 @@ import {
 } from "../../core/domain/delegation.mjs";
 import { authorizeDelegationRequest } from "../../core/delegation/policy.mjs";
 import { buildWorkerEnvelope } from "../../core/delegation/worker-envelope.mjs";
-import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
 import { sealDelegationArtifact } from "./artifact-lifecycle.mjs";
 import {
   cleanupMutableDelegationWorkspace,
   inspectMutableDelegationWorkspace,
   prepareMutableDelegationWorkspace,
 } from "./mutable-workspace.mjs";
+import { readDelegationProductFingerprint } from "./source-snapshot.mjs";
 import {
   cleanupDelegationWorkspace,
   inspectDelegationWorkspace,
@@ -19,7 +19,6 @@ import {
 import { writeDelegationRecord } from "./store.mjs";
 import { createDelegationLifecycleEvent } from "./events.mjs";
 
-const PRODUCT_FINGERPRINT_EXCLUDES = Object.freeze([".orchestra/state/**"]);
 const UNALLOCATED_WORKSPACE = "UNALLOCATED";
 const FAILURE_REASONS = new Set([
   "PROVIDER_UNAVAILABLE",
@@ -721,9 +720,7 @@ export function createDelegationBroker({
         return failureResult(request, "CAPABILITY_DENIED");
       }
 
-      const sourceIdentity = readWorkspaceFingerprint(repoRoot, {
-        excludedPaths: PRODUCT_FINGERPRINT_EXCLUDES,
-      });
+      const sourceIdentity = readDelegationProductFingerprint(repoRoot);
       const authorization = authorizeDelegationRequest(request, {
         sourceProvider: actor.provider,
         sourceFingerprint: sourceIdentity.fingerprint,
