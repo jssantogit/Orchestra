@@ -17,90 +17,76 @@ The installed Orchestra 1.1.0 delegation contract is intentionally read/process-
 - the Antigravity executor explicitly instructs the delegated worker not to modify files;
 - the broker treats a dirty delegated workspace as a capability violation and then cleans the workspace.
 
-This behavior is correct for the original cross-provider review milestone, but it means the current protocol cannot legitimately represent a cross-provider implementer.
-
-The required outcome is therefore not to bypass the policy. The required outcome is to add a new, explicit mutation-capable execution contract while preserving the original read-only contract unchanged.
+That is correct for the original cross-provider review milestone, but it cannot represent a legitimate cross-provider implementer. The fix must therefore add a new explicit mutation-capable execution contract rather than bypass or weaken the shipped policy.
 
 ## 2. Intent and success criteria
 
-A root CONTROL actor must be able to delegate a bounded implementation packet to the other provider, allow that worker to modify only an isolated candidate workspace, independently inspect the produced implementation, and explicitly promote or discard the sealed mutation artifact.
+A root CONTROL actor must be able to delegate a bounded implementation packet to the other provider, allow that worker to modify only an isolated candidate workspace, independently inspect the produced implementation, and explicitly promote or discard a sealed mutation artifact.
 
-Success means all of the following are true:
+Success requires all of the following:
 
 1. `DelegationRequest.v1` remains semantically and behaviorally read-only.
-2. A separate implementation contract can grant exactly `LOCAL_READ + PROCESS_EXEC + WORKSPACE_EDIT`.
+2. A separate implementation contract grants exactly `LOCAL_READ + PROCESS_EXEC + WORKSPACE_EDIT`.
 3. Mutation is limited to an isolated delegated workspace and an explicit machine-enforced path scope.
 4. Worker network tools, recursive delegation, publication, remote-repository mutation, and canonical-repository mutation remain forbidden.
-5. The canonical CONTROL workspace and canonical Git state are unchanged during delegated execution.
-6. Worker-produced changes are broker-derived and sealed; the model cannot self-report itself into a canonical Candidate.
+5. Canonical CONTROL workspace and canonical Git state remain unchanged during delegated execution.
+6. Worker-produced changes are broker-derived and sealed; model output cannot self-report itself into a Candidate.
 7. CONTROL can inspect/test the sealed workspace before promotion.
 8. Promotion is a separate explicit CONTROL action and fails closed if the canonical baseline or artifact changed.
 9. Failure never silently falls back to same-provider/manual implementation.
-10. Existing cross-provider review, Doctor, packaging, contamination, turn-economy and release invariants remain green.
+10. Existing review, Doctor, packaging, contamination, turn-economy and release invariants remain green.
 
-## 3. Existing architectural facts
+## 3. Existing foundation
 
-The current repository already provides the useful foundation:
+The current repository already provides the needed base:
 
-- provider-neutral delegation contracts and policy under `core/delegation/**` and `core/domain/delegation.mjs`;
-- a neutral broker/composition root under `runtime/delegation/**`;
+- provider-neutral delegation policy/contracts;
+- neutral broker/composition root under `runtime/delegation/**`;
 - provider-local Codex and Antigravity executors;
 - bounded process execution and sanitized provider environments;
 - dirty source snapshot materialization;
 - symlink-egress checks;
-- Git hook disabling for broker Git operations;
+- Git-hook disabling for broker Git operations;
 - canonical refs/config/hooks fingerprinting;
 - process-tree termination;
 - recursive-delegation fencing;
 - project-owned `.orchestra/state/**` excluded from product fingerprints;
-- an existing `ImplementationPacket` carrying goal, scope, validation and failure policy;
-- existing Candidate/Evidence/Acceptance state machines owned by CONTROL.
+- `ImplementationPacket` goal/scope/validation/failure policy;
+- Candidate/Evidence/Acceptance state machines owned by CONTROL.
 
-The new design should reuse these pieces rather than create a second control plane.
+The mutable path must extend this neutral plane, not create a second control plane.
 
 ## 4. Alternatives considered
 
-### 4.1 Relax `DelegationRequest.v1` in place
+### 4.1 Relax v1 in place
 
-Change v1 to accept `WORKSPACE_EDIT` and `mutation = ALLOWED`.
+Allow `WORKSPACE_EDIT` and mutation in `DelegationRequest.v1`.
 
-**Rejected.** V1 is already shipped and field-proven as a read-only capability boundary. Relaxing it would silently change the meaning of existing requests, tests, persisted records and security assumptions. It would also make privilege review harder because the same schema would describe two materially different trust levels.
+**Rejected.** V1 is shipped and field-proven as a read-only capability boundary. Relaxing it would silently change the meaning of existing requests, tests, persisted records and security assumptions.
 
-### 4.2 Add mutation directly to the current ephemeral Git worktree
+### 4.2 Mutate the current linked Git worktree
 
-Keep the current request/broker lifecycle but allow dirty worktrees for `IMPLEMENTER`.
+Keep the current lifecycle and allow a dirty worktree for `IMPLEMENTER`.
 
-**Rejected.** A linked Git worktree has its own worktree/index but shares the repository's common Git object/ref/config infrastructure. The current read-only design can detect forbidden canonical Git mutations after execution, but a mutation-capable worker should not be placed in a workspace that can physically reach the canonical Git common directory as part of normal Git operation. Detection after damage is weaker than isolation.
+**Rejected.** A linked worktree shares the repository's common Git infrastructure. Detection after a forbidden Git mutation is weaker than physically isolating a write-capable worker.
 
-### 4.3 Create a separate implementation-specific control plane
+### 4.3 Separate implementation control plane
 
-Add a second broker/runtime dedicated to mutable workers.
+Create a second broker/runtime for mutable workers.
 
-**Rejected.** This duplicates discovery, process boundaries, lifecycle, store, Doctor and provider composition. It also increases the chance that review and implementation delegation drift into inconsistent security models.
+**Rejected.** It duplicates discovery, process boundaries, lifecycle, state, Doctor and provider composition and invites security drift.
 
-### 4.4 Selected: additive v2 implementation protocol on the existing neutral broker
+### 4.4 Selected design: additive v2 implementation protocol
 
-Keep v1 exactly read-only and add a v2 request/result pair specifically for bounded implementation. The broker dispatches by schema version but shares provider discovery, process execution, state, events and recovery infrastructure.
+Keep v1 exactly read-only. Add a v2 request/result pair specifically for bounded implementation while retaining the existing neutral broker and provider executors.
 
-Implementation workers run in an **independent local ephemeral clone**, not a linked worktree. The broker seals the produced mutation as a local artifact and retains the clone for CONTROL review. Promotion/discard are separate broker operations.
-
-This is the selected design.
+V2 workers run in an **independent local ephemeral clone**, not a linked worktree. Orchestra seals the produced delta as a local Mutation Artifact and retains the isolated clone for CONTROL review. Promotion/discard are explicit later CONTROL operations.
 
 ## 5. Normative invariants
 
-### 5.1 Delegation still does not transfer authority
+### 5.1 Execution delegation is not authority transfer
 
-Cross-provider implementation delegates execution, not CONTROL.
-
-The delegated worker does not receive:
-
-- Work Lease ownership;
-- generation-advance authority;
-- Candidate promotion authority;
-- Evidence promotion authority;
-- Acceptance authority;
-- release/publication authority;
-- recursive delegation authority.
+The worker does not receive Work Lease ownership, generation-advance authority, Candidate/Evidence promotion authority, Acceptance authority, release/publication authority, or recursive delegation authority.
 
 ### 5.2 V1 remains immutable in meaning
 
@@ -108,9 +94,7 @@ The delegated worker does not receive:
 
 ### 5.3 V2 represents implementation only
 
-The first v2 milestone is deliberately narrow. It does not attempt to become a generic capability matrix.
-
-A valid implementation request has these semantic constants:
+The first v2 milestone is deliberately narrow:
 
 ```text
 schema                 = orchestra.delegation-request.v2
@@ -128,15 +112,13 @@ Any other combination fails closed.
 
 ### 5.4 Canonical repository is never the worker workspace
 
-The worker process must never run with the canonical checkout as `cwd`.
+The worker never runs with the canonical checkout as `cwd`. V2 uses an independent clone with its own `.git` storage so ordinary worker Git operations do not share canonical refs/config/hooks/object storage.
 
-For v2, the delegated workspace is an independent local clone with its own `.git` directory. Worker Git commands therefore cannot mutate canonical refs, config, hooks or object storage through linked-worktree sharing.
+### 5.5 Scope is machine-enforced
 
-### 5.5 Scope is machine-enforced, not prompt-only
+`ImplementationPacket.scope.allowedAreas` remains human/task context and is not treated as a sufficient security boundary.
 
-`ImplementationPacket.scope.allowedAreas` remains useful human/task context but is not sufficient as a mutation security boundary.
-
-V2 adds an explicit normalized mutation scope containing repository-relative paths/patterns. The broker derives the actual changed path set after execution and rejects any change outside the authorized set or inside mandatory forbidden regions.
+V2 adds an explicit normalized mutation scope containing repository-relative allowed/forbidden path patterns. Orchestra derives the actual changed path set after execution and rejects any change outside the authorized set or inside mandatory forbidden regions.
 
 Mandatory forbidden regions include at least:
 
@@ -145,17 +127,13 @@ Mandatory forbidden regions include at least:
 .orchestra/state/**
 ```
 
-Absolute paths, parent traversal and path forms that normalize outside the delegated clone are invalid.
+Absolute paths, parent traversal and normalized egress are invalid.
 
-### 5.6 Model output never defines the mutation artifact
+### 5.6 Model output never defines mutation facts
 
-The worker report remains a bounded model claim. Changed paths, patch bytes, hashes and candidate workspace identity are derived by Orchestra from the filesystem/Git state after execution.
+Changed paths, patch bytes, hashes and workspace identity are derived by Orchestra from Git/filesystem state. The worker report remains only a bounded model claim.
 
-The worker cannot declare which files it changed in order to bypass inspection.
-
-### 5.7 Delegation result is still not Candidate or Acceptance
-
-The existing invariant remains:
+### 5.7 Delegation result is not Candidate or Acceptance
 
 ```text
 DelegationResult != Evidence
@@ -163,39 +141,24 @@ DelegationResult != Candidate
 DelegationResult != Acceptance
 ```
 
-A successful v2 result may reference a sealed **Mutation Artifact**, but promotion of that artifact into the canonical workspace is a separate CONTROL action. Existing Candidate/Evidence/Acceptance flow continues after promotion.
+A successful v2 result may reference a sealed **Mutation Artifact**. Promotion only materializes an already-reviewed delta under CONTROL authority; normal Candidate/Evidence/Acceptance workflow follows afterward.
 
 ## 6. V2 request contract
 
-Add `schemas/delegation-request.v2.schema.json`.
-
-Illustrative shape:
+Add `schemas/delegation-request.v2.schema.json` with an implementation-only shape:
 
 ```ts
 DelegationRequestV2 {
   schema: "orchestra.delegation-request.v2"
   delegationId
   taskId
-
-  source: {
-    provider
-    actorIdHash
-  }
-
-  target: {
-    provider
-    logicalRole: "IMPLEMENTER"
-  }
-
+  source: { provider, actorIdHash }
+  target: { provider, logicalRole: "IMPLEMENTER" }
   purpose: "IMPLEMENTATION"
   packet: ImplementationPacket
 
   authority: {
-    capabilities: [
-      "LOCAL_READ",
-      "PROCESS_EXEC",
-      "WORKSPACE_EDIT"
-    ]
+    capabilities: ["LOCAL_READ", "PROCESS_EXEC", "WORKSPACE_EDIT"]
     mutation: "WORKSPACE_ONLY"
     network: "FORBIDDEN"
     mayDelegate: false
@@ -219,15 +182,13 @@ DelegationRequestV2 {
 }
 ```
 
-`allowedPaths` must be non-empty. `forbiddenPaths` may be empty in the request, but the broker always unions it with Orchestra mandatory forbidden paths.
+`allowedPaths` is non-empty. Core validation rejects unsafe path syntax beyond what JSON Schema should express.
 
-The Core validator additionally rejects unsafe path syntax that JSON Schema alone should not attempt to model.
-
-## 7. V2 result and sealed mutation artifact
+## 7. V2 result and Mutation Artifact
 
 Add `schemas/delegation-result.v2.schema.json`.
 
-A successful implementation result contains a bounded artifact descriptor derived by the broker:
+A successful result may contain a broker-derived artifact descriptor:
 
 ```ts
 DelegationResultV2 {
@@ -261,170 +222,139 @@ DelegationResultV2 {
 }
 ```
 
-`delegatedPath` is local execution metadata for the root CONTROL actor. It is never interpreted as authority and is not accepted from model output.
-
-The artifact descriptor exists only for a successful, scope-valid, sealed implementation. Failure results do not expose a promotable artifact.
+`delegatedPath` is local broker metadata for CONTROL review and never authority. Failure results do not expose a promotable artifact.
 
 ## 8. Mutable workspace lifecycle
 
-### 8.1 Validate and authorize before external execution
+### 8.1 Authorize before allocation or external execution
 
-Before provider discovery or filesystem allocation:
+Before provider discovery or workspace creation:
 
-- v2 schema validates;
-- source provider matches the root actor;
+- schema validates;
+- source provider matches root actor;
 - target differs from source;
-- role is `IMPLEMENTER`;
-- purpose is `IMPLEMENTATION`;
-- exact v2 capabilities are present;
+- role/purpose are exactly `IMPLEMENTER`/`IMPLEMENTATION`;
+- exact v2 capability set is present;
 - mutation is `WORKSPACE_ONLY`;
-- network is `FORBIDDEN`;
-- recursive delegation is forbidden;
-- source revision/fingerprint matches the canonical workspace;
-- mutation scope is syntactically safe.
+- network and recursive delegation are forbidden;
+- source revision/fingerprint matches canonical workspace;
+- mutation scope is safe.
 
-### 8.2 Create an independent local clone
+### 8.2 Create a hardened independent local clone
 
-The broker creates a clone outside the canonical checkout root using only the local repository as source. No remote network access is required.
+The broker creates the clone outside the canonical checkout using only the local repository as source. No remote network is required.
 
-The clone must:
+The clone boundary is stronger than merely having a separate `.git` directory. The implementation MUST ensure:
 
-- have an independent `.git` directory;
-- resolve outside the canonical checkout;
-- disable hooks for broker Git operations;
-- not inherit unsafe local Git configuration;
-- be attributable to one delegation/artifact ID;
-- work on supported Ubuntu and Windows CI surfaces.
+- clone storage resolves outside the canonical checkout;
+- `git clone --no-hardlinks` or an equivalent copy-isolating mechanism is used;
+- no object alternates reference canonical Git storage;
+- all inherited remotes are removed before the worker starts;
+- the worker cannot use a local `origin`/file transport to push into the canonical repository;
+- broker Git commands disable hooks;
+- the worker receives an isolated Git configuration: system config disabled, a broker-created empty global config, and a clone-local empty hooks path;
+- remote Git protocols are disabled for the worker execution environment/config, independently of the model prompt;
+- unsafe canonical Git config is not inherited;
+- the clone is attributable to one delegation/artifact ID;
+- the boundary works on supported Ubuntu and Windows CI surfaces.
+
+Provider sandboxing remains mandatory. Canonical workspace/Git fingerprint checks remain a defense-in-depth detector even though the clone is independently isolated.
 
 ### 8.3 Materialize the exact source snapshot
 
-The clone starts at `sourceRevision`. The existing dirty/uncommitted snapshot logic is reused/adapted so the delegated implementation sees exactly the same product state as CONTROL.
+The clone starts at `sourceRevision`. Existing dirty/staged/unstaged/untracked snapshot logic is reused/adapted so the delegated implementation sees the same product state as CONTROL.
 
-After materialization, Orchestra creates a **synthetic baseline commit inside the independent clone only**. This commit exists solely to define the exact pre-worker content baseline and never touches canonical Git storage or refs.
+After materialization, Orchestra creates a **synthetic baseline commit inside the independent clone only**. It exists solely to define the exact pre-worker content baseline and never touches canonical Git storage or refs.
 
-The synthetic baseline is created with:
+The synthetic baseline uses hooks disabled, fixed Orchestra-local identity, no signing and no network.
 
-- hooks disabled;
-- fixed Orchestra-local author/committer identity;
-- no signing;
-- no network;
-- no canonical ref update.
-
-This solves an important case: when CONTROL's canonical workspace was already dirty, the final worker delta must exclude those pre-existing changes.
+This is required because a canonical workspace may already be dirty: the final worker delta must exclude those pre-existing changes.
 
 ### 8.4 Run the provider implementer
 
-Provider executors select their prompt from the request version/capability profile.
+Executors select their prompt from request version/capability profile. V2 authorizes modification only inside the supplied mutation scope while network use and delegation remain forbidden.
 
-For v2 the prompt states that the worker may modify files only within the supplied mutation scope, while network use and delegation remain forbidden.
+Provider inference transport is infrastructure, not worker network authority.
 
-Provider sandboxing remains enabled. Provider inference transport is infrastructure, not worker network authority.
-
-The worker returns the same bounded report shape. Orchestra does not trust the report for filesystem facts.
+The worker returns the existing bounded report shape. Orchestra does not trust the report for filesystem facts.
 
 ### 8.5 Derive and validate actual mutation
 
-After execution Orchestra derives the changed path set from the clone.
+After execution Orchestra derives the changed path set from the clone and verifies:
 
-It then verifies:
-
-- every changed path is inside `allowedPaths`;
-- no changed path is inside request or mandatory forbidden paths;
-- no changed symlink resolves outside the delegated clone;
+- every changed path is allowed;
+- no changed path is request-forbidden or Orchestra-mandatory-forbidden;
+- changed symlinks cannot escape the clone;
 - canonical product fingerprint is unchanged;
-- canonical Git refs/config/hooks fingerprint is unchanged;
-- the delegated clone still descends from the synthetic baseline.
+- canonical refs/config/hooks fingerprint is unchanged;
+- the clone still has the expected synthetic baseline lineage.
 
-Any violation returns failure and produces no promotable artifact.
+Violation produces no promotable artifact.
 
 ### 8.6 Seal the artifact
 
-Inside the independent clone, the broker stages the validated worker delta with hooks disabled and creates a binary/full-index patch from the synthetic baseline to the staged result.
+Inside the independent clone, Orchestra stages the validated worker delta with hooks disabled and creates a binary/full-index patch from synthetic baseline to staged result.
 
-Because the synthetic baseline already contains the pre-existing canonical dirty snapshot, the patch contains **only the delegated worker delta** while still representing new, deleted and binary files.
+Because the baseline already contains the canonical pre-existing dirty snapshot, the patch represents **only worker delta** while covering new/deleted/binary files.
 
-Orchestra records under project-owned state:
+Project-owned state stores:
 
 ```text
 .orchestra/state/delegation/artifacts/<artifact-id>/manifest.json
 .orchestra/state/delegation/artifacts/<artifact-id>/candidate.patch
 ```
 
-The manifest contains bounded factual metadata including:
+The manifest contains delegation/task identity, source actor/provider, CONTROL generation, source revision/fingerprint, canonical Git boundary fingerprint, retained clone path, normalized mutation scope, changed paths, patch SHA-256, mutation content digest and lifecycle state.
 
-- delegation/task IDs;
-- source provider/actor hash;
-- generation supplied by CONTROL;
-- source revision/fingerprint;
-- canonical Git boundary fingerprint;
-- delegated clone path;
-- normalized mutation scope;
-- changed paths;
-- patch SHA-256;
-- mutation content digest;
-- lifecycle state.
-
-The patch and manifest are not product files and remain excluded from the product workspace fingerprint.
+`mutationDigest` is independent of synthetic commit SHA and is computed from normalized changed-path facts (path, kind, mode and content/link hash) so it can be rechecked after promotion.
 
 ### 8.7 Retain for independent review
 
-On successful v2 execution the independent clone is **not immediately deleted**. It is retained as a sealed review workspace.
+A successful v2 clone is retained as a sealed review workspace until explicit promote/discard.
 
-This lets CONTROL independently:
+CONTROL can inspect actual modified files, run local tests, compare report vs reality and decide whether to promote.
 
-- inspect the actual modified files;
-- run local tests in the candidate workspace;
-- compare the worker report against filesystem reality;
-- decide whether to promote or discard.
-
-Before any later promotion, Orchestra re-computes the sealed patch/hash/digest. Any post-seal mutation causes `ARTIFACT_TAMPERED` and blocks promotion.
+Before promotion, Orchestra regenerates/rechecks patch hash and mutation digest. Any post-seal change yields `ARTIFACT_TAMPERED`.
 
 ### 8.8 Explicit promotion
 
 Add a neutral broker operation conceptually equivalent to:
 
 ```ts
-promoteDelegationArtifact({
-  repoRoot,
-  artifactId,
-  generation,
-  actor,
-})
+promoteDelegationArtifact({ repoRoot, artifactId, generation, actor })
 ```
 
-Promotion is CONTROL-owned and must verify all of the following atomically enough to fail closed:
+Promotion verifies:
 
 1. artifact state is `READY_FOR_REVIEW`;
-2. actor matches the original root source actor;
-3. supplied generation matches the artifact generation;
-4. canonical source fingerprint is still exactly the artifact baseline;
-5. canonical Git boundary fingerprint is still unchanged;
-6. retained clone still matches the sealed patch hash/digest;
-7. changed paths still satisfy the original mutation scope;
-8. `git apply --check` succeeds against the canonical workspace;
-9. applying the patch produces the sealed changed-file content.
+2. actor matches original root source actor;
+3. CONTROL generation matches artifact generation;
+4. canonical source fingerprint still exactly matches artifact baseline;
+5. canonical Git boundary fingerprint is unchanged;
+6. retained clone still matches sealed patch hash/digest;
+7. paths still satisfy original scope;
+8. `git apply --check` succeeds against canonical workspace;
+9. patch application produces the sealed changed-file content/mutation digest.
 
-Only after all checks pass may the broker apply the delegated delta to the canonical workspace.
+Only then may Orchestra apply the worker delta to the canonical workspace.
 
-Promotion does **not** self-accept the implementation. It only materializes the already-reviewed worker delta under CONTROL authority. Candidate/Evidence/Acceptance state transitions continue through the existing Orchestra workflow.
+The apply step must preserve the canonical workspace's pre-existing staged/unstaged baseline rather than restaging or duplicating it. Promotion does not create Acceptance or auto-promote Evidence/Candidate state.
 
 ### 8.9 Explicit discard
 
-A sibling operation discards a `READY_FOR_REVIEW` artifact and cleans the retained clone. Discard does not alter the canonical workspace.
+A sibling operation discards a `READY_FOR_REVIEW` artifact and cleans its retained clone without changing canonical product state.
 
 ### 8.10 Cleanup and recovery
 
-Failures before a valid artifact is sealed always attempt immediate clone cleanup.
+Failures before sealing attempt immediate cleanup. Successful implementation retains the clone until promote/discard.
 
-Successful implementation retains the clone until promote/discard.
-
-If cleanup fails, the artifact/record keeps a recoverable path and Doctor can report it. Cleanup commands remain attribution-bound and must never perform broad deletion.
+Cleanup is attribution-bound. If cleanup fails, the state record retains a recoverable path and Doctor reports it; broad destructive cleanup is forbidden.
 
 ## 9. Failure taxonomy
 
 V1 taxonomy remains unchanged.
 
-V2 adds only implementation-specific failures needed for factual control:
+V2 adds only the factual families needed for mutable execution:
 
 ```text
 SCOPE_VIOLATION
@@ -434,177 +364,158 @@ PROMOTION_STALE
 PROMOTION_FAILED
 ```
 
-Provider absence, capability denial, workspace preparation, execution timeout/failure, invalid result and cleanup failure reuse existing reason families.
+Existing provider/capability/workspace/execution/timeout/result/cleanup reason families are reused. No failure implies provider fallback or manual implementation.
 
-No failure triggers implicit provider fallback or manual implementation.
-
-## 10. Provider executor changes
+## 10. Provider executor behavior
 
 ### Antigravity
 
-The current executor already invokes `agy --sandbox ... --print` from the delegated workspace. V2 changes the worker prompt from read-only to explicitly scoped implementation permission.
-
-The broker, not the prompt, remains responsible for enforcing actual changed paths and sealing the artifact.
+V1 continues to say `Do not modify files`. V2 explicitly authorizes only scoped workspace mutation while keeping network and delegation forbidden. `agy --sandbox` remains enabled.
 
 ### Codex
 
-The current executor already uses `codex exec --sandbox workspace-write` while the v1 prompt forbids source mutation. V1 keeps that behavior and its post-execution dirty-workspace denial.
+V1 remains logically read-only despite the executor's physical `workspace-write` sandbox. V2 changes the prompt to allow scoped mutation. The broker, not the prompt, enforces actual changes.
 
-For v2, the prompt authorizes bounded workspace mutation. The same broker-side scope/seal checks apply, preserving symmetry between providers.
+### Shared rule
 
-### Shared executor rule
-
-Provider executors do not receive promotion authority and do not write canonical Orchestra state directly. They execute a worker in the supplied isolated workspace and return only a bounded report plus execution facts.
+Executors do not receive promotion authority and do not write canonical Orchestra state. They execute in the supplied isolated workspace and return only bounded report/execution facts.
 
 ## 11. Broker and CLI surface
 
-The neutral broker remains the single lifecycle owner.
+The neutral broker remains lifecycle owner and gains version-aware execution plus explicit artifact actions.
 
-It gains version-aware execution plus explicit artifact actions. Exact CLI syntax is an implementation detail, but the existing v1 invocation must remain backward compatible.
-
-A practical shape is:
+Existing v1 CLI invocation stays backward compatible. Prefer a separate neutral artifact CLI over destabilizing the shipped parser, for example:
 
 ```text
-cli.mjs <existing v1 execute flags>
-cli.mjs execute <v2 request flags>
+cli.mjs <existing v1 flags>
+cli.mjs execute <v2 request flags>        # exact syntax may remain compatible without subcommand
 artifact-cli.mjs inspect --artifact <id> --repo-root <root>
 artifact-cli.mjs promote --artifact <id> --repo-root <root> --generation <n>
 artifact-cli.mjs discard --artifact <id> --repo-root <root> --generation <n>
 ```
 
-If preserving the original `cli.mjs` parser makes subcommands awkward, a separate neutral `artifact-cli.mjs` is preferred over destabilizing the shipped v1 CLI contract.
+Exact CLI spelling is an implementation decision; authority semantics are not.
 
 ## 12. Routing policy
 
-This hotfix does not make cross-provider implementation automatic merely because another provider is available.
+This hotfix does not make cross-provider implementation automatic merely because another provider exists.
 
-Implementation delegation requires explicit CONTROL intent. Same-provider/local implementation remains the normal routing default unless the orchestration decision specifically selects the cross-provider implementer.
+Cross-provider implementation requires explicit CONTROL intent. Same-provider/local implementation remains the normal default.
 
-There is no silent fallback:
+No silent fallback is allowed:
 
 ```text
 Codex CONTROL -> AGY implementation requested -> AGY unavailable
 = PROVIDER_UNAVAILABLE
 ```
 
-not:
-
-```text
-Codex CONTROL -> AGY unavailable -> Codex silently implements
-```
-
-This preserves the behavior expected by the Tsuzuki F7 checkpoint.
+not silent Codex/manual implementation.
 
 ## 13. Security properties that must survive
 
-The implementation must preserve the hardening already shipped in 1.1.0:
+The implementation preserves all 1.1.0 hardening, including:
 
-- dirty/uncommitted source snapshot fidelity;
+- dirty/uncommitted snapshot fidelity;
 - symlink egress protection;
-- Git hooks disabled for broker Git operations;
+- broker Git hooks disabled;
 - canonical refs/config/hooks protection;
-- sanitized delegated process environment;
-- process-tree termination on timeout;
+- sanitized delegated environment;
+- process-tree termination;
 - recursive-delegation fencing;
 - neutral-only provider packaging;
 - duplicate-install safety;
 - forbidden worker-envelope paths;
-- project-owned state excluded from product fingerprints;
+- project state excluded from product fingerprints;
 - provider-runtime firewall and contamination rules.
 
-The mutable protocol adds isolation; it must not weaken any of these controls.
+V2 adds clone/remotes/config/protocol isolation; it does not replace existing defenses.
 
-## 14. Required TDD/verification matrix
+## 14. Required TDD and verification matrix
 
-Implementation starts with RED tests proving the missing behavior and preserving old behavior.
-
-Minimum required coverage:
+Implementation begins with RED tests.
 
 ### Contract/policy
 
-- v1 still rejects `WORKSPACE_EDIT` and any mutation permission;
+- v1 still rejects `WORKSPACE_EDIT`/mutation;
 - v2 accepts exactly the implementation capability set;
-- v2 rejects read-only/mixed/unknown capability combinations;
-- v2 rejects network permission, recursion, wrong role, wrong purpose and non-clone isolation;
-- unsafe mutation-scope paths are rejected.
+- v2 rejects mixed/unknown capability combinations;
+- v2 rejects network, recursion, wrong role/purpose and non-clone isolation;
+- unsafe mutation-scope syntax fails.
 
-### Workspace isolation
+### Clone/Git isolation
 
-- v2 workspace has an independent `.git` directory;
-- worker `git config`, branch/ref creation or local commit inside the clone cannot mutate canonical refs/config/hooks;
-- canonical workspace fingerprint remains unchanged during worker execution;
-- dirty/staged/untracked canonical source state is reproduced exactly in the clone;
-- synthetic baseline causes the sealed patch to contain only worker delta.
+- clone has independent `.git` and no object alternates/hardlink dependency;
+- clone has no worker-visible remotes before execution;
+- worker Git config cannot inherit global/system hooks or remote protocol allowance;
+- worker `git config`, branch/ref creation, local commit or attempted push cannot mutate canonical refs/config/hooks;
+- canonical workspace fingerprint remains unchanged during execution;
+- dirty/staged/untracked source state is reproduced exactly;
+- synthetic baseline makes sealed patch contain only worker delta.
 
 ### Scope enforcement
 
-- allowed tracked edit passes;
-- allowed new file passes;
-- allowed deletion passes;
-- allowed binary change is captured;
-- mutation outside allowed paths fails;
+- allowed tracked edit/new file/deletion/binary change passes;
+- out-of-scope mutation fails;
 - mandatory forbidden paths fail even if request tries to allow them;
-- symlink egress mutation fails;
-- scope violation creates no promotable artifact.
+- symlink egress fails;
+- scope failure creates no promotable artifact.
 
 ### Artifact sealing/review
 
 - broker-derived changed paths match reality;
-- patch SHA and mutation digest are deterministic;
-- successful implementation returns `READY_FOR_REVIEW` artifact;
-- retained clone is available for CONTROL review;
-- modifying the clone after sealing makes promotion fail as tampered.
+- patch hash and mutation digest are deterministic;
+- success returns `READY_FOR_REVIEW`;
+- retained clone is available for independent review;
+- post-seal modification blocks promotion as tampering.
 
 ### Promotion/discard
 
-- promotion against unchanged canonical baseline applies exactly the worker delta;
-- pre-existing dirty canonical state is preserved rather than duplicated;
+- unchanged baseline promotes exactly worker delta;
+- pre-existing dirty/staged canonical state is preserved and not duplicated/restaged;
 - stale canonical fingerprint blocks promotion;
-- changed canonical Git boundary blocks promotion;
-- patch check failure leaves canonical workspace unchanged;
-- successful promotion marks artifact terminal and cleans clone;
-- discard leaves canonical workspace unchanged and cleans clone;
+- canonical Git boundary drift blocks promotion;
+- patch-check failure leaves canonical state unchanged;
+- post-apply content matches mutation digest;
+- successful promotion/discard cleans clone and transitions artifact terminally;
 - cleanup failure remains recoverable/Doctor-visible.
 
-### Provider execution
+### Provider behavior
 
-- AGY v1 prompt remains read-only;
-- AGY v2 prompt authorizes only scoped workspace mutation;
-- Codex v1 remains read-only by contract despite physical workspace-write sandbox;
-- Codex v2 gets the scoped implementation prompt;
-- both providers keep network/delegation prohibitions;
-- worker model output cannot forge changed paths/artifact hashes.
+- AGY v1 prompt stays read-only;
+- AGY v2 prompt allows only scoped workspace mutation;
+- Codex v1 stays read-only by contract;
+- Codex v2 gets scoped implementation prompt;
+- both keep network/delegation prohibitions;
+- model output cannot forge changed paths or artifact hashes.
 
 ### Regression/package surfaces
 
-- generated schemas/validators are synchronized;
-- runtime-core manifests are synchronized;
-- neutral delegation package contains required v2/artifact surfaces;
+- generated validators synchronized;
+- runtime-core manifests synchronized;
+- neutral delegation package includes required v2/artifact surfaces;
 - provider runtimes do not gain sibling control-plane code;
-- Doctor/contamination/firewall remain green;
-- full `npm test` remains green;
-- portable Ubuntu/Windows runtime tests remain green;
-- release-readiness and turn-economy regression surfaces remain green.
+- Doctor/contamination/firewall green;
+- full `npm test` green;
+- portable Ubuntu/Windows runtime tests green;
+- release-readiness and turn-economy surfaces green.
 
 ## 15. Rollout boundary
 
-This hotfix is developed and validated in Orchestra first.
+The fix is implemented and validated in Orchestra first. Tsuzuki is not modified during this work.
 
-It does **not** modify Tsuzuki during implementation or validation of the Orchestra fix.
-
-After the Orchestra branch is complete, independently reviewed, integrated and released through the existing Release Train, Tsuzuki synchronization remains a separate operator-controlled action. F7 can then restart from its preserved baseline using the new canonical mutable delegation mechanism.
+After the Orchestra change is complete, independently reviewed, integrated and released through the existing Release Train, Tsuzuki synchronization remains a separate operator-controlled action. F7 then restarts from its preserved baseline using the new canonical mutable delegation path.
 
 ## 16. Definition of done
 
-The architectural work is complete only when:
+The work is complete only when:
 
 1. v1 read-only behavior is demonstrably unchanged;
-2. v2 cross-provider implementation works for Codex -> AGY and AGY -> Codex through the neutral broker;
-3. worker mutation is physically isolated from canonical Git via an independent local clone;
-4. changed paths are machine-enforced against an explicit mutation scope;
-5. a successful worker produces a sealed, reviewable mutation artifact rather than an autoaccepted Candidate;
-6. CONTROL can inspect, promote or discard that artifact;
+2. v2 works for Codex -> AGY and AGY -> Codex;
+3. write-capable worker Git/filesystem activity is physically isolated from canonical Git;
+4. actual changed paths are machine-enforced;
+5. successful worker output becomes a sealed reviewable Mutation Artifact, not an autoaccepted Candidate;
+6. CONTROL can inspect, promote or discard it;
 7. stale/tampered promotion fails without canonical mutation;
-8. canonical workspace/Git integrity tests pass under adversarial cases;
+8. adversarial canonical workspace/Git integrity tests pass;
 9. packaging, Doctor, contamination/firewall, full regression and portable CI are green;
-10. no Tsuzuki product/runtime files are changed as part of this Orchestra hotfix.
+10. Tsuzuki remains untouched until a separate downstream rollout gate.
