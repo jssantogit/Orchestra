@@ -176,7 +176,7 @@ test("neutral delegation CLI remains bounded process execution and does not gran
 test("Antigravity crosses to Codex for implementation only under explicit CONTROL intent", () => {
   const capabilities = [
     { provider: "antigravity", available: true, independent: false },
-    { provider: "codex", available: true, independent: true },
+    { provider: "codex", available: true, independent: true, capabilities: { implementation: true } },
   ];
 
   assert.deepEqual(decideAntigravityCrossProviderRoute({
