@@ -30,6 +30,9 @@ function createRepo() {
   writeFileSync(join(root, "tracked.txt"), "canonical\n");
   git(root, "add", "tracked.txt");
   git(root, "commit", "-m", "initial");
+  // Orchestra project state is local runtime/governance state and is ignored in managed projects.
+  // Mirror that contract in this tiny standalone Git fixture so product status stays factual.
+  writeFileSync(join(root, ".git", "info", "exclude"), ".orchestra/\n", { flag: "a" });
   return root;
 }
 
