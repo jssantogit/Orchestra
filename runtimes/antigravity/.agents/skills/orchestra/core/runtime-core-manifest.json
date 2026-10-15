@@ -23,7 +23,7 @@
     },
     {
       "path": "delegation/worker-envelope.mjs",
-      "sha256": "638d32fb2410b5af037c4d1661a67b561a332db5eb00ee6cba7a0e5c0c263f8a"
+      "sha256": "5f4f4e29ac2ce6d1192098838ff35336b3d04ad4053c8a98182bbf16605c2fc9"
     },
     {
       "path": "domain/audit-result.mjs",
