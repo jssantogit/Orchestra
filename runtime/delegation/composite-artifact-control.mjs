@@ -10,17 +10,14 @@ import {
 import {
   readCompositeArtifact,
   recordCompositeArtifactCleanup,
-  transitionCompositeArtifactState,
 } from "./composite-artifact-store.mjs";
+import { commitCompositeTerminalState } from "./composite-terminal-state.mjs";
 import {
   readDelegationGitBoundary,
   readDelegationGitStdout,
   runDelegationGit,
 } from "./git-boundary.mjs";
-import {
-  readParallelGroup,
-  transitionParallelGroupState,
-} from "./parallel-group-store.mjs";
+import { readParallelGroup } from "./parallel-group-store.mjs";
 import { readDelegationProductFingerprint } from "./source-snapshot.mjs";
 
 const PROMOTION_LOCK_PATH = ".orchestra/state/delegation/promotion.lock";
@@ -324,23 +321,20 @@ export async function promoteCompositeArtifact({ repoRoot, artifactId, generatio
       return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
     }
 
-    const artifactTransition = transitionCompositeArtifactState(repoRoot, artifactId, {
-      expectedState: "READY_FOR_REVIEW",
-      nextState: "PROMOTED",
-      cleanup: { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED", recoverablePath: manifest.delegatedPath },
-    });
-    if (!artifactTransition.transitioned) {
-      const rolledBack = await rollbackPatch(repoRoot, patchPath, sourceFingerprint, indexBefore);
-      patchApplied = !rolledBack;
-      return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
-    }
-    const groupTransition = transitionParallelGroupState(repoRoot, manifest.groupId, {
-      expectedState: "READY_FOR_REVIEW",
-      nextState: "PROMOTED",
+    const terminal = commitCompositeTerminalState({
+      repoRoot,
+      artifactId,
+      groupId: manifest.groupId,
       memberArtifactIds: [...manifest.memberArtifactIds],
-      compositeArtifactId: artifactId,
+      nextState: "PROMOTED",
+      readyManifest: manifest,
+      cleanup: {
+        cleaned: false,
+        reason: "WORKSPACE_CLEANUP_FAILED",
+        recoverablePath: manifest.delegatedPath,
+      },
     });
-    if (!groupTransition.transitioned) {
+    if (!terminal.committed) {
       const rolledBack = await rollbackPatch(repoRoot, patchPath, sourceFingerprint, indexBefore);
       patchApplied = !rolledBack;
       return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
@@ -374,19 +368,20 @@ export async function discardCompositeArtifact({ repoRoot, artifactId, generatio
     if (!lease.allowed) return { discarded: false, reason: lease.reason };
     if (!checked.valid || !checked.derived) return { discarded: false, reason: "ARTIFACT_TAMPERED" };
 
-    const artifactTransition = transitionCompositeArtifactState(repoRoot, artifactId, {
-      expectedState: "READY_FOR_REVIEW",
-      nextState: "DISCARDED",
-      cleanup: { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED", recoverablePath: manifest.delegatedPath },
-    });
-    if (!artifactTransition.transitioned) return { discarded: false, reason: "PROMOTION_FAILED" };
-    const groupTransition = transitionParallelGroupState(repoRoot, manifest.groupId, {
-      expectedState: "READY_FOR_REVIEW",
-      nextState: "DISCARDED",
+    const terminal = commitCompositeTerminalState({
+      repoRoot,
+      artifactId,
+      groupId: manifest.groupId,
       memberArtifactIds: [...manifest.memberArtifactIds],
-      compositeArtifactId: artifactId,
+      nextState: "DISCARDED",
+      readyManifest: manifest,
+      cleanup: {
+        cleaned: false,
+        reason: "WORKSPACE_CLEANUP_FAILED",
+        recoverablePath: manifest.delegatedPath,
+      },
     });
-    if (!groupTransition.transitioned) return { discarded: false, reason: "PROMOTION_FAILED" };
+    if (!terminal.committed) return { discarded: false, reason: "PROMOTION_FAILED" };
 
     const cleanup = await cleanupReview(repoRoot, manifest.delegatedPath);
     recordCompositeArtifactCleanup(repoRoot, artifactId, cleanupRecord(cleanup, manifest.delegatedPath));
