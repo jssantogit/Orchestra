@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readlink, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, readFile, readlink, realpath, rm } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { assertDelegationRequest } from "../../core/domain/delegation.mjs";
 import {
   authorizeChangedPaths,
   normalizeMutationScope,
 } from "../../core/delegation/mutation-scope.mjs";
+import { acquireAtomicLock, releaseAtomicLock } from "../../core/leases/atomic-lock.mjs";
 import {
   readDelegationGitBoundary,
   readDelegationGitStdout,
@@ -14,7 +15,14 @@ import {
 } from "./git-boundary.mjs";
 import { inspectMutableDelegationWorkspace } from "./mutable-workspace.mjs";
 import { readDelegationProductFingerprint } from "./source-snapshot.mjs";
-import { writeDelegationArtifact } from "./artifact-store.mjs";
+import {
+  readDelegationArtifact,
+  transitionDelegationArtifactState,
+  writeDelegationArtifact,
+} from "./artifact-store.mjs";
+
+const PROMOTION_LOCK_PATH = ".orchestra/state/delegation/promotion.lock";
+const MAX_PATCH_BYTES = 64 * 1024 * 1024;
 
 function lifecycleError(code, detail = code, cause = undefined) {
   const error = new Error(`${code}:${detail}`);
@@ -200,7 +208,7 @@ export async function sealDelegationArtifact({
       "--full-index",
       workspace.syntheticBaselineSha,
       "--",
-    ], { maxBuffer: 64 * 1024 * 1024 });
+    ], { maxBuffer: MAX_PATCH_BYTES });
     const patch = Buffer.from(patchText, "utf8");
     const patchSha256 = `sha256:${sha256(patch)}`;
     const artifactId = request.delegationId;
@@ -242,5 +250,345 @@ export async function sealDelegationArtifact({
     if (error?.code === "SCOPE_VIOLATION") throw error;
     if (error?.code === "ARTIFACT_SEAL_FAILED") throw error;
     throw lifecycleError("ARTIFACT_SEAL_FAILED", "SEAL_FAILED", error);
+  }
+}
+
+function sameStrings(left, right) {
+  return Array.isArray(left)
+    && Array.isArray(right)
+    && left.length === right.length
+    && left.every((value, index) => value === right[index]);
+}
+
+async function validateReviewWorkspace(repoRoot, delegatedPath) {
+  if (typeof delegatedPath !== "string" || !delegatedPath) {
+    throw lifecycleError("ARTIFACT_TAMPERED", "REVIEW_PATH_INVALID");
+  }
+  const root = resolve(repoRoot);
+  const workspacePath = resolve(delegatedPath);
+  const scratchRoot = dirname(workspacePath);
+  if (inside(root, workspacePath)
+      || basename(workspacePath) !== "workspace"
+      || !basename(scratchRoot).startsWith("orchestra-implementation-")) {
+    throw lifecycleError("ARTIFACT_TAMPERED", "REVIEW_PATH_INVALID");
+  }
+
+  let workspaceStat;
+  try {
+    workspaceStat = await lstat(workspacePath);
+  } catch (error) {
+    throw lifecycleError("ARTIFACT_TAMPERED", "REVIEW_PATH_MISSING", error);
+  }
+  if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) {
+    throw lifecycleError("ARTIFACT_TAMPERED", "REVIEW_PATH_INVALID");
+  }
+  const [resolvedWorkspace, resolvedScratch] = await Promise.all([
+    realpath(workspacePath),
+    realpath(scratchRoot),
+  ]);
+  if (inside(root, resolvedWorkspace)
+      || inside(root, resolvedScratch)
+      || dirname(resolvedWorkspace) !== resolvedScratch) {
+    throw lifecycleError("ARTIFACT_TAMPERED", "REVIEW_PATH_INVALID");
+  }
+  return { workspacePath, scratchRoot };
+}
+
+async function artifactIntegrity(repoRoot, artifactId) {
+  let stored;
+  try {
+    stored = readDelegationArtifact(repoRoot, artifactId);
+  } catch (error) {
+    return {
+      stored: null,
+      manifest: null,
+      derived: null,
+      valid: false,
+      reason: "ARTIFACT_TAMPERED",
+      cause: error,
+    };
+  }
+  if (!stored.exists || !stored.valid || !stored.manifest || !Buffer.isBuffer(stored.patch)) {
+    return {
+      stored,
+      manifest: stored.manifest,
+      derived: null,
+      valid: false,
+      reason: "ARTIFACT_TAMPERED",
+    };
+  }
+
+  const manifest = stored.manifest;
+  if (`sha256:${sha256(stored.patch)}` !== manifest.patchSha256) {
+    return { stored, manifest, derived: null, valid: false, reason: "ARTIFACT_TAMPERED" };
+  }
+
+  if (manifest.state !== "READY_FOR_REVIEW") {
+    return { stored, manifest, derived: null, valid: true, reason: null };
+  }
+
+  try {
+    const { workspacePath } = await validateReviewWorkspace(repoRoot, manifest.delegatedPath);
+    const head = (await readDelegationGitStdout(workspacePath, ["rev-parse", "HEAD"])).trim();
+    if (head !== manifest.syntheticBaselineSha) {
+      throw lifecycleError("ARTIFACT_TAMPERED", "REVIEW_HEAD_CHANGED");
+    }
+
+    const derived = await deriveMutationFacts({
+      workspacePath,
+      baselineSha: manifest.syntheticBaselineSha,
+      scope: manifest.mutationScope,
+    });
+    if (!sameStrings(derived.changedPaths, manifest.changedPaths)
+        || derived.mutationDigest !== manifest.mutationDigest) {
+      throw lifecycleError("ARTIFACT_TAMPERED", "MUTATION_DIGEST_CHANGED");
+    }
+
+    const stagedPatch = await readDelegationGitStdout(workspacePath, [
+      "diff",
+      "--cached",
+      "--binary",
+      "--full-index",
+      manifest.syntheticBaselineSha,
+      "--",
+    ], { maxBuffer: MAX_PATCH_BYTES });
+    if (`sha256:${sha256(Buffer.from(stagedPatch, "utf8"))}` !== manifest.patchSha256) {
+      throw lifecycleError("ARTIFACT_TAMPERED", "STAGED_PATCH_CHANGED");
+    }
+    return { stored, manifest, derived, valid: true, reason: null };
+  } catch (error) {
+    return {
+      stored,
+      manifest,
+      derived: null,
+      valid: false,
+      reason: "ARTIFACT_TAMPERED",
+      cause: error,
+    };
+  }
+}
+
+export async function inspectDelegationArtifact({ repoRoot, artifactId } = {}) {
+  const checked = await artifactIntegrity(repoRoot, artifactId);
+  return {
+    manifest: checked.manifest,
+    integrity: { valid: checked.valid, reason: checked.reason },
+    reviewPath: checked.manifest?.delegatedPath ?? null,
+  };
+}
+
+function validControlAuthority(manifest, generation, actor) {
+  return manifest
+    && Number.isSafeInteger(generation)
+    && generation >= 0
+    && generation === manifest.generation
+    && actor?.isRoot === true
+    && actor?.provider === manifest.source.provider
+    && actor?.actorIdHash === manifest.source.actorIdHash;
+}
+
+function promotionLockPath(repoRoot) {
+  return join(resolve(repoRoot), PROMOTION_LOCK_PATH);
+}
+
+function acquireArtifactLock(repoRoot, artifactId, actor) {
+  return acquireAtomicLock(promotionLockPath(repoRoot), {
+    ownerIdHash: `${actor?.actorIdHash ?? "unknown"}:${artifactId ?? "unknown"}`,
+    staleAfterMs: 30_000,
+  });
+}
+
+async function cleanupRetainedWorkspace(repoRoot, delegatedPath) {
+  try {
+    const { scratchRoot } = await validateReviewWorkspace(repoRoot, delegatedPath);
+    await rm(scratchRoot, { recursive: true, force: true });
+    return { cleaned: true, reason: null };
+  } catch (error) {
+    return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED", error };
+  }
+}
+
+async function canonicalStillAtArtifactBaseline(repoRoot, manifest) {
+  const product = readDelegationProductFingerprint(repoRoot);
+  const gitBoundary = await readDelegationGitBoundary(repoRoot);
+  return product.available
+    && product.fingerprint === manifest.sourceFingerprint
+    && gitBoundary.available
+    && gitBoundary.fingerprint === manifest.canonicalGitFingerprint;
+}
+
+async function readCanonicalIndexPatch(repoRoot) {
+  return readDelegationGitStdout(repoRoot, [
+    "diff",
+    "--cached",
+    "--binary",
+    "--full-index",
+    "HEAD",
+    "--",
+  ], { maxBuffer: MAX_PATCH_BYTES });
+}
+
+async function canonicalFactForExpected(repoRoot, manifest, expected) {
+  if (expected.kind === "DELETED") {
+    try {
+      await lstat(resolve(repoRoot, expected.path));
+      throw lifecycleError("PROMOTION_FAILED", "DELETED_PATH_STILL_PRESENT");
+    } catch (error) {
+      if (error?.code === "PROMOTION_FAILED") throw error;
+      if (error?.code !== "ENOENT") throw error;
+      return { ...expected };
+    }
+  }
+  return mutationFact(repoRoot, manifest.sourceRevision, expected.path);
+}
+
+async function verifyPromotedMutation(repoRoot, manifest, expectedFacts) {
+  const actualFacts = [];
+  for (const expected of expectedFacts) {
+    actualFacts.push(await canonicalFactForExpected(repoRoot, manifest, expected));
+  }
+  actualFacts.sort((a, b) => a.path.localeCompare(b.path));
+  const digest = `sha256:${sha256(Buffer.from(JSON.stringify(actualFacts), "utf8"))}`;
+  return digest === manifest.mutationDigest;
+}
+
+async function rollbackAppliedPatch(repoRoot, patchPath, sourceFingerprint, indexPatch) {
+  try {
+    await runDelegationGit(repoRoot, ["apply", "--reverse", patchPath], { maxBuffer: MAX_PATCH_BYTES });
+    const [product, currentIndex] = await Promise.all([
+      Promise.resolve(readDelegationProductFingerprint(repoRoot)),
+      readCanonicalIndexPatch(repoRoot),
+    ]);
+    return product.available
+      && product.fingerprint === sourceFingerprint
+      && currentIndex === indexPatch;
+  } catch {
+    return false;
+  }
+}
+
+export async function promoteDelegationArtifact({
+  repoRoot,
+  artifactId,
+  generation,
+  actor,
+} = {}) {
+  const lock = acquireArtifactLock(repoRoot, artifactId, actor);
+  if (!lock.acquired) {
+    return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
+  }
+
+  let patchApplied = false;
+  let indexBefore = null;
+  let sourceFingerprint = null;
+  let patchPath = null;
+  try {
+    const checked = await artifactIntegrity(repoRoot, artifactId);
+    const manifest = checked.manifest;
+    if (!manifest || manifest.state !== "READY_FOR_REVIEW") {
+      return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
+    }
+    if (!validControlAuthority(manifest, generation, actor)) {
+      return { promoted: false, reason: "CAPABILITY_DENIED", changedPaths: [] };
+    }
+    if (!checked.valid || !checked.derived) {
+      return { promoted: false, reason: "ARTIFACT_TAMPERED", changedPaths: [] };
+    }
+    if (!(await canonicalStillAtArtifactBaseline(repoRoot, manifest))) {
+      return { promoted: false, reason: "PROMOTION_STALE", changedPaths: [] };
+    }
+
+    const patch = checked.stored.patch;
+    patchPath = join(checked.stored.path, "candidate.patch");
+    if (!Buffer.isBuffer(patch) || patch.length > MAX_PATCH_BYTES) {
+      return { promoted: false, reason: "ARTIFACT_TAMPERED", changedPaths: [] };
+    }
+    indexBefore = await readCanonicalIndexPatch(repoRoot);
+    sourceFingerprint = manifest.sourceFingerprint;
+
+    try {
+      await runDelegationGit(repoRoot, ["apply", "--check", patchPath], { maxBuffer: MAX_PATCH_BYTES });
+      await runDelegationGit(repoRoot, ["apply", patchPath], { maxBuffer: MAX_PATCH_BYTES });
+      patchApplied = true;
+    } catch {
+      return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
+    }
+
+    const indexAfter = await readCanonicalIndexPatch(repoRoot);
+    const mutationMatches = indexAfter === indexBefore
+      && await verifyPromotedMutation(repoRoot, manifest, checked.derived.facts);
+    if (!mutationMatches) {
+      const rolledBack = await rollbackAppliedPatch(
+        repoRoot,
+        patchPath,
+        sourceFingerprint,
+        indexBefore,
+      );
+      patchApplied = !rolledBack;
+      return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
+    }
+
+    const transition = transitionDelegationArtifactState(repoRoot, artifactId, {
+      expectedState: "READY_FOR_REVIEW",
+      nextState: "PROMOTED",
+    });
+    if (!transition.transitioned) {
+      const rolledBack = await rollbackAppliedPatch(
+        repoRoot,
+        patchPath,
+        sourceFingerprint,
+        indexBefore,
+      );
+      patchApplied = !rolledBack;
+      return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
+    }
+    patchApplied = false;
+
+    const cleanup = await cleanupRetainedWorkspace(repoRoot, manifest.delegatedPath);
+    return {
+      promoted: true,
+      reason: cleanup.cleaned ? null : cleanup.reason,
+      changedPaths: [...manifest.changedPaths],
+    };
+  } finally {
+    if (patchApplied && patchPath && sourceFingerprint && indexBefore !== null) {
+      await rollbackAppliedPatch(repoRoot, patchPath, sourceFingerprint, indexBefore);
+    }
+    releaseAtomicLock(lock.handle);
+  }
+}
+
+export async function discardDelegationArtifact({
+  repoRoot,
+  artifactId,
+  generation,
+  actor,
+} = {}) {
+  const lock = acquireArtifactLock(repoRoot, artifactId, actor);
+  if (!lock.acquired) return { discarded: false, reason: "PROMOTION_FAILED" };
+
+  try {
+    const checked = await artifactIntegrity(repoRoot, artifactId);
+    const manifest = checked.manifest;
+    if (!manifest || manifest.state !== "READY_FOR_REVIEW") {
+      return { discarded: false, reason: "PROMOTION_FAILED" };
+    }
+    if (!validControlAuthority(manifest, generation, actor)) {
+      return { discarded: false, reason: "CAPABILITY_DENIED" };
+    }
+    if (!checked.valid || !checked.derived) {
+      return { discarded: false, reason: "ARTIFACT_TAMPERED" };
+    }
+
+    const transition = transitionDelegationArtifactState(repoRoot, artifactId, {
+      expectedState: "READY_FOR_REVIEW",
+      nextState: "DISCARDED",
+    });
+    if (!transition.transitioned) return { discarded: false, reason: "PROMOTION_FAILED" };
+
+    const cleanup = await cleanupRetainedWorkspace(repoRoot, manifest.delegatedPath);
+    return { discarded: true, reason: cleanup.cleaned ? null : cleanup.reason };
+  } finally {
+    releaseAtomicLock(lock.handle);
   }
 }
