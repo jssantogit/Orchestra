@@ -93,6 +93,11 @@ function isImplementationRequest(request) {
   return request?.schema === "orchestra.delegation-request.v2";
 }
 
+function hasHelpFlag(help, flag) {
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\s)${escaped}(?:[=\\s]|$)`, "m").test(help);
+}
+
 function promptFor(request, workerEnvelope) {
   if (!isImplementationRequest(request)) {
     return [
@@ -206,7 +211,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
             printTimeout: true,
             sandbox: true,
             model: true,
-            implementation: help.includes("--mode"),
+            implementation: hasHelpFlag(help, "--mode"),
           },
         };
       } catch {
