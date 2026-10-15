@@ -171,7 +171,7 @@ test("Codex returns broker result to CONTROL without self-acceptance", async () 
 test("Codex crosses to AGY for implementation only under explicit CONTROL intent", () => {
   const providerCapabilities = [
     { provider: "codex", available: true, independent: false },
-    { provider: "antigravity", available: true, independent: true },
+    { provider: "antigravity", available: true, independent: true, capabilities: { implementation: true } },
   ];
 
   assert.deepEqual(decideCodexCrossProviderRoute({
