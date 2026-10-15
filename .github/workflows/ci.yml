@@ -26,19 +26,40 @@ jobs:
       - name: Build and verify generated artifacts
         run: |
           npm run build:schemas
+          npm run sync:runtime-core
           npm run build:runtimes
           npm run check:schemas
           npm run check:runtimes
           npm run check:runtime-core
           git diff --check
 
-      - name: Upload generated v2 validators
+      - name: Upload generated Task 1 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: delegation-v2-validators
+          name: delegation-v2-generated
           path: |
             core/schema/generated/delegation-request.v2.mjs
             core/schema/generated/delegation-result.v2.mjs
+            runtimes/codex/.codex/astra-orchestra/core/delegation/policy.mjs
+            runtimes/codex/.codex/astra-orchestra/core/delegation/mutation-scope.mjs
+            runtimes/codex/.codex/astra-orchestra/core/domain/delegation.mjs
+            runtimes/codex/.codex/astra-orchestra/core/routing/delegation-target.mjs
+            runtimes/codex/.codex/astra-orchestra/core/runtime-core-manifest.json
+            runtimes/codex/.codex/astra-orchestra/core/schema/validator.mjs
+            runtimes/codex/.codex/astra-orchestra/core/schema/generated/delegation-request.v2.mjs
+            runtimes/codex/.codex/astra-orchestra/core/schema/generated/delegation-result.v2.mjs
+            runtimes/codex/.codex/astra-orchestra/core/schemas/delegation-request.v2.schema.json
+            runtimes/codex/.codex/astra-orchestra/core/schemas/delegation-result.v2.schema.json
+            runtimes/antigravity/.agents/skills/orchestra/core/delegation/policy.mjs
+            runtimes/antigravity/.agents/skills/orchestra/core/delegation/mutation-scope.mjs
+            runtimes/antigravity/.agents/skills/orchestra/core/domain/delegation.mjs
+            runtimes/antigravity/.agents/skills/orchestra/core/routing/delegation-target.mjs
+            runtimes/antigravity/.agents/skills/orchestra/core/runtime-core-manifest.json
+            runtimes/antigravity/.agents/skills/orchestra/core/schema/validator.mjs
+            runtimes/antigravity/.agents/skills/orchestra/core/schema/generated/delegation-request.v2.mjs
+            runtimes/antigravity/.agents/skills/orchestra/core/schema/generated/delegation-result.v2.mjs
+            runtimes/antigravity/.agents/skills/orchestra/core/schemas/delegation-request.v2.schema.json
+            runtimes/antigravity/.agents/skills/orchestra/core/schemas/delegation-result.v2.schema.json
 
       - name: Run full regression
         run: npm test
