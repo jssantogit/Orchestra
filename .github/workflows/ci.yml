@@ -32,15 +32,6 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
-      - name: Diagnose artifact promotion lifecycle
-        run: node --test tests/delegation/artifact-promotion.test.mjs
-
-      - name: Diagnose retained artifact Doctor recovery
-        run: node --test tests/runtime/delegation-recovery-doctor.test.mjs
-
-      - name: Diagnose delegation suite
-        run: npm run test:delegation
-
       - name: Run full regression
         run: npm test
 
