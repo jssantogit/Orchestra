@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -115,4 +115,57 @@ test("canonical boundary violation outranks executor failure and never yields an
   assert.equal(result.reason, "SCOPE_VIOLATION");
   assert.equal("artifact" in result, false);
   assert.equal(readFileSync(join(repoRoot, "tracked.txt"), "utf8"), "forbidden-canonical-write\n");
+});
+
+test("broker preflight fingerprint ignores parent global Git clean filters", async (t) => {
+  const repoRoot = createRepo();
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  writeFileSync(join(repoRoot, ".gitattributes"), "tracked.txt filter=orchestra-poison\n");
+  git(repoRoot, "add", ".gitattributes");
+  git(repoRoot, "commit", "-m", "add filter attribute");
+
+  const request = requestFor(repoRoot);
+  writeFileSync(join(repoRoot, "tracked.txt"), "canonical changed after request\n");
+
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-broker-parent-git-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const configPath = join(scratch, "global.gitconfig");
+  const filterPath = join(scratch, "clean-filter.mjs");
+  const markerPath = join(scratch, "filter-ran.txt");
+  writeFileSync(filterPath, [
+    'import { writeFileSync } from "node:fs";',
+    'writeFileSync(process.env.ORCHESTRA_TEST_FILTER_MARKER, "ran\\n");',
+    "process.stdin.pipe(process.stdout);",
+    "",
+  ].join("\n"));
+  git(
+    scratch,
+    "config",
+    "--file",
+    configPath,
+    "filter.orchestra-poison.clean",
+    `node "${filterPath.replaceAll("\\", "/")}"`,
+  );
+
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousMarker = process.env.ORCHESTRA_TEST_FILTER_MARKER;
+  process.env.GIT_CONFIG_GLOBAL = configPath;
+  process.env.ORCHESTRA_TEST_FILTER_MARKER = markerPath;
+  let result;
+  try {
+    result = await createDelegationBroker({ executors: [] }).executeDelegation(request, {
+      repoRoot,
+      generation: 11,
+      actor: actor(),
+    });
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    if (previousMarker === undefined) delete process.env.ORCHESTRA_TEST_FILTER_MARKER;
+    else process.env.ORCHESTRA_TEST_FILTER_MARKER = previousMarker;
+  }
+
+  assert.equal(existsSync(markerPath), false);
+  assert.equal(result.status, "DENIED");
+  assert.equal(result.reason, "CAPABILITY_DENIED");
 });
