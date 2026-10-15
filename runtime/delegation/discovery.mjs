@@ -71,6 +71,13 @@ export async function discoverDelegationProviders({ executors } = {}) {
   };
 }
 
+function boundedProcessResult(result) {
+  return result
+    && result.timedOut !== true
+    && result.stdoutTruncated !== true
+    && result.stderrTruncated !== true;
+}
+
 async function inspectGitWorktree(runProcess) {
   try {
     const result = await runProcess({
@@ -80,14 +87,44 @@ async function inspectGitWorktree(runProcess) {
       maxOutputBytes: DISCOVERY_MAX_OUTPUT_BYTES,
     });
     return {
-      available: result?.exitCode === 0
-        && result?.timedOut !== true
-        && result?.stdoutTruncated !== true
-        && result?.stderrTruncated !== true,
+      available: boundedProcessResult(result) && result.exitCode === 0,
     };
   } catch {
     return { available: false };
   }
+}
+
+async function inspectGitClone(runProcess) {
+  try {
+    const result = await runProcess({
+      command: "git",
+      args: ["clone", "-h"],
+      timeoutMs: DISCOVERY_TIMEOUT_MS,
+      maxOutputBytes: DISCOVERY_MAX_OUTPUT_BYTES,
+    });
+    const output = `${result?.stdout || ""}\n${result?.stderr || ""}`;
+    const noHardlinks = boundedProcessResult(result) && /(?:^|\s)--no-hardlinks(?:\s|$)/m.test(output);
+    return {
+      available: noHardlinks,
+      noHardlinks,
+    };
+  } catch {
+    return { available: false, noHardlinks: false };
+  }
+}
+
+function buildModes({ discoveryStatus, gitWorktree, gitClone }) {
+  return {
+    review: {
+      status: gitWorktree.available ? discoveryStatus : "UNAVAILABLE",
+      isolation: "EPHEMERAL_WORKTREE",
+    },
+    implementation: {
+      status: gitClone.available ? discoveryStatus : "UNAVAILABLE",
+      isolation: "EPHEMERAL_CLONE",
+      artifactLifecycle: "CONTROL_OWNED",
+    },
+  };
 }
 
 export async function inspectDelegationCapabilities({ runProcess = runBoundedProcess } = {}) {
@@ -96,17 +133,23 @@ export async function inspectDelegationCapabilities({ runProcess = runBoundedPro
   }
 
   const gitWorktree = await inspectGitWorktree(runProcess);
+  const gitClone = await inspectGitClone(runProcess);
   const executors = [
     createAntigravityDelegationExecutor({ runProcess }),
     createCodexDelegationExecutor({ runProcess }),
   ];
   const discovery = await discoverDelegationProviders({ executors });
+  const modes = buildModes({
+    discoveryStatus: discovery.status,
+    gitWorktree,
+    gitClone,
+  });
 
   return {
-    status: !gitWorktree.available
-      ? "UNAVAILABLE"
-      : discovery.status,
+    status: modes.review.status,
     gitWorktree,
+    gitClone,
+    modes,
     providers: discovery.providers,
   };
 }
