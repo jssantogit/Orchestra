@@ -1,7 +1,7 @@
 {
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "delegation",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "sourceRoots": [
     "core",
     "runtime",
