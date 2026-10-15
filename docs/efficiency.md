@@ -138,3 +138,15 @@ The neutral request reuses the canonical task/Implementation Packet facts and re
 Capability discovery is model-free. Orchestra probes Git worktree support and provider CLI version/help surfaces only; it does not install a provider, log in, or spend an inference call just to determine readiness. If the optional sibling is absent, normal same-provider execution continues without cross-provider model cost.
 
 Recursion is denied and the routing policy permits at most one cross-provider delegation per logical stage. This prevents a second-opinion or review request from becoming an unbounded provider ping-pong. Provider-reported usage or cost may be retained when factual; Orchestra does not synthesize token, latency, or cost values that the target did not report.
+
+---
+
+## 10. Parallel Implementation 2
+
+Parallel implementation is an explicit optimization for a task that CONTROL has already decomposed into exactly two bounded, independent implementation shards. It is not selected merely because Codex and Antigravity are both available, and serial Direct Work remains the default.
+
+The cost model is deliberately narrow: both workers reuse one resolved control decision, start from the same source snapshot in independent hardened clones, and receive only their own Implementation Packet and mutation scope. This can shorten the critical path when the two shards are genuinely independent without paying for two separate control investigations.
+
+Before dispatch, Orchestra must prove the writable scopes are disjoint. After both workers finish, broker-derived `changedPaths` must also be disjoint. The two member artifacts are then applied in a third isolated composition clone and sealed as one Composite Mutation Artifact. CONTROL performs one inspect/promote/discard lifecycle against that composite; workers never create Candidate, Evidence, Acceptance, publication, or finish authority.
+
+The optimization is fail-closed and atomic from the canonical workspace perspective. A failed worker, provider unavailability, factual overlap, artifact tamper, composition conflict, stale baseline, or promotion failure produces no partial canonical mutation and never silently falls back to serial/manual implementation. Runtime updates are also blocked while a parallel group is in flight so the execution plane cannot change underneath active workers.
