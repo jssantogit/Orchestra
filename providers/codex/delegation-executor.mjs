@@ -213,6 +213,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
             model: true,
             reasoningEffort: true,
             structuredOutput: true,
+            implementation: true,
           },
         };
       } catch {
