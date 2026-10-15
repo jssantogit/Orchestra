@@ -27,7 +27,7 @@ function healthyProviderProcess(input) {
     return processResult({ stdout: "agy 1.2.3\n" });
   }
   if (input.command === "agy") {
-    return processResult({ stdout: "--print --print-timeout --sandbox --model\n" });
+    return processResult({ stdout: "--print --print-timeout --sandbox --model --mode\n" });
   }
   if (input.command === "codex" && input.args[0] === "--version") {
     return processResult({ stdout: "codex-cli 0.130.0\n" });
