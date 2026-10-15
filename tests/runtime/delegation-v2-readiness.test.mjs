@@ -63,8 +63,13 @@ test("delegation manifest exposes artifact lifecycle entrypoint and preserves se
   assert.ok(manifest.entrypoints.includes(
     ".orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs",
   ));
+  assert.ok(manifest.entrypoints.includes(
+    ".orchestra/runtime/delegation/runtime/delegation/parallel-cli.mjs",
+  ));
   assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegations"));
   assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegation/artifacts"));
+  assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegation/parallel-groups"));
+  assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegation/composite-artifacts"));
 });
 
 test("delegation discovery reports read-only and implementation workspace prerequisites independently", async () => {
@@ -97,6 +102,12 @@ test("delegation discovery reports read-only and implementation workspace prereq
       isolation: "EPHEMERAL_CLONE",
       artifactLifecycle: "CONTROL_OWNED",
     },
+    parallelImplementation: {
+      status: "READY",
+      isolation: "EPHEMERAL_CLONE",
+      memberCount: 2,
+      artifactLifecycle: "CONTROL_OWNED_COMPOSITE",
+    },
   });
   assert.ok(calls.some((call) => call.command === "git" && call.args.join(" ") === "clone -h"));
 });
@@ -117,6 +128,7 @@ test("implementation readiness fails closed when hardened clone capability is ab
   assert.equal(result.status, "READY");
   assert.equal(result.modes.review.status, "READY");
   assert.equal(result.modes.implementation.status, "UNAVAILABLE");
+  assert.equal(result.modes.parallelImplementation.status, "UNAVAILABLE");
   assert.equal(result.gitClone.available, false);
 });
 
@@ -146,6 +158,12 @@ test("Doctor normalizes per-mode delegation readiness as advisory structural inf
       status: "UNAVAILABLE",
       isolation: "EPHEMERAL_CLONE",
       artifactLifecycle: "CONTROL_OWNED",
+    },
+    parallelImplementation: {
+      status: "UNAVAILABLE",
+      isolation: "EPHEMERAL_CLONE",
+      memberCount: 2,
+      artifactLifecycle: "CONTROL_OWNED_COMPOSITE",
     },
   });
 });
