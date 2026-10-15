@@ -1,0 +1,102 @@
+name: Diagnose v1.1.0 Prepared Preflight
+
+on:
+  push:
+    branches:
+      - ops/diagnose-v1.1.0-preflight
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Diagnose prepared-release preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Require exact accepted main
+        run: test "$(git rev-parse HEAD)" = "e71ab16cd3b335726242ed59495a4a28e8c2eb16"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build current main runtimes for readiness
+        run: npm run build:runtimes
+
+      - name: Verify current main release metadata
+        run: npm run release:readiness
+
+      - name: Prepare v1.1.0 metadata and notes
+        id: prepare
+        run: node scripts/release/prepare-release.mjs --bump=minor
+
+      - name: Require expected v1.1.0 target
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+          BASE_TAG: ${{ steps.prepare.outputs.base_tag }}
+          BUMP: ${{ steps.prepare.outputs.requested_bump }}
+        run: |
+          test "$BASE_TAG" = "v1.0.1"
+          test "$TAG" = "v1.1.0"
+          test "$BUMP" = "minor"
+
+      - name: Create local release candidate
+        id: candidate
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          BRANCH="release/${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add --all
+          git commit -m "chore(release): prepare ${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: "Prepared: build runtimes"
+        run: npm run build:runtimes
+
+      - name: "Prepared: check runtimes"
+        run: npm run check:runtimes
+
+      - name: "Prepared: check runtime core"
+        run: npm run check:runtime-core
+
+      - name: "Prepared: npm test"
+        run: npm test
+
+      - name: "Prepared: doctor"
+        run: npm run doctor
+
+      - name: "Prepared: contamination"
+        run: npm run check:contamination
+
+      - name: "Prepared: release readiness"
+        run: npm run release:readiness
+
+      - name: "Prepared: diff check"
+        run: git diff --check
+
+      - name: Diagnostic immutability check
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          git diff --quiet HEAD -- .
+          git diff --cached --quiet
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Remove only disposable dist output
+        run: rm -rf dist
+
+      - name: Diagnostic final clean check
+        run: test -z "$(git status --porcelain)"
