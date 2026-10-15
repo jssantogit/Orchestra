@@ -1,4 +1,5 @@
 import { assertDelegationRequest } from "../domain/delegation.mjs";
+import { normalizeMutationScope } from "./mutation-scope.mjs";
 import { WORKER_REPORT_SCHEMA } from "./policy.mjs";
 
 const REQUIRED_FORBIDDEN_PATHS = Object.freeze([
@@ -32,12 +33,20 @@ export function buildWorkerEnvelope(request) {
   assertDelegationRequest(request);
 
   const packet = request.packet;
+  const implementation = request.schema === "orchestra.delegation-request.v2";
   const allowedAreas = normalizedUnique(packet.scope.allowedAreas)
     .filter((entry) => !isCanonicalStatePath(entry));
   const forbidden = normalizedUnique([
     ...packet.scope.forbidden,
     ...REQUIRED_FORBIDDEN_PATHS,
   ]);
+  const scope = {
+    allowedAreas,
+    forbidden,
+    ...(implementation
+      ? { mutationScope: normalizeMutationScope(request.workspace.mutationScope) }
+      : {}),
+  };
 
   return {
     objective: packet.goal,
@@ -53,14 +62,11 @@ export function buildWorkerEnvelope(request) {
       discovery: packet.permissions.discovery,
       tests: packet.permissions.tests,
     },
-    scope: {
-      allowedAreas,
-      forbidden,
-    },
+    scope,
     validation: [...packet.validation],
     capabilities: [...request.authority.capabilities],
     prohibitions: {
-      mutation: "FORBIDDEN",
+      mutation: implementation ? "WORKSPACE_ONLY" : "FORBIDDEN",
       network: "FORBIDDEN",
       delegation: "FORBIDDEN",
     },

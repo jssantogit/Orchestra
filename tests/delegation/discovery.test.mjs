@@ -81,14 +81,19 @@ function processResult(overrides = {}) {
   };
 }
 
-test("capability inspection checks Git worktree plus provider version/help without login or inference", async () => {
+test("capability inspection checks Git isolation plus provider version/help without login or inference", async () => {
   const calls = [];
   const result = await inspectDelegationCapabilities({
     runProcess: async (input) => {
       calls.push({ command: input.command, args: input.args });
-      if (input.command === "git") return processResult({ stdout: "worktree /repo\nHEAD abcdef\n" });
+      if (input.command === "git" && input.args[0] === "worktree") {
+        return processResult({ stdout: "worktree /repo\nHEAD abcdef\n" });
+      }
+      if (input.command === "git" && input.args[0] === "clone") {
+        return processResult({ exitCode: 129, stderr: "usage: git clone [<options>] <repo> [<dir>]\n    --no-hardlinks\n" });
+      }
       if (input.command === "agy" && input.args[0] === "--version") return processResult({ stdout: "agy 1.2.3\n" });
-      if (input.command === "agy") return processResult({ stdout: "--print --print-timeout --sandbox --model\n" });
+      if (input.command === "agy") return processResult({ stdout: "--print --print-timeout --sandbox --model --mode\n" });
       if (input.command === "codex" && input.args[0] === "--version") return processResult({ stdout: "codex-cli 0.130.0\n" });
       if (input.command === "codex") return processResult({ stdout: "--model --sandbox --ask-for-approval --config --output-schema --output-last-message\n" });
       throw new Error("unexpected command");
@@ -97,9 +102,14 @@ test("capability inspection checks Git worktree plus provider version/help witho
 
   assert.equal(result.status, "READY");
   assert.deepEqual(result.gitWorktree, { available: true });
+  assert.deepEqual(result.gitClone, { available: true, noHardlinks: true });
+  assert.equal(result.modes.review.status, "READY");
+  assert.equal(result.modes.implementation.status, "READY");
   assert.equal(result.providers.every((provider) => provider.available), true);
+  assert.equal(result.providers.every((provider) => provider.capabilities.implementation), true);
   assert.deepEqual(calls, [
     { command: "git", args: ["worktree", "list", "--porcelain"] },
+    { command: "git", args: ["clone", "-h"] },
     { command: "agy", args: ["--version"] },
     { command: "agy", args: ["--help"] },
     { command: "codex", args: ["--version"] },
@@ -107,10 +117,13 @@ test("capability inspection checks Git worktree plus provider version/help witho
   ]);
 });
 
-test("capability inspection is DEGRADED for one missing optional provider but UNAVAILABLE without Git worktree", async () => {
+test("capability inspection is DEGRADED for one missing optional provider but review is UNAVAILABLE without Git worktree", async () => {
   const oneProvider = await inspectDelegationCapabilities({
     runProcess: async (input) => {
-      if (input.command === "git") return processResult();
+      if (input.command === "git" && input.args[0] === "worktree") return processResult();
+      if (input.command === "git" && input.args[0] === "clone") {
+        return processResult({ exitCode: 129, stderr: "--no-hardlinks\n" });
+      }
       if (input.command === "agy") throw Object.assign(new Error("missing"), { code: "PROCESS_SPAWN_FAILED" });
       if (input.command === "codex" && input.args[0] === "--version") return processResult({ stdout: "codex-cli 0.130.0\n" });
       return processResult({ stdout: "--model --sandbox --ask-for-approval --config --output-schema --output-last-message\n" });
@@ -118,13 +131,19 @@ test("capability inspection is DEGRADED for one missing optional provider but UN
   });
   assert.equal(oneProvider.status, "DEGRADED");
   assert.equal(oneProvider.gitWorktree.available, true);
+  assert.equal(oneProvider.gitClone.available, true);
+  assert.equal(oneProvider.modes.implementation.status, "DEGRADED");
 
   const noWorktree = await inspectDelegationCapabilities({
     runProcess: async (input) => {
-      if (input.command === "git") return processResult({ exitCode: 1 });
+      if (input.command === "git" && input.args[0] === "worktree") return processResult({ exitCode: 1 });
+      if (input.command === "git" && input.args[0] === "clone") {
+        return processResult({ exitCode: 129, stderr: "--no-hardlinks\n" });
+      }
       return processResult({ exitCode: 1 });
     },
   });
   assert.equal(noWorktree.status, "UNAVAILABLE");
   assert.deepEqual(noWorktree.gitWorktree, { available: false });
+  assert.equal(noWorktree.modes.review.status, "UNAVAILABLE");
 });

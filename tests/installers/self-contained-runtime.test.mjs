@@ -106,17 +106,23 @@ test("delegation installed runtime is self-contained and contains no provider co
     const runtimeRoot = join(target, ".orchestra", "runtime", "delegation");
     const runner = join(target, "delegation-self-contained-smoke.mjs");
     const cliUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "cli.mjs")).href;
+    const artifactCliUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "artifact-cli.mjs")).href;
+    const artifactLifecycleUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "artifact-lifecycle.mjs")).href;
     const brokerUrl = pathToFileURL(join(runtimeRoot, "runtime", "delegation", "broker.mjs")).href;
     const antigravityExecutorUrl = pathToFileURL(join(runtimeRoot, "providers", "antigravity", "delegation-executor.mjs")).href;
     const codexExecutorUrl = pathToFileURL(join(runtimeRoot, "providers", "codex", "delegation-executor.mjs")).href;
     const domainUrl = pathToFileURL(join(runtimeRoot, "core", "domain", "delegation.mjs")).href;
     writeFileSync(runner, [
       `const cli = await import(${JSON.stringify(cliUrl)});`,
+      `const artifactCli = await import(${JSON.stringify(artifactCliUrl)});`,
+      `const artifactLifecycle = await import(${JSON.stringify(artifactLifecycleUrl)});`,
       `const broker = await import(${JSON.stringify(brokerUrl)});`,
       `const antigravityExecutor = await import(${JSON.stringify(antigravityExecutorUrl)});`,
       `const codexExecutor = await import(${JSON.stringify(codexExecutorUrl)});`,
       `const domain = await import(${JSON.stringify(domainUrl)});`,
       `if (typeof cli.runDelegationCli !== "function") throw new Error("DELEGATION_CLI_BROKEN");`,
+      `if (typeof artifactCli.runArtifactCli !== "function") throw new Error("ARTIFACT_CLI_BROKEN");`,
+      `if (typeof artifactLifecycle.promoteDelegationArtifact !== "function" || typeof artifactLifecycle.discardDelegationArtifact !== "function") throw new Error("ARTIFACT_LIFECYCLE_BROKEN");`,
       `if (typeof broker.createDelegationBroker !== "function") throw new Error("DELEGATION_BROKER_BROKEN");`,
       `if (typeof antigravityExecutor.createAntigravityDelegationExecutor !== "function") throw new Error("ANTIGRAVITY_DELEGATION_EXECUTOR_BROKEN");`,
       `if (typeof codexExecutor.createCodexDelegationExecutor !== "function") throw new Error("CODEX_DELEGATION_EXECUTOR_BROKEN");`,

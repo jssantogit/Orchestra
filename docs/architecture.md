@@ -176,7 +176,6 @@ Thus greater exploration autonomy is learned only inside pre-existing governance
 ---
 
 ## 9. Direct Work Default Execution Lane
-
 Direct Work is the default execution lane for normal bounded product work across both providers. Its design keeps expensive reasoning in the control plane and cheap implementation in a tightly bounded execution plane.
 
 ```text
@@ -250,35 +249,46 @@ normal UX for moving development to a fresh orchestrator chat.
 
 Cross-provider delegation is an **external execution plane**, not a third control plane. A Codex or Antigravity root may ask the neutral delegation runtime to execute bounded work through the other installed provider without transferring project authority.
 
+The plane exposes two additive contracts with different trust levels:
+
+- **V1 review/second opinion** — exactly `LOCAL_READ + PROCESS_EXEC`, `mutation=FORBIDDEN`, external ephemeral Git worktree. Any worker-side mutation fails closed.
+- **V2 implementation** — only when CONTROL explicitly selects cross-provider implementation; exactly `LOCAL_READ + PROCESS_EXEC + WORKSPACE_EDIT`, `mutation=WORKSPACE_ONLY`, external hardened `EPHEMERAL_CLONE`, network and recursive delegation forbidden.
+
 ```text
-Codex CONTROL ─┐
-               ├─ provider-local helper
-AGY CONTROL ───┘        │
-                        ▼
-             .orchestra/runtime/delegation
-                        │
-               ephemeral Git worktree
-                  ┌─────┴─────┐
-                  ▼           ▼
-             Codex executor  AGY executor
-                        │
-                        ▼
-                 DelegationResult
-                        │
-                        ▼
-              originating CONTROL
+originating CONTROL
+       │
+       ├─ v1 review ──> external worktree ──> bounded DelegationResult
+       │
+       `─ v2 implementation
+              │
+              ▼
+       independent hardened clone
+              │
+        scoped worker mutation
+              │
+              ▼
+        sealed Mutation Artifact
+              │
+       inspect / verify by CONTROL
+              │
+       explicit promote | discard
+              │
+              ▼
+       normal Candidate/Evidence flow
 ```
 
-The invariant is **delegating execution does not delegate authority**. The originating root keeps its Work Lease generation and remains the only actor allowed to interpret the result, promote factual evidence, create or accept a candidate, retry, or finish the task. Provider identity is provenance only.
+The invariant remains **delegating execution does not delegate authority**. The originating root keeps its Work Lease generation and remains the only actor allowed to promote the worker delta into the canonical workspace, create or accept a candidate, promote factual evidence, retry, publish, or finish the task. Provider identity is provenance only.
 
-A canonical `DelegationRequest` is reduced to a bounded Worker Envelope before it reaches the target provider. V1 grants at most `LOCAL_READ` plus `PROCESS_EXEC`; it does not grant workspace mutation, network write, remote-repository write, publication, Work Lease control, acceptance, or recursive delegation. Canonical governance paths such as `.orchestra/state/**` and `.git/**` are removed from allowed worker scope and remain explicit prohibitions. Any incidental files produced by tests or tools exist only inside the disposable delegated worktree. A dirty delegated worktree is treated as a capability violation rather than as a candidate.
+V1 behavior is immutable in meaning. Its Worker Envelope stays read/process-only, its external worktree is disposable, and a dirty delegated worktree remains a capability violation rather than a candidate.
 
-Every cross-provider execution uses an external ephemeral Git worktree. The request binds the factual `HEAD` plus the exact canonical workspace fingerprint; a dirty/uncommitted candidate is materialized into the delegated workspace without advancing the user's branch or refs. If tracked or untracked product state changes after that request snapshot, preparation fails closed instead of reviewing a different candidate. Git hooks are disabled for broker-owned Git operations, and canonical Git metadata is fingerprinted around worker execution so refs/config drift cannot pass as a clean delegated result.
+V2 never runs a mutating worker in the canonical checkout or a linked Git worktree. The broker creates an independent clone outside the checkout, uses copy isolation (`--no-hardlinks`), removes remotes/alternates, isolates Git configuration/hooks, and denies worker Git network protocols. A synthetic baseline inside that clone captures the exact canonical tracked/staged/unstaged/untracked source snapshot so the later worker patch contains only delegated mutation.
 
-Delegated provider processes receive a bounded operational environment plus only the target provider's required authentication variables; repository/publication credentials and sibling-provider secrets are not inherited wholesale. Every cross-provider subprocess carries delegation depth markers, and the neutral CLI rejects invocation from an already delegated context. Timeouts terminate the delegated process tree rather than only the direct provider PID.
+Mutation scope is machine-enforced. Orchestra derives changed paths and content/mode/link facts from Git/filesystem state; model output cannot define the mutation artifact. `.git/**` and `.orchestra/state/**` remain mandatory forbidden regions, symlink egress is rejected, and clone/canonical Git refs/config/hooks are fingerprinted as defense in depth.
 
-Delegation records are stored under `.orchestra/state/delegations/` and the temporary worktree is removed after terminal execution. Cleanup failure is explicit and leaves a recoverable path. Source Doctor reports bounded recovery state, while the Codex and Antigravity project Doctors also verify integrity and metadata freshness of the installed neutral delegation runtime.
+A successful implementation produces a broker-owned `READY_FOR_REVIEW` Mutation Artifact under `.orchestra/state/delegation/artifacts/<artifact-id>/` plus a retained isolated review workspace. `DelegationResult`, Mutation Artifact, Candidate, Evidence, and Acceptance remain distinct types. CONTROL can inspect the retained clone and run independent verification before taking any canonical mutation action.
 
-Provider isolation remains strict. Codex runtime/provider code may not import or directly invoke Antigravity, and Antigravity runtime/provider code may not import or directly invoke Codex. Only the neutral composition root under `runtime/delegation/**` may know both external executor implementations. Delegation executors are packaged only in the neutral image rather than mirrored into provider runtimes; provider runtime manifests therefore remain self-contained. The packaged neutral image contains only Core/contracts, delegation runtime machinery, and the bounded executor/model-catalog files needed for the two providers; it contains no `.codex`, `.agents`, provider hooks, sessions, adapters, or control-plane trees.
+Promotion/discard are separate neutral artifact actions. Promotion requires the original root CONTROL provider/actor hash and Work Lease generation, rechecks artifact hash/digest, canonical product fingerprint, canonical Git boundary, mutation scope, and patch applicability, then applies only the sealed worker delta without restaging or duplicating pre-existing canonical changes. Stale or tampered state fails closed. Discard cleans the retained clone without changing canonical product state. Neither action creates Acceptance.
 
-A completed external result is still a bounded worker claim. It never self-promotes to accepted evidence or task completion. Failures are normalized into the bounded taxonomy `PROVIDER_UNAVAILABLE`, `CAPABILITY_DENIED`, `WORKSPACE_PREP_FAILED`, `EXECUTION_FAILED`, `EXECUTION_TIMED_OUT`, `INVALID_RESULT`, and `WORKSPACE_CLEANUP_FAILED`; unknown executor failures collapse fail-closed to `INVALID_RESULT` or `EXECUTION_FAILED`.
+Every delegated provider process receives a bounded operational environment plus only the target provider's required authentication variables; repository/publication credentials and sibling-provider secrets are not inherited wholesale. Every cross-provider subprocess carries delegation depth markers, and the neutral execution and artifact CLIs reject invocation from an already delegated worker context. Timeouts terminate the delegated process tree rather than only the direct provider PID.
+
+Delegation records remain under `.orchestra/state/delegations/`; sealed implementation artifacts are preserved separately under `.orchestra/state/delegation/artifacts/`. Cleanup failure remains explicit and recoverable. Doctor reports **review** readiness (Git worktree + provider discovery) and **implementation** readiness (hardened clone capability + provider discovery) independently and treats both as advisory to structural single-provider health. Missing second-provider CLI/auth never silently falls back to local work.

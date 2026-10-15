@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { inspectDelegationCapabilities } from "./delegation/discovery.mjs";
+import { listDelegationArtifacts } from "./delegation/artifact-store.mjs";
 import { listDelegationRecords } from "./delegation/store.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CANONICAL_RUNTIMES = Object.freeze(["core", "codex", "antigravity", "delegation"]);
+const DELEGATION_STATUSES = new Set(["READY", "DEGRADED", "UNAVAILABLE"]);
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -37,39 +39,97 @@ function manifestNames(repoRoot, runtime) {
   return CANONICAL_RUNTIMES.filter((name) => existsSync(join(repoRoot, "runtime", "manifests", `${name}.json`)));
 }
 
-function unavailableDelegationReport() {
+function normalizeDelegationStatus(value) {
+  return DELEGATION_STATUSES.has(value) ? value : "UNAVAILABLE";
+}
+
+function normalizeDelegationModes(delegation) {
+  const baseStatus = normalizeDelegationStatus(delegation?.status);
+  const suppliedReview = delegation?.modes?.review;
+  const suppliedImplementation = delegation?.modes?.implementation;
+  const reviewStatus = suppliedReview && DELEGATION_STATUSES.has(suppliedReview.status)
+    ? suppliedReview.status
+    : delegation?.gitWorktree?.available === false
+      ? "UNAVAILABLE"
+      : baseStatus;
+  const cloneAvailabilityKnown = typeof delegation?.gitClone?.available === "boolean";
+  const implementationStatus = suppliedImplementation && DELEGATION_STATUSES.has(suppliedImplementation.status)
+    ? suppliedImplementation.status
+    : cloneAvailabilityKnown && delegation.gitClone.available === false
+      ? "UNAVAILABLE"
+      : baseStatus;
+
   return {
+    review: {
+      status: reviewStatus,
+      isolation: "EPHEMERAL_WORKTREE",
+    },
+    implementation: {
+      status: implementationStatus,
+      isolation: "EPHEMERAL_CLONE",
+      artifactLifecycle: "CONTROL_OWNED",
+    },
+  };
+}
+
+function unavailableDelegationReport() {
+  const report = {
     status: "UNAVAILABLE",
     gitWorktree: { available: false },
+    gitClone: { available: false, noHardlinks: false },
     providers: [],
+  };
+  return {
+    ...report,
+    modes: normalizeDelegationModes(report),
   };
 }
 
 function delegationRecovery(repoRoot) {
   try {
     const records = listDelegationRecords(repoRoot);
+    const artifacts = listDelegationArtifacts(repoRoot);
     const cleanupFailures = records
       .filter((record) => record.status === "CLEANUP_FAILED")
       .map((record) => ({
         delegationId: record.delegationId,
         recoverablePath: record.workspace.recoverablePath,
       }));
+    const artifactCleanupFailures = artifacts
+      .filter((artifact) => artifact.state !== "READY_FOR_REVIEW" && artifact.cleanup?.cleaned === false)
+      .map((artifact) => ({
+        artifactId: artifact.artifactId,
+        state: artifact.state,
+        recoverablePath: artifact.cleanup.recoverablePath,
+      }));
     const inFlight = records
       .filter((record) => record.status === "STARTED")
       .map((record) => ({ delegationId: record.delegationId, startedAt: record.startedAt }));
+    const retainedArtifacts = artifacts
+      .filter((artifact) => artifact.state === "READY_FOR_REVIEW")
+      .map((artifact) => ({
+        artifactId: artifact.artifactId,
+        state: artifact.state,
+        reviewPath: artifact.delegatedPath,
+      }));
+    const cleanupRequired = cleanupFailures.length > 0 || artifactCleanupFailures.length > 0;
     return {
       stateReadable: true,
-      required: cleanupFailures.length > 0,
+      required: cleanupRequired,
       cleanupFailures,
+      artifactCleanupFailures,
       inFlight,
-      reason: cleanupFailures.length > 0 ? "WORKSPACE_CLEANUP_FAILED" : null,
+      retainedArtifacts,
+      reason: cleanupRequired ? "WORKSPACE_CLEANUP_FAILED" : null,
     };
   } catch {
     return {
       stateReadable: false,
       required: true,
       cleanupFailures: [],
+      artifactCleanupFailures: [],
       inFlight: [],
+      retainedArtifacts: [],
       reason: "DELEGATION_STATE_UNREADABLE",
     };
   }
@@ -155,6 +215,7 @@ export async function runDoctor({
     }
     delegation = {
       ...delegation,
+      modes: normalizeDelegationModes(delegation),
       recovery: delegationRecovery(root),
     };
   }
@@ -178,11 +239,22 @@ async function main() {
     const providerSummary = report.delegation.providers
       .map((provider) => `${provider.provider}=${provider.available ? "available" : "unavailable"}`)
       .join(", ");
-    console.log(`INFO delegation:readiness — ${report.delegation.status}; gitWorktree=${report.delegation.gitWorktree.available ? "available" : "unavailable"}${providerSummary ? `; ${providerSummary}` : ""}`);
+    const review = report.delegation.modes?.review?.status || report.delegation.status;
+    const implementation = report.delegation.modes?.implementation?.status || "UNAVAILABLE";
+    console.log(`INFO delegation:readiness — review=${review}; implementation=${implementation}; gitWorktree=${report.delegation.gitWorktree?.available ? "available" : "unavailable"}; gitClone=${report.delegation.gitClone?.available ? "available" : "unavailable"}${providerSummary ? `; ${providerSummary}` : ""}`);
     if (report.delegation.recovery?.required) {
       const recovery = report.delegation.recovery;
-      const paths = recovery.cleanupFailures.map((entry) => entry.recoverablePath).filter(Boolean);
+      const paths = [
+        ...recovery.cleanupFailures.map((entry) => entry.recoverablePath),
+        ...recovery.artifactCleanupFailures.map((entry) => entry.recoverablePath),
+      ].filter(Boolean);
       console.log(`INFO delegation:recovery — ${recovery.reason || "RECOVERY_REQUIRED"}${paths.length ? `; paths=${paths.join(",")}` : ""}`);
+    }
+    if (report.delegation.recovery?.retainedArtifacts?.length > 0) {
+      const retained = report.delegation.recovery.retainedArtifacts
+        .map((entry) => entry.artifactId)
+        .join(",");
+      console.log(`INFO delegation:retained-artifacts — ${retained}`);
     }
   }
   console.log(report.healthy ? "Orchestra Doctor: healthy" : "Orchestra Doctor: unhealthy");

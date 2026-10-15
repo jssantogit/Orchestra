@@ -8,8 +8,8 @@ import {
 
 function providers(overrides = {}) {
   const base = [
-    { provider: "provider-a", available: true, independent: false },
-    { provider: "provider-b", available: true, independent: true },
+    { provider: "provider-a", available: true, independent: false, capabilities: { implementation: true } },
+    { provider: "provider-b", available: true, independent: true, capabilities: { implementation: true } },
   ];
   return base.map((entry) => ({ ...entry, ...(overrides[entry.provider] ?? {}) }));
 }
@@ -34,6 +34,41 @@ test("normal implementation, quick audit, and investigation stay local", () => {
       reason: "SAME_PROVIDER_DEFAULT",
     });
   }
+});
+
+test("implementation crosses providers only with explicit CONTROL intent", () => {
+  assert.deepEqual(route({
+    logicalRole: "IMPLEMENTER",
+    purpose: "IMPLEMENTATION",
+    explicitCrossProvider: false,
+  }), {
+    mode: "LOCAL",
+    targetProvider: "provider-a",
+    reason: "SAME_PROVIDER_DEFAULT",
+  });
+
+  assert.deepEqual(route({
+    logicalRole: "IMPLEMENTER",
+    purpose: "IMPLEMENTATION",
+    explicitCrossProvider: true,
+  }), {
+    mode: "CROSS_PROVIDER",
+    targetProvider: "provider-b",
+    reason: "IMPLEMENTATION",
+  });
+});
+
+test("explicit implementation returns PROVIDER_UNAVAILABLE instead of falling back", () => {
+  assert.deepEqual(route({
+    logicalRole: "IMPLEMENTER",
+    purpose: "IMPLEMENTATION",
+    explicitCrossProvider: true,
+    providerCapabilities: providers({ "provider-b": { available: false } }),
+  }), {
+    mode: "NONE",
+    targetProvider: null,
+    reason: "PROVIDER_UNAVAILABLE",
+  });
 });
 
 test("critical independent review chooses one healthy independent provider", () => {

@@ -22,8 +22,11 @@ const REQUIRED_HELP_FLAGS = Object.freeze([
 ]);
 const REPORT_KEYS = new Set(Object.keys(WORKER_REPORT_SCHEMA.properties));
 
-function processEnvironment() {
-  return buildDelegationProcessEnvironment({ providerKeys: PROVIDER_ENV_KEYS });
+function processEnvironment(extra = {}) {
+  return buildDelegationProcessEnvironment({
+    providerKeys: PROVIDER_ENV_KEYS,
+    extra,
+  });
 }
 
 function unavailable() {
@@ -86,11 +89,32 @@ function parseWorkerReport(stdout) {
   return validateWorkerReport(parsed) ? parsed : null;
 }
 
-function promptFor(workerEnvelope) {
+function isImplementationRequest(request) {
+  return request?.schema === "orchestra.delegation-request.v2";
+}
+
+function hasHelpFlag(help, flag) {
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\s)${escaped}(?:[=\\s]|$)`, "m").test(help);
+}
+
+function promptFor(request, workerEnvelope) {
+  if (!isImplementationRequest(request)) {
+    return [
+      "You are an external Orchestra worker operating under a bounded read/process-exec envelope.",
+      "Do not modify files. Do not use network tools. Do not delegate work to another agent.",
+      "Inspect only the provided workspace and run only local read/test commands needed by the envelope.",
+      "Return exactly one JSON object matching the output contract. Do not wrap it in Markdown or prose.",
+      JSON.stringify(workerEnvelope),
+    ].join("\n");
+  }
+
   return [
-    "You are an external Orchestra worker operating under a bounded read/process-exec envelope.",
-    "Do not modify files. Do not use network tools. Do not delegate work to another agent.",
-    "Inspect only the provided workspace and run only local read/test commands needed by the envelope.",
+    "You are an external Orchestra implementation worker operating under bounded WORKSPACE_ONLY mutation authority.",
+    "Modify files only within mutationScope.allowedPaths and never within mutationScope.forbiddenPaths.",
+    "Do not use network tools. Do not delegate work to another agent.",
+    "Do not create commits, change branches or HEAD, edit refs/remotes/Git config/hooks, or otherwise mutate Git history or metadata.",
+    "Operate only inside the provided isolated workspace and run only local commands needed by the envelope.",
     "Return exactly one JSON object matching the output contract. Do not wrap it in Markdown or prose.",
     JSON.stringify(workerEnvelope),
   ].join("\n");
@@ -98,6 +122,28 @@ function promptFor(workerEnvelope) {
 
 function printTimeoutValue(timeoutMs) {
   return `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`;
+}
+
+function validWorkerGitEnvironment(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value.GIT_CONFIG_NOSYSTEM !== "1"
+      || typeof value.GIT_CONFIG_GLOBAL !== "string" || !value.GIT_CONFIG_GLOBAL
+      || value.GIT_TERMINAL_PROMPT !== "0"
+      || value.GIT_PROTOCOL_FROM_USER !== "0"
+      || value.GIT_ALLOW_PROTOCOL !== "") return false;
+
+  const count = Number.parseInt(value.GIT_CONFIG_COUNT, 10);
+  if (!Number.isInteger(count) || count < 2) return false;
+  let hooksDenied = false;
+  let protocolsDenied = false;
+  for (let index = 0; index < count; index += 1) {
+    const key = value[`GIT_CONFIG_KEY_${index}`];
+    const configured = value[`GIT_CONFIG_VALUE_${index}`];
+    if (typeof key !== "string" || typeof configured !== "string") return false;
+    if (key === "core.hooksPath" && configured) hooksDenied = true;
+    if (key === "protocol.allow" && configured === "never") protocolsDenied = true;
+  }
+  return hooksDenied && protocolsDenied;
 }
 
 function validExecutionInput(request, workerEnvelope, workspace) {
@@ -110,6 +156,7 @@ function validExecutionInput(request, workerEnvelope, workspace) {
     && workspace
     && typeof workspace.path === "string"
     && workspace.path.length > 0
+    && (!isImplementationRequest(request) || validWorkerGitEnvironment(workspace.workerGitEnv))
     && Number.isInteger(request.limits?.timeoutMs)
     && request.limits.timeoutMs > 0
     && Number.isInteger(request.limits?.maxOutputBytes)
@@ -150,7 +197,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
             || helpResult.stdoutTruncated) return unavailable();
 
         const help = String(helpResult.stdout ?? "");
-        if (!REQUIRED_HELP_FLAGS.every((flag) => help.includes(flag))) return unavailable();
+        if (!REQUIRED_HELP_FLAGS.every((flag) => hasHelpFlag(help, flag))) return unavailable();
 
         const version = String(versionResult.stdout ?? "").trim();
         if (!version) return unavailable();
@@ -164,6 +211,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
             printTimeout: true,
             sandbox: true,
             model: true,
+            implementation: hasHelpFlag(help, "--mode"),
           },
         };
       } catch {
@@ -189,17 +237,18 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
           command: "agy",
           args: [
             "--sandbox",
+            ...(isImplementationRequest(request) ? ["--mode=accept-edits"] : []),
             "--model",
             profile.model,
             "--print-timeout",
             printTimeoutValue(request.limits.timeoutMs),
             "--print",
-            promptFor(workerEnvelope),
+            promptFor(request, workerEnvelope),
           ],
           cwd: workspace.path,
           timeoutMs: request.limits.timeoutMs,
           maxOutputBytes: request.limits.maxOutputBytes,
-          env: processEnvironment(),
+          env: processEnvironment(workspace.workerGitEnv ?? {}),
         });
       } catch (error) {
         if (error?.code === "PROCESS_SPAWN_FAILED") {

@@ -90,7 +90,7 @@ test("AGY discovery verifies factual binary/version and required non-interactive
       calls.push(input);
       if (input.args.includes("--version")) return processResult({ stdout: "agy 2.0.0\n" });
       return processResult({
-        stdout: "Usage of agy:\n  --print\n  --print-timeout\n  --sandbox\n  --model\n",
+        stdout: "Usage of agy:\n  --print\n  --print-timeout\n  --sandbox\n  --model\n  --mode\n",
       });
     },
   });
@@ -100,7 +100,13 @@ test("AGY discovery verifies factual binary/version and required non-interactive
     available: true,
     provider: "antigravity",
     version: "agy 2.0.0",
-    capabilities: { print: true, printTimeout: true, sandbox: true, model: true },
+    capabilities: {
+      print: true,
+      printTimeout: true,
+      sandbox: true,
+      model: true,
+      implementation: true,
+    },
   });
   assert.equal(calls.length, 2);
   assert.deepEqual(calls.map((call) => call.args), [["--version"], ["--help"]]);

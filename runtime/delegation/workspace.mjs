@@ -1,151 +1,26 @@
-import { createHash, randomBytes } from "node:crypto";
-import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import {
-  cp,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  readlink,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { assertDelegationRequest } from "../../core/domain/delegation.mjs";
-import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
+import {
+  readDelegationGitBoundary,
+  runDelegationGit,
+} from "./git-boundary.mjs";
+import {
+  materializeDelegationSourceSnapshot,
+  readDelegationProductFingerprint,
+  readDelegationSourceIdentity,
+  workspacePrepFailure,
+} from "./source-snapshot.mjs";
 
-const execFileAsync = promisify(execFile);
-const PRODUCT_FINGERPRINT_EXCLUDES = Object.freeze([".orchestra/state/**"]);
-const GIT_NO_HOOKS_PREFIX = Object.freeze(["-c", "core.hooksPath="]);
 const activeWorktrees = new Map();
 
 function inside(parent, child) {
   const rel = relative(resolve(parent), resolve(child));
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
-}
-
-function prepFailure(reason, cause = undefined) {
-  const error = new Error(`WORKSPACE_PREP_FAILED:${reason}`);
-  error.code = "WORKSPACE_PREP_FAILED";
-  error.reason = reason;
-  if (cause !== undefined) error.cause = cause;
-  return error;
-}
-
-async function git(cwd, args) {
-  return execFileAsync("git", [...GIT_NO_HOOKS_PREFIX, ...args], {
-    cwd,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 15000,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-}
-
-async function gitStdout(cwd, args) {
-  const result = await git(cwd, args);
-  return String(result.stdout ?? "");
-}
-
-function readProductFingerprint(repoRoot) {
-  return readWorkspaceFingerprint(repoRoot, {
-    excludedPaths: PRODUCT_FINGERPRINT_EXCLUDES,
-  });
-}
-
-async function appendHooksFingerprint(hash, hooksRoot, relRoot = "") {
-  let entries;
-  try {
-    entries = await readdir(hooksRoot, { withFileTypes: true });
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      hash.update("hooks:none\0");
-      return;
-    }
-    throw error;
-  }
-
-  entries.sort((a, b) => a.name.localeCompare(b.name));
-  for (const entry of entries) {
-    const relPath = relRoot ? `${relRoot}/${entry.name}` : entry.name;
-    const absolute = join(hooksRoot, entry.name);
-    const stat = await lstat(absolute);
-    hash
-      .update("path\0")
-      .update(relPath)
-      .update("\0mode\0")
-      .update(String(stat.mode & 0o7777))
-      .update("\0");
-
-    if (stat.isSymbolicLink()) {
-      hash.update("symlink\0").update(await readlink(absolute)).update("\0");
-    } else if (stat.isDirectory()) {
-      hash.update("dir\0");
-      await appendHooksFingerprint(hash, absolute, relPath);
-    } else if (stat.isFile()) {
-      hash.update("file\0").update(await readFile(absolute)).update("\0");
-    } else {
-      hash.update("other\0");
-    }
-  }
-}
-
-async function readCanonicalHooksFingerprint(repoRoot) {
-  const commonDirText = (await gitStdout(repoRoot, ["rev-parse", "--git-common-dir"])).trim();
-  if (!commonDirText) throw new Error("GIT_COMMON_DIR_UNAVAILABLE");
-  const commonDir = isAbsolute(commonDirText)
-    ? resolve(commonDirText)
-    : resolve(repoRoot, commonDirText);
-  const hash = createHash("sha256").update("orchestra.delegation.git-hooks.v1\0");
-  await appendHooksFingerprint(hash, join(commonDir, "hooks"));
-  return hash.digest("hex");
-}
-
-async function readCanonicalGitFingerprint(repoRoot) {
-  try {
-    const [refs, config, hooks] = await Promise.all([
-      gitStdout(repoRoot, ["show-ref", "--head"]),
-      gitStdout(repoRoot, ["config", "--local", "--null", "--list"]),
-      readCanonicalHooksFingerprint(repoRoot),
-    ]);
-    const fingerprint = createHash("sha256")
-      .update("orchestra.delegation.git-boundary.v2\0")
-      .update(refs)
-      .update("\0config\0")
-      .update(config)
-      .update("\0hooks\0")
-      .update(hooks)
-      .digest("hex");
-    return { available: true, fingerprint };
-  } catch {
-    return { available: false, fingerprint: null };
-  }
-}
-
-function productPathspecs() {
-  return [
-    ".",
-    ...PRODUCT_FINGERPRINT_EXCLUDES.map((path) => `:(exclude)${path}`),
-  ];
-}
-
-function sourceIdentity(repoRoot, request) {
-  const identity = readProductFingerprint(repoRoot);
-  if (!identity.available) throw prepFailure("SOURCE_GIT_UNAVAILABLE");
-  if (identity.head !== request.workspace.sourceRevision) {
-    throw prepFailure("SOURCE_REVISION_MISMATCH");
-  }
-  if (identity.fingerprint !== request.workspace.sourceFingerprint) {
-    if (identity.dirtyFileCount !== 0) throw prepFailure("SOURCE_WORKSPACE_DIRTY");
-    throw prepFailure("SOURCE_FINGERPRINT_MISMATCH");
-  }
-  return identity;
 }
 
 async function allocatePath(baseDir) {
@@ -155,117 +30,7 @@ async function allocatePath(baseDir) {
     const candidate = join(root, `orchestra-delegation-${randomBytes(12).toString("hex")}`);
     if (!existsSync(candidate)) return { root, path: candidate };
   }
-  throw prepFailure("WORKSPACE_PATH_UNAVAILABLE");
-}
-
-function nulPaths(value) {
-  return String(value ?? "").split("\0").filter(Boolean);
-}
-
-async function copyUntrackedPath(sourceRoot, targetRoot, relPath) {
-  const source = resolve(sourceRoot, relPath);
-  const target = resolve(targetRoot, relPath);
-  if (!inside(sourceRoot, source) || !inside(targetRoot, target)) {
-    throw prepFailure("WORKSPACE_SNAPSHOT_PATH_INVALID");
-  }
-  await mkdir(dirname(target), { recursive: true });
-  await cp(source, target, {
-    recursive: true,
-    dereference: false,
-    errorOnExist: true,
-    force: false,
-    preserveTimestamps: true,
-    verbatimSymlinks: true,
-  });
-}
-
-async function materializeSourceSnapshot(sourceRoot, targetRoot, source) {
-  if (source.dirtyFileCount === 0) return;
-
-  const scratch = await mkdtemp(join(tmpdir(), "orchestra-delegation-snapshot-"));
-  const cachedPatchPath = join(scratch, "cached.patch");
-  const unstagedPatchPath = join(scratch, "unstaged.patch");
-  const specs = productPathspecs();
-
-  try {
-    const cachedPatch = await gitStdout(sourceRoot, [
-      "diff", "--cached", "--binary", "HEAD", "--", ...specs,
-    ]);
-    const unstagedPatch = await gitStdout(sourceRoot, [
-      "diff", "--binary", "--", ...specs,
-    ]);
-    const untracked = nulPaths(await gitStdout(sourceRoot, [
-      "ls-files", "--others", "--exclude-standard", "-z", "--", ...specs,
-    ]));
-
-    if (cachedPatch.length > 0) {
-      await writeFile(cachedPatchPath, cachedPatch, "utf8");
-      await git(targetRoot, ["apply", "--index", "--binary", cachedPatchPath]);
-    }
-    if (unstagedPatch.length > 0) {
-      await writeFile(unstagedPatchPath, unstagedPatch, "utf8");
-      await git(targetRoot, ["apply", "--binary", unstagedPatchPath]);
-    }
-    for (const relPath of untracked) {
-      await copyUntrackedPath(sourceRoot, targetRoot, relPath);
-    }
-
-    const sourceAfter = readProductFingerprint(sourceRoot);
-    if (!sourceAfter.available || sourceAfter.fingerprint !== source.fingerprint) {
-      throw prepFailure("SOURCE_CHANGED_DURING_SNAPSHOT");
-    }
-  } finally {
-    await rm(scratch, { recursive: true, force: true });
-  }
-}
-
-async function assertSnapshotSymlinkSafety(targetRoot) {
-  const specs = productPathspecs();
-  const paths = nulPaths(await gitStdout(targetRoot, [
-    "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", ...specs,
-  ]));
-
-  for (const relPath of paths) {
-    const absolute = resolve(targetRoot, relPath);
-    if (!inside(targetRoot, absolute)) {
-      throw prepFailure("WORKSPACE_SNAPSHOT_PATH_INVALID");
-    }
-
-    let stat;
-    try {
-      stat = await lstat(absolute);
-    } catch (error) {
-      if (error?.code === "ENOENT") continue;
-      throw prepFailure("WORKSPACE_SNAPSHOT_PATH_INVALID", error);
-    }
-    if (!stat.isSymbolicLink()) continue;
-
-    let rawTarget;
-    try {
-      rawTarget = await readlink(absolute);
-    } catch (error) {
-      throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS", error);
-    }
-
-    const lexicalTarget = isAbsolute(rawTarget)
-      ? resolve(rawTarget)
-      : resolve(dirname(absolute), rawTarget);
-    if (!inside(targetRoot, lexicalTarget)) {
-      throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS");
-    }
-
-    try {
-      const resolvedTarget = await realpath(lexicalTarget);
-      if (!inside(targetRoot, resolvedTarget)) {
-        throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS");
-      }
-    } catch (error) {
-      if (error?.code === "WORKSPACE_PREP_FAILED") throw error;
-      if (error?.code !== "ENOENT") {
-        throw prepFailure("WORKSPACE_SNAPSHOT_SYMLINK_EGRESS", error);
-      }
-    }
-  }
+  throw workspacePrepFailure("WORKSPACE_PATH_UNAVAILABLE");
 }
 
 function attribution(context) {
@@ -280,7 +45,7 @@ function attribution(context) {
 
 async function bestEffortRemove(repoRoot, path) {
   try {
-    await git(repoRoot, ["worktree", "remove", "--force", path]);
+    await runDelegationGit(repoRoot, ["worktree", "remove", "--force", path]);
     return !existsSync(path);
   } catch {
     return false;
@@ -289,28 +54,37 @@ async function bestEffortRemove(repoRoot, path) {
 
 export async function prepareDelegationWorkspace({ repoRoot, request, baseDir = null } = {}) {
   assertDelegationRequest(request);
-  if (!repoRoot) throw prepFailure("SOURCE_GIT_UNAVAILABLE");
+  if (request.schema !== "orchestra.delegation-request.v1") {
+    throw workspacePrepFailure("WORKTREE_REQUEST_VERSION_INVALID");
+  }
+  if (!repoRoot) throw workspacePrepFailure("SOURCE_GIT_UNAVAILABLE");
 
   const root = resolve(repoRoot);
-  const source = sourceIdentity(root, request);
+  const source = readDelegationSourceIdentity(root, {
+    sourceRevision: request.workspace.sourceRevision,
+    sourceFingerprint: request.workspace.sourceFingerprint,
+  });
   const allocated = await allocatePath(baseDir);
-  if (inside(root, allocated.path)) throw prepFailure("WORKSPACE_PATH_INVALID");
+  if (inside(root, allocated.path)) throw workspacePrepFailure("WORKSPACE_PATH_INVALID");
 
   let added = false;
   try {
-    await git(root, ["worktree", "add", "--detach", allocated.path, request.workspace.sourceRevision]);
+    await runDelegationGit(root, ["worktree", "add", "--detach", allocated.path, request.workspace.sourceRevision]);
     added = true;
-    await materializeSourceSnapshot(root, allocated.path, source);
-    await assertSnapshotSymlinkSafety(allocated.path);
+    await materializeDelegationSourceSnapshot({
+      sourceRoot: root,
+      targetRoot: allocated.path,
+      source,
+    });
 
-    const initial = readProductFingerprint(allocated.path);
+    const initial = readDelegationProductFingerprint(allocated.path);
     if (!initial.available
         || initial.head !== request.workspace.sourceRevision
         || initial.fingerprint !== source.fingerprint) {
-      throw prepFailure("WORKSPACE_IDENTITY_MISMATCH");
+      throw workspacePrepFailure("WORKSPACE_IDENTITY_MISMATCH");
     }
-    const canonicalGit = await readCanonicalGitFingerprint(root);
-    if (!canonicalGit.available) throw prepFailure("SOURCE_GIT_UNAVAILABLE");
+    const canonicalGit = await readDelegationGitBoundary(root);
+    if (!canonicalGit.available) throw workspacePrepFailure("SOURCE_GIT_UNAVAILABLE");
 
     const cleanupToken = randomBytes(32).toString("hex");
     const record = Object.freeze({
@@ -332,21 +106,21 @@ export async function prepareDelegationWorkspace({ repoRoot, request, baseDir = 
   } catch (error) {
     if (added) await bestEffortRemove(root, allocated.path);
     if (error?.code === "WORKSPACE_PREP_FAILED") throw error;
-    throw prepFailure("WORKTREE_CREATE_FAILED", error);
+    throw workspacePrepFailure("WORKTREE_CREATE_FAILED", error);
   }
 }
 
 export async function inspectDelegationWorkspace(context) {
   const expected = attribution(context);
-  if (!expected) throw prepFailure("WORKSPACE_CONTEXT_INVALID");
+  if (!expected) throw workspacePrepFailure("WORKSPACE_CONTEXT_INVALID");
 
   const [identity, canonicalSource, canonicalGit] = await Promise.all([
-    Promise.resolve(readProductFingerprint(expected.path)),
-    Promise.resolve(readProductFingerprint(expected.repoRoot)),
-    readCanonicalGitFingerprint(expected.repoRoot),
+    Promise.resolve(readDelegationProductFingerprint(expected.path)),
+    Promise.resolve(readDelegationProductFingerprint(expected.repoRoot)),
+    readDelegationGitBoundary(expected.repoRoot),
   ]);
   if (!identity.available || !canonicalSource.available || !canonicalGit.available) {
-    throw prepFailure("WORKSPACE_INSPECTION_FAILED");
+    throw workspacePrepFailure("WORKSPACE_INSPECTION_FAILED");
   }
 
   const workspaceChanged = identity.fingerprint !== expected.initialFingerprint;
@@ -374,7 +148,7 @@ export async function cleanupDelegationWorkspace(context) {
   }
 
   try {
-    await git(expected.repoRoot, ["worktree", "remove", "--force", expected.path]);
+    await runDelegationGit(expected.repoRoot, ["worktree", "remove", "--force", expected.path]);
     if (existsSync(expected.path)) {
       return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
     }

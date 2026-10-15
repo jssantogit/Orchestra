@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runDoctor } from "../../runtime/doctor.mjs";
+import { writeDelegationArtifact } from "../../runtime/delegation/artifact-store.mjs";
 import { writeDelegationRecord } from "../../runtime/delegation/store.mjs";
 
 function fixture() {
@@ -54,6 +55,33 @@ function cleanupFailedRecord(recoverablePath) {
   };
 }
 
+function retainedArtifact(reviewPath, overrides = {}) {
+  return {
+    schema: "orchestra.delegation-artifact.v1",
+    artifactId: "doctor-retained-artifact",
+    delegationId: "doctor-retained-artifact",
+    taskId: "doctor-retained-task",
+    generation: 3,
+    source: { provider: "codex", actorIdHash: "sha256:control" },
+    target: { provider: "antigravity", logicalRole: "IMPLEMENTER" },
+    sourceRevision: "abcdef1234567890",
+    sourceFingerprint: "sha256:source",
+    canonicalGitFingerprint: "sha256:git",
+    delegatedPath: reviewPath,
+    syntheticBaselineSha: "1234567890abcdef",
+    mutationScope: {
+      allowedPaths: ["src/**"],
+      forbiddenPaths: [".git/**", ".orchestra/state/**"],
+    },
+    changedPaths: ["src/entry.mjs"],
+    patchSha256: "sha256:patch",
+    mutationDigest: "sha256:mutation",
+    state: "READY_FOR_REVIEW",
+    createdAt: "2026-10-15T04:00:00.000Z",
+    ...overrides,
+  };
+}
+
 test("Doctor surfaces delegated cleanup failures with bounded recovery paths", async (t) => {
   const root = fixture();
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -70,6 +98,65 @@ test("Doctor surfaces delegated cleanup failures with bounded recovery paths", a
   assert.equal(report.delegation.recovery.required, true);
   assert.deepEqual(report.delegation.recovery.cleanupFailures, [{
     delegationId: "doctor-cleanup-failed",
+    recoverablePath,
+  }]);
+});
+
+test("Doctor surfaces READY_FOR_REVIEW implementation artifacts without treating review as cleanup failure", async (t) => {
+  const root = fixture();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const reviewPath = join(tmpdir(), "orchestra-implementation-doctor", "workspace");
+  writeDelegationArtifact(root, {
+    manifest: retainedArtifact(reviewPath),
+    patch: Buffer.from("diff --git a/src/entry.mjs b/src/entry.mjs\n", "utf8"),
+  });
+
+  const report = await runDoctor({
+    repoRoot: root,
+    runtime: "fixture",
+    runCommands: false,
+    delegationInspector: async () => ({ status: "READY", gitWorktree: { available: true }, providers: [] }),
+  });
+
+  assert.equal(report.delegation.recovery.required, false);
+  assert.equal(report.delegation.recovery.reason, null);
+  assert.deepEqual(report.delegation.recovery.retainedArtifacts, [{
+    artifactId: "doctor-retained-artifact",
+    state: "READY_FOR_REVIEW",
+    reviewPath,
+  }]);
+});
+
+test("Doctor surfaces post-promotion artifact cleanup failures with recoverable clone paths", async (t) => {
+  const root = fixture();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const recoverablePath = join(tmpdir(), "orchestra-implementation-promoted-orphan", "workspace");
+  writeDelegationArtifact(root, {
+    manifest: retainedArtifact(recoverablePath, {
+      artifactId: "doctor-promoted-cleanup-failed",
+      delegationId: "doctor-promoted-cleanup-failed",
+      state: "PROMOTED",
+      cleanup: {
+        cleaned: false,
+        reason: "WORKSPACE_CLEANUP_FAILED",
+        recoverablePath,
+      },
+    }),
+    patch: Buffer.from("diff --git a/src/entry.mjs b/src/entry.mjs\n", "utf8"),
+  });
+
+  const report = await runDoctor({
+    repoRoot: root,
+    runtime: "fixture",
+    runCommands: false,
+    delegationInspector: async () => ({ status: "READY", gitWorktree: { available: true }, providers: [] }),
+  });
+
+  assert.equal(report.delegation.recovery.required, true);
+  assert.equal(report.delegation.recovery.reason, "WORKSPACE_CLEANUP_FAILED");
+  assert.deepEqual(report.delegation.recovery.artifactCleanupFailures, [{
+    artifactId: "doctor-promoted-cleanup-failed",
+    state: "PROMOTED",
     recoverablePath,
   }]);
 });

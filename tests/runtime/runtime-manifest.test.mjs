@@ -116,7 +116,12 @@ test("delegation manifest is a fourth independent neutral runtime with bounded p
   assert.equal(findAsset(manifest, ".orchestra/runtime/delegation/providers/codex/model-catalog.mjs")?.source, "providers/codex/model-catalog.mjs");
   assert.equal(manifest.managedAssets.some((asset) => asset.output.startsWith(".codex/") || asset.output.startsWith(".agents/") || asset.output === "GEMINI.md"), false);
   assert.equal(manifest.managedAssets.some((asset) => asset.output.includes("/providers/codex/adapter/") || asset.output.includes("/providers/antigravity/adapter/")), false);
-  assert.deepEqual(manifest.preservedProjectPaths, [".orchestra/state/delegations"]);
+  assert.deepEqual(manifest.preservedProjectPaths, [
+    ".orchestra/state/delegations",
+    ".orchestra/state/delegation/artifacts",
+  ]);
+  assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/cli.mjs"));
+  assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs"));
 });
 
 test("unknown runtime manifests fail closed", async () => {

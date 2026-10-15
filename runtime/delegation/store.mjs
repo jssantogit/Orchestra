@@ -21,6 +21,11 @@ const FAILURE_REASONS = new Set([
   "EXECUTION_TIMED_OUT",
   "INVALID_RESULT",
   "WORKSPACE_CLEANUP_FAILED",
+  "SCOPE_VIOLATION",
+  "ARTIFACT_SEAL_FAILED",
+  "ARTIFACT_TAMPERED",
+  "PROMOTION_STALE",
+  "PROMOTION_FAILED",
 ]);
 const TOP_LEVEL_KEYS = new Set([
   "schema",
@@ -35,6 +40,7 @@ const TOP_LEVEL_KEYS = new Set([
   "completedAt",
   "durationMs",
   "failureReason",
+  "artifactId",
   "workspace",
   "evidenceRefs",
 ]);
@@ -47,6 +53,7 @@ const WORKSPACE_KEYS = new Set([
   "dirty",
   "dirtyFileCount",
   "cleaned",
+  "retained",
   "cleanupReason",
   "recoverablePath",
 ]);
@@ -82,6 +89,16 @@ function validTimestamp(value, { nullable = false } = {}) {
   return boundedString(value, 64) && Number.isFinite(Date.parse(value));
 }
 
+function validOptionalArtifactId(artifactId) {
+  if (artifactId === undefined || artifactId === null) return true;
+  try {
+    assertDelegationId(artifactId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function validateRecord(record) {
   if (!exactKeys(record, TOP_LEVEL_KEYS)) return false;
   try {
@@ -92,6 +109,7 @@ function validateRecord(record) {
   if (record.schema !== undefined && record.schema !== RECORD_SCHEMA) return false;
   if (!boundedString(record.taskId, 300)) return false;
   if (!Number.isInteger(record.generation) || record.generation < 0) return false;
+  if (!validOptionalArtifactId(record.artifactId)) return false;
 
   if (!exactKeys(record.source, SOURCE_KEYS)
       || !boundedString(record.source.provider, 120)
@@ -114,6 +132,7 @@ function validateRecord(record) {
   if (typeof workspace.dirty !== "boolean") return false;
   if (!Number.isInteger(workspace.dirtyFileCount) || workspace.dirtyFileCount < 0) return false;
   if (typeof workspace.cleaned !== "boolean") return false;
+  if (!(workspace.retained === undefined || typeof workspace.retained === "boolean")) return false;
   if (!(workspace.cleanupReason === null || boundedString(workspace.cleanupReason, 300))) return false;
   if (!(workspace.recoverablePath === null || boundedString(workspace.recoverablePath, 4096))) return false;
 
@@ -122,9 +141,16 @@ function validateRecord(record) {
       || record.evidenceRefs.some((ref) => !boundedString(ref, 512))
       || new Set(record.evidenceRefs).size !== record.evidenceRefs.length) return false;
 
+  const retained = workspace.retained === true;
+  const hasArtifact = record.artifactId !== undefined && record.artifactId !== null;
+
   if (record.status === "STARTED") {
     if (record.completedAt !== null || record.durationMs !== null || record.failureReason !== null) return false;
-    if (workspace.cleaned !== false || workspace.cleanupReason !== null || workspace.recoverablePath !== null) return false;
+    if (workspace.cleaned !== false
+        || retained
+        || hasArtifact
+        || workspace.cleanupReason !== null
+        || workspace.recoverablePath !== null) return false;
     return true;
   }
 
@@ -133,14 +159,30 @@ function validateRecord(record) {
       || record.durationMs === null) return false;
 
   if (record.status === "COMPLETED") {
-    if (record.failureReason !== null || workspace.cleaned !== true) return false;
+    if (record.failureReason !== null) return false;
+    if (hasArtifact || retained) {
+      if (!(hasArtifact
+          && retained
+          && record.purpose === "IMPLEMENTATION"
+          && record.target.logicalRole === "IMPLEMENTER"
+          && workspace.cleaned === false
+          && workspace.cleanupReason === null
+          && workspace.recoverablePath !== null)) return false;
+    } else if (workspace.cleaned !== true) {
+      return false;
+    }
   } else if (record.status === "CLEANUP_FAILED") {
     if (record.failureReason !== "WORKSPACE_CLEANUP_FAILED"
         || workspace.cleaned !== false
+        || retained
+        || hasArtifact
         || workspace.cleanupReason !== "WORKSPACE_CLEANUP_FAILED"
         || workspace.recoverablePath === null) return false;
   } else {
-    if (record.failureReason === null || workspace.cleaned !== true) return false;
+    if (record.failureReason === null
+        || workspace.cleaned !== true
+        || retained
+        || hasArtifact) return false;
   }
   return true;
 }
