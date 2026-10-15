@@ -95,6 +95,13 @@ function delegationRecovery(repoRoot) {
         delegationId: record.delegationId,
         recoverablePath: record.workspace.recoverablePath,
       }));
+    const artifactCleanupFailures = artifacts
+      .filter((artifact) => artifact.state !== "READY_FOR_REVIEW" && artifact.cleanup?.cleaned === false)
+      .map((artifact) => ({
+        artifactId: artifact.artifactId,
+        state: artifact.state,
+        recoverablePath: artifact.cleanup.recoverablePath,
+      }));
     const inFlight = records
       .filter((record) => record.status === "STARTED")
       .map((record) => ({ delegationId: record.delegationId, startedAt: record.startedAt }));
@@ -105,19 +112,22 @@ function delegationRecovery(repoRoot) {
         state: artifact.state,
         reviewPath: artifact.delegatedPath,
       }));
+    const cleanupRequired = cleanupFailures.length > 0 || artifactCleanupFailures.length > 0;
     return {
       stateReadable: true,
-      required: cleanupFailures.length > 0,
+      required: cleanupRequired,
       cleanupFailures,
+      artifactCleanupFailures,
       inFlight,
       retainedArtifacts,
-      reason: cleanupFailures.length > 0 ? "WORKSPACE_CLEANUP_FAILED" : null,
+      reason: cleanupRequired ? "WORKSPACE_CLEANUP_FAILED" : null,
     };
   } catch {
     return {
       stateReadable: false,
       required: true,
       cleanupFailures: [],
+      artifactCleanupFailures: [],
       inFlight: [],
       retainedArtifacts: [],
       reason: "DELEGATION_STATE_UNREADABLE",
@@ -234,7 +244,10 @@ async function main() {
     console.log(`INFO delegation:readiness — review=${review}; implementation=${implementation}; gitWorktree=${report.delegation.gitWorktree?.available ? "available" : "unavailable"}; gitClone=${report.delegation.gitClone?.available ? "available" : "unavailable"}${providerSummary ? `; ${providerSummary}` : ""}`);
     if (report.delegation.recovery?.required) {
       const recovery = report.delegation.recovery;
-      const paths = recovery.cleanupFailures.map((entry) => entry.recoverablePath).filter(Boolean);
+      const paths = [
+        ...recovery.cleanupFailures.map((entry) => entry.recoverablePath),
+        ...recovery.artifactCleanupFailures.map((entry) => entry.recoverablePath),
+      ].filter(Boolean);
       console.log(`INFO delegation:recovery — ${recovery.reason || "RECOVERY_REQUIRED"}${paths.length ? `; paths=${paths.join(",")}` : ""}`);
     }
     if (report.delegation.recovery?.retainedArtifacts?.length > 0) {
