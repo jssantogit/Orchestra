@@ -149,6 +149,8 @@ export async function materializeDelegationSourceSnapshot({ sourceRoot, targetRo
       await copyUntrackedPath(sourceRoot, targetRoot, relPath);
     }
 
+    await assertDelegationSnapshotSymlinkSafety(targetRoot);
+
     const sourceAfter = readDelegationProductFingerprint(sourceRoot);
     if (!sourceAfter.available || sourceAfter.fingerprint !== source.fingerprint) {
       throw workspacePrepFailure("SOURCE_CHANGED_DURING_SNAPSHOT");
