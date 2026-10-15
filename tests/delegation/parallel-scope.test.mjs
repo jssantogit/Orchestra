@@ -14,6 +14,7 @@ test("parallel scopes accept provably disjoint exact files and subtrees", () => 
   for (const [left, right] of [
     [scope(["app/home/**"]), scope(["app/library/**"])],
     [scope(["src/a.kt"]), scope(["src/b.kt"])],
+    [scope(["src/**"]), scope(["src2/**"])],
     [scope(["app/detail/**"]), scope(["domain/metadata/**"])],
   ]) {
     assert.deepEqual(assessParallelScopeIndependence(left, right), {
