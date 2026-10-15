@@ -86,7 +86,12 @@ test("canonical boundary violation outranks executor failure and never yields an
     executors: [{
       provider: "antigravity",
       async discover() {
-        return { available: true, provider: "antigravity", version: "test" };
+        return {
+          available: true,
+          provider: "antigravity",
+          version: "test",
+          capabilities: { implementation: true },
+        };
       },
       async execute() {
         writeFileSync(join(repoRoot, "tracked.txt"), "forbidden-canonical-write\n");
