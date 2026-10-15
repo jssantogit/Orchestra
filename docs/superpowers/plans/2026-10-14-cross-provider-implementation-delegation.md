@@ -86,13 +86,14 @@
 
 **Interfaces:**
 - `DELEGATION_PURPOSES.IMPLEMENTATION = "IMPLEMENTATION"`; v1 schemas still reject it where not allowed, v2 requires it.
+- `DELEGATION_FAILURE_REASONS` gains `SCOPE_VIOLATION`, `ARTIFACT_SEAL_FAILED`, `ARTIFACT_TAMPERED`, `PROMOTION_STALE`, `PROMOTION_FAILED`; v1 result schema continues to reject those reasons while v2 permits the implementation-specific subset.
 - `validateDelegationRequest()` / `assertDelegationRequest()` dispatch strictly on `request.schema`; same for result v1/v2.
 - `authorizeDelegationRequest(request, context)` is version-aware but keeps its public signature; v1 branch is behaviorally unchanged.
 - `normalizeMutationScope({ allowedPaths, forbiddenPaths }) -> { allowedPaths, forbiddenPaths }` returns sorted normalized unique patterns and unions mandatory `.git/**`, `.orchestra/state/**`.
 - `authorizeChangedPaths(changedPaths, normalizedScope) -> { allowed, violations[] }` uses exact path + terminal `/**` subtree semantics only.
 - `selectDelegationTarget({... explicitCrossProvider = false })`: `IMPLEMENTER + IMPLEMENTATION` crosses only when `explicitCrossProvider === true`; otherwise same-provider default.
 
-- [ ] **Step 1: Write RED v1/v2 schema and policy tests** — v1 still rejects `WORKSPACE_EDIT`, `IMPLEMENTATION`, `WORKSPACE_ONLY`, and `EPHEMERAL_CLONE`; v2 accepts only the exact implementation tuple and rejects extra/missing capabilities, network, recursion, wrong role/purpose/isolation.
+- [ ] **Step 1: Write RED v1/v2 schema and policy tests** — v1 still rejects `WORKSPACE_EDIT`, `IMPLEMENTATION`, `WORKSPACE_ONLY`, `EPHEMERAL_CLONE`, and v2-only failure reasons; v2 accepts only the exact implementation tuple and rejects extra/missing capabilities, network, recursion, wrong role/purpose/isolation.
 - [ ] **Step 2: Write RED mutation-scope tests** — accept `src/file.mjs`, `src/**`, `**`; normalize `./`; reject absolute/drive-absolute paths, `..`, empty/double-star-in-middle/general globs; mandatory forbidden patterns always win; path boundary `src/**` must not match `src2/x`.
 - [ ] **Step 3: Write RED routing tests** — normal IMPLEMENTER remains local; explicit `IMPLEMENTATION + explicitCrossProvider` selects one healthy independent provider and consumes budget; unavailable target returns `PROVIDER_UNAVAILABLE`; no fallback.
 - [ ] **Step 4: Confirm RED** — `node --test tests/delegation/delegation-v2-contract.test.mjs tests/delegation/delegation-v2-policy.test.mjs tests/delegation/mutation-scope.test.mjs tests/delegation/delegation-policy.test.mjs tests/delegation/delegation-routing.test.mjs tests/core/schema-validation.test.mjs tests/core/schema-standalone-runtime.test.mjs`.
@@ -128,7 +129,7 @@
 
 - [ ] **Step 1: Lock current v1 behavior with regression assertions before extraction** — same fingerprints, dirty snapshot fidelity, symlink egress, no-hooks behavior, canonical Git mutation detection.
 - [ ] **Step 2: Write RED mutable-clone tests** — path outside canonical checkout; independent `.git`; clone made with no hardlinks; no `objects/info/alternates`; no remotes before worker; source revision/dirty snapshot exactly reproduced; synthetic baseline commit contains canonical pre-worker state.
-- [ ] **Step 3: Write RED Git isolation tests** — worker env contains `GIT_CONFIG_NOSYSTEM=1`, broker-created `GIT_CONFIG_GLOBAL`, no terminal prompts, protocol denial; inherited global/system hook/config fixture cannot execute; local/file/http/ssh remote use is unavailable from worker env.
+- [ ] **Step 3: Write RED Git isolation tests** — worker env contains `GIT_CONFIG_NOSYSTEM=1`, broker-created `GIT_CONFIG_GLOBAL`, `GIT_TERMINAL_PROMPT=0`, and protocol denial; inherited global/system hook/config fixture cannot execute; local/file/http/https/ssh/git/ext remote use is unavailable from worker env.
 - [ ] **Step 4: Write RED metadata mutation tests** — worker-created commit/HEAD move, ref/config/hooks mutation, or staged index change is detected; canonical repo remains unchanged; no promotable workspace facts are returned.
 - [ ] **Step 5: Confirm RED** — `node --test tests/delegation/mutable-workspace*.test.mjs tests/delegation/workspace-*.test.mjs`.
 - [ ] **Step 6: Extract existing helpers and implement hardened clone/synthetic baseline** — broker Git operations use no-hooks; synthetic commit uses fixed local identity, no signing, no remote.
@@ -149,10 +150,10 @@
 
 **Interfaces:**
 - Artifact state root: `.orchestra/state/delegation/artifacts/<artifactId>/` with `manifest.json` and `candidate.patch`.
-- `deriveMutationFacts({ workspacePath, baselineSha, scope }) -> Promise<{ changedPaths, facts, mutationDigest }>` derives sorted path/kind/mode/content-or-link-hash facts from filesystem/Git, never worker report fields.
+- `deriveMutationFacts({ workspacePath, baselineSha, scope }) -> Promise<{ changedPaths, facts, mutationDigest }>` derives sorted path/kind/mode/content-or-link-hash facts from filesystem/Git, never worker report fields; deleted paths are represented as `kind: "DELETED"` facts.
 - `sealDelegationArtifact({ repoRoot, request, generation, actor, workspace, report }) -> Promise<{ artifactId, patchSha256, mutationDigest, changedPaths, state: "READY_FOR_REVIEW" }>` validates scope/symlinks/Git boundaries, stages only after validation, emits `git diff --cached --binary --full-index <syntheticBaselineSha>`, and writes state atomically.
 - `readDelegationArtifact(repoRoot, artifactId)` / `listDelegationArtifacts(repoRoot)` reject unsafe IDs and malformed/incomplete state.
-- Delegation record v1 storage accepts optional v2 facts without invalidating existing records: `artifactId`, `workspace.retained`; v1 terminal records remain unchanged.
+- Delegation record v1 storage accepts optional v2 facts without invalidating existing records: top-level `artifactId` and `workspace.retained`. V1 terminal records remain unchanged; successful v2 records may be `COMPLETED` with `retained=true`, `cleaned=false`, no cleanup failure, and an artifact ID.
 
 - [ ] **Step 1: Write RED artifact-store tests** — safe ID/path traversal, atomic manifest+patch presence, parse/shape failure, bounded strings/arrays, no raw prompt/transcript/stdout/stderr/reasoning.
 - [ ] **Step 2: Write RED sealing tests** — tracked edit/new/delete/binary/mode/symlink changes produce deterministic `changedPaths`, binary/full-index patch hash and mutation digest; dirty canonical baseline is excluded from worker delta.
@@ -182,7 +183,7 @@
 - `buildDelegationProcessEnvironment({... extra })` remains sanitized and accepts broker-supplied Git-isolation variables from v2 workspace context.
 
 - [ ] **Step 1: Write RED v1 prompt regression tests** — AGY still receives `Do not modify files`; Codex v1 remains logically read-only; v1 worker envelope has no `WORKSPACE_EDIT`/mutation scope.
-- [ ] **Step 2: Write RED v2 executor tests** — AGY/Codex prompt explicitly allows only scoped workspace edits, still forbids network/delegation, uses the supplied independent clone cwd, retains sandboxing, and receives isolated Git env.
+- [ ] **Step 2: Write RED v2 executor tests** — AGY/Codex prompt explicitly allows only scoped workspace edits, still forbids network/delegation/Git-history mutation, uses the supplied independent clone cwd, retains sandboxing, and receives isolated Git env.
 - [ ] **Step 3: Write RED malformed-output/failure tests for v2** — timeout/nonzero/oversized/malformed report map to existing taxonomy and cannot fabricate artifact fields.
 - [ ] **Step 4: Confirm RED** — `node --test tests/delegation/worker-envelope-boundary.test.mjs tests/delegation/antigravity-executor.test.mjs tests/delegation/codex-executor.test.mjs tests/delegation/process-environment.test.mjs`.
 - [ ] **Step 5: Implement version-aware envelope/prompt/env wiring**.
@@ -232,10 +233,10 @@
 - `inspectDelegationArtifact({ repoRoot, artifactId }) -> { manifest, integrity: { valid, reason }, reviewPath }` recomputes patch SHA/mutation digest/scope and never mutates canonical product state.
 - `promoteDelegationArtifact({ repoRoot, artifactId, generation, actor }) -> { promoted, reason, changedPaths }` accepts only `READY_FOR_REVIEW`; acquires `.orchestra/state/delegation/promotion.lock` with `actor.actorIdHash`; validates actor/generation/baseline/Git boundary/sealed clone/scope; runs `git apply --check`, rechecks baseline while lock is held, applies patch to working tree without `--index`, verifies changed-file mutation digest, marks artifact `PROMOTED`, then exact-path cleans retained clone.
 - `discardDelegationArtifact({ repoRoot, artifactId, generation, actor }) -> { discarded, reason }` accepts only `READY_FOR_REVIEW`, validates actor/generation, exact-path cleans clone, marks `DISCARDED`.
-- CLI syntax is fixed here: `artifact-cli.mjs inspect --artifact <id> --repo-root <root>`; `promote|discard` additionally require `--generation <n>` and derive/validate root actor identity from stored artifact source plus caller-supplied trusted control context in the same manner as delegation CLI composition.
+- CLI syntax is fixed here: `artifact-cli.mjs inspect --artifact <id> --repo-root <root>`; `artifact-cli.mjs promote|discard --artifact <id> --repo-root <root> --generation <n> --source-provider <provider> --actor-id-hash <hash>`. Mutating actions construct a root actor only from these explicit caller facts and then compare them to the sealed manifest; stored artifact identity alone never authenticates the action.
 
 - [ ] **Step 1: Write RED inspect/tamper tests** — unchanged artifact validates; edited retained file/index/patch/manifest yields `ARTIFACT_TAMPERED`; inspect never applies patch.
-- [ ] **Step 2: Write RED stale/authority tests** — wrong actor/generation, canonical tracked/untracked/index change, canonical refs/config/hooks change, non-READY state all fail before canonical product mutation; stale baseline maps to `PROMOTION_STALE`.
+- [ ] **Step 2: Write RED stale/authority tests** — wrong source provider/actor/generation, canonical tracked/untracked/index change, canonical refs/config/hooks change, non-READY state all fail before canonical product mutation; stale baseline maps to `PROMOTION_STALE`.
 - [ ] **Step 3: Write RED promotion fidelity tests** — canonical fixture starts with staged + unstaged + untracked baseline; promotion applies only worker delta, preserves prior index entries exactly, and final changed file facts equal sealed mutation digest.
 - [ ] **Step 4: Write RED concurrency/CLI tests** — active promotion lock denies concurrent promotion; CLI rejects malformed flags/unsafe IDs; successful promote/discard transitions artifact state and cleans only attributed clone.
 - [ ] **Step 5: Confirm RED** — `node --test tests/delegation/artifact-promotion.test.mjs tests/delegation/artifact-cli.test.mjs tests/leases/atomic-lock.test.mjs`.
@@ -245,7 +246,7 @@
 
 ---
 
-### Task 7: Expose explicit implementation delegation in both provider control planes
+### Task 7: Expose explicit implementation and artifact actions in both provider control planes
 
 **Files:**
 - Modify: `runtimes/codex/.codex/astra-orchestra/cross-provider-delegation.mjs`
@@ -258,13 +259,14 @@
 - Keep existing `buildCodexDelegationRequest()` and `buildAntigravityDelegationRequest()` as v1 read-only builders.
 - Add `buildCodexImplementationDelegationRequest({... mutationScope })` and `buildAntigravityImplementationDelegationRequest({... mutationScope })`; both emit canonical v2 with exact implementation authority and no Work Lease payload.
 - `decideCodexCrossProviderRoute()` / `decideAntigravityCrossProviderRoute()` forward `explicitCrossProvider`; implementation crosses only with explicit intent.
-- Existing execute helpers accept either request version, require matching result version/identity, and always return `{ controlReturned: true, accepted: false, claimOnly: true, result }`.
+- Existing execute helpers accept either request version, require matching result schema/identity, and always return `{ controlReturned: true, accepted: false, claimOnly: true, result }`.
+- Add provider wrappers over the installed neutral artifact CLI: `inspectCodexDelegationArtifact`, `promoteCodexDelegationArtifact`, `discardCodexDelegationArtifact` and symmetric Antigravity functions. Mutating wrappers pass the provider constant plus current `actorIdHash`/generation explicitly; they return artifact action facts only and never auto-create Candidate/Evidence/Acceptance.
 
 - [ ] **Step 1: Write RED Codex -> AGY primary implementer contract test** — explicit route selects AGY; builder emits v2 exact capabilities/scope; normal implementation without explicit flag remains local; unavailable AGY returns failure without Codex/manual fallback.
 - [ ] **Step 2: Write RED AGY -> Codex symmetric test**.
-- [ ] **Step 3: Add result-version mismatch and no-self-acceptance tests**.
+- [ ] **Step 3: Write RED provider artifact-action tests** — inspect is read-only; promote/discard invoke installed neutral CLI with exact source provider/actor/generation; mismatched result/version is rejected; promotion still does not imply acceptance.
 - [ ] **Step 4: Confirm RED** — `node --test tests/delegation/codex-control-plane-delegation.test.mjs tests/delegation/antigravity-control-plane-delegation.test.mjs`.
-- [ ] **Step 5: Implement provider-control builders/routing plumbing** — keep source-relative installed runtime imports intact.
+- [ ] **Step 5: Implement provider-control builders/routing/artifact wrappers** — keep source-relative installed runtime imports intact.
 - [ ] **Step 6: Sync runtime core/provider generated copies and verify parity** — `npm run sync:runtime-core && npm run check:runtime-core` plus focused tests.
 - [ ] **Step 7: Commit** — `feat(delegation): expose explicit cross-provider implementers`.
 
