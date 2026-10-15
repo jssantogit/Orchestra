@@ -15,7 +15,11 @@
     },
     {
       "path": "delegation/mutation-scope.mjs",
-      "sha256": "795ff71201930eff3db9f333893c66493995530355bf6f02c8c0e2d51379b17f"
+      "sha256": "f4606f8320d1125963270ef9b9252e7af915add4ee8d4a3bcc7bb582ad056cf3"
+    },
+    {
+      "path": "delegation/parallel-scope.mjs",
+      "sha256": "ea67b65e7002d16ee0130826f2acf9b40a798c4b267f5beb91df9323cfac8d1d"
     },
     {
       "path": "delegation/policy.mjs",
