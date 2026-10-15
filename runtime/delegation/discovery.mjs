@@ -113,14 +113,23 @@ async function inspectGitClone(runProcess) {
   }
 }
 
-function buildModes({ discoveryStatus, gitWorktree, gitClone }) {
+function providerModeStatus(providers, capability = null) {
+  if (!Array.isArray(providers) || providers.length === 0) return "UNAVAILABLE";
+  const availableCount = providers.filter((provider) => provider?.available === true
+    && (capability === null || provider.capabilities?.[capability] === true)).length;
+  if (availableCount === providers.length) return "READY";
+  if (availableCount === 0) return "UNAVAILABLE";
+  return "DEGRADED";
+}
+
+function buildModes({ discoveryStatus, gitWorktree, gitClone, providers }) {
   return {
     review: {
       status: gitWorktree.available ? discoveryStatus : "UNAVAILABLE",
       isolation: "EPHEMERAL_WORKTREE",
     },
     implementation: {
-      status: gitClone.available ? discoveryStatus : "UNAVAILABLE",
+      status: gitClone.available ? providerModeStatus(providers, "implementation") : "UNAVAILABLE",
       isolation: "EPHEMERAL_CLONE",
       artifactLifecycle: "CONTROL_OWNED",
     },
@@ -143,6 +152,7 @@ export async function inspectDelegationCapabilities({ runProcess = runBoundedPro
     discoveryStatus: discovery.status,
     gitWorktree,
     gitClone,
+    providers: discovery.providers,
   });
 
   return {
