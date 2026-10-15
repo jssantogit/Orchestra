@@ -119,9 +119,12 @@ test("delegation manifest is a fourth independent neutral runtime with bounded p
   assert.deepEqual(manifest.preservedProjectPaths, [
     ".orchestra/state/delegations",
     ".orchestra/state/delegation/artifacts",
+    ".orchestra/state/delegation/parallel-groups",
+    ".orchestra/state/delegation/composite-artifacts",
   ]);
   assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/cli.mjs"));
   assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs"));
+  assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/parallel-cli.mjs"));
 });
 
 test("unknown runtime manifests fail closed", async () => {
