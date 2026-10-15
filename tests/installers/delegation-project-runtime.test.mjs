@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -104,7 +105,9 @@ test("delegation manifest owns one independent project-wide neutral runtime", as
   assert.equal(outputs.some((output) => output.startsWith(".codex/") || output.startsWith(".agents/") || output === "GEMINI.md"), false);
   assert.equal(outputs.some((output) => output.includes("/providers/codex/adapter/") || output.includes("/providers/antigravity/adapter/")), false);
   assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/cli.mjs"));
+  assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs"));
   assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegations"));
+  assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegation/artifacts"));
 });
 
 test("delegation runtime installs, inspects cleanly, and repeated ensure is an idempotent noop", async (t) => {
@@ -114,6 +117,7 @@ test("delegation runtime installs, inspects cleanly, and repeated ensure is an i
   assert.equal(installed.operation, "install");
   assert.equal(installed.metadata.runtime, "delegation");
   assert.equal(existsSync(join(targetDir, ".orchestra", "runtime", "delegation", "runtime", "delegation", "cli.mjs")), true);
+  assert.equal(existsSync(join(targetDir, ".orchestra", "runtime", "delegation", "runtime", "delegation", "artifact-cli.mjs")), true);
 
   const inspection = await inspectDelegationProjectRuntime({ targetDir, builtRuntime });
   assert.equal(inspection.clean, true);
@@ -147,12 +151,19 @@ test("delegation runtime update fails closed while any delegation record is in f
   ).includes("changed build for quiescence test"), false);
 });
 
-test("delegation runtime update preserves durable delegation records and does not own provider runtime trees", async (t) => {
+test("delegation runtime update preserves durable delegation records and sealed artifact state", async (t) => {
   const { targetDir, builtRuntime } = await fixture(t);
   await installDelegationProjectRuntime({ targetDir, builtRuntime });
   writeDelegationRecord(targetDir, completedRecord());
   const recordPath = join(targetDir, ".orchestra", "state", "delegations", "runtime-update-completed.json");
   const before = readFileSync(recordPath, "utf8");
+
+  const artifactDir = join(targetDir, ".orchestra", "state", "delegation", "artifacts", "sealed-fixture");
+  await mkdir(artifactDir, { recursive: true });
+  const artifactManifestPath = join(artifactDir, "manifest.json");
+  const artifactPatchPath = join(artifactDir, "candidate.patch");
+  writeFileSync(artifactManifestPath, "{\"state\":\"READY_FOR_REVIEW\"}\n", "utf8");
+  writeFileSync(artifactPatchPath, "sealed patch fixture\n", "utf8");
 
   appendFileSync(
     join(builtRuntime, ".orchestra", "runtime", "delegation", "runtime", "delegation", "cli.mjs"),
@@ -161,6 +172,8 @@ test("delegation runtime update preserves durable delegation records and does no
   const updated = await updateDelegationProjectRuntime({ targetDir, builtRuntime });
   assert.equal(updated.changed, true);
   assert.equal(readFileSync(recordPath, "utf8"), before);
+  assert.equal(readFileSync(artifactManifestPath, "utf8"), "{\"state\":\"READY_FOR_REVIEW\"}\n");
+  assert.equal(readFileSync(artifactPatchPath, "utf8"), "sealed patch fixture\n");
   assert.equal(existsSync(join(targetDir, ".codex")), false);
   assert.equal(existsSync(join(targetDir, ".agents")), false);
   assert.equal(existsSync(join(targetDir, "GEMINI.md")), false);
