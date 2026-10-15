@@ -100,6 +100,10 @@ function writeLease(repoRoot, { generation = 8, provider = "provider-a", session
   }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
+function claimLockPath(repoRoot) {
+  return join(repoRoot, ".orchestra", "state", "work-lease.claim.lock");
+}
+
 async function sealedFixture(t, id) {
   const repoRoot = createRepo();
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
@@ -150,11 +154,10 @@ test("discard is stale when the canonical Work Lease generation advanced after s
   assert.equal(readDelegationArtifact(fixture.repoRoot, fixture.descriptor.artifactId).manifest.state, "READY_FOR_REVIEW");
 });
 
-test("promotion fails closed while another root owns the Work Lease mutation lock", async (t) => {
+test("promotion fails closed while another root owns the canonical Work Lease claim lock", async (t) => {
   const fixture = await sealedFixture(t, "artifact-work-lease-lock-promote");
   writeLease(fixture.repoRoot, { generation: 7 });
-  const leaseLockPath = join(fixture.repoRoot, ".orchestra", "state", "work-lease.lock");
-  const held = acquireAtomicLock(leaseLockPath, { ownerIdHash: "sha256:new-root" });
+  const held = acquireAtomicLock(claimLockPath(fixture.repoRoot), { ownerIdHash: "sha256:new-root" });
   assert.equal(held.acquired, true);
   t.after(() => releaseAtomicLock(held.handle));
 
@@ -170,11 +173,10 @@ test("promotion fails closed while another root owns the Work Lease mutation loc
   assert.equal(git(fixture.repoRoot, "status", "--short", "--", "worker.txt"), "");
 });
 
-test("discard fails closed while another root owns the Work Lease mutation lock", async (t) => {
+test("discard fails closed while another root owns the canonical Work Lease claim lock", async (t) => {
   const fixture = await sealedFixture(t, "artifact-work-lease-lock-discard");
   writeLease(fixture.repoRoot, { generation: 7 });
-  const leaseLockPath = join(fixture.repoRoot, ".orchestra", "state", "work-lease.lock");
-  const held = acquireAtomicLock(leaseLockPath, { ownerIdHash: "sha256:new-root" });
+  const held = acquireAtomicLock(claimLockPath(fixture.repoRoot), { ownerIdHash: "sha256:new-root" });
   assert.equal(held.acquired, true);
   t.after(() => releaseAtomicLock(held.handle));
 
