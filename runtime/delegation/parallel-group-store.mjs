@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -23,6 +24,7 @@ const STATES = new Set([
   "PROMOTED",
   "DISCARDED",
 ]);
+const IN_FLIGHT_STATES = new Set(["CREATED", "RUNNING", "MEMBERS_READY", "COMPOSING"]);
 const TRANSITIONS = new Map([
   ["CREATED", new Set(["RUNNING", "FAILED"])],
   ["RUNNING", new Set(["MEMBERS_READY", "FAILED"])],
@@ -231,6 +233,23 @@ export function readParallelGroup(repoRoot, groupId) {
     };
   }
   return { exists: true, valid: true, record, reason: null, path: p.dir };
+}
+
+export function listParallelGroups(repoRoot) {
+  const p = paths(repoRoot);
+  if (!existsSync(p.groups)) return [];
+  const records = [];
+  for (const name of readdirSync(p.groups).sort()) {
+    if (name.startsWith(".")) continue;
+    const result = readParallelGroup(repoRoot, name);
+    if (!result.exists || !result.valid || !result.record) fail("PARALLEL_GROUP_STATE_INVALID");
+    records.push(result.record);
+  }
+  return records.sort((a, b) => a.group.groupId.localeCompare(b.group.groupId));
+}
+
+export function hasInFlightParallelGroup(repoRoot) {
+  return listParallelGroups(repoRoot).some((record) => IN_FLIGHT_STATES.has(record.state));
 }
 
 export function transitionParallelGroupState(repoRoot, groupId, transition = {}) {
