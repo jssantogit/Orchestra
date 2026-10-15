@@ -69,23 +69,22 @@ function requestFor(repoRoot) {
   };
 }
 
-test("v2 explicit implementation=false returns PROVIDER_UNAVAILABLE before clone allocation", async (t) => {
-  const repoRoot = createRepo();
-  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+function actor() {
+  return {
+    provider: "codex",
+    actorIdHash: "sha256:control",
+    actorKind: "ROOT",
+    isRoot: true,
+  };
+}
+
+function brokerForDiscovery(discovery) {
   let prepareCalls = 0;
   let executeCalls = 0;
-
   const broker = createDelegationBroker({
     executors: [{
       provider: "antigravity",
-      async discover() {
-        return {
-          available: true,
-          provider: "antigravity",
-          version: "agy-old",
-          capabilities: { implementation: false },
-        };
-      },
+      async discover() { return discovery; },
       async execute() {
         executeCalls += 1;
         throw new Error("must not execute");
@@ -100,20 +99,44 @@ test("v2 explicit implementation=false returns PROVIDER_UNAVAILABLE before clone
       async cleanup() { throw new Error("must not cleanup"); },
     },
   });
+  return {
+    broker,
+    prepareCalls: () => prepareCalls,
+    executeCalls: () => executeCalls,
+  };
+}
 
-  const result = await broker.executeDelegation(requestFor(repoRoot), {
+async function assertUnavailableBeforeWorkspace(t, discovery) {
+  const repoRoot = createRepo();
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const fixture = brokerForDiscovery(discovery);
+
+  const result = await fixture.broker.executeDelegation(requestFor(repoRoot), {
     repoRoot,
     generation: 12,
-    actor: {
-      provider: "codex",
-      actorIdHash: "sha256:control",
-      actorKind: "ROOT",
-      isRoot: true,
-    },
+    actor: actor(),
   });
 
   assert.equal(result.status, "FAILED");
   assert.equal(result.reason, "PROVIDER_UNAVAILABLE");
-  assert.equal(prepareCalls, 0);
-  assert.equal(executeCalls, 0);
+  assert.equal(fixture.prepareCalls(), 0);
+  assert.equal(fixture.executeCalls(), 0);
+}
+
+test("v2 explicit implementation=false returns PROVIDER_UNAVAILABLE before clone allocation", async (t) => {
+  await assertUnavailableBeforeWorkspace(t, {
+    available: true,
+    provider: "antigravity",
+    version: "agy-old",
+    capabilities: { implementation: false },
+  });
+});
+
+test("v2 missing implementation capability fails closed before clone allocation", async (t) => {
+  await assertUnavailableBeforeWorkspace(t, {
+    available: true,
+    provider: "antigravity",
+    version: "agy-unknown-capability",
+    capabilities: {},
+  });
 });
