@@ -17,6 +17,7 @@ import {
 import { inspectMutableDelegationWorkspace } from "./mutable-workspace.mjs";
 import { readDelegationProductFingerprint } from "./source-snapshot.mjs";
 import {
+  assertArtifactId,
   readDelegationArtifact,
   recordDelegationArtifactCleanup,
   transitionDelegationArtifactState,
@@ -156,6 +157,27 @@ function assertSealAuthority(request, generation, actor) {
   }
 }
 
+function normalizeParallelBinding(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).length !== 2
+      || !Object.hasOwn(value, "groupId")
+      || !Object.hasOwn(value, "memberId")) {
+    throw lifecycleError("ARTIFACT_SEAL_FAILED", "PARALLEL_BINDING_INVALID");
+  }
+  try {
+    assertArtifactId(value.groupId);
+  } catch (error) {
+    throw lifecycleError("ARTIFACT_SEAL_FAILED", "PARALLEL_BINDING_INVALID", error);
+  }
+  if (typeof value.memberId !== "string"
+      || value.memberId.length === 0
+      || value.memberId.length > 160) {
+    throw lifecycleError("ARTIFACT_SEAL_FAILED", "PARALLEL_BINDING_INVALID");
+  }
+  return { groupId: value.groupId, memberId: value.memberId };
+}
+
 export async function sealDelegationArtifact({
   repoRoot,
   request,
@@ -163,6 +185,7 @@ export async function sealDelegationArtifact({
   actor,
   workspace,
   report,
+  parallelBinding = null,
 } = {}) {
   void report;
   assertDelegationRequest(request);
@@ -170,6 +193,7 @@ export async function sealDelegationArtifact({
     throw lifecycleError("ARTIFACT_SEAL_FAILED", "REQUEST_VERSION_INVALID");
   }
   assertSealAuthority(request, generation, actor);
+  const binding = normalizeParallelBinding(parallelBinding);
 
   try {
     const inspection = await inspectMutableDelegationWorkspace(workspace);
@@ -240,6 +264,10 @@ export async function sealDelegationArtifact({
       mutationDigest: derived.mutationDigest,
       state: "READY_FOR_REVIEW",
       createdAt: new Date().toISOString(),
+      ...(binding === null ? {} : {
+        parallelGroupId: binding.groupId,
+        parallelMemberId: binding.memberId,
+      }),
     };
     writeDelegationArtifact(repoRoot, { manifest, patch });
     return {
