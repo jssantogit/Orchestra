@@ -21,6 +21,10 @@ import {
   updateDelegationProjectRuntime,
 } from "../../runtime/delegation/project-runtime-manager.mjs";
 import { writeDelegationRecord } from "../../runtime/delegation/store.mjs";
+import {
+  createParallelGroup,
+  transitionParallelGroupState,
+} from "../../runtime/delegation/parallel-group-store.mjs";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -82,6 +86,50 @@ function completedRecord() {
   };
 }
 
+function packet(taskId, generation, file) {
+  return {
+    schema: "orchestra.implementation-packet.v1",
+    taskId,
+    candidateGeneration: generation,
+    goal: `implement ${file}`,
+    direction: { change: `change ${file}`, preserve: ["other shard"] },
+    anchors: [{ file }],
+    scope: { allowedAreas: ["src/**"], forbidden: [] },
+    permissions: { discovery: "DIRECTED", tests: "READ_ONLY", sideEffects: [] },
+    validation: ["focused tests"],
+    failurePolicy: { selfCaused: "REPAIR", unrelatedOrUncertain: "RETURN_TO_CONTROL" },
+  };
+}
+
+function parallelGroup() {
+  const taskId = "runtime-parallel-task";
+  const generation = 5;
+  return {
+    schema: "orchestra.parallel-implementation-group.v1",
+    groupId: "runtime-parallel-active",
+    taskId,
+    generation,
+    source: { provider: "codex", actorIdHash: "sha256:control" },
+    sourceRevision: "abcdef1234567890",
+    sourceFingerprint: "sha256:source",
+    canonicalGitFingerprint: "sha256:git",
+    members: [
+      {
+        memberId: "local",
+        targetProvider: "codex",
+        packet: packet(taskId, generation, "src/home.mjs"),
+        mutationScope: { allowedPaths: ["src/home/**"], forbiddenPaths: [] },
+      },
+      {
+        memberId: "external",
+        targetProvider: "antigravity",
+        packet: packet(taskId, generation, "src/library.mjs"),
+        mutationScope: { allowedPaths: ["src/library/**"], forbiddenPaths: [] },
+      },
+    ],
+  };
+}
+
 test("delegation manifest owns one independent project-wide neutral runtime", async () => {
   const manifest = await loadRuntimeManifest("delegation");
   const packageVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
@@ -106,8 +154,11 @@ test("delegation manifest owns one independent project-wide neutral runtime", as
   assert.equal(outputs.some((output) => output.includes("/providers/codex/adapter/") || output.includes("/providers/antigravity/adapter/")), false);
   assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/cli.mjs"));
   assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs"));
+  assert.ok(manifest.entrypoints.includes(".orchestra/runtime/delegation/runtime/delegation/parallel-cli.mjs"));
   assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegations"));
   assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegation/artifacts"));
+  assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegation/parallel-groups"));
+  assert.ok(manifest.preservedProjectPaths.includes(".orchestra/state/delegation/composite-artifacts"));
 });
 
 test("delegation runtime installs, inspects cleanly, and repeated ensure is an idempotent noop", async (t) => {
@@ -118,6 +169,7 @@ test("delegation runtime installs, inspects cleanly, and repeated ensure is an i
   assert.equal(installed.metadata.runtime, "delegation");
   assert.equal(existsSync(join(targetDir, ".orchestra", "runtime", "delegation", "runtime", "delegation", "cli.mjs")), true);
   assert.equal(existsSync(join(targetDir, ".orchestra", "runtime", "delegation", "runtime", "delegation", "artifact-cli.mjs")), true);
+  assert.equal(existsSync(join(targetDir, ".orchestra", "runtime", "delegation", "runtime", "delegation", "parallel-cli.mjs")), true);
 
   const inspection = await inspectDelegationProjectRuntime({ targetDir, builtRuntime });
   assert.equal(inspection.clean, true);
@@ -151,7 +203,30 @@ test("delegation runtime update fails closed while any delegation record is in f
   ).includes("changed build for quiescence test"), false);
 });
 
-test("delegation runtime update preserves durable delegation records and sealed artifact state", async (t) => {
+test("delegation runtime update fails closed while a parallel implementation group is active", async (t) => {
+  const { targetDir, builtRuntime } = await fixture(t);
+  await installDelegationProjectRuntime({ targetDir, builtRuntime });
+  const group = parallelGroup();
+  createParallelGroup(targetDir, group);
+  const started = transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "CREATED",
+    nextState: "RUNNING",
+  });
+  assert.equal(started.transitioned, true);
+
+  appendFileSync(
+    join(builtRuntime, ".orchestra", "runtime", "delegation", "runtime", "delegation", "cli.mjs"),
+    "\n// changed build for parallel quiescence test\n",
+  );
+
+  await assert.rejects(
+    () => updateDelegationProjectRuntime({ targetDir, builtRuntime }),
+    (error) => error?.code === "RUNTIME_NOT_QUIESCENT"
+      && error?.quiescence?.reason === "DELEGATION_IN_FLIGHT",
+  );
+});
+
+test("delegation runtime update preserves durable delegation, parallel group, and composite artifact state", async (t) => {
   const { targetDir, builtRuntime } = await fixture(t);
   await installDelegationProjectRuntime({ targetDir, builtRuntime });
   writeDelegationRecord(targetDir, completedRecord());
@@ -165,6 +240,36 @@ test("delegation runtime update preserves durable delegation records and sealed 
   writeFileSync(artifactManifestPath, "{\"state\":\"READY_FOR_REVIEW\"}\n", "utf8");
   writeFileSync(artifactPatchPath, "sealed patch fixture\n", "utf8");
 
+  const group = { ...parallelGroup(), groupId: "sealed-group" };
+  createParallelGroup(targetDir, group);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "CREATED",
+    nextState: "RUNNING",
+  }).transitioned, true);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "RUNNING",
+    nextState: "MEMBERS_READY",
+    memberArtifactIds: ["sealed-member-local", "sealed-member-external"],
+  }).transitioned, true);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "MEMBERS_READY",
+    nextState: "COMPOSING",
+  }).transitioned, true);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "COMPOSING",
+    nextState: "READY_FOR_REVIEW",
+    compositeArtifactId: "sealed-composite",
+  }).transitioned, true);
+  const groupPath = join(targetDir, ".orchestra", "state", "delegation", "parallel-groups", "sealed-group", "group.json");
+  const groupBefore = readFileSync(groupPath, "utf8");
+
+  const compositeDir = join(targetDir, ".orchestra", "state", "delegation", "composite-artifacts", "sealed-composite");
+  await mkdir(compositeDir, { recursive: true });
+  const compositeManifestPath = join(compositeDir, "manifest.json");
+  const compositePatchPath = join(compositeDir, "candidate.patch");
+  writeFileSync(compositeManifestPath, "{\"state\":\"READY_FOR_REVIEW\"}\n", "utf8");
+  writeFileSync(compositePatchPath, "composite patch fixture\n", "utf8");
+
   appendFileSync(
     join(builtRuntime, ".orchestra", "runtime", "delegation", "runtime", "delegation", "cli.mjs"),
     "\n// deterministic fixture change\n",
@@ -174,6 +279,9 @@ test("delegation runtime update preserves durable delegation records and sealed 
   assert.equal(readFileSync(recordPath, "utf8"), before);
   assert.equal(readFileSync(artifactManifestPath, "utf8"), "{\"state\":\"READY_FOR_REVIEW\"}\n");
   assert.equal(readFileSync(artifactPatchPath, "utf8"), "sealed patch fixture\n");
+  assert.equal(readFileSync(groupPath, "utf8"), groupBefore);
+  assert.equal(readFileSync(compositeManifestPath, "utf8"), "{\"state\":\"READY_FOR_REVIEW\"}\n");
+  assert.equal(readFileSync(compositePatchPath, "utf8"), "composite patch fixture\n");
   assert.equal(existsSync(join(targetDir, ".codex")), false);
   assert.equal(existsSync(join(targetDir, ".agents")), false);
   assert.equal(existsSync(join(targetDir, "GEMINI.md")), false);

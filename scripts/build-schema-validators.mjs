@@ -17,6 +17,7 @@ export const SCHEMA_FILES = Object.freeze([
   "delegation-result.v2.schema.json",
   "evidence.v1.schema.json",
   "implementation-packet.v1.schema.json",
+  "parallel-implementation-group.v1.schema.json",
   "runtime-event.v1.schema.json",
   "scope-contract.v2.schema.json",
   "work-lease.v1.schema.json",

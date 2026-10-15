@@ -89,6 +89,40 @@ const validWorkLease = () => ({
   candidate: null,
 });
 
+const validParallelImplementationGroup = () => {
+  const packetFor = (allowedArea) => ({
+    ...validImplementationPacket(),
+    taskId: "parallel-task",
+    candidateGeneration: 7,
+    anchors: [{ file: allowedArea.replace(/\/\*\*$/, "/entry.mjs") }],
+    scope: { allowedAreas: [allowedArea], forbidden: ["secrets/**"] },
+  });
+  return {
+    schema: "orchestra.parallel-implementation-group.v1",
+    groupId: "parallel-group-1",
+    taskId: "parallel-task",
+    generation: 7,
+    source: { provider: "codex", actorIdHash: "sha256:source" },
+    sourceRevision: "abcdef1234567890",
+    sourceFingerprint: "sha256:source-fingerprint",
+    canonicalGitFingerprint: "sha256:git-fingerprint",
+    members: [
+      {
+        memberId: "local",
+        targetProvider: "codex",
+        packet: packetFor("src/a/**"),
+        mutationScope: { allowedPaths: ["src/a/**"], forbiddenPaths: ["secrets/**"] },
+      },
+      {
+        memberId: "external",
+        targetProvider: "antigravity",
+        packet: packetFor("src/b/**"),
+        mutationScope: { allowedPaths: ["src/b/**"], forbiddenPaths: ["secrets/**"] },
+      },
+    ],
+  };
+};
+
 test("implementation packet accepts the approved Direct Work shape", () => {
   const result = validateSchema("implementation-packet.v1.schema.json", validImplementationPacket());
   assert.equal(result.valid, true, JSON.stringify(result.errors));
@@ -124,6 +158,15 @@ test("delegation request embeds canonical implementation packet validation", () 
   const request = validDelegationRequest();
   request.packet.permissions.discovery = "BROAD";
   assert.equal(validateSchema("delegation-request.v1.schema.json", request).valid, false);
+});
+
+test("parallel implementation group schema embeds exactly two bounded implementation packets", () => {
+  const valid = validateSchema("parallel-implementation-group.v1.schema.json", validParallelImplementationGroup());
+  assert.equal(valid.valid, true, JSON.stringify(valid.errors));
+
+  const oneMember = validParallelImplementationGroup();
+  oneMember.members.pop();
+  assert.equal(validateSchema("parallel-implementation-group.v1.schema.json", oneMember).valid, false);
 });
 
 test("work lease requires factual bounded authority fields and a non-negative generation", () => {
@@ -171,6 +214,7 @@ test("every canonical schema rejects unknown top-level properties", () => {
     "implementation-packet.v1.schema.json": validImplementationPacket(),
     "delegation-request.v1.schema.json": validDelegationRequest(),
     "delegation-result.v1.schema.json": validDelegationResult(),
+    "parallel-implementation-group.v1.schema.json": validParallelImplementationGroup(),
     "scope-contract.v2.schema.json": {
       schema: "orchestra.scope-contract.v2",
       taskId: "task-1",

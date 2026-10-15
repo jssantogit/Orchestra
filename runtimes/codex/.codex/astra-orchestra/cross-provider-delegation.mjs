@@ -12,6 +12,7 @@ import {
   assertDelegationResult,
 } from "./core/domain/delegation.mjs";
 import { assertImplementationPacket } from "./core/domain/implementation-packet.mjs";
+import { assertParallelImplementationGroup } from "./core/domain/parallel-implementation.mjs";
 import { selectDelegationTarget } from "./core/routing/delegation-target.mjs";
 
 const SOURCE_PROVIDER = "codex";
@@ -133,6 +134,50 @@ export function buildCodexImplementationDelegationRequest({
   return request;
 }
 
+function parallelGroupInvalid() {
+  const error = new Error("ORCHESTRA_CODEX_PARALLEL_GROUP_INVALID");
+  error.code = "ORCHESTRA_CODEX_PARALLEL_GROUP_INVALID";
+  throw error;
+}
+
+export function buildCodexParallelImplementationGroup({
+  groupId,
+  actorIdHash,
+  generation,
+  sourceRevision,
+  sourceFingerprint,
+  canonicalGitFingerprint,
+  members,
+} = {}) {
+  try {
+    if (!Array.isArray(members) || members.length !== 2) parallelGroupInvalid();
+    for (const member of members) assertImplementationPacket(member?.packet);
+    const targets = members.map((member) => member?.targetProvider);
+    if (targets.filter((provider) => provider === SOURCE_PROVIDER).length !== 1
+        || new Set(targets).size !== 2) parallelGroupInvalid();
+
+    const group = {
+      schema: "orchestra.parallel-implementation-group.v1",
+      groupId,
+      taskId: members[0].packet.taskId,
+      generation,
+      source: {
+        provider: SOURCE_PROVIDER,
+        actorIdHash,
+      },
+      sourceRevision,
+      sourceFingerprint,
+      canonicalGitFingerprint,
+      members,
+    };
+    assertParallelImplementationGroup(group);
+    return group;
+  } catch (error) {
+    if (error?.code === "ORCHESTRA_CODEX_PARALLEL_GROUP_INVALID") throw error;
+    parallelGroupInvalid();
+  }
+}
+
 function neutralRuntimePath(repoRoot, entrypoint) {
   return join(
     resolve(repoRoot),
@@ -205,6 +250,54 @@ function runInstalledArtifactCli({
   return JSON.parse(stdout.trim());
 }
 
+function runInstalledParallelCli({
+  action,
+  group,
+  repoRoot,
+  artifactId,
+  generation,
+  sourceProvider,
+  actorIdHash,
+}) {
+  const root = resolve(repoRoot);
+  const cliPath = neutralRuntimePath(root, "parallel-cli.mjs");
+  let scratch = null;
+  try {
+    const args = [cliPath, action];
+    if (action === "execute") {
+      scratch = mkdtempSync(join(tmpdir(), "orchestra-codex-parallel-"));
+      const groupPath = join(scratch, "group.json");
+      writeFileSync(groupPath, `${JSON.stringify(group)}\n`, "utf8");
+      args.push(
+        "--group-file", groupPath,
+        "--repo-root", root,
+        "--source-provider", sourceProvider,
+        "--actor-id-hash", actorIdHash,
+      );
+    } else {
+      args.push("--artifact", artifactId, "--repo-root", root);
+      if (action !== "inspect") {
+        args.push(
+          "--generation", String(generation),
+          "--source-provider", sourceProvider,
+          "--actor-id-hash", actorIdHash,
+        );
+      }
+    }
+    const stdout = execFileSync(process.execPath, args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: DEFAULT_TIMEOUT_MS + 5_000,
+      maxBuffer: DEFAULT_MAX_OUTPUT_BYTES * 4,
+      env: process.env,
+    });
+    return JSON.parse(stdout.trim());
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function expectedResultSchema(request) {
   return request.schema === "orchestra.delegation-request.v2"
     ? "orchestra.delegation-result.v2"
@@ -246,6 +339,29 @@ export async function executeCodexCrossProviderDelegation({
     throw error;
   }
 
+  return {
+    controlReturned: true,
+    accepted: false,
+    claimOnly: true,
+    result,
+  };
+}
+
+export async function executeCodexParallelImplementation({
+  group,
+  repoRoot,
+  runParallelCli = runInstalledParallelCli,
+} = {}) {
+  assertParallelImplementationGroup(group);
+  if (group.source.provider !== SOURCE_PROVIDER
+      || typeof repoRoot !== "string" || repoRoot.length === 0) parallelGroupInvalid();
+  const result = await runParallelCli({
+    action: "execute",
+    group,
+    repoRoot,
+    sourceProvider: SOURCE_PROVIDER,
+    actorIdHash: group.source.actorIdHash,
+  });
   return {
     controlReturned: true,
     accepted: false,
@@ -309,6 +425,51 @@ export async function discardCodexDelegationArtifact({
 } = {}) {
   assertArtifactMutationContext({ repoRoot, artifactId, generation, actorIdHash });
   return runArtifactCli({
+    action: "discard",
+    repoRoot,
+    artifactId,
+    generation,
+    sourceProvider: SOURCE_PROVIDER,
+    actorIdHash,
+  });
+}
+
+export async function inspectCodexCompositeArtifact({
+  repoRoot,
+  artifactId,
+  runParallelCli = runInstalledParallelCli,
+} = {}) {
+  assertArtifactContext({ repoRoot, artifactId });
+  return runParallelCli({ action: "inspect", repoRoot, artifactId });
+}
+
+export async function promoteCodexCompositeArtifact({
+  repoRoot,
+  artifactId,
+  generation,
+  actorIdHash,
+  runParallelCli = runInstalledParallelCli,
+} = {}) {
+  assertArtifactMutationContext({ repoRoot, artifactId, generation, actorIdHash });
+  return runParallelCli({
+    action: "promote",
+    repoRoot,
+    artifactId,
+    generation,
+    sourceProvider: SOURCE_PROVIDER,
+    actorIdHash,
+  });
+}
+
+export async function discardCodexCompositeArtifact({
+  repoRoot,
+  artifactId,
+  generation,
+  actorIdHash,
+  runParallelCli = runInstalledParallelCli,
+} = {}) {
+  assertArtifactMutationContext({ repoRoot, artifactId, generation, actorIdHash });
+  return runParallelCli({
     action: "discard",
     repoRoot,
     artifactId,

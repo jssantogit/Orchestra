@@ -68,7 +68,9 @@
   ],
   "preservedProjectPaths": [
     ".orchestra/state/delegations",
-    ".orchestra/state/delegation/artifacts"
+    ".orchestra/state/delegation/artifacts",
+    ".orchestra/state/delegation/parallel-groups",
+    ".orchestra/state/delegation/composite-artifacts"
   ],
   "generatedInputs": [
     "core",
@@ -86,6 +88,7 @@
   "entrypoints": [
     ".orchestra/runtime/delegation/runtime/delegation/cli.mjs",
     ".orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs",
+    ".orchestra/runtime/delegation/runtime/delegation/parallel-cli.mjs",
     ".orchestra/runtime/delegation/runtime/delegation/project-runtime-manager.mjs"
   ],
   "healthChecks": [

@@ -49,6 +49,10 @@ function matches(path, pattern) {
   return path === pattern;
 }
 
+export function normalizeMutationPath(value) {
+  return normalizePattern(value, { allowWildcard: false });
+}
+
 export function normalizeMutationScope({ allowedPaths, forbiddenPaths = [] } = {}) {
   const allowed = normalizeList(allowedPaths, { required: true });
   const forbidden = normalizeList([...forbiddenPaths, ...MANDATORY_FORBIDDEN]);
@@ -68,7 +72,7 @@ export function authorizeChangedPaths(changedPaths, normalizedScope) {
   for (const value of changedPaths) {
     let path;
     try {
-      path = normalizePattern(value, { allowWildcard: false });
+      path = normalizeMutationPath(value);
     } catch {
       violations.push(String(value));
       continue;

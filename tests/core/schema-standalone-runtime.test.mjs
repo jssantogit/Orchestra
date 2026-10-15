@@ -68,6 +68,31 @@ const validDelegationResult = {
   },
 };
 
+const validParallelGroup = {
+  schema: "orchestra.parallel-implementation-group.v1",
+  groupId: "parallel-standalone",
+  taskId: "task-standalone",
+  generation: 0,
+  source: { provider: "codex", actorIdHash: "sha256:source" },
+  sourceRevision: "abcdef1234567890",
+  sourceFingerprint: "sha256:source-fingerprint",
+  canonicalGitFingerprint: "sha256:git-fingerprint",
+  members: [
+    {
+      memberId: "local",
+      targetProvider: "codex",
+      packet: { ...validPacket, scope: { allowedAreas: ["src/a/**"], forbidden: [] } },
+      mutationScope: { allowedPaths: ["src/a/**"], forbiddenPaths: [] },
+    },
+    {
+      memberId: "external",
+      targetProvider: "antigravity",
+      packet: { ...validPacket, scope: { allowedAreas: ["src/b/**"], forbidden: [] } },
+      mutationScope: { allowedPaths: ["src/b/**"], forbiddenPaths: [] },
+    },
+  ],
+};
+
 test("generated schema validators run in an isolated fixture with no node_modules", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "orchestra-schema-standalone-"));
   const copiedRoot = join(fixture, "core", "schema");
@@ -86,12 +111,17 @@ test("generated schema validators run in an isolated fixture with no node_module
     assert.equal(request.valid, true, JSON.stringify(request.errors));
     const result = validateSchema("delegation-result.v1.schema.json", validDelegationResult);
     assert.equal(result.valid, true, JSON.stringify(result.errors));
+    const parallel = validateSchema("parallel-implementation-group.v1.schema.json", validParallelGroup);
+    assert.equal(parallel.valid, true, JSON.stringify(parallel.errors));
 
     const invalidDelegation = {
       ...validDelegationRequest,
       authority: { ...validDelegationRequest.authority, mayDelegate: true },
     };
     assert.equal(validateSchema("delegation-request.v1.schema.json", invalidDelegation).valid, false);
+
+    const invalidParallel = { ...validParallelGroup, members: [validParallelGroup.members[0]] };
+    assert.equal(validateSchema("parallel-implementation-group.v1.schema.json", invalidParallel).valid, false);
 
     const validEvent = {
       schema: "orchestra.runtime-event.v1",

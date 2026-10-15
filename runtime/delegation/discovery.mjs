@@ -122,6 +122,14 @@ function providerModeStatus(providers, capability = null) {
   return "DEGRADED";
 }
 
+function parallelImplementationStatus(providers) {
+  if (!Array.isArray(providers) || providers.length !== 2) return "UNAVAILABLE";
+  return providers.every((provider) => provider?.available === true
+    && provider.capabilities?.implementation === true)
+    ? "READY"
+    : "UNAVAILABLE";
+}
+
 function buildModes({ discoveryStatus, gitWorktree, gitClone, providers }) {
   return {
     review: {
@@ -132,6 +140,12 @@ function buildModes({ discoveryStatus, gitWorktree, gitClone, providers }) {
       status: gitClone.available ? providerModeStatus(providers, "implementation") : "UNAVAILABLE",
       isolation: "EPHEMERAL_CLONE",
       artifactLifecycle: "CONTROL_OWNED",
+    },
+    parallelImplementation: {
+      status: gitClone.available ? parallelImplementationStatus(providers) : "UNAVAILABLE",
+      isolation: "EPHEMERAL_CLONE",
+      memberCount: 2,
+      artifactLifecycle: "CONTROL_OWNED_COMPOSITE",
     },
   };
 }

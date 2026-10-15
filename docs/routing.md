@@ -76,19 +76,37 @@ When a task involves `criticality == CRITICAL` (e.g. database schema migrations,
 
 ## 5. Cross-Provider Delegation
 
-Cross-provider routing is intentionally conservative. Normal implementation, investigation, Quick Audit, and routine review stay on the current provider. The presence of another installed provider is a capability, not a reason to add a model handoff.
+Cross-provider routing is intentionally conservative. Normal implementation, investigation, Quick Audit, and routine review stay on the current provider unless CONTROL explicitly chooses an allowed external implementation route. The presence of another installed provider is a capability, not a reason to add a model handoff.
 
-Automatic cross-provider use is limited to an **independent critical-review slot** where provider diversity materially increases independence. A user may also explicitly request a cross-provider `SECOND_OPINION`. These are execution routes only: the originating CONTROL keeps Work Lease authority and all acceptance decisions.
+V1 remains the bounded read/process-exec contract used for independent critical review and explicit `SECOND_OPINION`. V2 is implementation-only: CONTROL may explicitly choose the sibling provider as an `IMPLEMENTER` with `LOCAL_READ + PROCESS_EXEC + WORKSPACE_EDIT`, `WORKSPACE_ONLY`, network forbidden, no recursive delegation, and `EPHEMERAL_CLONE` isolation. Standalone V2 remains strictly cross-provider.
 
-A cross-provider route must satisfy all of the following:
+Every cross-provider route preserves originating CONTROL authority. External workers do not receive Work Lease ownership, generation advance, Candidate/Evidence promotion, Acceptance, release/publication, or finish authority.
 
-- the target provider differs from the origin provider;
-- the logical purpose is an allowed bounded review/investigation purpose;
-- the target capability has been discovered as available;
-- the delegation remains `LOCAL_READ + PROCESS_EXEC` in V1;
-- the worker may not delegate again;
-- at most one cross-provider delegation is allowed for the same logical stage.
+The read-only route still requires a distinct target provider, a supported purpose, factual provider readiness, and the stage-local delegation budget. Mutable V2 additionally requires hardened local clone support and a machine-valid mutation scope. The broker derives the actual mutation, seals a Mutation Artifact, and requires an explicit CONTROL inspect/promote/discard decision.
 
-If the sibling provider is absent, unauthenticated at execution time, times out, returns malformed output, violates capability bounds, or otherwise fails, Orchestra returns the normalized result to CONTROL. It does **not** silently switch to another provider, reinterpret the route, or treat failure as approval. Provider unavailability therefore degrades an optional route rather than changing the authority model.
+If the sibling provider is absent, unauthenticated at execution time, times out, returns malformed output, violates capability bounds, produces a stale/tampered artifact, or otherwise fails, Orchestra returns a bounded failure to CONTROL. It does **not** silently switch provider, mutate manually, reinterpret the route, or treat failure as approval.
 
 Critical review remains subject to the existing independent-review and Human Gate semantics. Cross-provider diversity can supply one reviewer, but it never weakens the requirement for factual evidence or grants the external worker self-acceptance authority.
+
+---
+
+## 6. Parallel Implementation 2
+
+`PARALLEL_2` is a distinct implementation-concurrency decision, not Milestone-K exploration parallelism and not an automatic consequence of two providers being installed.
+
+CONTROL may select it only when all of these facts are already resolved:
+
+- the task is bounded implementation work;
+- there are exactly two independent workstreams;
+- diagnosis is not unresolved or open-ended;
+- each shard is resolved and bounded;
+- each shard has an explicit mutation scope;
+- Orchestra can prove those writable scopes are disjoint.
+
+When those prerequisites are absent or ambiguous, routing returns to CONTROL with serial implementation semantics. Serial Direct Work remains the default.
+
+A valid group has exactly two distinct target providers. One may match the CONTROL provider only inside this validated group; the second is the sibling provider. Both workers execute in separate hardened clones from the same immutable source snapshot. Their factual `changedPaths` must also be disjoint after execution.
+
+The neutral broker never promotes member artifacts one by one. It composes the two sealed deltas in a fresh third clone and produces one Composite Mutation Artifact. CONTROL then performs one inspect/promote/discard lifecycle. Any member failure, overlap, tamper, composition conflict, stale baseline, Work Lease mismatch, or promotion failure closes the group without partial canonical product mutation.
+
+Parallel group execution has its own exact two-member reservation and does not raise the ordinary cross-provider delegation budget globally. A failed parallel group never silently falls back to serial or manual implementation; CONTROL may choose a new explicit serial retry only after the failed group is closed.

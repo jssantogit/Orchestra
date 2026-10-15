@@ -12,7 +12,7 @@ import { join, resolve } from "node:path";
 const ARTIFACT_ROOT = ".orchestra/state/delegation/artifacts";
 const ARTIFACT_SCHEMA = "orchestra.delegation-artifact.v1";
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
-const STATES = new Set(["READY_FOR_REVIEW", "PROMOTED", "DISCARDED"]);
+const STATES = new Set(["READY_FOR_REVIEW", "PROMOTED", "DISCARDED", "CONSUMED"]);
 const TOP_LEVEL_KEYS = new Set([
   "schema",
   "artifactId",
@@ -33,6 +33,8 @@ const TOP_LEVEL_KEYS = new Set([
   "state",
   "createdAt",
   "cleanup",
+  "parallelGroupId",
+  "parallelMemberId",
 ]);
 const SOURCE_KEYS = new Set(["provider", "actorIdHash"]);
 const TARGET_KEYS = new Set(["provider", "logicalRole"]);
@@ -86,6 +88,18 @@ function validCleanup(cleanup) {
     && boundedString(cleanup.recoverablePath, 4096);
 }
 
+function parallelBinding(manifest) {
+  const hasGroup = manifest.parallelGroupId !== undefined;
+  const hasMember = manifest.parallelMemberId !== undefined;
+  if (hasGroup !== hasMember) return { valid: false, bound: false };
+  if (!hasGroup) return { valid: true, bound: false };
+  if (!SAFE_ID.test(manifest.parallelGroupId)
+      || !boundedString(manifest.parallelMemberId, 160)) {
+    return { valid: false, bound: false };
+  }
+  return { valid: true, bound: true };
+}
+
 function validateManifest(manifest) {
   if (!exactKeys(manifest, TOP_LEVEL_KEYS)) return false;
   if (manifest.schema !== ARTIFACT_SCHEMA) return false;
@@ -95,6 +109,8 @@ function validateManifest(manifest) {
   } catch {
     return false;
   }
+  const binding = parallelBinding(manifest);
+  if (!binding.valid || (manifest.state === "CONSUMED" && !binding.bound)) return false;
   if (!boundedString(manifest.taskId, 300)) return false;
   if (!Number.isInteger(manifest.generation) || manifest.generation < 0) return false;
   if (!exactKeys(manifest.source, SOURCE_KEYS)
@@ -201,6 +217,9 @@ export function transitionDelegationArtifactState(repoRoot, artifactId, {
     return { transitioned: false, reason: current.reason ?? "DELEGATION_ARTIFACT_INVALID", manifest: current.manifest };
   }
   if (current.manifest.state !== expectedState) {
+    return { transitioned: false, reason: "ARTIFACT_STATE_MISMATCH", manifest: current.manifest };
+  }
+  if (nextState === "CONSUMED" && !parallelBinding(current.manifest).bound) {
     return { transitioned: false, reason: "ARTIFACT_STATE_MISMATCH", manifest: current.manifest };
   }
 
