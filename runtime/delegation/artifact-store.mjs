@@ -32,10 +32,12 @@ const TOP_LEVEL_KEYS = new Set([
   "mutationDigest",
   "state",
   "createdAt",
+  "cleanup",
 ]);
 const SOURCE_KEYS = new Set(["provider", "actorIdHash"]);
 const TARGET_KEYS = new Set(["provider", "logicalRole"]);
 const SCOPE_KEYS = new Set(["allowedPaths", "forbiddenPaths"]);
+const CLEANUP_KEYS = new Set(["cleaned", "reason", "recoverablePath"]);
 
 function invalid(code = "DELEGATION_ARTIFACT_INVALID") {
   const error = new Error(code);
@@ -74,6 +76,16 @@ function validTimestamp(value) {
   return boundedString(value, 64) && Number.isFinite(Date.parse(value));
 }
 
+function validCleanup(cleanup) {
+  if (cleanup === undefined) return true;
+  if (!exactKeys(cleanup, CLEANUP_KEYS) || typeof cleanup.cleaned !== "boolean") return false;
+  if (cleanup.cleaned) {
+    return cleanup.reason === null && cleanup.recoverablePath === null;
+  }
+  return cleanup.reason === "WORKSPACE_CLEANUP_FAILED"
+    && boundedString(cleanup.recoverablePath, 4096);
+}
+
 function validateManifest(manifest) {
   if (!exactKeys(manifest, TOP_LEVEL_KEYS)) return false;
   if (manifest.schema !== ARTIFACT_SCHEMA) return false;
@@ -103,7 +115,9 @@ function validateManifest(manifest) {
   if (!boundedString(manifest.patchSha256, 300)
       || !boundedString(manifest.mutationDigest, 300)
       || !STATES.has(manifest.state)
-      || !validTimestamp(manifest.createdAt)) return false;
+      || !validTimestamp(manifest.createdAt)
+      || !validCleanup(manifest.cleanup)) return false;
+  if (manifest.state === "READY_FOR_REVIEW" && manifest.cleanup !== undefined) return false;
   return true;
 }
 
@@ -127,6 +141,20 @@ function normalizeManifest(manifest) {
   const candidate = { schema: ARTIFACT_SCHEMA, ...manifest };
   if (!validateManifest(candidate)) invalid();
   return candidate;
+}
+
+function replaceManifest(repoRoot, artifactId, manifest) {
+  const p = paths(repoRoot, artifactId);
+  const normalized = normalizeManifest(manifest);
+  const temp = `${p.manifest}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    renameSync(temp, p.manifest);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
+  return normalized;
 }
 
 export function writeDelegationArtifact(repoRoot, { manifest, patch } = {}) {
@@ -158,6 +186,7 @@ export function writeDelegationArtifact(repoRoot, { manifest, patch } = {}) {
 export function transitionDelegationArtifactState(repoRoot, artifactId, {
   expectedState,
   nextState,
+  cleanup,
 } = {}) {
   assertArtifactId(artifactId);
   if (!STATES.has(expectedState) || !STATES.has(nextState) || expectedState === nextState) {
@@ -175,17 +204,26 @@ export function transitionDelegationArtifactState(repoRoot, artifactId, {
     return { transitioned: false, reason: "ARTIFACT_STATE_MISMATCH", manifest: current.manifest };
   }
 
-  const p = paths(repoRoot, artifactId);
-  const manifest = normalizeManifest({ ...current.manifest, state: nextState });
-  const temp = `${p.manifest}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    renameSync(temp, p.manifest);
-  } catch (error) {
-    rmSync(temp, { force: true });
-    throw error;
-  }
+  const manifest = replaceManifest(repoRoot, artifactId, {
+    ...current.manifest,
+    state: nextState,
+    ...(cleanup === undefined ? {} : { cleanup }),
+  });
   return { transitioned: true, reason: null, manifest };
+}
+
+export function recordDelegationArtifactCleanup(repoRoot, artifactId, cleanup) {
+  assertArtifactId(artifactId);
+  const current = readDelegationArtifact(repoRoot, artifactId);
+  if (!current.exists) return { updated: false, reason: "DELEGATION_ARTIFACT_NOT_FOUND", manifest: null };
+  if (!current.valid) {
+    return { updated: false, reason: current.reason ?? "DELEGATION_ARTIFACT_INVALID", manifest: current.manifest };
+  }
+  if (current.manifest.state === "READY_FOR_REVIEW") {
+    return { updated: false, reason: "ARTIFACT_STATE_MISMATCH", manifest: current.manifest };
+  }
+  const manifest = replaceManifest(repoRoot, artifactId, { ...current.manifest, cleanup });
+  return { updated: true, reason: null, manifest };
 }
 
 export function readDelegationArtifact(repoRoot, artifactId) {
