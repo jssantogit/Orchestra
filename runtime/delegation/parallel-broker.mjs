@@ -463,3 +463,5 @@ export async function executeParallelImplementationGroup({
     members,
   };
 }
+
+export { composeParallelArtifacts } from "./composite-artifact-lifecycle.mjs";
