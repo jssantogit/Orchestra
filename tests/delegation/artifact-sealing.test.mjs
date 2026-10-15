@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -172,6 +173,64 @@ test("synthetic baseline keeps pre-existing canonical dirty state out of the wor
   assert.equal(patch.includes("worker-only.txt"), true);
   assert.equal(patch.includes("preexisting.txt"), false);
   assert.equal(patch.includes("pre-existing canonical dirty"), false);
+});
+
+test("artifact sealing ignores parent global Git clean filters", async (t) => {
+  const repoRoot = createRepo();
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  writeFileSync(join(repoRoot, ".gitattributes"), "edit.txt filter=orchestra-poison\n");
+  git(repoRoot, "add", ".gitattributes");
+  git(repoRoot, "commit", "-m", "add filter attribute");
+
+  const request = requestFor(repoRoot, "artifact-parent-git-config", ["edit.txt"]);
+  const workspace = await prepared(t, repoRoot, request);
+  writeFileSync(join(workspace.path, "edit.txt"), "after\n");
+
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-artifact-parent-git-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const configPath = join(scratch, "global.gitconfig");
+  const filterPath = join(scratch, "clean-filter.mjs");
+  const markerPath = join(scratch, "filter-ran.txt");
+  writeFileSync(filterPath, [
+    'import { writeFileSync } from "node:fs";',
+    'writeFileSync(process.env.ORCHESTRA_TEST_FILTER_MARKER, "ran\\n");',
+    "process.stdin.pipe(process.stdout);",
+    "",
+  ].join("\n"));
+  git(
+    scratch,
+    "config",
+    "--file",
+    configPath,
+    "filter.orchestra-poison.clean",
+    `node "${filterPath.replaceAll("\\", "/")}"`,
+  );
+
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousMarker = process.env.ORCHESTRA_TEST_FILTER_MARKER;
+  process.env.GIT_CONFIG_GLOBAL = configPath;
+  process.env.ORCHESTRA_TEST_FILTER_MARKER = markerPath;
+  let descriptor;
+  try {
+    descriptor = await sealDelegationArtifact({
+      repoRoot,
+      request,
+      generation: 7,
+      actor: { provider: "provider-a", actorIdHash: "sha256:source" },
+      workspace,
+      report: { summary: "done", findings: [], evidenceRefs: [] },
+    });
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    if (previousMarker === undefined) delete process.env.ORCHESTRA_TEST_FILTER_MARKER;
+    else process.env.ORCHESTRA_TEST_FILTER_MARKER = previousMarker;
+  }
+
+  assert.equal(existsSync(markerPath), false);
+  const stored = readDelegationArtifact(repoRoot, descriptor.artifactId);
+  assert.equal(stored.valid, true);
+  assert.match(stored.patch.toString("utf8"), /\+after/);
 });
 
 test("scope, symlink egress, worker staging, and clone git mutation fail closed without an artifact", async (t) => {
