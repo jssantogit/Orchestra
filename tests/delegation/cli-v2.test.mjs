@@ -80,6 +80,8 @@ test("delegation CLI preserves v2 request/result identity and returns CONTROL co
   let brokerInput = null;
   let brokerContext = null;
   const result = await runDelegationCli([
+    "node",
+    "delegation-cli",
     "--request", requestPath,
     "--repo-root", scratch,
     "--generation", "4",
