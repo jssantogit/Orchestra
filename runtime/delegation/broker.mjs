@@ -5,6 +5,12 @@ import {
 import { authorizeDelegationRequest } from "../../core/delegation/policy.mjs";
 import { buildWorkerEnvelope } from "../../core/delegation/worker-envelope.mjs";
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
+import { sealDelegationArtifact } from "./artifact-lifecycle.mjs";
+import {
+  cleanupMutableDelegationWorkspace,
+  inspectMutableDelegationWorkspace,
+  prepareMutableDelegationWorkspace,
+} from "./mutable-workspace.mjs";
 import {
   cleanupDelegationWorkspace,
   inspectDelegationWorkspace,
@@ -14,6 +20,7 @@ import { writeDelegationRecord } from "./store.mjs";
 import { createDelegationLifecycleEvent } from "./events.mjs";
 
 const PRODUCT_FINGERPRINT_EXCLUDES = Object.freeze([".orchestra/state/**"]);
+const UNALLOCATED_WORKSPACE = "UNALLOCATED";
 const FAILURE_REASONS = new Set([
   "PROVIDER_UNAVAILABLE",
   "CAPABILITY_DENIED",
@@ -22,7 +29,16 @@ const FAILURE_REASONS = new Set([
   "EXECUTION_TIMED_OUT",
   "INVALID_RESULT",
   "WORKSPACE_CLEANUP_FAILED",
+  "SCOPE_VIOLATION",
+  "ARTIFACT_SEAL_FAILED",
+  "ARTIFACT_TAMPERED",
+  "PROMOTION_STALE",
+  "PROMOTION_FAILED",
 ]);
+
+function isImplementationRequest(request) {
+  return request?.schema === "orchestra.delegation-request.v2";
+}
 
 function normalizeExecutors(executors) {
   if (!Array.isArray(executors)) throw new TypeError("DELEGATION_EXECUTORS_REQUIRED");
@@ -48,6 +64,20 @@ function normalizeWorkspace(workspace = {}) {
   };
 }
 
+function normalizeMutableWorkspace(workspace = {}) {
+  return {
+    prepare: workspace.prepare ?? prepareMutableDelegationWorkspace,
+    inspect: workspace.inspect ?? inspectMutableDelegationWorkspace,
+    cleanup: workspace.cleanup ?? cleanupMutableDelegationWorkspace,
+  };
+}
+
+function normalizeArtifacts(artifacts = {}) {
+  return {
+    seal: artifacts.seal ?? sealDelegationArtifact,
+  };
+}
+
 function normalizeStore(store = {}) {
   return {
     write: store.write ?? writeDelegationRecord,
@@ -61,8 +91,19 @@ function normalizeEvents(events = {}) {
   };
 }
 
-function validateServices(workspace, store, events) {
-  for (const fn of [workspace.prepare, workspace.inspect, workspace.cleanup, store.write, events.create, events.emit]) {
+function validateServices(workspace, mutableWorkspace, artifacts, store, events) {
+  for (const fn of [
+    workspace.prepare,
+    workspace.inspect,
+    workspace.cleanup,
+    mutableWorkspace.prepare,
+    mutableWorkspace.inspect,
+    mutableWorkspace.cleanup,
+    artifacts.seal,
+    store.write,
+    events.create,
+    events.emit,
+  ]) {
     if (typeof fn !== "function") throw new TypeError("DELEGATION_BROKER_SERVICE_INVALID");
   }
 }
@@ -76,11 +117,24 @@ function executionFacts(execution = {}) {
   };
 }
 
-function resultWorkspace(initialFingerprint = null, inspection = null) {
+function resultWorkspaceV1(initialFingerprint = null, inspection = null) {
   return {
     initialFingerprint: initialFingerprint ?? null,
     finalFingerprint: inspection?.finalFingerprint ?? null,
     dirty: typeof inspection?.dirty === "boolean" ? inspection.dirty : null,
+  };
+}
+
+function resultWorkspaceV2(request, workspaceContext = null, inspection = null) {
+  const changedPaths = Array.isArray(inspection?.changedPaths)
+    ? [...inspection.changedPaths]
+    : [];
+  return {
+    sourceRevision: request.workspace.sourceRevision,
+    sourceFingerprint: request.workspace.sourceFingerprint,
+    delegatedPath: workspaceContext?.path ?? UNALLOCATED_WORKSPACE,
+    changedPaths,
+    dirty: changedPaths.length > 0,
   };
 }
 
@@ -92,10 +146,14 @@ function baseResult(request, {
   evidenceRefs = [],
   execution = {},
   initialFingerprint = null,
+  workspaceContext = null,
   inspection = null,
+  artifact = undefined,
 } = {}) {
   const result = {
-    schema: "orchestra.delegation-result.v1",
+    schema: isImplementationRequest(request)
+      ? "orchestra.delegation-result.v2"
+      : "orchestra.delegation-result.v1",
     delegationId: request.delegationId,
     provider: request.target.provider,
     logicalRole: request.target.logicalRole,
@@ -106,7 +164,10 @@ function baseResult(request, {
     findings,
     evidenceRefs,
     execution: executionFacts(execution),
-    workspace: resultWorkspace(initialFingerprint, inspection),
+    workspace: isImplementationRequest(request)
+      ? resultWorkspaceV2(request, workspaceContext, inspection)
+      : resultWorkspaceV1(initialFingerprint, inspection),
+    ...(artifact ? { artifact } : {}),
   };
   assertDelegationResult(result);
   return result;
@@ -132,6 +193,7 @@ function failureResult(request, reason, context = {}) {
 }
 
 function startedRecord(request, { generation, startedAt, workspace }) {
+  const implementation = isImplementationRequest(request);
   return {
     delegationId: request.delegationId,
     taskId: request.taskId,
@@ -146,11 +208,14 @@ function startedRecord(request, { generation, startedAt, workspace }) {
     failureReason: null,
     workspace: {
       sourceRevision: request.workspace.sourceRevision,
-      initialFingerprint: workspace.initialFingerprint,
+      initialFingerprint: implementation
+        ? request.workspace.sourceFingerprint
+        : workspace.initialFingerprint,
       finalFingerprint: null,
       dirty: false,
       dirtyFileCount: 0,
       cleaned: false,
+      ...(implementation ? { retained: false } : {}),
       cleanupReason: null,
       recoverablePath: null,
     },
@@ -168,8 +233,15 @@ function terminalRecord(request, {
   workspace,
   inspection,
   cleanup,
+  retained = false,
+  artifact = null,
   evidenceRefs,
 }) {
+  const implementation = isImplementationRequest(request);
+  const changedPaths = implementation && Array.isArray(inspection?.changedPaths)
+    ? inspection.changedPaths
+    : [];
+  const cleaned = retained ? false : cleanup.cleaned === true;
   return {
     delegationId: request.delegationId,
     taskId: request.taskId,
@@ -182,17 +254,23 @@ function terminalRecord(request, {
     completedAt,
     durationMs,
     failureReason,
+    ...(artifact ? { artifactId: artifact.artifactId } : {}),
     workspace: {
       sourceRevision: request.workspace.sourceRevision,
-      initialFingerprint: workspace.initialFingerprint,
-      finalFingerprint: inspection?.finalFingerprint ?? null,
-      dirty: inspection?.dirty === true,
-      dirtyFileCount: Number.isInteger(inspection?.dirtyFileCount) && inspection.dirtyFileCount >= 0
-        ? inspection.dirtyFileCount
-        : 0,
-      cleaned: cleanup.cleaned === true,
-      cleanupReason: cleanup.cleaned === true ? null : "WORKSPACE_CLEANUP_FAILED",
-      recoverablePath: cleanup.cleaned === true ? null : workspace.path,
+      initialFingerprint: implementation
+        ? request.workspace.sourceFingerprint
+        : workspace.initialFingerprint,
+      finalFingerprint: implementation ? null : (inspection?.finalFingerprint ?? null),
+      dirty: implementation ? changedPaths.length > 0 : inspection?.dirty === true,
+      dirtyFileCount: implementation
+        ? changedPaths.length
+        : (Number.isInteger(inspection?.dirtyFileCount) && inspection.dirtyFileCount >= 0
+          ? inspection.dirtyFileCount
+          : 0),
+      cleaned,
+      ...(implementation ? { retained } : {}),
+      cleanupReason: retained || cleaned ? null : "WORKSPACE_CLEANUP_FAILED",
+      recoverablePath: retained ? workspace.path : (cleaned ? null : workspace.path),
     },
     evidenceRefs,
   };
@@ -205,7 +283,8 @@ function terminalEventState(recordStatus) {
   return "FAILED";
 }
 
-function recordStatusFor(result, cleanup) {
+function recordStatusFor(result, cleanup, { retained = false } = {}) {
+  if (retained && result.status === "COMPLETED") return "COMPLETED";
   if (cleanup.cleaned !== true) return "CLEANUP_FAILED";
   if (result.status === "COMPLETED") return "COMPLETED";
   if (result.status === "TIMED_OUT") return "TIMED_OUT";
@@ -260,17 +339,366 @@ function validSuccessfulExecution(executionResult, targetProvider) {
     && typeof executionResult.execution === "object";
 }
 
+async function runExecutor(executor, request, workspaceContext) {
+  try {
+    return await executor.execute({
+      request,
+      workerEnvelope: buildWorkerEnvelope(request),
+      workspace: workspaceContext,
+    });
+  } catch {
+    return {
+      ok: false,
+      provider: request.target.provider,
+      reason: "EXECUTION_FAILED",
+      execution: { exitCode: null, durationMs: 0 },
+    };
+  }
+}
+
+async function safeInspect(workspace, workspaceContext) {
+  try {
+    return await workspace.inspect(workspaceContext);
+  } catch {
+    return null;
+  }
+}
+
+async function safeCleanup(workspace, workspaceContext) {
+  try {
+    const cleanup = await workspace.cleanup(workspaceContext);
+    if (cleanup?.cleaned === true) return cleanup;
+  } catch {
+    // Cleanup failure is normalized below.
+  }
+  return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
+}
+
+function completedRecordFacts(result, cleanup, retained) {
+  const recordStatus = recordStatusFor(result, cleanup, { retained });
+  return {
+    recordStatus,
+    failureReason: recordStatus === "COMPLETED" ? null
+      : recordStatus === "CLEANUP_FAILED" ? "WORKSPACE_CLEANUP_FAILED"
+        : result.reason,
+    evidenceRefs: recordStatus === "COMPLETED" ? [...result.evidenceRefs] : [],
+  };
+}
+
+async function finishLifecycle({
+  request,
+  repoRoot,
+  generation,
+  actor,
+  startedAtMs,
+  startedAt,
+  workspaceContext,
+  inspection,
+  cleanup,
+  retained = false,
+  artifact = null,
+  result,
+  store,
+  events,
+}) {
+  const completedAtMs = Date.now();
+  const completedAt = new Date(completedAtMs).toISOString();
+  const durationMs = Math.max(0, completedAtMs - startedAtMs);
+  const recordFacts = completedRecordFacts(result, cleanup, retained);
+
+  store.write(repoRoot, terminalRecord(request, {
+    generation,
+    startedAt,
+    completedAt,
+    durationMs,
+    recordStatus: recordFacts.recordStatus,
+    failureReason: recordFacts.failureReason,
+    workspace: workspaceContext,
+    inspection,
+    cleanup,
+    retained,
+    artifact,
+    evidenceRefs: recordFacts.evidenceRefs,
+  }));
+  await emitLifecycle(events, {
+    delegationId: request.delegationId,
+    state: terminalEventState(recordFacts.recordStatus),
+    generation,
+    taskId: request.taskId,
+    actor,
+  });
+  return result;
+}
+
+async function executeReadOnlyLifecycle({
+  request,
+  repoRoot,
+  generation,
+  actor,
+  executor,
+  workspace,
+  store,
+  events,
+}) {
+  let workspaceContext;
+  try {
+    workspaceContext = await workspace.prepare({ repoRoot, request });
+  } catch {
+    return failureResult(request, "WORKSPACE_PREP_FAILED");
+  }
+
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  store.write(repoRoot, startedRecord(request, { generation, startedAt, workspace: workspaceContext }));
+  await emitLifecycle(events, {
+    delegationId: request.delegationId,
+    state: "STARTED",
+    generation,
+    taskId: request.taskId,
+    actor,
+  });
+
+  const executionResult = await runExecutor(executor, request, workspaceContext);
+  const inspection = await safeInspect(workspace, workspaceContext);
+
+  let result;
+  const executorReason = executorFailureReason(executionResult);
+  if (!inspection) {
+    result = failureResult(request, "EXECUTION_FAILED", {
+      status: "FAILED",
+      execution: executionResult?.execution,
+      initialFingerprint: workspaceContext.initialFingerprint,
+    });
+  } else if (inspection.dirty === true) {
+    result = failureResult(request, "CAPABILITY_DENIED", {
+      status: "FAILED",
+      execution: executionResult?.execution,
+      initialFingerprint: workspaceContext.initialFingerprint,
+      inspection,
+    });
+  } else if (executorReason) {
+    result = failureResult(request, executorReason, {
+      execution: executionResult?.execution,
+      initialFingerprint: workspaceContext.initialFingerprint,
+      inspection,
+    });
+  } else if (!validSuccessfulExecution(executionResult, request.target.provider)) {
+    result = failureResult(request, "INVALID_RESULT", {
+      execution: executionResult?.execution,
+      initialFingerprint: workspaceContext.initialFingerprint,
+      inspection,
+    });
+  } else {
+    try {
+      result = baseResult(request, {
+        status: "COMPLETED",
+        summary: executionResult.report.summary,
+        findings: executionResult.report.findings,
+        evidenceRefs: executionResult.report.evidenceRefs,
+        execution: executionResult.execution,
+        initialFingerprint: workspaceContext.initialFingerprint,
+        inspection,
+      });
+    } catch {
+      result = failureResult(request, "INVALID_RESULT", {
+        execution: executionResult.execution,
+        initialFingerprint: workspaceContext.initialFingerprint,
+        inspection,
+      });
+    }
+  }
+
+  const cleanup = await safeCleanup(workspace, workspaceContext);
+  if (cleanup.cleaned !== true) {
+    result = failureResult(request, "WORKSPACE_CLEANUP_FAILED", {
+      execution: executionResult?.execution,
+      initialFingerprint: workspaceContext.initialFingerprint,
+      inspection,
+    });
+  }
+
+  return finishLifecycle({
+    request,
+    repoRoot,
+    generation,
+    actor,
+    startedAtMs,
+    startedAt,
+    workspaceContext,
+    inspection,
+    cleanup,
+    result,
+    store,
+    events,
+  });
+}
+
+async function executeImplementationLifecycle({
+  request,
+  repoRoot,
+  generation,
+  actor,
+  executor,
+  workspace,
+  artifacts,
+  store,
+  events,
+}) {
+  let workspaceContext;
+  try {
+    workspaceContext = await workspace.prepare({ repoRoot, request });
+  } catch {
+    return failureResult(request, "WORKSPACE_PREP_FAILED");
+  }
+
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  store.write(repoRoot, startedRecord(request, { generation, startedAt, workspace: workspaceContext }));
+  await emitLifecycle(events, {
+    delegationId: request.delegationId,
+    state: "STARTED",
+    generation,
+    taskId: request.taskId,
+    actor,
+  });
+
+  const executionResult = await runExecutor(executor, request, workspaceContext);
+  const inspection = await safeInspect(workspace, workspaceContext);
+  const executorReason = executorFailureReason(executionResult);
+  let result = null;
+  let artifact = null;
+
+  if (!inspection) {
+    result = failureResult(request, "EXECUTION_FAILED", {
+      status: "FAILED",
+      execution: executionResult?.execution,
+      workspaceContext,
+    });
+  } else if (executorReason) {
+    result = failureResult(request, executorReason, {
+      execution: executionResult?.execution,
+      workspaceContext,
+      inspection,
+    });
+  } else if (!validSuccessfulExecution(executionResult, request.target.provider)) {
+    result = failureResult(request, "INVALID_RESULT", {
+      execution: executionResult?.execution,
+      workspaceContext,
+      inspection,
+    });
+  } else {
+    try {
+      baseResult(request, {
+        status: "COMPLETED",
+        summary: executionResult.report.summary,
+        findings: executionResult.report.findings,
+        evidenceRefs: executionResult.report.evidenceRefs,
+        execution: executionResult.execution,
+        workspaceContext,
+        inspection,
+      });
+    } catch {
+      result = failureResult(request, "INVALID_RESULT", {
+        execution: executionResult.execution,
+        workspaceContext,
+        inspection,
+      });
+    }
+  }
+
+  if (!result) {
+    try {
+      artifact = await artifacts.seal({
+        repoRoot,
+        request,
+        generation,
+        actor,
+        workspace: workspaceContext,
+        report: executionResult.report,
+      });
+      const sealedInspection = {
+        ...inspection,
+        changedPaths: [...artifact.changedPaths],
+        dirtyFileCount: artifact.changedPaths.length,
+      };
+      result = baseResult(request, {
+        status: "COMPLETED",
+        summary: executionResult.report.summary,
+        findings: executionResult.report.findings,
+        evidenceRefs: executionResult.report.evidenceRefs,
+        execution: executionResult.execution,
+        workspaceContext,
+        inspection: sealedInspection,
+        artifact,
+      });
+      return finishLifecycle({
+        request,
+        repoRoot,
+        generation,
+        actor,
+        startedAtMs,
+        startedAt,
+        workspaceContext,
+        inspection: sealedInspection,
+        cleanup: { cleaned: false, reason: null },
+        retained: true,
+        artifact,
+        result,
+        store,
+        events,
+      });
+    } catch (error) {
+      const reason = error?.reason === "SCOPE_VIOLATION" || error?.code === "SCOPE_VIOLATION"
+        ? "SCOPE_VIOLATION"
+        : "ARTIFACT_SEAL_FAILED";
+      result = failureResult(request, reason, {
+        execution: executionResult?.execution,
+        workspaceContext,
+        inspection,
+      });
+    }
+  }
+
+  const cleanup = await safeCleanup(workspace, workspaceContext);
+  if (cleanup.cleaned !== true) {
+    result = failureResult(request, "WORKSPACE_CLEANUP_FAILED", {
+      execution: executionResult?.execution,
+      workspaceContext,
+      inspection,
+    });
+  }
+
+  return finishLifecycle({
+    request,
+    repoRoot,
+    generation,
+    actor,
+    startedAtMs,
+    startedAt,
+    workspaceContext,
+    inspection,
+    cleanup,
+    result,
+    store,
+    events,
+  });
+}
+
 export function createDelegationBroker({
   executors = [],
   workspace: workspaceOverrides = {},
+  mutableWorkspace: mutableWorkspaceOverrides = {},
+  artifacts: artifactOverrides = {},
   store: storeOverrides = {},
   events: eventOverrides = {},
 } = {}) {
   const executorMap = normalizeExecutors(executors);
   const workspace = normalizeWorkspace(workspaceOverrides);
+  const mutableWorkspace = normalizeMutableWorkspace(mutableWorkspaceOverrides);
+  const artifacts = normalizeArtifacts(artifactOverrides);
   const store = normalizeStore(storeOverrides);
   const events = normalizeEvents(eventOverrides);
-  validateServices(workspace, store, events);
+  validateServices(workspace, mutableWorkspace, artifacts, store, events);
 
   return {
     async executeDelegation(request, { repoRoot, generation, actor } = {}) {
@@ -278,6 +706,9 @@ export function createDelegationBroker({
       validateInvocation({ repoRoot, generation, actor });
 
       if (!rootActorMatchesRequest(actor, request)) {
+        return failureResult(request, "CAPABILITY_DENIED");
+      }
+      if (isImplementationRequest(request) && request.packet.candidateGeneration !== generation) {
         return failureResult(request, "CAPABILITY_DENIED");
       }
 
@@ -305,139 +736,30 @@ export function createDelegationBroker({
         return failureResult(request, "PROVIDER_UNAVAILABLE");
       }
 
-      let workspaceContext;
-      try {
-        workspaceContext = await workspace.prepare({ repoRoot, request });
-      } catch {
-        return failureResult(request, "WORKSPACE_PREP_FAILED");
-      }
-
-      const startedAtMs = Date.now();
-      const startedAt = new Date(startedAtMs).toISOString();
-      store.write(repoRoot, startedRecord(request, { generation, startedAt, workspace: workspaceContext }));
-      await emitLifecycle(events, {
-        delegationId: request.delegationId,
-        state: "STARTED",
-        generation,
-        taskId: request.taskId,
-        actor,
-      });
-
-      let executionResult;
-      try {
-        executionResult = await executor.execute({
+      if (isImplementationRequest(request)) {
+        return executeImplementationLifecycle({
           request,
-          workerEnvelope: buildWorkerEnvelope(request),
-          workspace: workspaceContext,
-        });
-      } catch {
-        executionResult = {
-          ok: false,
-          provider: request.target.provider,
-          reason: "EXECUTION_FAILED",
-          execution: { exitCode: null, durationMs: 0 },
-        };
-      }
-
-      let inspection = null;
-      try {
-        inspection = await workspace.inspect(workspaceContext);
-      } catch {
-        inspection = null;
-      }
-
-      let result;
-      const executorReason = executorFailureReason(executionResult);
-      if (!inspection) {
-        result = failureResult(request, "EXECUTION_FAILED", {
-          status: "FAILED",
-          execution: executionResult?.execution,
-          initialFingerprint: workspaceContext.initialFingerprint,
-        });
-      } else if (inspection.dirty === true) {
-        result = failureResult(request, "CAPABILITY_DENIED", {
-          status: "FAILED",
-          execution: executionResult?.execution,
-          initialFingerprint: workspaceContext.initialFingerprint,
-          inspection,
-        });
-      } else if (executorReason) {
-        result = failureResult(request, executorReason, {
-          execution: executionResult?.execution,
-          initialFingerprint: workspaceContext.initialFingerprint,
-          inspection,
-        });
-      } else if (!validSuccessfulExecution(executionResult, request.target.provider)) {
-        result = failureResult(request, "INVALID_RESULT", {
-          execution: executionResult?.execution,
-          initialFingerprint: workspaceContext.initialFingerprint,
-          inspection,
-        });
-      } else {
-        try {
-          result = baseResult(request, {
-            status: "COMPLETED",
-            summary: executionResult.report.summary,
-            findings: executionResult.report.findings,
-            evidenceRefs: executionResult.report.evidenceRefs,
-            execution: executionResult.execution,
-            initialFingerprint: workspaceContext.initialFingerprint,
-            inspection,
-          });
-        } catch {
-          result = failureResult(request, "INVALID_RESULT", {
-            execution: executionResult.execution,
-            initialFingerprint: workspaceContext.initialFingerprint,
-            inspection,
-          });
-        }
-      }
-
-      let cleanup;
-      try {
-        cleanup = await workspace.cleanup(workspaceContext);
-      } catch {
-        cleanup = { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
-      }
-      if (!cleanup || cleanup.cleaned !== true) {
-        cleanup = { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
-        result = failureResult(request, "WORKSPACE_CLEANUP_FAILED", {
-          execution: executionResult?.execution,
-          initialFingerprint: workspaceContext.initialFingerprint,
-          inspection,
+          repoRoot,
+          generation,
+          actor,
+          executor,
+          workspace: mutableWorkspace,
+          artifacts,
+          store,
+          events,
         });
       }
 
-      const completedAtMs = Date.now();
-      const completedAt = new Date(completedAtMs).toISOString();
-      const durationMs = Math.max(0, completedAtMs - startedAtMs);
-      const recordStatus = recordStatusFor(result, cleanup);
-      const failureReason = recordStatus === "COMPLETED" ? null
-        : recordStatus === "CLEANUP_FAILED" ? "WORKSPACE_CLEANUP_FAILED"
-          : result.reason;
-      const evidenceRefs = recordStatus === "COMPLETED" ? [...result.evidenceRefs] : [];
-
-      store.write(repoRoot, terminalRecord(request, {
+      return executeReadOnlyLifecycle({
+        request,
+        repoRoot,
         generation,
-        startedAt,
-        completedAt,
-        durationMs,
-        recordStatus,
-        failureReason,
-        workspace: workspaceContext,
-        inspection,
-        cleanup,
-        evidenceRefs,
-      }));
-      await emitLifecycle(events, {
-        delegationId: request.delegationId,
-        state: terminalEventState(recordStatus),
-        generation,
-        taskId: request.taskId,
         actor,
+        executor,
+        workspace,
+        store,
+        events,
       });
-
-      return result;
     },
   };
 }
