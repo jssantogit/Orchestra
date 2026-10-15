@@ -122,7 +122,7 @@ function executor({ onExecute = null, outcome = null, available = true } = {}) {
 
 function cleanupRetained(result) {
   const path = result?.workspace?.delegatedPath;
-  if (typeof path === "string" && path) {
+  if (typeof path === "string" && path && path !== "UNALLOCATED") {
     rmSync(dirname(path), { recursive: true, force: true });
   }
 }
@@ -205,7 +205,7 @@ test("v2 broker represents pre-workspace provider unavailability factually and n
   assert.equal(result.schema, "orchestra.delegation-result.v2");
   assert.equal(result.status, "FAILED");
   assert.equal(result.reason, "PROVIDER_UNAVAILABLE");
-  assert.equal(result.workspace.delegatedPath, null);
+  assert.equal(result.workspace.delegatedPath, "UNALLOCATED");
   assert.deepEqual(result.workspace.changedPaths, []);
   assert.equal(result.workspace.dirty, false);
   assert.equal("artifact" in result, false);
