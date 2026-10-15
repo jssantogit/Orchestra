@@ -6,14 +6,19 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     name: Orchestra 1.x Verification
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Check out pull request head
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -33,33 +38,15 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
-      - name: Upload generated Task 1 artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: delegation-v2-generated
-          path: |
-            core/schema/generated/delegation-request.v2.mjs
-            core/schema/generated/delegation-result.v2.mjs
-            runtimes/codex/.codex/astra-orchestra/core/delegation/policy.mjs
-            runtimes/codex/.codex/astra-orchestra/core/delegation/mutation-scope.mjs
-            runtimes/codex/.codex/astra-orchestra/core/domain/delegation.mjs
-            runtimes/codex/.codex/astra-orchestra/core/routing/delegation-target.mjs
-            runtimes/codex/.codex/astra-orchestra/core/runtime-core-manifest.json
-            runtimes/codex/.codex/astra-orchestra/core/schema/validator.mjs
-            runtimes/codex/.codex/astra-orchestra/core/schema/generated/delegation-request.v2.mjs
-            runtimes/codex/.codex/astra-orchestra/core/schema/generated/delegation-result.v2.mjs
-            runtimes/codex/.codex/astra-orchestra/core/schemas/delegation-request.v2.schema.json
-            runtimes/codex/.codex/astra-orchestra/core/schemas/delegation-result.v2.schema.json
-            runtimes/antigravity/.agents/skills/orchestra/core/delegation/policy.mjs
-            runtimes/antigravity/.agents/skills/orchestra/core/delegation/mutation-scope.mjs
-            runtimes/antigravity/.agents/skills/orchestra/core/domain/delegation.mjs
-            runtimes/antigravity/.agents/skills/orchestra/core/routing/delegation-target.mjs
-            runtimes/antigravity/.agents/skills/orchestra/core/runtime-core-manifest.json
-            runtimes/antigravity/.agents/skills/orchestra/core/schema/validator.mjs
-            runtimes/antigravity/.agents/skills/orchestra/core/schema/generated/delegation-request.v2.mjs
-            runtimes/antigravity/.agents/skills/orchestra/core/schema/generated/delegation-result.v2.mjs
-            runtimes/antigravity/.agents/skills/orchestra/core/schemas/delegation-request.v2.schema.json
-            runtimes/antigravity/.agents/skills/orchestra/core/schemas/delegation-result.v2.schema.json
+      - name: Commit generated Task 1 artifacts
+        run: |
+          git config user.name "Orchestra CI"
+          git config user.email "orchestra-ci@users.noreply.github.com"
+          git add core/schema/generated runtimes/codex/.codex/astra-orchestra/core runtimes/antigravity/.agents/skills/orchestra/core
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(runtime): sync delegation v2 core mirrors"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
 
       - name: Run full regression
         run: npm test
@@ -90,8 +77,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Check out repository
+      - name: Check out pull request head
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
