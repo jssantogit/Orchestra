@@ -27,7 +27,12 @@ import {
   cleanupCompositionWorkspace,
   prepareCompositionWorkspace,
 } from "./composition-workspace.mjs";
-import { writeCompositeArtifact } from "./composite-artifact-store.mjs";
+import {
+  readCompositeArtifact,
+  recordCompositeArtifactCleanup,
+  transitionCompositeArtifactState,
+  writeCompositeArtifact,
+} from "./composite-artifact-store.mjs";
 import { inspectMutableDelegationWorkspace } from "./mutable-workspace.mjs";
 import {
   readParallelGroup,
@@ -66,7 +71,7 @@ function inside(parent, child) {
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
 }
 
-async function cleanupRetainedMemberWorkspace(repoRoot, delegatedPath) {
+async function cleanupRetainedWorkspace(repoRoot, delegatedPath) {
   try {
     if (typeof delegatedPath !== "string" || !delegatedPath) {
       return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
@@ -114,7 +119,7 @@ async function consumeBoundMember({ repoRoot, artifactId, manifest }) {
     return { consumed: false, reason: transition.reason, cleanup: null };
   }
 
-  const cleanup = await cleanupRetainedMemberWorkspace(repoRoot, manifest.delegatedPath);
+  const cleanup = await cleanupRetainedWorkspace(repoRoot, manifest.delegatedPath);
   const cleanupState = cleanup.cleaned
     ? { cleaned: true, reason: null, recoverablePath: null }
     : provisionalCleanup;
@@ -129,6 +134,45 @@ async function consumeBoundMember({ repoRoot, artifactId, manifest }) {
   return { consumed: true, reason: cleanup.reason, cleanup };
 }
 
+async function abortCompositeArtifact({ repoRoot, artifactId, reviewPath }) {
+  let stored;
+  try {
+    stored = readCompositeArtifact(repoRoot, artifactId);
+  } catch {
+    return { discarded: false, cleanup: null };
+  }
+  if (!stored?.exists
+      || !stored.valid
+      || stored.manifest?.state !== "READY_FOR_REVIEW"
+      || stored.manifest.delegatedPath !== reviewPath) {
+    return { discarded: false, cleanup: null };
+  }
+
+  const provisionalCleanup = {
+    cleaned: false,
+    reason: "WORKSPACE_CLEANUP_FAILED",
+    recoverablePath: reviewPath,
+  };
+  const transition = transitionCompositeArtifactState(repoRoot, artifactId, {
+    expectedState: "READY_FOR_REVIEW",
+    nextState: "DISCARDED",
+    cleanup: provisionalCleanup,
+  });
+  if (!transition.transitioned) return { discarded: false, cleanup: null };
+
+  const cleanup = await cleanupRetainedWorkspace(repoRoot, reviewPath);
+  const cleanupState = cleanup.cleaned
+    ? { cleaned: true, reason: null, recoverablePath: null }
+    : provisionalCleanup;
+  const recorded = recordCompositeArtifactCleanup(repoRoot, artifactId, cleanupState);
+  return {
+    discarded: true,
+    cleanup: recorded.updated
+      ? cleanup
+      : { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" },
+  };
+}
+
 function defaultServices() {
   return {
     groups: {
@@ -141,7 +185,10 @@ function defaultServices() {
       inspect: inspectDelegationArtifact,
       consume: consumeBoundMember,
     },
-    composition: { compose: composeParallelMemberArtifacts },
+    composition: {
+      compose: composeParallelMemberArtifacts,
+      abort: abortCompositeArtifact,
+    },
   };
 }
 
@@ -352,6 +399,19 @@ function failGroup(services, repoRoot, group, memberArtifactIds, reason) {
   return failure(reason);
 }
 
+async function abortSealedComposite(services, repoRoot, descriptor) {
+  if (!descriptor?.artifactId
+      || !descriptor?.reviewPath
+      || typeof services.composition.abort !== "function") return;
+  try {
+    await services.composition.abort({
+      repoRoot,
+      artifactId: descriptor.artifactId,
+      reviewPath: descriptor.reviewPath,
+    });
+  } catch {}
+}
+
 export async function composeParallelArtifacts({
   repoRoot,
   group,
@@ -433,6 +493,7 @@ export async function composeParallelArtifacts({
       consumed = { consumed: false, reason: "ARTIFACT_STATE_MISMATCH", cleanup: null };
     }
     if (!consumed?.consumed) {
+      await abortSealedComposite(services, repoRoot, descriptor);
       return failGroup(services, repoRoot, group, memberArtifactIds, "COMPOSITION_FAILED");
     }
     if (consumed.cleanup?.cleaned === false) {
@@ -452,9 +513,13 @@ export async function composeParallelArtifacts({
       compositeArtifactId: descriptor.artifactId,
     });
   } catch {
-    return failure("COMPOSITION_FAILED");
+    await abortSealedComposite(services, repoRoot, descriptor);
+    return failGroup(services, repoRoot, group, memberArtifactIds, "COMPOSITION_FAILED");
   }
-  if (!ready?.transitioned) return failure("COMPOSITION_FAILED");
+  if (!ready?.transitioned) {
+    await abortSealedComposite(services, repoRoot, descriptor);
+    return failGroup(services, repoRoot, group, memberArtifactIds, "COMPOSITION_FAILED");
+  }
 
   if (cleanupFailures.length > 0) {
     try { services.groups.cleanup(repoRoot, group.groupId, cleanupFailures); } catch {}
