@@ -197,7 +197,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
             || helpResult.stdoutTruncated) return unavailable();
 
         const help = String(helpResult.stdout ?? "");
-        if (!REQUIRED_HELP_FLAGS.every((flag) => help.includes(flag))) return unavailable();
+        if (!REQUIRED_HELP_FLAGS.every((flag) => hasHelpFlag(help, flag))) return unavailable();
 
         const version = String(versionResult.stdout ?? "").trim();
         if (!version) return unavailable();
