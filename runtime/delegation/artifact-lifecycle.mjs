@@ -8,6 +8,7 @@ import {
   normalizeMutationScope,
 } from "../../core/delegation/mutation-scope.mjs";
 import { acquireAtomicLock, releaseAtomicLock } from "../../core/leases/atomic-lock.mjs";
+import { readWorkLease } from "../../core/leases/work-lease-store.mjs";
 import {
   readDelegationGitBoundary,
   readDelegationGitStdout,
@@ -387,6 +388,32 @@ function validControlAuthority(manifest, generation, actor) {
     && actor?.actorIdHash === manifest.source.actorIdHash;
 }
 
+function currentWorkLeaseDecision(repoRoot, manifest, generation, actor) {
+  const current = readWorkLease(repoRoot);
+  if (!current.exists) {
+    // Explicit session-authority rollback can legitimately have no neutral lease.
+    // In normal 1.x lease mode, any existing neutral lease is authoritative below.
+    return { allowed: true, reason: null };
+  }
+  if (!current.valid || !current.lease) {
+    return { allowed: false, reason: "CAPABILITY_DENIED" };
+  }
+
+  const lease = current.lease;
+  if (lease.generation !== generation || lease.generation !== manifest?.generation) {
+    return { allowed: false, reason: "PROMOTION_STALE" };
+  }
+  if (lease.actor?.provider !== actor?.provider
+      || lease.actor?.sessionIdHash !== actor?.actorIdHash
+      || lease.actor?.provider !== manifest?.source?.provider
+      || lease.actor?.sessionIdHash !== manifest?.source?.actorIdHash
+      || !Array.isArray(lease.capabilities)
+      || !lease.capabilities.includes("CONTROL")) {
+    return { allowed: false, reason: "CAPABILITY_DENIED" };
+  }
+  return { allowed: true, reason: null };
+}
+
 function promotionLockPath(repoRoot) {
   return join(resolve(repoRoot), PROMOTION_LOCK_PATH);
 }
@@ -491,6 +518,10 @@ export async function promoteDelegationArtifact({
     if (!validControlAuthority(manifest, generation, actor)) {
       return { promoted: false, reason: "CAPABILITY_DENIED", changedPaths: [] };
     }
+    const leaseDecision = currentWorkLeaseDecision(repoRoot, manifest, generation, actor);
+    if (!leaseDecision.allowed) {
+      return { promoted: false, reason: leaseDecision.reason, changedPaths: [] };
+    }
     if (!checked.valid || !checked.derived) {
       return { promoted: false, reason: "ARTIFACT_TAMPERED", changedPaths: [] };
     }
@@ -575,6 +606,10 @@ export async function discardDelegationArtifact({
     }
     if (!validControlAuthority(manifest, generation, actor)) {
       return { discarded: false, reason: "CAPABILITY_DENIED" };
+    }
+    const leaseDecision = currentWorkLeaseDecision(repoRoot, manifest, generation, actor);
+    if (!leaseDecision.allowed) {
+      return { discarded: false, reason: leaseDecision.reason };
     }
     if (!checked.valid || !checked.derived) {
       return { discarded: false, reason: "ARTIFACT_TAMPERED" };
