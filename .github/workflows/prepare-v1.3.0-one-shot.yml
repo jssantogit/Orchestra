@@ -1,0 +1,84 @@
+name: Prepare Release v1.3.0 One Shot
+
+on:
+  push:
+    branches:
+      - ops/prepare-v1.3.0-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: c45c85041e6d78bd0620139a0418cd97111dcc45
+          fetch-depth: 0
+      - name: Require accepted main SHA
+        run: test "$(git rev-parse HEAD)" = "c45c85041e6d78bd0620139a0418cd97111dcc45"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts
+      - name: Build current main runtimes for readiness
+        run: npm run build:runtimes
+      - name: Verify current main release metadata
+        run: npm run release:readiness
+      - name: Prepare release metadata and notes
+        id: prepare
+        run: node scripts/release/prepare-release.mjs --bump=minor
+      - name: Require expected target and semantic classification
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+          BASE_TAG: ${{ steps.prepare.outputs.base_tag }}
+          BUMP: ${{ steps.prepare.outputs.requested_bump }}
+          SUGGESTED: ${{ steps.prepare.outputs.suggested_bump }}
+        run: |
+          test "$BASE_TAG" = "v1.2.0"
+          test "$TAG" = "v1.3.0"
+          test "$BUMP" = "minor"
+          test "$SUGGESTED" = "minor"
+      - name: Create local release candidate
+        id: candidate
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+        run: |
+          BRANCH="release/${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add --all
+          git commit -m "chore(release): prepare ${TAG}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Run full prepared-release preflight
+        run: |
+          npm run build:runtimes
+          npm run check:runtimes
+          npm run check:runtime-core
+          npm test
+          npm run doctor
+          npm run check:contamination
+          npm run release:readiness
+          git diff --check
+      - name: Require clean validated candidate
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          if ! git diff --quiet HEAD -- . || ! git diff --cached --quiet; then
+            git status --short >&2
+            exit 6
+          fi
+          rm -rf dist
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short >&2
+            exit 6
+          fi
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Refuse duplicate release refs
+        run: |
+          if git rev-parse --verify --quiet refs/tags/v1.3.0 >/dev/null; then exit 3; fi
+          if git ls-remote --exit-code --heads origin refs/heads/release/v1.3.0 >/dev/null 2>&1; then exit 4; fi
+      - name: Push validated release branch
+        run: git push origin HEAD:release/v1.3.0
