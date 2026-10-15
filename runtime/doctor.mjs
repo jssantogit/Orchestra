@@ -10,6 +10,7 @@ import { listDelegationRecords } from "./delegation/store.mjs";
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CANONICAL_RUNTIMES = Object.freeze(["core", "codex", "antigravity", "delegation"]);
+const DELEGATION_STATUSES = new Set(["READY", "DEGRADED", "UNAVAILABLE"]);
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -38,11 +39,49 @@ function manifestNames(repoRoot, runtime) {
   return CANONICAL_RUNTIMES.filter((name) => existsSync(join(repoRoot, "runtime", "manifests", `${name}.json`)));
 }
 
-function unavailableDelegationReport() {
+function normalizeDelegationStatus(value) {
+  return DELEGATION_STATUSES.has(value) ? value : "UNAVAILABLE";
+}
+
+function normalizeDelegationModes(delegation) {
+  const baseStatus = normalizeDelegationStatus(delegation?.status);
+  const suppliedReview = delegation?.modes?.review;
+  const suppliedImplementation = delegation?.modes?.implementation;
+  const reviewStatus = suppliedReview && DELEGATION_STATUSES.has(suppliedReview.status)
+    ? suppliedReview.status
+    : delegation?.gitWorktree?.available === false
+      ? "UNAVAILABLE"
+      : baseStatus;
+  const cloneAvailabilityKnown = typeof delegation?.gitClone?.available === "boolean";
+  const implementationStatus = suppliedImplementation && DELEGATION_STATUSES.has(suppliedImplementation.status)
+    ? suppliedImplementation.status
+    : cloneAvailabilityKnown && delegation.gitClone.available === false
+      ? "UNAVAILABLE"
+      : baseStatus;
+
   return {
+    review: {
+      status: reviewStatus,
+      isolation: "EPHEMERAL_WORKTREE",
+    },
+    implementation: {
+      status: implementationStatus,
+      isolation: "EPHEMERAL_CLONE",
+      artifactLifecycle: "CONTROL_OWNED",
+    },
+  };
+}
+
+function unavailableDelegationReport() {
+  const report = {
     status: "UNAVAILABLE",
     gitWorktree: { available: false },
+    gitClone: { available: false, noHardlinks: false },
     providers: [],
+  };
+  return {
+    ...report,
+    modes: normalizeDelegationModes(report),
   };
 }
 
@@ -166,6 +205,7 @@ export async function runDoctor({
     }
     delegation = {
       ...delegation,
+      modes: normalizeDelegationModes(delegation),
       recovery: delegationRecovery(root),
     };
   }
@@ -189,7 +229,9 @@ async function main() {
     const providerSummary = report.delegation.providers
       .map((provider) => `${provider.provider}=${provider.available ? "available" : "unavailable"}`)
       .join(", ");
-    console.log(`INFO delegation:readiness — ${report.delegation.status}; gitWorktree=${report.delegation.gitWorktree.available ? "available" : "unavailable"}${providerSummary ? `; ${providerSummary}` : ""}`);
+    const review = report.delegation.modes?.review?.status || report.delegation.status;
+    const implementation = report.delegation.modes?.implementation?.status || "UNAVAILABLE";
+    console.log(`INFO delegation:readiness — review=${review}; implementation=${implementation}; gitWorktree=${report.delegation.gitWorktree?.available ? "available" : "unavailable"}; gitClone=${report.delegation.gitClone?.available ? "available" : "unavailable"}${providerSummary ? `; ${providerSummary}` : ""}`);
     if (report.delegation.recovery?.required) {
       const recovery = report.delegation.recovery;
       const paths = recovery.cleanupFailures.map((entry) => entry.recoverablePath).filter(Boolean);
