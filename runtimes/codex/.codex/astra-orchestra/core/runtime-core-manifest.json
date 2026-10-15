@@ -95,7 +95,7 @@
     },
     {
       "path": "leases/workspace-fingerprint.mjs",
-      "sha256": "2d0e22a6427a70cf6696c36c35c422dd509aa41615c0482d4ff27f9f12efc390"
+      "sha256": "ddf94e7fbc3af2f69c4637527ccc29b67ac055b133d84a49434dc90d368e10e0"
     },
     {
       "path": "policy/capability-authorization.mjs",
@@ -115,7 +115,7 @@
     },
     {
       "path": "routing/delegation-target.mjs",
-      "sha256": "0c4a7579ca200bbe88efbc77a23856d664892759c9000328caca628fd28eaa98"
+      "sha256": "52d90a101b57a6e024c62bf817723b5abf258445772b32a375774771a30ee56b"
     },
     {
       "path": "routing/escalation.mjs",

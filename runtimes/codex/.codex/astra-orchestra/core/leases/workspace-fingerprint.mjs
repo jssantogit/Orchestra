@@ -8,10 +8,11 @@ function digest(value) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function gitOutput(root, args, { encoding = "utf8" } = {}) {
+function gitOutput(root, args, { encoding = "utf8", env = process.env } = {}) {
   return execFileSync("git", args, {
     cwd: root,
     encoding,
+    env,
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5000,
     maxBuffer: 16 * 1024 * 1024,
@@ -38,7 +39,7 @@ function hashRegularFile(path) {
   }
 }
 
-function workingFileIdentity(root, relPath) {
+function workingFileIdentity(root, relPath, { env = process.env } = {}) {
   const absolute = join(root, relPath);
   try {
     const stat = lstatSync(absolute);
@@ -50,7 +51,7 @@ function workingFileIdentity(root, relPath) {
     }
     if (stat.isDirectory()) {
       let nestedHead = null;
-      try { nestedHead = gitOutput(absolute, ["rev-parse", "HEAD"]).trim() || null; } catch {}
+      try { nestedHead = gitOutput(absolute, ["rev-parse", "HEAD"], { env }).trim() || null; } catch {}
       return { path: relPath, kind: "DIRECTORY", mode: stat.mode & 0o7777, nestedHead };
     }
     return { path: relPath, kind: "OTHER", mode: stat.mode & 0o7777, size: stat.size };
@@ -64,17 +65,17 @@ function pathspecs(excludedPaths = []) {
   return [".", ...excludedPaths.filter(Boolean).map((path) => `:(exclude)${path}`)];
 }
 
-export function readWorkspaceFingerprint(repoRoot, { excludedPaths = [] } = {}) {
+export function readWorkspaceFingerprint(repoRoot, { excludedPaths = [], env = process.env } = {}) {
   const root = resolve(repoRoot);
   try {
     const specs = pathspecs(excludedPaths);
-    const head = gitOutput(root, ["rev-parse", "HEAD"]).trim() || null;
-    const indexListing = gitOutput(root, ["ls-files", "-s", "-z", "--", ...specs], { encoding: "buffer" });
+    const head = gitOutput(root, ["rev-parse", "HEAD"], { env }).trim() || null;
+    const indexListing = gitOutput(root, ["ls-files", "-s", "-z", "--", ...specs], { encoding: "buffer", env });
     const indexHash = digest(indexListing);
-    const trackedDirty = nulPaths(gitOutput(root, ["diff", "--name-only", "-z", "HEAD", "--", ...specs], { encoding: "buffer" }));
-    const untracked = nulPaths(gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...specs], { encoding: "buffer" }));
+    const trackedDirty = nulPaths(gitOutput(root, ["diff", "--name-only", "-z", "HEAD", "--", ...specs], { encoding: "buffer", env }));
+    const untracked = nulPaths(gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...specs], { encoding: "buffer", env }));
     const dirtyPaths = [...new Set([...trackedDirty, ...untracked])].sort();
-    const workingFiles = dirtyPaths.map((relPath) => workingFileIdentity(root, relPath));
+    const workingFiles = dirtyPaths.map((relPath) => workingFileIdentity(root, relPath, { env }));
     const workingTreeHash = digest(workingFiles);
     return {
       available: true,

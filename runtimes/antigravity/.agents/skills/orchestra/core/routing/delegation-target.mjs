@@ -17,21 +17,22 @@ export function consumeCrossProviderBudget({ used, limit = 1 } = {}) {
   };
 }
 
-function findIndependentTarget(sourceProvider, providerCapabilities = []) {
-  return providerCapabilities.find((capability) => capability
-    && typeof capability.provider === "string"
-    && capability.provider !== sourceProvider
-    && capability.available === true
-    && capability.independent === true) ?? null;
+function findIndependentTarget(sourceProvider, providerCapabilities = [], { capability = null } = {}) {
+  return providerCapabilities.find((candidate) => candidate
+    && typeof candidate.provider === "string"
+    && candidate.provider !== sourceProvider
+    && candidate.available === true
+    && candidate.independent === true
+    && (capability === null || candidate.capabilities?.[capability] === true)) ?? null;
 }
 
-function crossProviderRoute({ sourceProvider, providerCapabilities, budget, reason }) {
+function crossProviderRoute({ sourceProvider, providerCapabilities, budget, reason, capability = null }) {
   const budgetDecision = consumeCrossProviderBudget(normalizeBudget(budget));
   if (!budgetDecision.allowed) {
     return { mode: "NONE", targetProvider: null, reason: budgetDecision.reason };
   }
 
-  const target = findIndependentTarget(sourceProvider, providerCapabilities);
+  const target = findIndependentTarget(sourceProvider, providerCapabilities, { capability });
   if (!target) {
     return { mode: "NONE", targetProvider: null, reason: "PROVIDER_UNAVAILABLE" };
   }
@@ -56,6 +57,7 @@ export function selectDelegationTarget({
       providerCapabilities,
       budget,
       reason: "IMPLEMENTATION",
+      capability: "implementation",
     });
   }
 
