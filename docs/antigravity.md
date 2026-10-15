@@ -146,4 +146,16 @@ Read-only v1 runs continue in an external ephemeral Git worktree and fail closed
 
 AGY CONTROL may inspect and independently verify the retained clone before explicitly promoting or discarding the artifact. Promotion requires the original AGY CONTROL actor and Work Lease generation, checks canonical source/Git freshness and artifact integrity, and applies only the sealed worker delta while preserving any pre-existing canonical staged/unstaged/untracked baseline. A missing/failed Codex target, stale/tampered artifact, or promotion failure returns bounded failure; Orchestra never silently falls back or interprets failure as approval.
 
-Prerequisites are an already installed/authenticated `codex` CLI plus Git worktree support for review and hardened local-clone support (`git clone --no-hardlinks`) for implementation. Discovery uses only version/help surfaces and performs no authentication or inference. `npm run doctor` reports review and implementation readiness separately, so an unavailable cross-provider implementation lane does not make an otherwise healthy AGY-only project structurally unhealthy.
+Prerequisites are an already installed/authenticated `codex` CLI plus Git worktree support for review and hardened local-clone support (`git clone --no-hardlinks`) for implementation. Discovery uses only version/help surfaces and performs no authentication or inference. AGY 1.3.5 emits its help surface on stderr; the neutral executor treats bounded stdout and stderr symmetrically while still failing closed on timeout, nonzero exit, or truncation. `npm run doctor` reports review and implementation readiness separately, so an unavailable cross-provider implementation lane does not make an otherwise healthy AGY-only project structurally unhealthy.
+
+---
+
+## 7. Parallel Implementation 2
+
+Antigravity CONTROL may explicitly choose `PARALLEL_2` only after it has resolved exactly two bounded implementation shards with disjoint mutation scopes. Normal AGY Direct Work remains serial and provider-local by default; the mere presence of Codex does not cause fan-out.
+
+The v1 parallel lane uses one AGY implementation worker plus one Codex implementation worker. Both are isolated execution-plane children against the same immutable source snapshot, each in its own hardened clone and each restricted to its own Implementation Packet and `WORKSPACE_ONLY` scope. Ordinary same-provider v2 delegation remains forbidden; the AGY same-provider child is legal only inside the validated two-member parallel group.
+
+When both members succeed, Orchestra revalidates their sealed artifacts, proves factual changed paths are disjoint, composes the two patches inside a fresh third clone, and produces a single Composite Mutation Artifact. AGY CONTROL alone may inspect, promote, or discard that composite. Member artifacts are group-bound and cannot be promoted individually, and the operation never synthesizes Candidate, Evidence, Acceptance, publication, or finish authority.
+
+Failure is atomic from the product workspace's perspective: unavailable provider, member failure, overlap, tamper, composition conflict, stale baseline, or failed promotion yields no partial canonical mutation and no silent serial/manual fallback. `npm run doctor` reports the `parallelImplementation` lane independently and requires both providers to advertise implementation plus hardened clone support. Project runtime updates fail closed while a parallel group is in flight.
