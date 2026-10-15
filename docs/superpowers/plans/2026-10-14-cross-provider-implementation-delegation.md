@@ -169,17 +169,17 @@
 
 **Files:**
 - Modify: `core/delegation/worker-envelope.mjs`
+- Modify: `runtime/delegation/process-environment.mjs`
 - Modify: `providers/antigravity/delegation-executor.mjs`
 - Modify: `providers/codex/delegation-executor.mjs`
-- Modify: `runtime/delegation/process-environment.mjs`
 - Modify: `tests/delegation/worker-envelope-boundary.test.mjs`
 - Modify: `tests/delegation/antigravity-executor.test.mjs`
 - Modify: `tests/delegation/codex-executor.test.mjs`
 - Modify: `tests/delegation/process-environment.test.mjs`
 
 **Interfaces:**
-- `buildWorkerEnvelope(request)` preserves the exact v1 read-only envelope; for v2 it includes normalized mutation scope and `prohibitions: { mutation: "WORKSPACE_ONLY", network: "FORBIDDEN", delegation: "FORBIDDEN" }` while omitting lease/control internals.
-- Provider executor `execute({ request, workerEnvelope, workspace })` selects prompt semantics by request schema; it never decides scope validity or promotion.
+- `buildWorkerEnvelope(request)` branches by request schema. V1 output stays byte-for-byte compatible where feasible and keeps mutation prohibited. V2 adds mutation scope and `WORKSPACE_EDIT` capability but still withholds actor ID, generation, source fingerprints/revision, artifact/promotion internals and Work Lease data.
+- Provider executor `execute({ request, workerEnvelope, workspace })` remains the public interface; prompt text and worker cwd/env are selected from the request version.
 - `buildDelegationProcessEnvironment({... extra })` remains sanitized and accepts broker-supplied Git-isolation variables from v2 workspace context.
 
 - [ ] **Step 1: Write RED v1 prompt regression tests** — AGY still receives `Do not modify files`; Codex v1 remains logically read-only; v1 worker envelope has no `WORKSPACE_EDIT`/mutation scope.
@@ -187,47 +187,49 @@
 - [ ] **Step 3: Write RED malformed-output/failure tests for v2** — timeout/nonzero/oversized/malformed report map to existing taxonomy and cannot fabricate artifact fields.
 - [ ] **Step 4: Confirm RED** — `node --test tests/delegation/worker-envelope-boundary.test.mjs tests/delegation/antigravity-executor.test.mjs tests/delegation/codex-executor.test.mjs tests/delegation/process-environment.test.mjs`.
 - [ ] **Step 5: Implement version-aware envelope/prompt/env wiring**.
-- [ ] **Step 6: Verify GREEN and contamination/firewall** — focused tests + `npm run test:firewall && npm run check:contamination`.
-- [ ] **Step 7: Commit** — `feat(delegation): enable scoped provider implementation prompts`.
+- [ ] **Step 6: Verify GREEN** — focused tests plus existing v1 delegation suite.
+- [ ] **Step 7: Commit** — `feat(delegation): allow scoped implementation workers`.
 
 ---
 
-### Task 5: Add v2 execution lifecycle to the neutral broker and CLI
+### Task 5: Integrate v2 lifecycle in the neutral broker and execution CLI
 
 **Files:**
 - Modify: `runtime/delegation/broker.mjs`
 - Modify: `runtime/delegation/cli.mjs`
 - Modify: `runtime/delegation/store.mjs`
+- Modify: `runtime/delegation/events.mjs` only if new implementation-specific lifecycle event types are truly required; prefer current generic lifecycle events.
 - Create: `tests/delegation/broker-v2.test.mjs`
 - Modify: `tests/delegation/broker.test.mjs`
 - Modify: `tests/delegation/delegation-cli.test.mjs`
-- Modify: `tests/delegation/delegation-events.test.mjs`
 
 **Interfaces:**
-- `createDelegationBroker({ executors, workspace, mutableWorkspace, artifacts, store, events })` keeps current v1 services/defaults and adds injectable v2 services.
-- `executeDelegation(request, { repoRoot, generation, actor })` dispatches by schema after common root-actor validation.
-- V2 lifecycle: authorize -> discover exact provider -> prepare hardened clone -> STARTED record/event -> execute -> inspect -> scope/Git integrity -> seal artifact -> terminal COMPLETED record/event with `artifactId` and retained clone -> return `DelegationResult.v2`.
-- V2 failure before sealing cleans the clone/config scratch; cleanup failure uses existing `WORKSPACE_CLEANUP_FAILED`. Successful v2 deliberately retains the clone and is not misclassified as cleanup failure.
-- Existing `cli.mjs --request ... --repo-root ... --generation ...` syntax accepts either canonical request version; request schema selects lifecycle.
+- `createDelegationBroker(...)` public composition stays stable.
+- `executeDelegation(request, { repoRoot, generation, actor })` dispatches v1 to existing linked-worktree lifecycle and v2 to mutable clone lifecycle.
+- V2 success: authorize -> discover exact target -> hardened clone -> STARTED record/event -> execute provider -> validate bounded report -> inspect factual mutation -> seal artifact -> write COMPLETED record with `artifactId`, `retained=true`, `cleaned=false` -> return canonical v2 result with broker-derived workspace/artifact facts. Clone is retained.
+- V2 failure before sealing always attempts cleanup; cleanup failure uses current recovery semantics. No failure result carries `artifact`.
+- `runtime/delegation/cli.mjs` accepts either canonical request version and emits one matching result JSON; its `generation`/actor context remains root CONTROL provenance, not worker authority.
 
-- [ ] **Step 1: Write RED broker-v2 happy path** — fake provider edits an allowed file in real mutable clone; result is v2 COMPLETED with broker-derived artifact; canonical product/Git unchanged; record is terminal with retained artifact; result is not Candidate/Evidence/Acceptance.
-- [ ] **Step 2: Write RED failure matrix** — provider unavailable, scope violation, canonical mutation detector, invalid report, execution timeout/failure, seal failure, cleanup failure; no fallback and no artifact on failure.
-- [ ] **Step 3: Write RED v1 compatibility assertions** — existing broker/CLI fixtures and cleanup semantics remain byte/shape compatible where contract fixes them.
-- [ ] **Step 4: Confirm RED** — `node --test tests/delegation/broker.test.mjs tests/delegation/broker-v2.test.mjs tests/delegation/delegation-cli.test.mjs tests/delegation/delegation-events.test.mjs`.
-- [ ] **Step 5: Implement version-aware broker/CLI with separate v1/v2 internal paths** — do not turn v1 dirty-workspace denial into a generic mutable rule.
+- [ ] **Step 1: Write RED successful v2 broker test** — fake provider writes one authorized file in real temp clone; returned result is v2 `COMPLETED` with sealed artifact; canonical checkout/Git fingerprints unchanged; retained clone exists; no Evidence/Candidate/Acceptance state written.
+- [ ] **Step 2: Write RED failure matrix** — missing target, invalid request, provider timeout/nonzero/malformed output, out-of-scope mutation, canonical mutation detector, seal failure; each maps to bounded taxonomy, produces no promotable artifact, and attempts exact cleanup.
+- [ ] **Step 3: Write RED CLI version dispatch tests** — v1 invocation remains compatible; v2 round-trip validates schema/version/identity and never auto-promotes.
+- [ ] **Step 4: Confirm RED** — `node --test tests/delegation/broker.test.mjs tests/delegation/broker-v2.test.mjs tests/delegation/delegation-cli.test.mjs`.
+- [ ] **Step 5: Implement version-aware broker/CLI/store integration** — do not fork discovery/process/event infrastructure.
 - [ ] **Step 6: Verify GREEN** — `npm run test:delegation`.
-- [ ] **Step 7: Commit** — `feat(delegation): broker cross-provider implementation artifacts`.
+- [ ] **Step 7: Commit** — `feat(delegation): broker mutable implementation workers`.
 
 ---
 
-### Task 6: Add artifact inspection, tamper checks, explicit CONTROL promotion/discard, and atomic promotion lock
+### Task 6: Add CONTROL-owned artifact inspection, promotion, discard, and recovery
 
 **Files:**
 - Modify: `runtime/delegation/artifact-lifecycle.mjs`
 - Create: `runtime/delegation/artifact-cli.mjs`
+- Modify: `runtime/doctor.mjs`
 - Create: `tests/delegation/artifact-promotion.test.mjs`
 - Create: `tests/delegation/artifact-cli.test.mjs`
-- Modify: `tests/leases/atomic-lock.test.mjs` only if reusable-lock behavior needs an additional contract assertion
+- Modify: `tests/runtime/delegation-recovery-doctor.test.mjs`
+- Reuse: `core/leases/atomic-lock.mjs`
 
 **Interfaces:**
 - `inspectDelegationArtifact({ repoRoot, artifactId }) -> { manifest, integrity: { valid, reason }, reviewPath }` recomputes patch SHA/mutation digest/scope and never mutates canonical product state.
@@ -240,9 +242,9 @@
 - [ ] **Step 3: Write RED promotion fidelity tests** — canonical fixture starts with staged + unstaged + untracked baseline; promotion applies only worker delta, preserves prior index entries exactly, and final changed file facts equal sealed mutation digest.
 - [ ] **Step 4: Write RED concurrency/CLI tests** — active promotion lock denies concurrent promotion; CLI rejects malformed flags/unsafe IDs; successful promote/discard transitions artifact state and cleans only attributed clone.
 - [ ] **Step 5: Confirm RED** — `node --test tests/delegation/artifact-promotion.test.mjs tests/delegation/artifact-cli.test.mjs tests/leases/atomic-lock.test.mjs`.
-- [ ] **Step 6: Implement inspect/promote/discard + CLI** — no auto-Candidate/Evidence/Acceptance transition.
-- [ ] **Step 7: Verify GREEN** — focused tests + `npm run test:leases`.
-- [ ] **Step 8: Commit** — `feat(delegation): add explicit artifact promotion`.
+- [ ] **Step 6: Implement inspect/promote/discard/Doctor recovery** — cleanup failures remain recoverable and surfaced; promotion/discard are the only mutable artifact actions.
+- [ ] **Step 7: Verify GREEN** — focused tests + `node --test tests/runtime/delegation-recovery-doctor.test.mjs`.
+- [ ] **Step 8: Commit** — `feat(delegation): promote sealed worker artifacts under control`.
 
 ---
 
@@ -253,7 +255,6 @@
 - Modify: `runtimes/antigravity/.agents/skills/orchestra/cross-provider-delegation.mjs`
 - Modify: `tests/delegation/codex-control-plane-delegation.test.mjs`
 - Modify: `tests/delegation/antigravity-control-plane-delegation.test.mjs`
-- Modify provider routing/docs tests if the runtime instruction surfaces assert delegation purposes.
 
 **Interfaces:**
 - Keep existing `buildCodexDelegationRequest()` and `buildAntigravityDelegationRequest()` as v1 read-only builders.
@@ -272,71 +273,44 @@
 
 ---
 
-### Task 8: Package the new neutral surfaces, preserve artifact state, and extend Doctor recovery
+### Task 8: Package v2/artifact runtime surfaces, extend Doctor, and prove no architectural regression
 
 **Files:**
 - Modify: `runtime/manifests/delegation.json`
-- Modify: `runtime/doctor.mjs`
-- Modify: `tests/runtime/delegation-recovery-doctor.test.mjs`
+- Modify generated runtime build outputs as produced by canonical build scripts; do not hand-own provider mirrors.
 - Modify: `tests/runtime/runtime-manifest.test.mjs`
 - Modify: `tests/installers/delegation-project-runtime.test.mjs`
 - Modify: `tests/installers/self-contained-runtime.test.mjs`
-- Modify installer/runtime-manager tests that assert preserved project paths or delegation entrypoints.
-- Regenerate: `dist/**` / runtime images through canonical build scripts only; do not hand-edit generated runtime payloads.
+- Modify: `tests/installers/codex-v2-doctor.test.mjs`
+- Modify: `tests/installers/antigravity-v2-doctor.test.mjs`
+- Modify: `tests/cross-runtime/cross-runtime-firewall.test.mjs`
+- Modify: `tests/cross-runtime/core-provider-firewall.test.mjs`
+- Modify: `tests/turn-economy/critical-review-consensus.test.mjs` only if routing instrumentation needs an additive assertion.
+- Modify docs: `docs/architecture.md`, provider READMEs/operational docs that describe delegation authority.
 
-**Packaging contract:**
-- `runtime/delegation/**` tree automatically carries mutable workspace, artifact store/lifecycle and `artifact-cli.mjs` into `.orchestra/runtime/delegation/runtime/delegation/**`.
-- Add installed entrypoint `.orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs`.
-- Preserve both existing `.orchestra/state/delegations` records and new `.orchestra/state/delegation/artifacts` state across install/update.
-- Neutral runtime still packages only bounded provider executor/catalog files; never `.codex/**`, `.agents/**`, provider hooks/session/control-plane trees.
-- Doctor adds artifact recovery facts: malformed artifact state => recovery required; `READY_FOR_REVIEW` is reported as pending review (not cleanup failure); failed discard/promote cleanup exposes exact recoverable path; no broad cleanup is performed.
+**Interfaces/packaging:**
+- `runtime/manifests/delegation.json` preserves `.orchestra/state/delegations` and `.orchestra/state/delegation/artifacts`; packages `artifact-cli.mjs`, artifact lifecycle/store, mutable workspace helpers, v2 generated validators and both provider executors/catalogs only under the neutral delegation runtime.
+- Installed stable entrypoints include existing delegation CLI plus `.orchestra/runtime/delegation/runtime/delegation/artifact-cli.mjs`.
+- Doctor distinguishes read-only delegation readiness from implementation-delegation readiness and reports retained/recoverable artifacts without making missing second-provider availability unhealthy for normal Orchestra use.
+- Provider manifests continue not to own `.orchestra/runtime/delegation/**`; provider runtime source never imports the other provider.
 
-- [ ] **Step 1: Write RED manifest/install tests** — artifact CLI is self-contained, new state path preserved, duplicate provider install/update remains idempotent, no provider control-plane contamination.
-- [ ] **Step 2: Write RED Doctor tests** — ready artifact/pending review, tampered/unreadable state, cleanup-failed retained clone; existing v1 delegation recovery output remains valid.
-- [ ] **Step 3: Confirm RED** — `node --test tests/runtime/runtime-manifest.test.mjs tests/runtime/delegation-recovery-doctor.test.mjs tests/installers/delegation-project-runtime.test.mjs tests/installers/self-contained-runtime.test.mjs`.
-- [ ] **Step 4: Implement manifest/Doctor integration**.
-- [ ] **Step 5: Rebuild/check generated runtimes** — `npm run build:runtimes && npm run check:runtimes && npm run check:runtime-core`.
-- [ ] **Step 6: Verify installers/firewall/contamination** — `npm run test:installers && npm run test:firewall && npm run check:contamination`.
-- [ ] **Step 7: Commit** — `feat(delegation): package mutable delegation lifecycle`.
-
----
-
-### Task 9: Close documentation, regression, portability, and canonical CI gates
-
-**Files:**
-- Modify: `docs/architecture.md`
-- Modify: delegation/runtime README or provider runtime guidance that currently documents cross-provider delegation as read-only.
-- Modify: `docs/superpowers/specs/2026-10-14-cross-provider-implementation-delegation-design.md` status to implemented only after evidence is green.
-- Add/modify tests only for gaps discovered by the final regression; do not weaken assertions to obtain green.
-
-**Interfaces/evidence:**
-- Documentation states two protocols: v1 read/review and v2 explicit implementation; delegation remains execution, not authority transfer.
-- Tsuzuki remains untouched until a later downstream synchronization gate.
-- No package version/tag/release action occurs in this task.
-
-- [ ] **Step 1: Run generated/focused preflight** — `npm run check:schemas && npm run check:runtimes && npm run check:runtime-core && npm run test:delegation && npm run test:leases && npm run test:firewall && npm run check:contamination`.
-- [ ] **Step 2: Run installer/Doctor/release-readiness surfaces** — `npm run test:installers && npm run test:runtime && npm run test:release`.
-- [ ] **Step 3: Run full regression** — `npm test`.
-- [ ] **Step 4: Exercise portable CI surfaces** — canonical repository CI must pass Ubuntu and Windows runtime/install/delegation jobs on the exact hotfix HEAD; no live provider credentials required.
-- [ ] **Step 5: Run an adversarial implementation-specific review** — verify no canonical Git write path through clone remotes/protocol/config, no v1 privilege expansion, no scope bypass/symlink egress, no artifact self-acceptance, and promotion stale/tamper fences.
-- [ ] **Step 6: Update architecture/status docs only with factual green evidence and exact HEAD/run identifiers**.
-- [ ] **Step 7: Commit** — `docs(delegation): document implementation delegation evidence`.
-- [ ] **Step 8: Open integration PR against `main` and require exact-head CI green before requesting merge authorization** — merging/releasing remains a separate operator decision.
+- [ ] **Step 1: Write RED manifest/install/Doctor tests** — v2 schemas/artifact CLI/helpers appear in neutral runtime; both provider installs converge idempotently; artifact state survives update; missing second provider is informational; orphan retained artifact is recoverable.
+- [ ] **Step 2: Write RED firewall/contamination checks** — no provider control-plane tree in neutral image; no cross-provider imports outside neutral composition; Core remains provider-neutral.
+- [ ] **Step 3: Confirm RED** — targeted installer/runtime/firewall/Doctor tests.
+- [ ] **Step 4: Implement manifest/build/Doctor/docs changes and regenerate runtime images through canonical scripts**.
+- [ ] **Step 5: Verify generated freshness** — `npm run build:schemas && npm run check:schemas && npm run build:runtimes && npm run check:runtimes && npm run sync:runtime-core && npm run check:runtime-core`.
+- [ ] **Step 6: Run focused architecture gates** — `npm run test:delegation && npm run test:firewall && npm run test:installers && npm run test:architecture-invariants && npm run check:contamination`.
+- [ ] **Step 7: Run full regression** — `npm test`.
+- [ ] **Step 8: Release readiness** — `npm run release:readiness`; do not publish or bump version.
+- [ ] **Step 9: Commit** — `feat(orchestra): complete bounded implementation delegation`.
 
 ---
 
-## Definition of Done
+## Final Review and Integration Gate
 
-The hotfix is implementation-complete only when all of these are factual on one exact branch HEAD:
-
-- v1 read-only delegation regression is green and still denies mutation;
-- Codex CONTROL can explicitly build/execute a v2 AGY implementation request and AGY CONTROL can symmetrically target Codex;
-- v2 worker mutation is confined to a hardened independent clone and machine-enforced path scope;
-- canonical product and Git state remain unchanged during delegated execution;
-- worker delta is sealed into a factual `READY_FOR_REVIEW` artifact independent of model self-report;
-- CONTROL can inspect, promote, or discard; wrong actor/generation, stale baseline, tamper, scope violation, and Git-boundary mutation fail closed;
-- promotion preserves pre-existing canonical staged/unstaged/untracked state and applies only the sealed worker delta;
-- no Candidate/Evidence/Acceptance authority is implicitly transferred;
-- neutral runtime packaging, Doctor, installers, firewall, contamination, Ubuntu/Windows portability, release-readiness and full `npm test` are green;
-- Tsuzuki has not been modified;
-- exact-head CI evidence is available for operator review before merge/release decisions.
+- Run a whole-branch review against base `927e92305803015f2946ec3314ae414ae4fc8b84` with the Review Focus cases above explicit.
+- Re-grade review findings by shipped impact; Critical/Important get one TDD fix pass, Minor findings are recorded for the operator.
+- Re-run the affected focused suite and full `npm test` after the fix pass.
+- Open/update a PR from `hotfix/cross-provider-implementation-delegation` to `main` with exact verification evidence.
+- Do **not** merge without a new explicit operator authorization.
+- Do **not** modify/sync Tsuzuki until this Orchestra hotfix has passed integration and the operator chooses a downstream sync/release path.
