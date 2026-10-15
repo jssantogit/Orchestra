@@ -106,3 +106,19 @@ test("implementation v2 still binds source provider and canonical source fingerp
     { allowed: false, reason: "WORKSPACE_PREP_FAILED" },
   );
 });
+
+test("standalone implementation v2 remains cross-provider only", () => {
+  for (const provider of ["codex", "antigravity"]) {
+    const request = validV2Request();
+    request.source.provider = provider;
+    request.target.provider = provider;
+
+    assert.deepEqual(
+      authorizeDelegationRequest(request, {
+        sourceProvider: provider,
+        sourceFingerprint: "sha256:fingerprint",
+      }),
+      { allowed: false, reason: "CAPABILITY_DENIED" },
+    );
+  }
+});
