@@ -231,6 +231,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
           command: "agy",
           args: [
             "--sandbox",
+            ...(isImplementationRequest(request) ? ["--mode=accept-edits"] : []),
             "--model",
             profile.model,
             "--print-timeout",
