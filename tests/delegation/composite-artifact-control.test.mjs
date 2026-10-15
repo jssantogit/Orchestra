@@ -8,12 +8,12 @@ import { tmpdir } from "node:os";
 import { claimWorkLease } from "../../core/leases/work-lease-store.mjs";
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
 import { sealDelegationArtifact } from "../../runtime/delegation/artifact-lifecycle.mjs";
+import { composeParallelArtifacts } from "../../runtime/delegation/composite-artifact-lifecycle.mjs";
 import {
-  composeParallelArtifacts,
   discardCompositeArtifact,
   inspectCompositeArtifact,
   promoteCompositeArtifact,
-} from "../../runtime/delegation/composite-artifact-lifecycle.mjs";
+} from "../../runtime/delegation/composite-artifact-control.mjs";
 import { readCompositeArtifact } from "../../runtime/delegation/composite-artifact-store.mjs";
 import { readDelegationGitBoundary } from "../../runtime/delegation/git-boundary.mjs";
 import {
