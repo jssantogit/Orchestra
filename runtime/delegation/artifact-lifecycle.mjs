@@ -23,6 +23,7 @@ import {
 } from "./artifact-store.mjs";
 
 const PROMOTION_LOCK_PATH = ".orchestra/state/delegation/promotion.lock";
+const WORK_LEASE_CLAIM_LOCK_PATH = ".orchestra/state/work-lease.claim.lock";
 const MAX_PATCH_BYTES = 64 * 1024 * 1024;
 
 function lifecycleError(code, detail = code, cause = undefined) {
@@ -418,9 +419,20 @@ function promotionLockPath(repoRoot) {
   return join(resolve(repoRoot), PROMOTION_LOCK_PATH);
 }
 
+function workLeaseClaimLockPath(repoRoot) {
+  return join(resolve(repoRoot), WORK_LEASE_CLAIM_LOCK_PATH);
+}
+
 function acquireArtifactLock(repoRoot, artifactId, actor) {
   return acquireAtomicLock(promotionLockPath(repoRoot), {
     ownerIdHash: `${actor?.actorIdHash ?? "unknown"}:${artifactId ?? "unknown"}`,
+    staleAfterMs: 30_000,
+  });
+}
+
+function acquireWorkLeaseFence(repoRoot, artifactId, actor) {
+  return acquireAtomicLock(workLeaseClaimLockPath(repoRoot), {
+    ownerIdHash: `${actor?.actorIdHash ?? "unknown"}:${artifactId ?? "unknown"}:artifact-control`,
     staleAfterMs: 30_000,
   });
 }
@@ -504,6 +516,11 @@ export async function promoteDelegationArtifact({
   if (!lock.acquired) {
     return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
   }
+  const leaseFence = acquireWorkLeaseFence(repoRoot, artifactId, actor);
+  if (!leaseFence.acquired) {
+    releaseAtomicLock(lock.handle);
+    return { promoted: false, reason: "PROMOTION_FAILED", changedPaths: [] };
+  }
 
   let patchApplied = false;
   let indexBefore = null;
@@ -585,6 +602,7 @@ export async function promoteDelegationArtifact({
     if (patchApplied && patchPath && sourceFingerprint && indexBefore !== null) {
       await rollbackAppliedPatch(repoRoot, patchPath, sourceFingerprint, indexBefore);
     }
+    releaseAtomicLock(leaseFence.handle);
     releaseAtomicLock(lock.handle);
   }
 }
@@ -597,6 +615,11 @@ export async function discardDelegationArtifact({
 } = {}) {
   const lock = acquireArtifactLock(repoRoot, artifactId, actor);
   if (!lock.acquired) return { discarded: false, reason: "PROMOTION_FAILED" };
+  const leaseFence = acquireWorkLeaseFence(repoRoot, artifactId, actor);
+  if (!leaseFence.acquired) {
+    releaseAtomicLock(lock.handle);
+    return { discarded: false, reason: "PROMOTION_FAILED" };
+  }
 
   try {
     const checked = await artifactIntegrity(repoRoot, artifactId);
@@ -624,6 +647,7 @@ export async function discardDelegationArtifact({
     const cleanup = await cleanupRetainedWorkspace(repoRoot, manifest.delegatedPath);
     return { discarded: true, reason: cleanup.cleaned ? null : cleanup.reason };
   } finally {
+    releaseAtomicLock(leaseFence.handle);
     releaseAtomicLock(lock.handle);
   }
 }
