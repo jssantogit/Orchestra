@@ -205,3 +205,15 @@ Read-only v1 runs use an external ephemeral Git worktree and still treat any tar
 Codex CONTROL may inspect the retained review workspace, run its own verification, then explicitly promote or discard the sealed artifact. Promotion is separately fenced by the original CONTROL provider/actor hash and Work Lease generation, verifies canonical workspace/Git freshness plus artifact integrity, and applies only the worker delta while preserving pre-existing staged/unstaged/untracked state. Provider failure, stale/tampered artifacts, or unavailable AGY return bounded failure; there is no silent Codex/manual fallback.
 
 Prerequisites are intentionally external to Orchestra: an already installed/authenticated `agy` CLI plus Git worktree support for review and hardened local-clone support (`git clone --no-hardlinks`) for implementation. Discovery uses only version/help surfaces and performs no login or inference. `npm run doctor` reports review and implementation readiness separately, so an unavailable cross-provider implementation lane does not make an otherwise healthy Codex project structurally unhealthy.
+
+---
+
+## 11. Parallel Implementation 2
+
+Codex CONTROL may explicitly choose `PARALLEL_2` only after it has already decomposed one implementation task into exactly two bounded shards with provably disjoint mutation scopes. Serial Direct Work remains the default; two healthy providers by themselves never trigger fan-out.
+
+The intended lane is Codex CONTROL with one Codex implementation worker and one Antigravity implementation worker. Both are execution-plane children: each receives its own Implementation Packet and `WORKSPACE_ONLY` scope, both start from the same source snapshot in independent hardened clones, and neither owns the canonical checkout or Work Lease. Same-provider implementation remains forbidden for ordinary standalone v2 delegation and is permitted only as a member of this validated parallel group.
+
+After execution, Orchestra seals each member delta from factual Git/filesystem state, proves factual `changedPaths` are disjoint, applies both artifacts in deterministic order inside a third isolated composition clone, and seals one Composite Mutation Artifact. Codex CONTROL then uses the neutral parallel lifecycle to inspect, promote, or discard the composite once. Member artifacts cannot be promoted individually.
+
+Any worker failure, provider unavailability, scope/factual overlap, tamper, composition conflict, stale canonical source/Git boundary, or promotion failure closes the group without partial canonical mutation. Orchestra never silently falls back to serial/manual implementation. `npm run doctor` exposes `parallelImplementation` readiness separately; the lane requires hardened clone support plus two implementation-capable providers. Runtime updates are rejected while a parallel group is still in flight.
