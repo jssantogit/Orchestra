@@ -79,14 +79,22 @@ test("delegation CLI preserves v2 request/result identity and returns CONTROL co
 
   let brokerInput = null;
   let brokerContext = null;
-  const result = await runDelegationCli([
-    "node",
-    "delegation-cli",
-    "--request", requestPath,
-    "--repo-root", scratch,
-    "--generation", "4",
-  ], {
-    createExecutors: () => [],
+  let stdout = "";
+  let stderr = "";
+  const result = await runDelegationCli({
+    argv: [
+      "--request", requestPath,
+      "--repo-root", scratch,
+      "--generation", "4",
+    ],
+    stdout: { write(value) { stdout += value; } },
+    stderr: { write(value) { stderr += value; } },
+    env: {},
+    createExecutors: () => [{
+      provider: "antigravity",
+      async discover() { return { available: true, provider: "antigravity" }; },
+      async execute() { throw new Error("fake broker owns this test execution"); },
+    }],
     createBroker: () => ({
       async executeDelegation(input, context) {
         brokerInput = input;
@@ -96,6 +104,9 @@ test("delegation CLI preserves v2 request/result identity and returns CONTROL co
     }),
   });
 
+  assert.equal(result, 0);
+  assert.equal(stderr, "");
+  assert.deepEqual(JSON.parse(stdout.trim()), completedResult());
   assert.equal(brokerInput.schema, "orchestra.delegation-request.v2");
   assert.equal(brokerInput.delegationId, "cli-v2-roundtrip");
   assert.equal(brokerContext.generation, 4);
@@ -105,9 +116,8 @@ test("delegation CLI preserves v2 request/result identity and returns CONTROL co
     actorKind: "ROOT",
     isRoot: true,
   });
-  assert.deepEqual(result, completedResult());
-  assert.equal(result.artifact.state, "READY_FOR_REVIEW");
-  assert.equal("accepted" in result, false);
-  assert.equal("candidate" in result, false);
-  assert.equal("evidence" in result, false);
+  assert.equal(completedResult().artifact.state, "READY_FOR_REVIEW");
+  assert.equal("accepted" in completedResult(), false);
+  assert.equal("candidate" in completedResult(), false);
+  assert.equal("evidence" in completedResult(), false);
 });
