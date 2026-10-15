@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { lstat, realpath, rm } from "node:fs/promises";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
 import { assertParallelImplementationGroup } from "../../core/domain/parallel-implementation.mjs";
 import { assessChangedPathIndependence } from "../../core/delegation/parallel-scope.mjs";
@@ -7,7 +16,11 @@ import {
   deriveMutationFacts,
   inspectDelegationArtifact,
 } from "./artifact-lifecycle.mjs";
-import { readDelegationArtifact } from "./artifact-store.mjs";
+import {
+  readDelegationArtifact,
+  recordDelegationArtifactCleanup,
+  transitionDelegationArtifactState,
+} from "./artifact-store.mjs";
 import {
   applyCompositionPatch,
   buildCompositionPatch,
@@ -16,7 +29,11 @@ import {
 } from "./composition-workspace.mjs";
 import { writeCompositeArtifact } from "./composite-artifact-store.mjs";
 import { inspectMutableDelegationWorkspace } from "./mutable-workspace.mjs";
-import { readParallelGroup } from "./parallel-group-store.mjs";
+import {
+  readParallelGroup,
+  recordParallelGroupCleanup,
+  transitionParallelGroupState,
+} from "./parallel-group-store.mjs";
 
 function failure(reason) {
   return { composed: false, reason, artifactId: null };
@@ -44,14 +61,87 @@ function sameFacts(left, right) {
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
+function inside(parent, child) {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+async function cleanupRetainedMemberWorkspace(repoRoot, delegatedPath) {
+  try {
+    if (typeof delegatedPath !== "string" || !delegatedPath) {
+      return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
+    }
+    const root = resolve(repoRoot);
+    const workspacePath = resolve(delegatedPath);
+    const scratchRoot = dirname(workspacePath);
+    if (inside(root, workspacePath)
+        || basename(workspacePath) !== "workspace"
+        || !basename(scratchRoot).startsWith("orchestra-implementation-")) {
+      return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
+    }
+    const stat = await lstat(workspacePath);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
+    }
+    const [resolvedWorkspace, resolvedScratch] = await Promise.all([
+      realpath(workspacePath),
+      realpath(scratchRoot),
+    ]);
+    if (inside(root, resolvedWorkspace)
+        || inside(root, resolvedScratch)
+        || dirname(resolvedWorkspace) !== resolvedScratch) {
+      return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
+    }
+    await rm(resolvedScratch, { recursive: true, force: true });
+    return { cleaned: true, reason: null };
+  } catch {
+    return { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" };
+  }
+}
+
+async function consumeBoundMember({ repoRoot, artifactId, manifest }) {
+  const provisionalCleanup = {
+    cleaned: false,
+    reason: "WORKSPACE_CLEANUP_FAILED",
+    recoverablePath: manifest.delegatedPath,
+  };
+  const transition = transitionDelegationArtifactState(repoRoot, artifactId, {
+    expectedState: "READY_FOR_REVIEW",
+    nextState: "CONSUMED",
+    cleanup: provisionalCleanup,
+  });
+  if (!transition.transitioned) {
+    return { consumed: false, reason: transition.reason, cleanup: null };
+  }
+
+  const cleanup = await cleanupRetainedMemberWorkspace(repoRoot, manifest.delegatedPath);
+  const cleanupState = cleanup.cleaned
+    ? { cleaned: true, reason: null, recoverablePath: null }
+    : provisionalCleanup;
+  const recorded = recordDelegationArtifactCleanup(repoRoot, artifactId, cleanupState);
+  if (!recorded.updated) {
+    return {
+      consumed: true,
+      reason: "WORKSPACE_CLEANUP_FAILED",
+      cleanup: { cleaned: false, reason: "WORKSPACE_CLEANUP_FAILED" },
+    };
+  }
+  return { consumed: true, reason: cleanup.reason, cleanup };
+}
+
 function defaultServices() {
   return {
-    groups: { read: readParallelGroup },
+    groups: {
+      read: readParallelGroup,
+      transition: transitionParallelGroupState,
+      cleanup: recordParallelGroupCleanup,
+    },
     artifacts: {
       read: readDelegationArtifact,
       inspect: inspectDelegationArtifact,
+      consume: consumeBoundMember,
     },
-    composition: {},
+    composition: { compose: composeParallelMemberArtifacts },
   };
 }
 
@@ -78,7 +168,8 @@ function manifestMatchesGroup(manifest, group, artifactId, expectedMemberIds) {
       || manifest.canonicalGitFingerprint !== group.canonicalGitFingerprint
       || manifest.state !== "READY_FOR_REVIEW"
       || !Array.isArray(manifest.changedPaths)) return false;
-  return true;
+  const expectedMember = group.members.find((member) => member.memberId === manifest.parallelMemberId);
+  return Boolean(expectedMember && expectedMember.targetProvider === manifest.target?.provider);
 }
 
 async function readVerifiedMembers(repoRoot, group, memberArtifactIds, services = null) {
@@ -107,7 +198,11 @@ async function readVerifiedMembers(repoRoot, group, memberArtifactIds, services 
     }
     members.push({ artifactId, stored, manifest });
   }
-  if (new Set(members.map((member) => member.manifest.parallelMemberId)).size !== 2) {
+  if (new Set(members.map((member) => member.manifest.parallelMemberId)).size !== 2
+      || !sameSet(
+        members.map((member) => member.manifest.parallelMemberId),
+        group.members.map((member) => member.memberId),
+      )) {
     return { ok: false, reason: "ARTIFACT_TAMPERED", members: [] };
   }
   return { ok: true, reason: null, members };
@@ -245,6 +340,18 @@ export async function composeParallelMemberArtifacts({
   }
 }
 
+function failGroup(services, repoRoot, group, memberArtifactIds, reason) {
+  try {
+    services.groups.transition(repoRoot, group.groupId, {
+      expectedState: "COMPOSING",
+      nextState: "FAILED",
+      memberArtifactIds: [...memberArtifactIds],
+      failureReason: reason,
+    });
+  } catch {}
+  return failure(reason);
+}
+
 export async function composeParallelArtifacts({
   repoRoot,
   group,
@@ -282,24 +389,80 @@ export async function composeParallelArtifacts({
   const changedPathDecision = changedPathDecisionFor(verified.members);
   if (!changedPathDecision.independent) return failure("SCOPE_VIOLATION");
 
-  if (typeof services.composition.prepare === "function") {
-    try {
-      await services.composition.prepare({
-        repoRoot,
-        group,
-        memberArtifactIds,
-        manifests: verified.members.map((member) => member.manifest),
-      });
-    } catch {
-      return failure("COMPOSITION_FAILED");
-    }
-    return failure("COMPOSITION_FAILED");
+  let composing;
+  try {
+    composing = services.groups.transition(repoRoot, group.groupId, {
+      expectedState: "MEMBERS_READY",
+      nextState: "COMPOSING",
+      memberArtifactIds: [...memberArtifactIds],
+    });
+  } catch {
+    return failure("PARALLEL_GROUP_STATE_INVALID");
+  }
+  if (!composing?.transitioned) return failure("PARALLEL_GROUP_STATE_INVALID");
+
+  let descriptor;
+  try {
+    descriptor = await services.composition.compose({ repoRoot, group, memberArtifactIds });
+  } catch (error) {
+    const reason = ["ARTIFACT_TAMPERED", "SCOPE_VIOLATION"].includes(error?.code)
+      ? error.code
+      : "COMPOSITION_FAILED";
+    return failGroup(services, repoRoot, group, memberArtifactIds, reason);
+  }
+  if (!descriptor
+      || descriptor.state !== "READY_FOR_REVIEW"
+      || typeof descriptor.artifactId !== "string"
+      || !descriptor.artifactId) {
+    return failGroup(services, repoRoot, group, memberArtifactIds, "COMPOSITION_FAILED");
   }
 
-  try {
-    const descriptor = await composeParallelMemberArtifacts({ repoRoot, group, memberArtifactIds });
-    return { composed: true, reason: null, ...descriptor };
-  } catch (error) {
-    return failure(error?.code ?? "COMPOSITION_FAILED");
+  const cleanupFailures = [];
+  const orderedMembers = [...verified.members].sort((a, b) => (
+    a.manifest.parallelMemberId.localeCompare(b.manifest.parallelMemberId)
+  ));
+  for (const member of orderedMembers) {
+    let consumed;
+    try {
+      consumed = await services.artifacts.consume({
+        repoRoot,
+        artifactId: member.artifactId,
+        manifest: member.manifest,
+      });
+    } catch {
+      consumed = { consumed: false, reason: "ARTIFACT_STATE_MISMATCH", cleanup: null };
+    }
+    if (!consumed?.consumed) {
+      return failGroup(services, repoRoot, group, memberArtifactIds, "COMPOSITION_FAILED");
+    }
+    if (consumed.cleanup?.cleaned === false) {
+      cleanupFailures.push({
+        memberId: member.manifest.parallelMemberId,
+        recoverablePath: member.manifest.delegatedPath,
+      });
+    }
   }
+
+  let ready;
+  try {
+    ready = services.groups.transition(repoRoot, group.groupId, {
+      expectedState: "COMPOSING",
+      nextState: "READY_FOR_REVIEW",
+      memberArtifactIds: [...memberArtifactIds],
+      compositeArtifactId: descriptor.artifactId,
+    });
+  } catch {
+    return failure("COMPOSITION_FAILED");
+  }
+  if (!ready?.transitioned) return failure("COMPOSITION_FAILED");
+
+  if (cleanupFailures.length > 0) {
+    try { services.groups.cleanup(repoRoot, group.groupId, cleanupFailures); } catch {}
+  }
+
+  return {
+    composed: true,
+    reason: null,
+    ...descriptor,
+  };
 }
