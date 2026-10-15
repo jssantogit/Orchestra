@@ -1,17 +1,68 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { lstat, readFile, readdir, readlink } from "node:fs/promises";
+import { devNull } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const GIT_NO_HOOKS_PREFIX = Object.freeze(["-c", "core.hooksPath="]);
+const SAFE_GIT_ENV_KEYS = new Set([
+  "GIT_CONFIG_NOSYSTEM",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_TERMINAL_PROMPT",
+  "GIT_PROTOCOL_FROM_USER",
+  "GIT_ALLOW_PROTOCOL",
+  "GIT_CONFIG_COUNT",
+]);
+const SAFE_INDEXED_GIT_ENV = /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/;
 
-export async function runDelegationGit(cwd, args, {
-  env = process.env,
-  timeoutMs = 15_000,
-  maxBuffer = 16 * 1024 * 1024,
+function safeGitEnvironment(source = process.env, { allowGitOverrides = false } = {}) {
+  const environment = {};
+  for (const [key, value] of Object.entries(source ?? {})) {
+    if (typeof value !== "string") continue;
+    if (!key.startsWith("GIT_")) {
+      environment[key] = value;
+      continue;
+    }
+    if (allowGitOverrides && (SAFE_GIT_ENV_KEYS.has(key) || SAFE_INDEXED_GIT_ENV.test(key))) {
+      environment[key] = value;
+    }
+  }
+
+  environment.GIT_CONFIG_NOSYSTEM = "1";
+  if (!allowGitOverrides || typeof environment.GIT_CONFIG_GLOBAL !== "string" || !environment.GIT_CONFIG_GLOBAL) {
+    environment.GIT_CONFIG_GLOBAL = devNull;
+  }
+  environment.GIT_TERMINAL_PROMPT = "0";
+  return environment;
+}
+
+export function buildDelegationGitEnvironment({
+  source = process.env,
+  gitOverrides = null,
 } = {}) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new TypeError("DELEGATION_GIT_ENV_SOURCE_INVALID");
+  }
+  if (gitOverrides !== null
+      && (!gitOverrides || typeof gitOverrides !== "object" || Array.isArray(gitOverrides))) {
+    throw new TypeError("DELEGATION_GIT_ENV_OVERRIDES_INVALID");
+  }
+  const merged = gitOverrides === null ? source : { ...source, ...gitOverrides };
+  return safeGitEnvironment(merged, { allowGitOverrides: gitOverrides !== null });
+}
+
+export async function runDelegationGit(cwd, args, options = {}) {
+  const {
+    timeoutMs = 15_000,
+    maxBuffer = 16 * 1024 * 1024,
+  } = options;
+  const hasExplicitEnv = Object.hasOwn(options, "env");
+  const env = buildDelegationGitEnvironment({
+    source: hasExplicitEnv ? options.env : process.env,
+    gitOverrides: hasExplicitEnv ? options.env : null,
+  });
   return execFileAsync("git", [...GIT_NO_HOOKS_PREFIX, ...args], {
     cwd,
     env,
