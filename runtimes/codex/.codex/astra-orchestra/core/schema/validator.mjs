@@ -6,6 +6,7 @@ import validateDelegationResultV1 from "./generated/delegation-result.v1.mjs";
 import validateDelegationResultV2 from "./generated/delegation-result.v2.mjs";
 import validateEvidence from "./generated/evidence.v1.mjs";
 import validateImplementationPacket from "./generated/implementation-packet.v1.mjs";
+import validateParallelImplementationGroup from "./generated/parallel-implementation-group.v1.mjs";
 import validateRuntimeEvent from "./generated/runtime-event.v1.mjs";
 import validateScopeContract from "./generated/scope-contract.v2.mjs";
 import validateWorkLease from "./generated/work-lease.v1.mjs";
@@ -19,6 +20,7 @@ const validators = new Map([
   ["delegation-result.v2.schema.json", validateDelegationResultV2],
   ["evidence.v1.schema.json", validateEvidence],
   ["implementation-packet.v1.schema.json", validateImplementationPacket],
+  ["parallel-implementation-group.v1.schema.json", validateParallelImplementationGroup],
   ["runtime-event.v1.schema.json", validateRuntimeEvent],
   ["scope-contract.v2.schema.json", validateScopeContract],
   ["work-lease.v1.schema.json", validateWorkLease],
