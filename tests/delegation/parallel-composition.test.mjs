@@ -52,6 +52,38 @@ function group() {
   };
 }
 
+function manifest(artifactId, changedPath) {
+  return {
+    artifactId,
+    parallelGroupId: "group-compose-1",
+    parallelMemberId: artifactId.endsWith("a") ? "a" : "b",
+    taskId: "task-compose",
+    generation: 7,
+    source: { provider: "codex", actorIdHash: "sha256:root" },
+    sourceRevision: "abcdef1234567890",
+    sourceFingerprint: "sha256:source",
+    canonicalGitFingerprint: "sha256:git",
+    delegatedPath: `/tmp/${artifactId}/workspace`,
+    changedPaths: [changedPath],
+    state: "READY_FOR_REVIEW",
+  };
+}
+
+function artifactServices(paths = ["app/home/a.txt", "app/library/b.txt"]) {
+  return {
+    read: (_repoRoot, artifactId) => ({
+      exists: true,
+      valid: true,
+      manifest: manifest(artifactId, artifactId.endsWith("a") ? paths[0] : paths[1]),
+      patch: Buffer.from("patch"),
+    }),
+    inspect: async ({ artifactId }) => ({
+      manifest: manifest(artifactId, artifactId.endsWith("a") ? paths[0] : paths[1]),
+      integrity: { valid: true, reason: null },
+    }),
+  };
+}
+
 test("parallel composition is an explicit lifecycle operation", () => {
   assert.equal(typeof composeParallelArtifacts, "function");
 });
@@ -75,42 +107,7 @@ test("parallel composition rejects factual changed-path overlap before applying 
         },
       }),
     },
-    artifacts: {
-      read: (_repoRoot, artifactId) => ({
-        exists: true,
-        valid: true,
-        manifest: {
-          artifactId,
-          parallelGroupId: "group-compose-1",
-          parallelMemberId: artifactId.endsWith("a") ? "a" : "b",
-          taskId: "task-compose",
-          generation: 7,
-          source: { provider: "codex", actorIdHash: "sha256:root" },
-          sourceRevision: "abcdef1234567890",
-          sourceFingerprint: "sha256:source",
-          canonicalGitFingerprint: "sha256:git",
-          changedPaths: ["shared.txt"],
-          state: "READY_FOR_REVIEW",
-        },
-        patch: Buffer.from("patch"),
-      }),
-      inspect: async ({ artifactId }) => ({
-        manifest: {
-          artifactId,
-          parallelGroupId: "group-compose-1",
-          parallelMemberId: artifactId.endsWith("a") ? "a" : "b",
-          taskId: "task-compose",
-          generation: 7,
-          source: { provider: "codex", actorIdHash: "sha256:root" },
-          sourceRevision: "abcdef1234567890",
-          sourceFingerprint: "sha256:source",
-          canonicalGitFingerprint: "sha256:git",
-          changedPaths: ["shared.txt"],
-          state: "READY_FOR_REVIEW",
-        },
-        integrity: { valid: true, reason: null },
-      }),
-    },
+    artifacts: artifactServices(["shared.txt", "shared.txt"]),
     composition: {
       prepare: async () => { prepared = true; return {}; },
     },
@@ -122,4 +119,80 @@ test("parallel composition rejects factual changed-path overlap before applying 
     artifactId: null,
   });
   assert.equal(prepared, false);
+});
+
+test("successful parallel composition atomically advances group, consumes members, and cleans member workspaces", async () => {
+  const groupTransitions = [];
+  const artifactTransitions = [];
+  const cleaned = [];
+  const baseArtifacts = artifactServices();
+
+  const result = await composeParallelArtifacts({
+    repoRoot: "/repo",
+    group: group(),
+    memberArtifactIds: ["artifact-a", "artifact-b"],
+  }, {
+    groups: {
+      read: () => ({
+        exists: true,
+        valid: true,
+        record: {
+          group: group(),
+          state: "MEMBERS_READY",
+          memberArtifactIds: ["artifact-a", "artifact-b"],
+          compositeArtifactId: null,
+        },
+      }),
+      transition: (_repoRoot, groupId, transition) => {
+        groupTransitions.push({ groupId, ...transition });
+        return { transitioned: true, reason: null, record: { state: transition.nextState } };
+      },
+      recordCleanup: () => ({ updated: true, reason: null }),
+    },
+    artifacts: {
+      ...baseArtifacts,
+      transition: (_repoRoot, artifactId, transition) => {
+        artifactTransitions.push({ artifactId, ...transition });
+        return { transitioned: true, reason: null, manifest: { state: transition.nextState } };
+      },
+      recordCleanup: () => ({ updated: true, reason: null }),
+      cleanup: async (_repoRoot, delegatedPath) => {
+        cleaned.push(delegatedPath);
+        return { cleaned: true, reason: null };
+      },
+    },
+    composition: {
+      compose: async () => ({
+        artifactId: "composite-ready",
+        patchSha256: "sha256:patch",
+        mutationDigest: "sha256:mutation",
+        changedPaths: ["app/home/a.txt", "app/library/b.txt"],
+        state: "READY_FOR_REVIEW",
+        reviewPath: "/tmp/composite/workspace",
+      }),
+    },
+  });
+
+  assert.equal(result.composed, true);
+  assert.equal(result.artifactId, "composite-ready");
+  assert.deepEqual(groupTransitions, [
+    {
+      groupId: "group-compose-1",
+      expectedState: "MEMBERS_READY",
+      nextState: "COMPOSING",
+      memberArtifactIds: ["artifact-a", "artifact-b"],
+    },
+    {
+      groupId: "group-compose-1",
+      expectedState: "COMPOSING",
+      nextState: "READY_FOR_REVIEW",
+      memberArtifactIds: ["artifact-a", "artifact-b"],
+      compositeArtifactId: "composite-ready",
+    },
+  ]);
+  assert.deepEqual(artifactTransitions, [
+    { artifactId: "artifact-a", expectedState: "READY_FOR_REVIEW", nextState: "CONSUMED" },
+    { artifactId: "artifact-b", expectedState: "READY_FOR_REVIEW", nextState: "CONSUMED" },
+  ]);
+  assert.deepEqual(cleaned, ["/tmp/artifact-a/workspace", "/tmp/artifact-b/workspace"]);
 });
