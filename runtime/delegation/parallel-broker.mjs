@@ -447,6 +447,15 @@ export async function executeParallelImplementationGroup({
   });
   if (!ready?.transitioned) {
     const cleanupFailures = await cleanupContexts(repoRoot, prepared, services, sealedByMember);
+    try {
+      services.groups.transition(repoRoot, group.groupId, {
+        expectedState: "RUNNING",
+        nextState: "FAILED",
+        memberArtifactIds,
+        failureReason: "PARALLEL_GROUP_STATE_INVALID",
+      });
+    } catch {}
+    if (cleanupFailures.length > 0) services.groups.cleanup(repoRoot, group.groupId, cleanupFailures);
     return {
       ...resultBase,
       status: "FAILED",
