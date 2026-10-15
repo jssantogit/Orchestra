@@ -1,20 +1,70 @@
 {
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "delegation",
-  "version": "1.0.1",
-  "sourceRoots": ["core", "runtime", "schemas", "providers/antigravity", "providers/codex"],
+  "version": "1.1.0",
+  "sourceRoots": [
+    "core",
+    "runtime",
+    "schemas",
+    "providers/antigravity",
+    "providers/codex"
+  ],
   "managedAssets": [
-    { "type": "tree", "source": "core", "output": ".orchestra/runtime/delegation/core" },
-    { "type": "tree", "source": "schemas", "output": ".orchestra/runtime/delegation/core/schemas" },
-    { "type": "tree", "source": "runtime/delegation", "output": ".orchestra/runtime/delegation/runtime/delegation" },
-    { "type": "file", "source": "runtime/project-runtime-manager.mjs", "output": ".orchestra/runtime/delegation/runtime/project-runtime-manager.mjs" },
-    { "type": "file", "source": "runtime/project-state-ignore.mjs", "output": ".orchestra/runtime/delegation/runtime/project-state-ignore.mjs" },
-    { "type": "file", "source": "runtime/manifest-loader.mjs", "output": ".orchestra/runtime/delegation/runtime/manifest-loader.mjs" },
-    { "type": "file", "source": "runtime/manifests/delegation.json", "output": ".orchestra/runtime/delegation/runtime/manifests/delegation.json" },
-    { "type": "file", "source": "providers/antigravity/delegation-executor.mjs", "output": ".orchestra/runtime/delegation/providers/antigravity/delegation-executor.mjs" },
-    { "type": "file", "source": "providers/antigravity/model-catalog.mjs", "output": ".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs" },
-    { "type": "file", "source": "providers/codex/delegation-executor.mjs", "output": ".orchestra/runtime/delegation/providers/codex/delegation-executor.mjs" },
-    { "type": "file", "source": "providers/codex/model-catalog.mjs", "output": ".orchestra/runtime/delegation/providers/codex/model-catalog.mjs" }
+    {
+      "type": "tree",
+      "source": "core",
+      "output": ".orchestra/runtime/delegation/core"
+    },
+    {
+      "type": "tree",
+      "source": "schemas",
+      "output": ".orchestra/runtime/delegation/core/schemas"
+    },
+    {
+      "type": "tree",
+      "source": "runtime/delegation",
+      "output": ".orchestra/runtime/delegation/runtime/delegation"
+    },
+    {
+      "type": "file",
+      "source": "runtime/project-runtime-manager.mjs",
+      "output": ".orchestra/runtime/delegation/runtime/project-runtime-manager.mjs"
+    },
+    {
+      "type": "file",
+      "source": "runtime/project-state-ignore.mjs",
+      "output": ".orchestra/runtime/delegation/runtime/project-state-ignore.mjs"
+    },
+    {
+      "type": "file",
+      "source": "runtime/manifest-loader.mjs",
+      "output": ".orchestra/runtime/delegation/runtime/manifest-loader.mjs"
+    },
+    {
+      "type": "file",
+      "source": "runtime/manifests/delegation.json",
+      "output": ".orchestra/runtime/delegation/runtime/manifests/delegation.json"
+    },
+    {
+      "type": "file",
+      "source": "providers/antigravity/delegation-executor.mjs",
+      "output": ".orchestra/runtime/delegation/providers/antigravity/delegation-executor.mjs"
+    },
+    {
+      "type": "file",
+      "source": "providers/antigravity/model-catalog.mjs",
+      "output": ".orchestra/runtime/delegation/providers/antigravity/model-catalog.mjs"
+    },
+    {
+      "type": "file",
+      "source": "providers/codex/delegation-executor.mjs",
+      "output": ".orchestra/runtime/delegation/providers/codex/delegation-executor.mjs"
+    },
+    {
+      "type": "file",
+      "source": "providers/codex/model-catalog.mjs",
+      "output": ".orchestra/runtime/delegation/providers/codex/model-catalog.mjs"
+    }
   ],
   "preservedProjectPaths": [
     ".orchestra/state/delegations"
@@ -36,5 +86,9 @@
     ".orchestra/runtime/delegation/runtime/delegation/cli.mjs",
     ".orchestra/runtime/delegation/runtime/delegation/project-runtime-manager.mjs"
   ],
-  "healthChecks": ["schema-freshness", "provider-firewall", "contamination"]
+  "healthChecks": [
+    "schema-freshness",
+    "provider-firewall",
+    "contamination"
+  ]
 }
