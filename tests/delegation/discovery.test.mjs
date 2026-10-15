@@ -93,7 +93,7 @@ test("capability inspection checks Git isolation plus provider version/help with
         return processResult({ exitCode: 129, stderr: "usage: git clone [<options>] <repo> [<dir>]\n    --no-hardlinks\n" });
       }
       if (input.command === "agy" && input.args[0] === "--version") return processResult({ stdout: "agy 1.2.3\n" });
-      if (input.command === "agy") return processResult({ stdout: "--print --print-timeout --sandbox --model\n" });
+      if (input.command === "agy") return processResult({ stdout: "--print --print-timeout --sandbox --model --mode\n" });
       if (input.command === "codex" && input.args[0] === "--version") return processResult({ stdout: "codex-cli 0.130.0\n" });
       if (input.command === "codex") return processResult({ stdout: "--model --sandbox --ask-for-approval --config --output-schema --output-last-message\n" });
       throw new Error("unexpected command");
@@ -106,6 +106,7 @@ test("capability inspection checks Git isolation plus provider version/help with
   assert.equal(result.modes.review.status, "READY");
   assert.equal(result.modes.implementation.status, "READY");
   assert.equal(result.providers.every((provider) => provider.available), true);
+  assert.equal(result.providers.every((provider) => provider.capabilities.implementation), true);
   assert.deepEqual(calls, [
     { command: "git", args: ["worktree", "list", "--porcelain"] },
     { command: "git", args: ["clone", "-h"] },
