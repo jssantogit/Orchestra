@@ -8,8 +8,8 @@ import {
 
 function providers(overrides = {}) {
   const base = [
-    { provider: "provider-a", available: true, independent: false },
-    { provider: "provider-b", available: true, independent: true },
+    { provider: "provider-a", available: true, independent: false, capabilities: { implementation: true } },
+    { provider: "provider-b", available: true, independent: true, capabilities: { implementation: true } },
   ];
   return base.map((entry) => ({ ...entry, ...(overrides[entry.provider] ?? {}) }));
 }
