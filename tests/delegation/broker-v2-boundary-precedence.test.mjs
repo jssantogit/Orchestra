@@ -166,6 +166,6 @@ test("broker preflight fingerprint ignores parent global Git clean filters", asy
   }
 
   assert.equal(existsSync(markerPath), false);
-  assert.equal(result.status, "DENIED");
-  assert.equal(result.reason, "CAPABILITY_DENIED");
+  assert.equal(result.status, "FAILED");
+  assert.equal(result.reason, "WORKSPACE_PREP_FAILED");
 });
