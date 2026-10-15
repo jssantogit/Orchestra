@@ -240,10 +240,28 @@ test("delegation runtime update preserves durable delegation, parallel group, an
   writeFileSync(artifactManifestPath, "{\"state\":\"READY_FOR_REVIEW\"}\n", "utf8");
   writeFileSync(artifactPatchPath, "sealed patch fixture\n", "utf8");
 
-  const groupDir = join(targetDir, ".orchestra", "state", "delegation", "parallel-groups", "sealed-group");
-  await mkdir(groupDir, { recursive: true });
-  const groupPath = join(groupDir, "group.json");
-  writeFileSync(groupPath, "{\"state\":\"READY_FOR_REVIEW\"}\n", "utf8");
+  const group = { ...parallelGroup(), groupId: "sealed-group" };
+  createParallelGroup(targetDir, group);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "CREATED",
+    nextState: "RUNNING",
+  }).transitioned, true);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "RUNNING",
+    nextState: "MEMBERS_READY",
+    memberArtifactIds: ["sealed-member-local", "sealed-member-external"],
+  }).transitioned, true);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "MEMBERS_READY",
+    nextState: "COMPOSING",
+  }).transitioned, true);
+  assert.equal(transitionParallelGroupState(targetDir, group.groupId, {
+    expectedState: "COMPOSING",
+    nextState: "READY_FOR_REVIEW",
+    compositeArtifactId: "sealed-composite",
+  }).transitioned, true);
+  const groupPath = join(targetDir, ".orchestra", "state", "delegation", "parallel-groups", "sealed-group", "group.json");
+  const groupBefore = readFileSync(groupPath, "utf8");
 
   const compositeDir = join(targetDir, ".orchestra", "state", "delegation", "composite-artifacts", "sealed-composite");
   await mkdir(compositeDir, { recursive: true });
@@ -261,7 +279,7 @@ test("delegation runtime update preserves durable delegation, parallel group, an
   assert.equal(readFileSync(recordPath, "utf8"), before);
   assert.equal(readFileSync(artifactManifestPath, "utf8"), "{\"state\":\"READY_FOR_REVIEW\"}\n");
   assert.equal(readFileSync(artifactPatchPath, "utf8"), "sealed patch fixture\n");
-  assert.equal(readFileSync(groupPath, "utf8"), "{\"state\":\"READY_FOR_REVIEW\"}\n");
+  assert.equal(readFileSync(groupPath, "utf8"), groupBefore);
   assert.equal(readFileSync(compositeManifestPath, "utf8"), "{\"state\":\"READY_FOR_REVIEW\"}\n");
   assert.equal(readFileSync(compositePatchPath, "utf8"), "composite patch fixture\n");
   assert.equal(existsSync(join(targetDir, ".codex")), false);
