@@ -32,6 +32,14 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
+      - name: Upload generated v2 validators
+        uses: actions/upload-artifact@v4
+        with:
+          name: delegation-v2-validators
+          path: |
+            core/schema/generated/delegation-request.v2.mjs
+            core/schema/generated/delegation-result.v2.mjs
+
       - name: Run full regression
         run: npm test
 

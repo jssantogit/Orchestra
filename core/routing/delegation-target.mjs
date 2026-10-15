@@ -44,9 +44,21 @@ export function selectDelegationTarget({
   logicalRole,
   purpose,
   independenceRequired = false,
+  explicitCrossProvider = false,
   providerCapabilities = [],
   budget = { used: 0, limit: 1 },
 } = {}) {
+  if (logicalRole === "IMPLEMENTER"
+      && purpose === "IMPLEMENTATION"
+      && explicitCrossProvider === true) {
+    return crossProviderRoute({
+      sourceProvider,
+      providerCapabilities,
+      budget,
+      reason: "IMPLEMENTATION",
+    });
+  }
+
   if (purpose === "SPECIALIST_EXECUTION") {
     return {
       mode: "NONE",

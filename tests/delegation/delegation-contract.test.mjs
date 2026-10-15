@@ -87,12 +87,13 @@ function validResult() {
   };
 }
 
-test("delegation vocabularies expose the bounded v1 contract", () => {
+test("delegation vocabularies expose the additive contract while v1 stays schema-bounded", () => {
   assert.deepEqual(Object.values(DELEGATION_PURPOSES), [
     "INDEPENDENT_REVIEW",
     "SECOND_OPINION",
     "SPECIALIST_EXECUTION",
     "MANUAL",
+    "IMPLEMENTATION",
   ]);
   assert.deepEqual(Object.values(DELEGATION_STATUSES), ["COMPLETED", "FAILED", "TIMED_OUT", "DENIED"]);
   assert.equal(DELEGATION_FAILURE_REASONS.PROVIDER_UNAVAILABLE, "PROVIDER_UNAVAILABLE");
@@ -110,10 +111,12 @@ test("delegation request fails closed on authority expansion and recursive deleg
   const cases = [
     (request) => request.authority.capabilities.push("WORKSPACE_EDIT"),
     (request) => { request.authority.mutation = "ALLOWED"; },
+    (request) => { request.authority.mutation = "WORKSPACE_ONLY"; },
     (request) => { request.authority.network = "ALLOWED"; },
     (request) => { request.authority.mayDelegate = true; },
     (request) => { request.limits.delegationDepth = 2; },
     (request) => { request.workspace.isolation = "CANONICAL_WORKTREE"; },
+    (request) => { request.workspace.isolation = "EPHEMERAL_CLONE"; },
   ];
 
   for (const mutate of cases) {
