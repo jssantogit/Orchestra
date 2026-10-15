@@ -206,6 +206,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
             printTimeout: true,
             sandbox: true,
             model: true,
+            implementation: help.includes("--mode"),
           },
         };
       } catch {
