@@ -169,3 +169,22 @@ test("promotion fails closed while another root owns the Work Lease mutation loc
   assert.equal(readDelegationArtifact(fixture.repoRoot, fixture.descriptor.artifactId).manifest.state, "READY_FOR_REVIEW");
   assert.equal(git(fixture.repoRoot, "status", "--short", "--", "worker.txt"), "");
 });
+
+test("discard fails closed while another root owns the Work Lease mutation lock", async (t) => {
+  const fixture = await sealedFixture(t, "artifact-work-lease-lock-discard");
+  writeLease(fixture.repoRoot, { generation: 7 });
+  const leaseLockPath = join(fixture.repoRoot, ".orchestra", "state", "work-lease.lock");
+  const held = acquireAtomicLock(leaseLockPath, { ownerIdHash: "sha256:new-root" });
+  assert.equal(held.acquired, true);
+  t.after(() => releaseAtomicLock(held.handle));
+
+  const result = await discardDelegationArtifact({
+    repoRoot: fixture.repoRoot,
+    artifactId: fixture.descriptor.artifactId,
+    generation: 7,
+    actor: actor(),
+  });
+
+  assert.deepEqual(result, { discarded: false, reason: "PROMOTION_FAILED" });
+  assert.equal(readDelegationArtifact(fixture.repoRoot, fixture.descriptor.artifactId).manifest.state, "READY_FOR_REVIEW");
+});
