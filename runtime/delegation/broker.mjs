@@ -744,7 +744,7 @@ export function createDelegationBroker({
       if (!discovery?.available || discovery.provider !== request.target.provider) {
         return failureResult(request, "PROVIDER_UNAVAILABLE");
       }
-      if (isImplementationRequest(request) && discovery.capabilities?.implementation === false) {
+      if (isImplementationRequest(request) && discovery.capabilities?.implementation !== true) {
         return failureResult(request, "PROVIDER_UNAVAILABLE");
       }
 
