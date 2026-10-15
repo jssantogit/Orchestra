@@ -161,12 +161,13 @@
 
 **Interfaces:**
 - Group state root: `.orchestra/state/delegation/parallel-groups/<groupId>/group.json`.
-- States: `CREATED | RUNNING | MEMBERS_READY | COMPOSING | READY_FOR_REVIEW | FAILED | PROMOTED | DISCARDED` with allowed forward transitions only.
+- States: `CREATED | RUNNING | MEMBERS_READY | COMPOSING | READY_FOR_REVIEW | FAILED | PROMOTED | DISCARDED`.
+- Exact transitions: `CREATED -> RUNNING | FAILED`; `RUNNING -> MEMBERS_READY | FAILED`; `MEMBERS_READY -> COMPOSING | FAILED`; `COMPOSING -> READY_FOR_REVIEW | FAILED`; `READY_FOR_REVIEW -> PROMOTED | DISCARDED`. `FAILED`, `PROMOTED`, and `DISCARDED` are terminal.
 - `createParallelGroup(repoRoot, group)`, `readParallelGroup(repoRoot, groupId)`, `transitionParallelGroupState(repoRoot, groupId, transition)` use safe IDs and atomic replace semantics.
 - Ordinary mutation artifact manifest gains optional `parallelGroupId` and `parallelMemberId` together; bound member state gains `CONSUMED` as a terminal non-promotable state.
 - `promoteDelegationArtifact()` returns `CAPABILITY_DENIED` for any artifact bound to a parallel group; only the composite lifecycle may consume it.
 
-- [ ] **Step 1: Write RED store tests** — safe IDs/path traversal, atomic creation, exact state transitions, malformed state rejection, duplicate group creation, no transcript/prompt/reasoning persistence.
+- [ ] **Step 1: Write RED store tests** — safe IDs/path traversal, atomic creation, exact transition map, terminal-state immutability, malformed state rejection, duplicate group creation, no transcript/prompt/reasoning persistence.
 - [ ] **Step 2: Write RED member binding tests** — bound artifact validates only with both group/member IDs; direct ordinary promotion denied; ordinary unbound v2 promotion remains unchanged.
 - [ ] **Step 3: Add cleanup/recovery state tests** — failed groups retain only explicitly recoverable workspace paths and never report READY member artifact as independently promotable.
 - [ ] **Step 4: Run RED** — focused group/member artifact tests plus existing artifact store/lifecycle tests.
@@ -190,10 +191,11 @@
 - The function requires root CONTROL actor matching group source and current Work Lease generation before any worker starts.
 - It proves pre-dispatch scope independence, discovers both exact target providers, prepares two independent mutable clones from the same validated source snapshot, and starts both executor promises before awaiting completion.
 - Internal `authorizeParallelMember({ group, member, actor, sourceFingerprint })` permits a member whose target equals source provider only after the full group contract/authority/baseline/scope checks; it is not exported through ordinary delegation CLI.
+- If one member fails after the sibling already sealed a bound artifact, that successful sibling artifact transitions to `DISCARDED` before cleanup. Cleanup failure is recorded on the discarded artifact/group as recoverable state; it never returns to `READY_FOR_REVIEW` and never becomes individually promotable.
 
 - [ ] **Step 1: Write RED concurrency test** — two fake executors block on barriers; assert both `execute()` calls started before either is released; each receives a different clone path but identical source revision/fingerprint/synthetic snapshot facts.
 - [ ] **Step 2: Write RED same-provider group test** — Codex CONTROL may run Codex member + Antigravity member; Antigravity CONTROL may run Antigravity member + Codex member; standalone same-provider remains denied from Task 2.
-- [ ] **Step 3: Write RED atomic failure tests** — unavailable/timeout/invalid result/scope violation of either member closes group `FAILED`, cleans both attributable clones when possible, returns no composite, and leaves canonical product/Git unchanged.
+- [ ] **Step 3: Write RED atomic failure tests** — unavailable/timeout/invalid result/scope violation of either member closes group `FAILED`, transitions any sealed sibling artifact to `DISCARDED`, cleans both attributable clones when possible, returns no composite, and leaves canonical product/Git unchanged.
 - [ ] **Step 4: Add dirty baseline test** — pre-existing staged/unstaged/untracked canonical state appears identically in both synthetic baselines and neither member artifact contains it as worker delta.
 - [ ] **Step 5: Run RED** — focused parallel broker tests.
 - [ ] **Step 6: Implement concurrent preparation/execution/sealing by reusing v1.2.0 hardened mutable workspace and factual artifact sealing** — do not add a second provider executor implementation.
@@ -214,11 +216,12 @@
 
 **Interfaces:**
 - Composite state root: `.orchestra/state/delegation/composite-artifacts/<artifactId>/{manifest.json,candidate.patch}`.
+- Composite states are exactly `READY_FOR_REVIEW | PROMOTED | DISCARDED`; only `READY_FOR_REVIEW -> PROMOTED | DISCARDED` is allowed.
 - `composeParallelArtifacts({ repoRoot, group, memberArtifactIds }) -> Promise<{ artifactId, changedPaths, patchSha256, mutationDigest, state: "READY_FOR_REVIEW" }>`.
 - `prepareCompositionWorkspace(...)` creates a fresh hardened clone from the same exact source snapshot, never from member workspaces.
 - Composite manifest schema string: `orchestra.parallel-composite-artifact.v1`; it records `groupId`, source/generation/Git facts, exactly two member artifact IDs, combined factual changed paths, patch hash/digest, retained review path, state.
 
-- [ ] **Step 1: Write RED store integrity tests** — safe IDs, exact two members, malformed/tampered patch hash rejection, immutable source/group facts, READY artifact retains review path.
+- [ ] **Step 1: Write RED store integrity tests** — safe IDs, exact two members, exact composite state transition map, malformed/tampered patch hash rejection, immutable source/group facts, READY artifact retains review path.
 - [ ] **Step 2: Write RED successful composition tests** — disjoint text+text, text+binary, create+delete, executable mode, contained symlink; apply members in deterministic member-ID order and derive one binary/full-index patch from original synthetic baseline.
 - [ ] **Step 3: Write RED overlap/conflict tests** — factual changed-path intersection fails before patch application; patch apply conflict fails closed even when paths differ; combined facts must equal sorted union of member facts.
 - [ ] **Step 4: Add tamper tests** — changed member patch/manifest/review workspace after sealing returns artifact-tampered failure and no composite.
