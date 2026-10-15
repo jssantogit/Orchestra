@@ -32,6 +32,9 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
+      - name: Diagnose artifact promotion lifecycle
+        run: node --test tests/delegation/artifact-promotion.test.mjs
+
       - name: Run full regression
         run: npm test
 
