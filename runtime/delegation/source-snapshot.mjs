@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
-import { readDelegationGitStdout, runDelegationGit } from "./git-boundary.mjs";
+import {
+  buildDelegationGitEnvironment,
+  readDelegationGitStdout,
+  runDelegationGit,
+} from "./git-boundary.mjs";
 
 export const PRODUCT_FINGERPRINT_EXCLUDES = Object.freeze([".orchestra/state/**"]);
 
@@ -35,6 +39,7 @@ function nulPaths(value) {
 export function readDelegationProductFingerprint(repoRoot) {
   return readWorkspaceFingerprint(repoRoot, {
     excludedPaths: PRODUCT_FINGERPRINT_EXCLUDES,
+    env: buildDelegationGitEnvironment(),
   });
 }
 
