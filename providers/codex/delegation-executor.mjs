@@ -105,6 +105,11 @@ function isImplementationRequest(request) {
   return request?.schema === "orchestra.delegation-request.v2";
 }
 
+function hasHelpFlag(help, flag) {
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\s)${escaped}(?:[=\\s]|$)`, "m").test(help);
+}
+
 function promptFor(request, workerEnvelope) {
   if (!isImplementationRequest(request)) {
     return [
@@ -198,7 +203,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
             || helpResult.exitCode !== 0
             || helpResult.stdoutTruncated) return unavailable();
         const help = String(helpResult.stdout ?? "");
-        if (!REQUIRED_HELP_FLAGS.every((flag) => help.includes(flag))) return unavailable();
+        if (!REQUIRED_HELP_FLAGS.every((flag) => hasHelpFlag(help, flag))) return unavailable();
 
         const version = String(versionResult.stdout ?? "").trim();
         if (!version) return unavailable();
