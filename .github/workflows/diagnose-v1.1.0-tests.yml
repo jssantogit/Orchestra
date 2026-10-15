@@ -1,0 +1,83 @@
+name: Diagnose v1.1.0 Prepared Tests
+
+on:
+  push:
+    branches:
+      - ops/diagnose-v1.1.0-tests
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 90fee3d9c2441457c5c88b1b6226dd142c3fa86d
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --ignore-scripts
+      - run: npm run build:runtimes
+      - run: npm run release:readiness
+      - run: node scripts/release/prepare-release.mjs --bump=minor
+      - name: Commit prepared candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c release/v1.1.0-test-diagnostic
+          git add --all
+          git commit -m "chore(release): diagnostic v1.1.0 candidate"
+      - run: npm run build:runtimes
+      - name: Test runtime
+        run: npm run test:runtime
+      - name: Test core
+        run: npm run test:core
+      - name: Test delegation
+        run: npm run test:delegation
+      - name: Test direct work
+        run: npm run test:direct-work
+      - name: Test leases
+        run: npm run test:leases
+      - name: Test Codex
+        run: npm run test:codex
+      - name: Test Antigravity routing
+        run: node --test runtimes/antigravity/tests/routing-policy.test.mjs
+      - name: Test Antigravity hooks
+        run: node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+      - name: Test Dream
+        run: npm run test:dream
+      - name: Test evidence
+        run: npm run test:evidence
+      - name: Test feedback
+        run: npm run test:feedback
+      - name: Test trust
+        run: npm run test:trust
+      - name: Test handoff
+        run: npm run test:handoff
+      - name: Test JEV
+        run: npm run test:jev
+      - name: Test labs
+        run: npm run test:labs
+      - name: Test mechanical
+        run: npm run test:mechanical
+      - name: Test firewall
+        run: npm run test:firewall
+      - name: Test installers
+        run: npm run test:installers
+      - name: Test turn economy instrumentation
+        run: node --test tests/turn-economy/instrumentation.test.mjs
+      - name: Test turn economy token semantics
+        run: node --test tests/turn-economy/token-semantics.test.mjs
+      - name: Test turn economy fidelity
+        run: node --test tests/turn-economy/fidelity.test.mjs
+      - name: Test turn economy turn diet
+        run: node --test tests/turn-economy/turn-diet.test.mjs
+      - name: Test turn economy consensus
+        run: node --test tests/turn-economy/critical-review-consensus.test.mjs
+      - name: Test release
+        run: npm run test:release
+      - name: Test architecture invariants
+        run: npm run test:architecture-invariants
