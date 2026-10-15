@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { runDoctor } from "../../runtime/doctor.mjs";
 import { writeDelegationArtifact } from "../../runtime/delegation/artifact-store.mjs";
+import { writeCompositeArtifact } from "../../runtime/delegation/composite-artifact-store.mjs";
 import { writeDelegationRecord } from "../../runtime/delegation/store.mjs";
 
 function fixture() {
@@ -82,6 +83,29 @@ function retainedArtifact(reviewPath, overrides = {}) {
   };
 }
 
+function retainedCompositeArtifact(reviewPath, overrides = {}) {
+  return {
+    schema: "orchestra.parallel-composite-artifact.v1",
+    artifactId: "doctor-retained-composite",
+    groupId: "doctor-parallel-group",
+    taskId: "doctor-parallel-task",
+    generation: 3,
+    source: { provider: "codex", actorIdHash: "sha256:control" },
+    sourceRevision: "abcdef1234567890",
+    sourceFingerprint: "sha256:source",
+    canonicalGitFingerprint: "sha256:git",
+    delegatedPath: reviewPath,
+    syntheticBaselineSha: "1234567890abcdef",
+    memberArtifactIds: ["doctor-member-a", "doctor-member-b"],
+    changedPaths: ["src/entry.mjs"],
+    patchSha256: "sha256:composite-patch",
+    mutationDigest: "sha256:composite-mutation",
+    state: "READY_FOR_REVIEW",
+    createdAt: "2026-10-15T04:00:00.000Z",
+    ...overrides,
+  };
+}
+
 test("Doctor surfaces delegated cleanup failures with bounded recovery paths", async (t) => {
   const root = fixture();
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -127,6 +151,32 @@ test("Doctor surfaces READY_FOR_REVIEW implementation artifacts without treating
   }]);
 });
 
+test("Doctor surfaces READY parallel composite artifacts as retained review state", async (t) => {
+  const root = fixture();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const reviewPath = join(tmpdir(), "orchestra-parallel-doctor", "workspace");
+  writeCompositeArtifact(root, {
+    manifest: retainedCompositeArtifact(reviewPath),
+    patch: Buffer.from("diff --git a/src/entry.mjs b/src/entry.mjs\n", "utf8"),
+  });
+
+  const report = await runDoctor({
+    repoRoot: root,
+    runtime: "fixture",
+    runCommands: false,
+    delegationInspector: async () => ({ status: "READY", gitWorktree: { available: true }, providers: [] }),
+  });
+
+  assert.equal(report.delegation.recovery.required, false);
+  assert.equal(report.delegation.recovery.reason, null);
+  assert.deepEqual(report.delegation.recovery.retainedCompositeArtifacts, [{
+    artifactId: "doctor-retained-composite",
+    groupId: "doctor-parallel-group",
+    state: "READY_FOR_REVIEW",
+    reviewPath,
+  }]);
+});
+
 test("Doctor surfaces post-promotion artifact cleanup failures with recoverable clone paths", async (t) => {
   const root = fixture();
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -156,6 +206,40 @@ test("Doctor surfaces post-promotion artifact cleanup failures with recoverable 
   assert.equal(report.delegation.recovery.reason, "WORKSPACE_CLEANUP_FAILED");
   assert.deepEqual(report.delegation.recovery.artifactCleanupFailures, [{
     artifactId: "doctor-promoted-cleanup-failed",
+    state: "PROMOTED",
+    recoverablePath,
+  }]);
+});
+
+test("Doctor surfaces post-promotion composite cleanup failures with recoverable clone paths", async (t) => {
+  const root = fixture();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const recoverablePath = join(tmpdir(), "orchestra-parallel-promoted-orphan", "workspace");
+  writeCompositeArtifact(root, {
+    manifest: retainedCompositeArtifact(recoverablePath, {
+      artifactId: "doctor-composite-cleanup-failed",
+      state: "PROMOTED",
+      cleanup: {
+        cleaned: false,
+        reason: "WORKSPACE_CLEANUP_FAILED",
+        recoverablePath,
+      },
+    }),
+    patch: Buffer.from("diff --git a/src/entry.mjs b/src/entry.mjs\n", "utf8"),
+  });
+
+  const report = await runDoctor({
+    repoRoot: root,
+    runtime: "fixture",
+    runCommands: false,
+    delegationInspector: async () => ({ status: "READY", gitWorktree: { available: true }, providers: [] }),
+  });
+
+  assert.equal(report.delegation.recovery.required, true);
+  assert.equal(report.delegation.recovery.reason, "WORKSPACE_CLEANUP_FAILED");
+  assert.deepEqual(report.delegation.recovery.compositeCleanupFailures, [{
+    artifactId: "doctor-composite-cleanup-failed",
+    groupId: "doctor-parallel-group",
     state: "PROMOTED",
     recoverablePath,
   }]);
