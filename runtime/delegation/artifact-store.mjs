@@ -155,6 +155,39 @@ export function writeDelegationArtifact(repoRoot, { manifest, patch } = {}) {
   return { manifest: normalized, patch: Buffer.from(patch), path: p.dir };
 }
 
+export function transitionDelegationArtifactState(repoRoot, artifactId, {
+  expectedState,
+  nextState,
+} = {}) {
+  assertArtifactId(artifactId);
+  if (!STATES.has(expectedState) || !STATES.has(nextState) || expectedState === nextState) {
+    invalid("DELEGATION_ARTIFACT_STATE_INVALID");
+  }
+
+  const current = readDelegationArtifact(repoRoot, artifactId);
+  if (!current.exists) {
+    return { transitioned: false, reason: "DELEGATION_ARTIFACT_NOT_FOUND", manifest: null };
+  }
+  if (!current.valid) {
+    return { transitioned: false, reason: current.reason ?? "DELEGATION_ARTIFACT_INVALID", manifest: current.manifest };
+  }
+  if (current.manifest.state !== expectedState) {
+    return { transitioned: false, reason: "ARTIFACT_STATE_MISMATCH", manifest: current.manifest };
+  }
+
+  const p = paths(repoRoot, artifactId);
+  const manifest = normalizeManifest({ ...current.manifest, state: nextState });
+  const temp = `${p.manifest}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    renameSync(temp, p.manifest);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
+  return { transitioned: true, reason: null, manifest };
+}
+
 export function readDelegationArtifact(repoRoot, artifactId) {
   const p = paths(repoRoot, artifactId);
   if (!existsSync(p.dir)) {
