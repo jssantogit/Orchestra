@@ -55,7 +55,7 @@ function cleanupFailedRecord(recoverablePath) {
   };
 }
 
-function retainedArtifact(reviewPath) {
+function retainedArtifact(reviewPath, overrides = {}) {
   return {
     schema: "orchestra.delegation-artifact.v1",
     artifactId: "doctor-retained-artifact",
@@ -78,6 +78,7 @@ function retainedArtifact(reviewPath) {
     mutationDigest: "sha256:mutation",
     state: "READY_FOR_REVIEW",
     createdAt: "2026-10-15T04:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -123,5 +124,39 @@ test("Doctor surfaces READY_FOR_REVIEW implementation artifacts without treating
     artifactId: "doctor-retained-artifact",
     state: "READY_FOR_REVIEW",
     reviewPath,
+  }]);
+});
+
+test("Doctor surfaces post-promotion artifact cleanup failures with recoverable clone paths", async (t) => {
+  const root = fixture();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const recoverablePath = join(tmpdir(), "orchestra-implementation-promoted-orphan", "workspace");
+  writeDelegationArtifact(root, {
+    manifest: retainedArtifact(recoverablePath, {
+      artifactId: "doctor-promoted-cleanup-failed",
+      delegationId: "doctor-promoted-cleanup-failed",
+      state: "PROMOTED",
+      cleanup: {
+        cleaned: false,
+        reason: "WORKSPACE_CLEANUP_FAILED",
+        recoverablePath,
+      },
+    }),
+    patch: Buffer.from("diff --git a/src/entry.mjs b/src/entry.mjs\n", "utf8"),
+  });
+
+  const report = await runDoctor({
+    repoRoot: root,
+    runtime: "fixture",
+    runCommands: false,
+    delegationInspector: async () => ({ status: "READY", gitWorktree: { available: true }, providers: [] }),
+  });
+
+  assert.equal(report.delegation.recovery.required, true);
+  assert.equal(report.delegation.recovery.reason, "WORKSPACE_CLEANUP_FAILED");
+  assert.deepEqual(report.delegation.recovery.artifactCleanupFailures, [{
+    artifactId: "doctor-promoted-cleanup-failed",
+    state: "PROMOTED",
+    recoverablePath,
   }]);
 });
