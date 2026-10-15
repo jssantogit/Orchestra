@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "orchestra.delegation-result.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "delegationId", "provider", "logicalRole", "purpose", "status", "summary", "findings", "evidenceRefs", "execution", "workspace"],
+  "properties": {
+    "schema": { "const": "orchestra.delegation-result.v2" },
+    "delegationId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "provider": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "logicalRole": { "const": "IMPLEMENTER" },
+    "purpose": { "const": "IMPLEMENTATION" },
+    "status": { "enum": ["COMPLETED", "FAILED", "TIMED_OUT", "DENIED"] },
+    "reason": {
+      "enum": [
+        "PROVIDER_UNAVAILABLE",
+        "CAPABILITY_DENIED",
+        "WORKSPACE_PREP_FAILED",
+        "EXECUTION_FAILED",
+        "EXECUTION_TIMED_OUT",
+        "INVALID_RESULT",
+        "WORKSPACE_CLEANUP_FAILED",
+        "SCOPE_VIOLATION",
+        "ARTIFACT_SEAL_FAILED",
+        "ARTIFACT_TAMPERED",
+        "PROMOTION_STALE",
+        "PROMOTION_FAILED"
+      ]
+    },
+    "summary": { "type": "string", "maxLength": 8192 },
+    "findings": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exitCode", "durationMs"],
+      "properties": {
+        "exitCode": { "type": ["integer", "null"] },
+        "durationMs": { "type": "integer", "minimum": 0, "maximum": 3600000 }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRevision", "sourceFingerprint", "delegatedPath", "changedPaths", "dirty"],
+      "properties": {
+        "sourceRevision": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "sourceFingerprint": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "delegatedPath": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "changedPaths": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "dirty": { "type": "boolean" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "patchSha256", "mutationDigest", "changedPaths", "state"],
+      "properties": {
+        "artifactId": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "patchSha256": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "mutationDigest": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "changedPaths": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+        },
+        "state": { "const": "READY_FOR_REVIEW" }
+      }
+    }
+  }
+}

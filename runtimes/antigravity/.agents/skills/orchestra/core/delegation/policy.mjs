@@ -1,7 +1,8 @@
+import { normalizeMutationScope } from "./mutation-scope.mjs";
 import { validateDelegationRequest } from "../domain/delegation.mjs";
 
-const REQUIRED_CAPABILITIES = Object.freeze(["LOCAL_READ", "PROCESS_EXEC"]);
-const REQUIRED_CAPABILITY_SET = new Set(REQUIRED_CAPABILITIES);
+const REVIEW_CAPABILITIES = Object.freeze(["LOCAL_READ", "PROCESS_EXEC"]);
+const IMPLEMENTATION_CAPABILITIES = Object.freeze(["LOCAL_READ", "PROCESS_EXEC", "WORKSPACE_EDIT"]);
 
 export const WORKER_REPORT_SCHEMA = Object.freeze({
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -25,21 +26,44 @@ export const WORKER_REPORT_SCHEMA = Object.freeze({
   },
 });
 
-function hasExactWorkerCapabilities(authority) {
+function hasExactCapabilities(authority, requiredCapabilities) {
   if (!authority || !Array.isArray(authority.capabilities)) return false;
-  if (authority.capabilities.length !== REQUIRED_CAPABILITIES.length) return false;
+  if (authority.capabilities.length !== requiredCapabilities.length) return false;
   const capabilities = new Set(authority.capabilities);
-  return capabilities.size === REQUIRED_CAPABILITIES.length
-    && REQUIRED_CAPABILITIES.every((capability) => capabilities.has(capability))
-    && [...capabilities].every((capability) => REQUIRED_CAPABILITY_SET.has(capability));
+  if (capabilities.size !== requiredCapabilities.length) return false;
+  return requiredCapabilities.every((capability) => capabilities.has(capability));
 }
 
-function capabilityBoundaryIsValid(request) {
-  return hasExactWorkerCapabilities(request?.authority)
+function v1BoundaryIsValid(request) {
+  return hasExactCapabilities(request?.authority, REVIEW_CAPABILITIES)
     && request.authority.mutation === "FORBIDDEN"
     && request.authority.network === "FORBIDDEN"
     && request.authority.mayDelegate === false
     && request?.limits?.delegationDepth === 1;
+}
+
+function v2BoundaryIsValid(request) {
+  if (!(hasExactCapabilities(request?.authority, IMPLEMENTATION_CAPABILITIES)
+    && request.authority.mutation === "WORKSPACE_ONLY"
+    && request.authority.network === "FORBIDDEN"
+    && request.authority.mayDelegate === false
+    && request?.limits?.delegationDepth === 1
+    && request?.target?.logicalRole === "IMPLEMENTER"
+    && request?.purpose === "IMPLEMENTATION"
+    && request?.workspace?.isolation === "EPHEMERAL_CLONE")) return false;
+
+  try {
+    normalizeMutationScope(request.workspace.mutationScope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function capabilityBoundaryIsValid(request) {
+  if (request?.schema === "orchestra.delegation-request.v1") return v1BoundaryIsValid(request);
+  if (request?.schema === "orchestra.delegation-request.v2") return v2BoundaryIsValid(request);
+  return false;
 }
 
 export function authorizeDelegationRequest(request, { sourceProvider, sourceFingerprint } = {}) {

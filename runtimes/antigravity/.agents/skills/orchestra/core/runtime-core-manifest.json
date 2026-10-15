@@ -14,8 +14,12 @@
       "sha256": "4522258d44b48a7b80aad72efd0cbab29f153db93f4a95452cf807f119c8449f"
     },
     {
+      "path": "delegation/mutation-scope.mjs",
+      "sha256": "795ff71201930eff3db9f333893c66493995530355bf6f02c8c0e2d51379b17f"
+    },
+    {
       "path": "delegation/policy.mjs",
-      "sha256": "b385739fe2e51c2ed45ed3cab81131216a24daeab6acf54f87a2185ec7edd14e"
+      "sha256": "d21a0f124ee63ae6d02c69718b049cff0ada66ae3bcfbfbeda9e4c1a46476f01"
     },
     {
       "path": "delegation/worker-envelope.mjs",
@@ -31,7 +35,7 @@
     },
     {
       "path": "domain/delegation.mjs",
-      "sha256": "94d746edefa766deb77a86e41296def02e455a0c904948d4bc715fd2342150b0"
+      "sha256": "e1f37423461cd65f18e9c60608ef2f004d024994b919221af38471e4ad04774e"
     },
     {
       "path": "domain/evidence.mjs",
@@ -111,7 +115,7 @@
     },
     {
       "path": "routing/delegation-target.mjs",
-      "sha256": "0dfe181e31ed6a8d577c6a558710ae8935968aa97bb49d78f8b797a4bd28d9c8"
+      "sha256": "0c4a7579ca200bbe88efbc77a23856d664892759c9000328caca628fd28eaa98"
     },
     {
       "path": "routing/escalation.mjs",
@@ -134,8 +138,16 @@
       "sha256": "b0203b73639081c2661ea2be386b8c97b6201dc2dcda113eab94b7218983e5f8"
     },
     {
+      "path": "schema/generated/delegation-request.v2.mjs",
+      "sha256": "b8ec35bbd062bf49e38ae222aed263c380bd3b76fd1ed13a3f7835d9cdfe74a1"
+    },
+    {
       "path": "schema/generated/delegation-result.v1.mjs",
       "sha256": "c48b8cded2f67b5769a99e8c57a0bb47033293dd2109abc59231a49e5d5be9a3"
+    },
+    {
+      "path": "schema/generated/delegation-result.v2.mjs",
+      "sha256": "42f50294e188f05b838fa975c69b9b1087e32a71529ef0bb5e871751587d9591"
     },
     {
       "path": "schema/generated/evidence.v1.mjs",
@@ -159,7 +171,7 @@
     },
     {
       "path": "schema/validator.mjs",
-      "sha256": "2712ba1c727c45dc45f20d3fff5ec28c507aa44398fe53f3df55b315fa967dd1"
+      "sha256": "c403fe2c43f84844c77846785f00253dc4efdb791e591bfaa70ddeafb9847774"
     },
     {
       "path": "schemas/audit-result.v1.schema.json",
@@ -174,8 +186,16 @@
       "sha256": "21f5663ce27e6d67352dec2fba7d35612977b8f92ba55a8e180ee0fbc2b8ccf4"
     },
     {
+      "path": "schemas/delegation-request.v2.schema.json",
+      "sha256": "504b9f2e396ec803f4260e0f9f05175c592ca6f2b5be6b1559b47e344d12663c"
+    },
+    {
       "path": "schemas/delegation-result.v1.schema.json",
       "sha256": "d687905487b9424a287127779548242795747c2cd1110257f325c4ad3b1566c9"
+    },
+    {
+      "path": "schemas/delegation-result.v2.schema.json",
+      "sha256": "b841f7fba7462e9a56038d9aff754db5bcc3c57a0b663274fc24a18ebeb464ee"
     },
     {
       "path": "schemas/delta-packet.v1.schema.json",
