@@ -1,0 +1,105 @@
+name: Diagnose v1.1.0 Candidate npm test
+
+on:
+  push:
+    branches:
+      - ops/diagnose-v1.1.0-npm-test
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Diagnose candidate npm test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Require exact accepted main
+        run: test "$(git rev-parse HEAD)" = "e71ab16cd3b335726242ed59495a4a28e8c2eb16"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build baseline runtimes
+        run: npm run build:runtimes
+      - name: Verify baseline readiness
+        run: npm run release:readiness
+      - name: Prepare v1.1.0
+        id: prepare
+        run: node scripts/release/prepare-release.mjs --bump=minor
+      - name: Require expected target
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
+          BASE_TAG: ${{ steps.prepare.outputs.base_tag }}
+        run: |
+          test "$BASE_TAG" = "v1.0.1"
+          test "$TAG" = "v1.1.0"
+      - name: Commit local candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c release/v1.1.0
+          git add --all
+          git commit -m "chore(release): prepare v1.1.0"
+      - name: Candidate build runtimes
+        run: npm run build:runtimes
+      - name: Candidate check runtimes
+        run: npm run check:runtimes
+      - name: Candidate check runtime core
+        run: npm run check:runtime-core
+
+      - name: "npm test: runtime"
+        run: npm run test:runtime
+      - name: "npm test: core"
+        run: npm run test:core
+      - name: "npm test: delegation"
+        run: npm run test:delegation
+      - name: "npm test: direct work"
+        run: npm run test:direct-work
+      - name: "npm test: leases"
+        run: npm run test:leases
+      - name: "npm test: codex"
+        run: npm run test:codex
+      - name: "npm test: antigravity routing"
+        run: node --test runtimes/antigravity/tests/routing-policy.test.mjs
+      - name: "npm test: antigravity hooks"
+        run: node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs
+      - name: "npm test: dream"
+        run: npm run test:dream
+      - name: "npm test: evidence"
+        run: npm run test:evidence
+      - name: "npm test: feedback"
+        run: npm run test:feedback
+      - name: "npm test: trust"
+        run: npm run test:trust
+      - name: "npm test: handoff"
+        run: npm run test:handoff
+      - name: "npm test: jev"
+        run: npm run test:jev
+      - name: "npm test: labs"
+        run: npm run test:labs
+      - name: "npm test: mechanical"
+        run: npm run test:mechanical
+      - name: "npm test: firewall"
+        run: npm run test:firewall
+      - name: "npm test: installers"
+        run: npm run test:installers
+      - name: "npm test: turn economy instrumentation"
+        run: node --test tests/turn-economy/instrumentation.test.mjs
+      - name: "npm test: turn economy token semantics"
+        run: node --test tests/turn-economy/token-semantics.test.mjs
+      - name: "npm test: turn economy fidelity"
+        run: node --test tests/turn-economy/fidelity.test.mjs
+      - name: "npm test: turn economy turn diet"
+        run: node --test tests/turn-economy/turn-diet.test.mjs
+      - name: "npm test: turn economy critical review consensus"
+        run: node --test tests/turn-economy/critical-review-consensus.test.mjs
+      - name: "npm test: release"
+        run: npm run test:release
+      - name: "npm test: architecture invariants"
+        run: npm run test:architecture-invariants
