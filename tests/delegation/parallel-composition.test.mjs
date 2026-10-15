@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import * as parallelBroker from "../../runtime/delegation/parallel-broker.mjs";
+import { composeParallelArtifacts } from "../../runtime/delegation/composite-artifact-lifecycle.mjs";
 
 function group() {
   return {
@@ -52,15 +52,13 @@ function group() {
   };
 }
 
-test("parallel composition is an explicit broker operation", () => {
-  assert.equal(typeof parallelBroker.composeParallelArtifacts, "function");
+test("parallel composition is an explicit lifecycle operation", () => {
+  assert.equal(typeof composeParallelArtifacts, "function");
 });
 
 test("parallel composition rejects factual changed-path overlap before applying patches", async () => {
-  assert.equal(typeof parallelBroker.composeParallelArtifacts, "function");
-
   let prepared = false;
-  const result = await parallelBroker.composeParallelArtifacts({
+  const result = await composeParallelArtifacts({
     repoRoot: "/repo",
     group: group(),
     memberArtifactIds: ["artifact-a", "artifact-b"],
@@ -76,7 +74,6 @@ test("parallel composition rejects factual changed-path overlap before applying 
           compositeArtifactId: null,
         },
       }),
-      transition: () => ({ transitioned: true }),
     },
     artifacts: {
       read: (_repoRoot, artifactId) => ({
