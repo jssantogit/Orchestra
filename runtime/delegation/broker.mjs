@@ -574,6 +574,15 @@ async function executeImplementationLifecycle({
       execution: executionResult?.execution,
       workspaceContext,
     });
+  } else if (inspection.canonicalWorkspaceChanged
+      || inspection.canonicalGitChanged
+      || inspection.cloneGitChanged
+      || inspection.stagedByWorker) {
+    result = failureResult(request, "SCOPE_VIOLATION", {
+      execution: executionResult?.execution,
+      workspaceContext,
+      inspection,
+    });
   } else if (executorReason) {
     result = failureResult(request, executorReason, {
       execution: executionResult?.execution,
