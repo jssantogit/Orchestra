@@ -36,6 +36,41 @@ test("normal implementation, quick audit, and investigation stay local", () => {
   }
 });
 
+test("implementation crosses providers only with explicit CONTROL intent", () => {
+  assert.deepEqual(route({
+    logicalRole: "IMPLEMENTER",
+    purpose: "IMPLEMENTATION",
+    explicitCrossProvider: false,
+  }), {
+    mode: "LOCAL",
+    targetProvider: "provider-a",
+    reason: "SAME_PROVIDER_DEFAULT",
+  });
+
+  assert.deepEqual(route({
+    logicalRole: "IMPLEMENTER",
+    purpose: "IMPLEMENTATION",
+    explicitCrossProvider: true,
+  }), {
+    mode: "CROSS_PROVIDER",
+    targetProvider: "provider-b",
+    reason: "IMPLEMENTATION",
+  });
+});
+
+test("explicit implementation returns PROVIDER_UNAVAILABLE instead of falling back", () => {
+  assert.deepEqual(route({
+    logicalRole: "IMPLEMENTER",
+    purpose: "IMPLEMENTATION",
+    explicitCrossProvider: true,
+    providerCapabilities: providers({ "provider-b": { available: false } }),
+  }), {
+    mode: "NONE",
+    targetProvider: null,
+    reason: "PROVIDER_UNAVAILABLE",
+  });
+});
+
 test("critical independent review chooses one healthy independent provider", () => {
   assert.deepEqual(route({
     logicalRole: "CRITICAL_REVIEWER",
