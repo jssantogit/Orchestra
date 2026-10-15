@@ -9,6 +9,8 @@ import { bumpVersion, suggestBump } from "../../scripts/release/versioning.mjs";
 import { prepareRelease } from "../../scripts/release/prepare-release.mjs";
 import { evaluateExistingPublication, validatePublishAuthorization } from "../../scripts/release/publish-guard.mjs";
 
+const CANONICAL_RUNTIMES = Object.freeze(["core", "codex", "antigravity", "delegation"]);
+
 function fixture(version = "1.0.1") {
   const root = mkdtempSync(join(tmpdir(), "orchestra-release-train-"));
   mkdirSync(join(root, "runtime/manifests"), { recursive: true });
@@ -24,7 +26,7 @@ function fixture(version = "1.0.1") {
     lockfileVersion: 3,
     packages: { "": { name: "orchestra", version } },
   }, null, 2)}\n`);
-  for (const runtime of ["core", "codex", "antigravity"]) {
+  for (const runtime of CANONICAL_RUNTIMES) {
     writeFileSync(join(root, `runtime/manifests/${runtime}.json`), `${JSON.stringify({ runtime, version }, null, 2)}\n`);
   }
   return root;
@@ -71,7 +73,7 @@ test("prepareRelease updates canonical version sources and writes reviewable not
     assert.equal(pkg.scripts["release:readiness"], "node scripts/release-readiness.mjs");
     assert.equal(lock.version, "1.1.0");
     assert.equal(lock.packages[""].version, "1.1.0");
-    for (const runtime of ["core", "codex", "antigravity"]) {
+    for (const runtime of CANONICAL_RUNTIMES) {
       assert.equal(JSON.parse(readFileSync(join(root, `runtime/manifests/${runtime}.json`), "utf8")).version, "1.1.0");
     }
 
