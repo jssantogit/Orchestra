@@ -134,8 +134,13 @@ async function main() {
     return;
   }
 
-  if (checkOnly) console.log("Schema validators: OK");
-  else console.log(`Schema validators generated: ${SCHEMA_FILES.length}`);
+  if (checkOnly) {
+    console.log("Schema validators: OK");
+  } else {
+    console.log(`Schema validators generated: ${SCHEMA_FILES.length}`);
+    const generated = await readFile(join(defaultRepoRoot, "core", "schema", "generated", "parallel-implementation-group.v1.mjs"));
+    console.log(`ORCHESTRA_PARALLEL_VALIDATOR_BASE64=${generated.toString("base64")}`);
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
