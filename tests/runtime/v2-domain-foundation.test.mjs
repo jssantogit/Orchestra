@@ -8,17 +8,17 @@ import {
   validateProjectV2,
   validateRuntimeImageRefV2,
   validateWorkUnitV2,
-} from "../../core/v2/domain/contracts.mjs";
+} from "../../v2/domain/contracts.mjs";
 import {
   authorizeAttach,
   authorizeCapability,
-} from "../../core/v2/authority/authority.mjs";
+} from "../../v2/authority/authority.mjs";
 import {
   classifyPersistedOperation,
-} from "../../core/v2/reconciliation/liveness.mjs";
+} from "../../v2/reconciliation/liveness.mjs";
 import {
   projectExperience,
-} from "../../core/v2/experience/projector.mjs";
+} from "../../v2/experience/projector.mjs";
 
 const project = {
   schema: "orchestra.project.v2",
