@@ -22,6 +22,13 @@ function validateOperations({ project, work, liveOperations }) {
   return null;
 }
 
+function liveMutationOperations(liveOperations) {
+  return (liveOperations || []).filter((operation) =>
+    operation.liveness === "LIVE"
+    && Array.isArray(operation.capabilities)
+    && operation.capabilities.includes("WORKSPACE_EDIT"));
+}
+
 export function authorizeAttach({ project, work, actor, observedInstructionEpoch, liveOperations = [] } = {}) {
   const invalid = baseValidation({ project, work, actor });
   if (invalid) return invalid;
@@ -43,6 +50,7 @@ export function authorizeCapability({
   work,
   actor,
   capability,
+  workspaceRef = null,
   expectedGeneration,
   liveOperations = [],
 } = {}) {
@@ -54,9 +62,25 @@ export function authorizeCapability({
   if (invalidOperations) return invalidOperations;
 
   if (capability === "WORKSPACE_EDIT") {
-    const incompatible = liveOperations.find((operation) =>
-      operation.liveness === "LIVE" && Array.isArray(operation.capabilities) && operation.capabilities.includes("WORKSPACE_EDIT"));
-    if (incompatible) return { allowed: false, reason: "INCOMPATIBLE_LIVE_OPERATION", operation: incompatible.operationId ?? null };
+    const mutations = liveMutationOperations(liveOperations);
+    if (typeof workspaceRef !== "string" || workspaceRef.trim().length === 0) {
+      // Conservatively preserve the older denial reason when an incompatible writer
+      // is already factual, while still requiring a workspace for otherwise legal mutation.
+      if (mutations.length > 0) {
+        return { allowed: false, reason: "INCOMPATIBLE_LIVE_OPERATION", operation: mutations[0].operationId ?? null };
+      }
+      return { allowed: false, reason: "MUTATION_WORKSPACE_REQUIRED" };
+    }
+
+    const unscoped = mutations.find((operation) => typeof operation.workspaceRef !== "string" || operation.workspaceRef.trim().length === 0);
+    if (unscoped) {
+      return { allowed: false, reason: "INCOMPATIBLE_LIVE_OPERATION", operation: unscoped.operationId ?? null };
+    }
+
+    const incompatible = mutations.find((operation) => operation.workspaceRef === workspaceRef);
+    if (incompatible) {
+      return { allowed: false, reason: "INCOMPATIBLE_LIVE_OPERATION", operation: incompatible.operationId ?? null };
+    }
   }
 
   return { allowed: true, reason: null, generation: work.generation };
