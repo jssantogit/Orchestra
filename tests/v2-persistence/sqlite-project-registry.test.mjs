@@ -119,7 +119,8 @@ test("SQLite schema migration ledger initializes version 1", async () => {
 
     const db = new DatabaseSync(dbPath);
     const version = db.prepare("PRAGMA user_version").get().user_version;
-    const migration = db.prepare("SELECT version, name FROM orchestra_migrations ORDER BY version").all();
+    const migration = db.prepare("SELECT version, name FROM orchestra_migrations ORDER BY version").all()
+      .map((row) => ({ version: row.version, name: row.name }));
     db.close();
 
     assert.equal(version, 1);
