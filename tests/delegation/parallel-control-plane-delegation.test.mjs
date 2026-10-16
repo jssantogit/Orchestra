@@ -15,6 +15,8 @@ import {
   inspectAntigravityCompositeArtifact,
   promoteAntigravityCompositeArtifact,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/cross-provider-delegation.mjs";
+import * as codexParallelControlPlane from "../../runtimes/codex/.codex/astra-orchestra/cross-provider-delegation.mjs";
+import * as antigravityParallelControlPlane from "../../runtimes/antigravity/.agents/skills/orchestra/cross-provider-delegation.mjs";
 import { validateParallelImplementationGroup } from "../../core/domain/parallel-implementation.mjs";
 
 function packet(taskId = "parallel-task", generation = 7, file = "src/example.mjs") {
@@ -89,6 +91,25 @@ test("parallel group builders require one provider-local member and one distinct
     ...buildFacts(),
     members: members("codex", "other"),
   }), /ORCHESTRA_ANTIGRAVITY_PARALLEL_GROUP_INVALID/);
+});
+
+test("parallel execute wrappers reserve bounded lifecycle headroom beyond the 120s member budget", () => {
+  const cases = [
+    ["codex", codexParallelControlPlane],
+    ["antigravity", antigravityParallelControlPlane],
+  ];
+
+  for (const [provider, controlPlane] of cases) {
+    assert.equal(
+      typeof controlPlane.resolveParallelCliTimeoutMs,
+      "function",
+      `${provider} must expose the parallel CLI timeout policy`,
+    );
+    assert.equal(controlPlane.resolveParallelCliTimeoutMs("execute"), 600_000);
+    for (const action of ["inspect", "promote", "discard"]) {
+      assert.equal(controlPlane.resolveParallelCliTimeoutMs(action), 120_000);
+    }
+  }
 });
 
 test("Codex and Antigravity execute parallel groups through the neutral parallel CLI without self-acceptance", async () => {
