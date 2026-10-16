@@ -32,9 +32,15 @@ function sameTerminalResult(operation, { workflowState, resultRef }) {
   return operation.workflowState === workflowState && operation.resultRef === resultRef;
 }
 
+function rebindKey({ projectId, expectedRoot, newRoot }) {
+  return JSON.stringify([projectId, expectedRoot, newRoot]);
+}
+
 export function createReferenceState() {
   const projectsById = new Map();
   const projectIdByRoot = new Map();
+  const projectRegisterRequestsById = new Map();
+  const successfulRebindRequests = new Set();
   const worksById = new Map();
   const workOpenRequestsById = new Map();
   const transitionsByWork = new Map();
@@ -47,7 +53,8 @@ export function createReferenceState() {
 
       const existing = projectsById.get(project.projectId);
       if (existing) {
-        if (isDeepStrictEqual(existing, project)) {
+        const originalRegistration = projectRegisterRequestsById.get(project.projectId);
+        if (originalRegistration && isDeepStrictEqual(originalRegistration, project)) {
           return success({ project: clone(existing), replayed: true });
         }
         return failure("PROJECT_ID_CONFLICT");
@@ -60,6 +67,7 @@ export function createReferenceState() {
 
       const stored = clone(project);
       projectsById.set(stored.projectId, stored);
+      projectRegisterRequestsById.set(stored.projectId, clone(project));
       projectIdByRoot.set(stored.workspace.canonicalRoot, stored.projectId);
       return success({ project: clone(stored), replayed: false });
     },
@@ -78,10 +86,19 @@ export function createReferenceState() {
     rebind({ projectId, expectedRoot, newRoot } = {}) {
       const current = projectsById.get(projectId);
       if (!current) return failure("PROJECT_NOT_FOUND");
+
+      const requestKey = rebindKey({ projectId, expectedRoot, newRoot });
+      if (successfulRebindRequests.has(requestKey)) {
+        return success({ project: clone(current), replayed: true });
+      }
+
       if (current.workspace.canonicalRoot !== expectedRoot) {
         return failure("STALE_PROJECT_ROOT", { currentRoot: current.workspace.canonicalRoot });
       }
-      if (newRoot === expectedRoot) return success({ project: clone(current), replayed: true });
+      if (newRoot === expectedRoot) {
+        successfulRebindRequests.add(requestKey);
+        return success({ project: clone(current), replayed: true });
+      }
 
       const targetOwner = projectIdByRoot.get(newRoot);
       if (targetOwner && targetOwner !== projectId) {
@@ -97,6 +114,7 @@ export function createReferenceState() {
       projectIdByRoot.delete(expectedRoot);
       projectIdByRoot.set(newRoot, projectId);
       projectsById.set(projectId, next);
+      successfulRebindRequests.add(requestKey);
       return success({ project: clone(next), replayed: false });
     },
   };
