@@ -4,10 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import {
-  enterCodexWorkLease,
-  inspectCodexWorkLease,
-} from "../.codex/astra-orchestra/work-lease-authority.mjs";
+import { enterCodexWorkLease } from "../.codex/astra-orchestra/work-lease-authority.mjs";
+import { inspectCodexWorkLease } from "../.codex/astra-orchestra/work-lease-inspector.mjs";
 
 function project() {
   const root = mkdtempSync(join(tmpdir(), "orch-codex-work-lease-diagnostic-"));
