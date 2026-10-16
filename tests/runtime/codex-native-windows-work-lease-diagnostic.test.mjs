@@ -33,14 +33,15 @@ function writeActiveState(root, value = {}) {
 
 function hookEntries() {
   const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+  const groups = [
+    ...hooks.hooks.SessionStart,
+    ...hooks.hooks.UserPromptSubmit,
+    ...hooks.hooks.PreToolUse,
+    ...hooks.hooks.PostToolUse,
+  ];
   return {
     hooks,
-    entries: [
-      ...hooks.hooks.SessionStart,
-      ...hooks.hooks.UserPromptSubmit,
-      ...hooks.hooks.PreToolUse,
-      ...hooks.hooks.PostToolUse,
-    ],
+    entries: groups.flatMap((group) => group.hooks || []),
   };
 }
 
