@@ -3,14 +3,19 @@ import assert from "node:assert/strict";
 import {
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
+import {
+  buildDelegationGitEnvironment,
+  readDelegationGitBoundary,
+} from "../../runtime/delegation/git-boundary.mjs";
 import {
   cleanupDelegationWorkspace,
   inspectDelegationWorkspace,
@@ -88,6 +93,8 @@ test("canonical hook mutation through shared Git metadata is reported as delegat
   });
   t.after(async () => { await cleanupDelegationWorkspace(context); });
 
+  const beforeBoundary = await readDelegationGitBoundary(repoRoot);
+  const sourceCommonDirText = git(repoRoot, "rev-parse", "--git-common-dir");
   const commonDirText = git(context.path, "rev-parse", "--git-common-dir");
   const commonDir = isAbsolute(commonDirText)
     ? commonDirText
@@ -96,7 +103,25 @@ test("canonical hook mutation through shared Git metadata is reported as delegat
   mkdirSync(hooksDir, { recursive: true });
   writeFileSync(join(hooksDir, "pre-commit"), "#!/bin/sh\nexit 0\n", "utf8");
 
+  const afterBoundary = await readDelegationGitBoundary(repoRoot);
+  const env = buildDelegationGitEnvironment();
+  console.error("ORCHESTRA_GIT_HOOK_DIAGNOSTIC", JSON.stringify({
+    platform: process.platform,
+    devNull,
+    gitConfigGlobal: env.GIT_CONFIG_GLOBAL,
+    repoRoot,
+    contextPath: context.path,
+    sourceCommonDirText,
+    worktreeCommonDirText: commonDirText,
+    resolvedCommonDir: commonDir,
+    hookEntries: readdirSync(hooksDir).sort(),
+    beforeBoundary,
+    afterBoundary,
+    boundaryChanged: beforeBoundary.fingerprint !== afterBoundary.fingerprint,
+  }));
+
   const inspection = await inspectDelegationWorkspace(context);
+  console.error("ORCHESTRA_GIT_HOOK_INSPECTION", JSON.stringify(inspection));
   assert.equal(inspection.dirty, true);
   assert.equal(inspection.canonicalGitChanged, true);
 });
