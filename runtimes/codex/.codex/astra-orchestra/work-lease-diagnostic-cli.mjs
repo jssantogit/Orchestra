@@ -1,13 +1,42 @@
 #!/usr/bin/env node
 
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import { diagnoseCodexWorkLease } from "./work-lease-authority.mjs";
 
-function usageError(message) {
-  const error = new Error(message);
-  error.code = "ORCHESTRA_WORK_LEASE_DIAGNOSTIC_USAGE";
+function codedError(code, message, cause = undefined) {
+  const error = new Error(message, cause === undefined ? undefined : { cause });
+  error.code = code;
   return error;
+}
+
+function usageError(message) {
+  return codedError("ORCHESTRA_WORK_LEASE_DIAGNOSTIC_USAGE", message);
+}
+
+function assertReadableDiagnosticState(repoRoot) {
+  const targets = [
+    {
+      path: join(repoRoot, ".orchestra", "state", "work-lease.json"),
+      code: "ORCHESTRA_WORK_LEASE_READ_FAILED",
+      label: "Work Lease",
+    },
+    {
+      path: join(repoRoot, ".codex", "orchestra-state", "work-lease-session-bindings.json"),
+      code: "ORCHESTRA_WORK_LEASE_BINDINGS_READ_FAILED",
+      label: "Work Lease bindings",
+    },
+  ];
+
+  for (const target of targets) {
+    if (!existsSync(target.path)) continue;
+    try {
+      readFileSync(target.path, "utf8");
+    } catch (cause) {
+      throw codedError(target.code, `${target.label} state cannot be read`, cause);
+    }
+  }
 }
 
 function parseArgs(argv) {
@@ -64,6 +93,7 @@ export function runWorkLeaseDiagnosticCli(argv = process.argv.slice(2)) {
       return 0;
     }
 
+    assertReadableDiagnosticState(options.repoRoot);
     const result = diagnoseCodexWorkLease(options.repoRoot, {
       sessionId: options.sessionId,
       mode: options.mode,
