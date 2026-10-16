@@ -163,6 +163,21 @@ evidence/audit references, generation, blockers, and approved direction may
 survive. Provider transcript, prompts, summaries, arbitrary prior conversation
 text, and hidden reasoning never grant continuation authority.
 
+For read-only troubleshooting, the installed Codex runtime exposes an official
+Work Lease diagnostic command:
+
+```bash
+node .codex/astra-orchestra/work-lease-diagnostic-cli.mjs --repo-root .
+```
+
+The command never claims, advances, repairs, or releases a lease. Successful
+diagnostics exit `0` even when the semantic state is `MISSING`, `INVALID`, or
+`DENIED`; usage/runtime failures exit `2` with a structured error on stderr. The
+JSON result separates lease status, binding status, and authority status so a
+missing lease cannot be confused with an invalid store or an authority denial.
+Actor-specific diagnosis is optional and may use `--session-id` only with the
+factual Codex-provided session id; the diagnostic never fabricates one.
+
 The legacy boundary command remains available only for recovery/debug or an
 explicit rollback workflow:
 
@@ -176,7 +191,10 @@ single-use, workspace/state-bound `ACTIVE -> TRANSFERRING -> ACTIVE` semantics
 and still performs a clean milestone boundary rather than transcript migration.
 
 Project-local hooks remain subject to Codex's normal hook-trust review; Orchestra
-does not use a trust bypass as part of normal operation.
+does not use a trust bypass as part of normal operation. On Windows,
+`commandWindows` entries are native PowerShell command bodies because Codex
+already executes them through its Windows shell; Orchestra does not nest a
+second `powershell -Command` launcher.
 
 ---
 
