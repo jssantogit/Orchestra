@@ -112,7 +112,7 @@ test("failed rebind collision leaves durable registry unchanged", async () => {
   });
 });
 
-test("SQLite schema migration ledger initializes version 1", async () => {
+test("SQLite schema migration ledger initializes through version 2", async () => {
   await withDb(async ({ dbPath }) => {
     const state = createSqliteState({ dbPath });
     state.close();
@@ -123,8 +123,11 @@ test("SQLite schema migration ledger initializes version 1", async () => {
       .map((row) => ({ version: row.version, name: row.name }));
     db.close();
 
-    assert.equal(version, 1);
-    assert.deepEqual(migration, [{ version: 1, name: "v2_initial_registry" }]);
+    assert.equal(version, 2);
+    assert.deepEqual(migration, [
+      { version: 1, name: "v2_initial_registry" },
+      { version: 2, name: "v2_work_operations" },
+    ]);
   });
 });
 
