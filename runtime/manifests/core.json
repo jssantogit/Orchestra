@@ -1,7 +1,7 @@
 {
   "schema": "orchestra.runtime-manifest.v1",
   "runtime": "core",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "sourceRoots": [
     "core",
     "schemas"
