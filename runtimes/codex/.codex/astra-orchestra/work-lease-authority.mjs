@@ -162,6 +162,23 @@ function diagnosticLease(current) {
   };
 }
 
+function diagnosticSubject(actor) {
+  if (actor) {
+    return {
+      scope: "SUPPLIED_ACTOR",
+      identitySource: "CALLER_SUPPLIED_SESSION_ID",
+      currentSessionVerified: false,
+      warning: "Authority applies only to the supplied factual Codex hook session_id; do not infer the current session id from environment variables.",
+    };
+  }
+  return {
+    scope: "LEASE_ONLY",
+    identitySource: "NONE",
+    currentSessionVerified: false,
+    warning: "No actor identity was supplied; authority for the current Codex session is not evaluated by this diagnostic.",
+  };
+}
+
 export function resolveCodexAuthorityMode(value = process.env.ORCHESTRA_AUTHORITY_MODE) {
   if (value === undefined || value === null || String(value).trim() === "") return "lease";
   const normalized = String(value).trim().toLowerCase();
@@ -185,6 +202,7 @@ export function diagnoseCodexWorkLease(repoRoot, { sessionId, mode = undefined }
   const lease = diagnosticLease(current);
   const bindingInspection = inspectBindings(repoRoot);
   const actor = actorFor(sessionId);
+  const subject = diagnosticSubject(actor);
   let actorBinding = null;
   let bindings = {
     status: bindingInspection.status,
@@ -236,6 +254,7 @@ export function diagnoseCodexWorkLease(repoRoot, { sessionId, mode = undefined }
     schema: DIAGNOSTIC_SCHEMA,
     ok: true,
     mode: authorityMode,
+    subject,
     lease,
     bindings,
     authority,
