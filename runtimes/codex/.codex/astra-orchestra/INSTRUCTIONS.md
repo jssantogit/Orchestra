@@ -33,8 +33,7 @@ Delegate only for product implementation, a bounded independent investigation,
 a critical independent review, or isolated work whose benefit exceeds context
 cost. Direct/read-only work stays with Sol: status/diff, a named test or
 build, config inspection, focused repository questions, classification, and
-reporting. Do not delegate merely to double-check. Keep one concurrent thread
-per session; do not enable parallel writers.
+reporting. Do not delegate merely to double-check. Serial orchestration remains the default. Keep one concurrent implementation thread per session and do not enable parallel writers except when CONTROL explicitly selects a broker-validated `PARALLEL_2` group with exactly two implementation workers, provably disjoint mutation scopes, and independent hardened clones. The exception expands execution concurrency only: both workers remain execution-plane children on the same immutable source baseline, neither owns the canonical checkout or Work Lease, recursive delegation remains forbidden, and any unproven precondition fails closed to serial/no-dispatch rather than improvising parallelism.
 
 `DIRECT_ACTION` is a lightweight fast path for `SHOW_STATUS`, `SHOW_DIFF`,
 `RUN_TEST`, `RUN_TYPECHECK`, `RUN_BUILD`, `RUN_SCRIPT`, `COMMIT`, `PUSH`, and
