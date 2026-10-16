@@ -17,7 +17,12 @@ import { selectDelegationTarget } from "./core/routing/delegation-target.mjs";
 
 const SOURCE_PROVIDER = "antigravity";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const PARALLEL_EXECUTE_TIMEOUT_MS = DEFAULT_TIMEOUT_MS * 5;
 const DEFAULT_MAX_OUTPUT_BYTES = 65_536;
+
+export function resolveParallelCliTimeoutMs(action) {
+  return action === "execute" ? PARALLEL_EXECUTE_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+}
 
 export function decideAntigravityCrossProviderRoute({
   logicalRole,
@@ -288,7 +293,7 @@ function runInstalledParallelCli({
       cwd: root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: DEFAULT_TIMEOUT_MS + 5_000,
+      timeout: resolveParallelCliTimeoutMs(action),
       maxBuffer: DEFAULT_MAX_OUTPUT_BYTES * 4,
       env: process.env,
     });
