@@ -140,6 +140,7 @@ export async function readDelegationGitBoundary(repoRoot, options = {}) {
       .update("\0config\0")
       .update(config)
       .update("\0hooks\0")
+      .update(hooks)
       .digest("hex");
     return { available: true, fingerprint };
   } catch {
