@@ -5,6 +5,11 @@ import { validateWorkUnitV2 } from "../domain/contracts.mjs";
 const CAPSULE_SCHEMA = "orchestra.continuation-capsule.v2";
 const DIGEST_ALGORITHM = "sha256";
 const CANONICALIZATION = "orchestra.canonical-json.v1";
+const CAPSULE_KEYS = new Set([
+  "schema", "projectId", "workId", "taskId", "generation", "runtimeImage", "instructionEpoch",
+  "scopeRef", "directionRef", "candidateRef", "evidenceRefs", "blockers", "facts", "digest",
+]);
+const DIGEST_KEYS = new Set(["algorithm", "canonicalization", "value"]);
 const FORBIDDEN_CHAT_KEYS = new Set([
   "transcript",
   "providertranscript",
@@ -26,6 +31,20 @@ function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isPlainRecord(value) {
+  if (!isRecord(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasOnlyKeys(value, allowed) {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
 function normalizeKey(key) {
   return String(key).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
 }
@@ -38,7 +57,7 @@ function findChatDependency(value, path = "facts") {
     }
     return null;
   }
-  if (!isRecord(value)) return null;
+  if (!isPlainRecord(value)) return null;
 
   for (const [key, child] of Object.entries(value)) {
     if (FORBIDDEN_CHAT_KEYS.has(normalizeKey(key))) return `${path}.${key}`;
@@ -62,6 +81,7 @@ function canonicalValue(value, path = "$", seen = new Set()) {
   if (Array.isArray(value)) {
     normalized = value.map((entry, index) => canonicalValue(entry, `${path}[${index}]`, seen));
   } else {
+    if (!isPlainRecord(value)) throw new TypeError(`non-plain object at ${path}`);
     normalized = {};
     for (const key of Object.keys(value).sort()) {
       normalized[key] = canonicalValue(value[key], `${path}.${key}`, seen);
@@ -98,9 +118,24 @@ function capsulePayload(capsule) {
   };
 }
 
+function validateCapsuleShape(capsule) {
+  if (!isPlainRecord(capsule) || capsule.schema !== CAPSULE_SCHEMA || !hasOnlyKeys(capsule, CAPSULE_KEYS)) return false;
+  for (const key of ["projectId", "workId", "taskId", "runtimeImage"]) {
+    if (!isNonEmptyString(capsule[key])) return false;
+  }
+  if (!Number.isInteger(capsule.generation) || capsule.generation < 0
+    || !Number.isInteger(capsule.instructionEpoch) || capsule.instructionEpoch < 0) return false;
+  for (const key of ["scopeRef", "directionRef", "candidateRef"]) {
+    if (capsule[key] !== null && !isNonEmptyString(capsule[key])) return false;
+  }
+  if (!Array.isArray(capsule.evidenceRefs) || capsule.evidenceRefs.some((entry) => !isNonEmptyString(entry))) return false;
+  if (!Array.isArray(capsule.blockers) || !isPlainRecord(capsule.facts)) return false;
+  return true;
+}
+
 export function createContinuationCapsule({ work, facts } = {}) {
   if (!validateWorkUnitV2(work).valid) return result(false, { reason: "CONTINUATION_WORK_INVALID" });
-  if (!isRecord(facts)) return result(false, { reason: "CONTINUATION_FACTS_INVALID" });
+  if (!isPlainRecord(facts)) return result(false, { reason: "CONTINUATION_FACTS_INVALID" });
 
   const dependency = findChatDependency(facts);
   if (dependency) return result(false, { reason: "CONTINUATION_CHAT_DEPENDENCY", path: dependency });
@@ -135,13 +170,13 @@ export function createContinuationCapsule({ work, facts } = {}) {
 }
 
 export function verifyContinuationCapsule(capsule) {
-  if (!isRecord(capsule) || capsule.schema !== CAPSULE_SCHEMA) {
+  if (!validateCapsuleShape(capsule)) {
     return result(false, { reason: "CONTINUATION_SCHEMA_INVALID" });
   }
-  if (!isRecord(capsule.facts) || findChatDependency(capsule.facts)) {
-    return result(false, { reason: "CONTINUATION_CHAT_DEPENDENCY" });
-  }
-  if (!isRecord(capsule.digest)
+  const dependency = findChatDependency(capsule.facts);
+  if (dependency) return result(false, { reason: "CONTINUATION_CHAT_DEPENDENCY", path: dependency });
+  if (!isPlainRecord(capsule.digest)
+    || !hasOnlyKeys(capsule.digest, DIGEST_KEYS)
     || capsule.digest.algorithm !== DIGEST_ALGORITHM
     || capsule.digest.canonicalization !== CANONICALIZATION
     || typeof capsule.digest.value !== "string") {
