@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const GIT_NO_HOOKS_PREFIX = Object.freeze(["-c", "core.hooksPath="]);
+const GIT_NULL_CONFIG = process.platform === "win32" ? "NUL" : devNull;
 const SAFE_GIT_ENV_KEYS = new Set([
   "GIT_CONFIG_NOSYSTEM",
   "GIT_CONFIG_GLOBAL",
@@ -32,7 +33,7 @@ function safeGitEnvironment(source = process.env, { allowGitOverrides = false } 
 
   environment.GIT_CONFIG_NOSYSTEM = "1";
   if (!allowGitOverrides || typeof environment.GIT_CONFIG_GLOBAL !== "string" || !environment.GIT_CONFIG_GLOBAL) {
-    environment.GIT_CONFIG_GLOBAL = devNull;
+    environment.GIT_CONFIG_GLOBAL = GIT_NULL_CONFIG;
   }
   environment.GIT_TERMINAL_PROMPT = "0";
   return environment;
