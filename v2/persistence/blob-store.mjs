@@ -40,7 +40,7 @@ function normalizeBytes(bytes) {
 }
 
 async function syncFile(path) {
-  const handle = await open(path, "r");
+  const handle = await open(path, "r+");
   try {
     await handle.sync();
   } finally {
