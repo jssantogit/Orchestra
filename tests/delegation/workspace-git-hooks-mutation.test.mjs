@@ -1,25 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import {
-  existsSync,
   mkdtempSync,
   mkdirSync,
-  readFileSync,
-  readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { devNull, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
-import {
-  buildDelegationGitEnvironment,
-  readDelegationGitBoundary,
-} from "../../runtime/delegation/git-boundary.mjs";
 import {
   cleanupDelegationWorkspace,
   inspectDelegationWorkspace,
@@ -84,19 +75,6 @@ function requestFor(repoRoot) {
   };
 }
 
-function fileSnapshot(path) {
-  if (!existsSync(path)) return { exists: false };
-  const contents = readFileSync(path);
-  const stat = statSync(path);
-  return {
-    exists: true,
-    mode: stat.mode & 0o7777,
-    size: stat.size,
-    sha256: createHash("sha256").update(contents).digest("hex"),
-    content: contents.toString("utf8"),
-  };
-}
-
 test("canonical hook mutation through shared Git metadata is reported as delegation dirtiness", async (t) => {
   const repoRoot = createRepo();
   const baseDir = mkdtempSync(join(tmpdir(), "orchestra-git-hook-mutation-root-"));
@@ -110,44 +88,15 @@ test("canonical hook mutation through shared Git metadata is reported as delegat
   });
   t.after(async () => { await cleanupDelegationWorkspace(context); });
 
-  const beforeBoundary = await readDelegationGitBoundary(repoRoot);
-  const sourceCommonDirText = git(repoRoot, "rev-parse", "--git-common-dir");
   const commonDirText = git(context.path, "rev-parse", "--git-common-dir");
   const commonDir = isAbsolute(commonDirText)
     ? commonDirText
     : resolve(context.path, commonDirText);
   const hooksDir = join(commonDir, "hooks");
   mkdirSync(hooksDir, { recursive: true });
-  const hookPath = join(hooksDir, "pre-commit");
-  const hookEntriesBefore = readdirSync(hooksDir).sort();
-  const hookBefore = fileSnapshot(hookPath);
-
-  writeFileSync(hookPath, "#!/bin/sh\nexit 0\n", "utf8");
-
-  const hookAfter = fileSnapshot(hookPath);
-  const afterBoundary = await readDelegationGitBoundary(repoRoot);
-  const env = buildDelegationGitEnvironment();
-  console.error("ORCHESTRA_GIT_HOOK_DIAGNOSTIC", JSON.stringify({
-    platform: process.platform,
-    devNull,
-    gitConfigGlobal: env.GIT_CONFIG_GLOBAL,
-    repoRoot,
-    contextPath: context.path,
-    sourceCommonDirText,
-    worktreeCommonDirText: commonDirText,
-    resolvedCommonDir: commonDir,
-    hookEntriesBefore,
-    hookBefore,
-    hookEntriesAfter: readdirSync(hooksDir).sort(),
-    hookAfter,
-    hookActuallyChanged: JSON.stringify(hookBefore) !== JSON.stringify(hookAfter),
-    beforeBoundary,
-    afterBoundary,
-    boundaryChanged: beforeBoundary.fingerprint !== afterBoundary.fingerprint,
-  }));
+  writeFileSync(join(hooksDir, "pre-commit"), "#!/bin/sh\nexit 0\n", "utf8");
 
   const inspection = await inspectDelegationWorkspace(context);
-  console.error("ORCHESTRA_GIT_HOOK_INSPECTION", JSON.stringify(inspection));
   assert.equal(inspection.dirty, true);
   assert.equal(inspection.canonicalGitChanged, true);
 });
