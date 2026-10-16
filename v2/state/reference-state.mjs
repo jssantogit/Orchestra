@@ -36,8 +36,10 @@ export function createReferenceState() {
   const projectsById = new Map();
   const projectIdByRoot = new Map();
   const worksById = new Map();
+  const workOpenRequestsById = new Map();
   const transitionsByWork = new Map();
   const operationsById = new Map();
+  const operationBeginRequestsById = new Map();
 
   const projects = {
     register(project) {
@@ -110,7 +112,8 @@ export function createReferenceState() {
 
       const existing = worksById.get(workUnit.workId);
       if (existing) {
-        if (isDeepStrictEqual(existing, workUnit)) {
+        const originalOpen = workOpenRequestsById.get(workUnit.workId);
+        if (originalOpen && isDeepStrictEqual(originalOpen, workUnit)) {
           return success({ work: clone(existing), replayed: true });
         }
         return failure("WORK_ID_CONFLICT");
@@ -118,6 +121,7 @@ export function createReferenceState() {
 
       const stored = clone(workUnit);
       worksById.set(stored.workId, stored);
+      workOpenRequestsById.set(stored.workId, clone(workUnit));
       transitionsByWork.set(stored.workId, new Map());
       return success({ work: clone(stored), replayed: false });
     },
@@ -173,11 +177,16 @@ export function createReferenceState() {
 
       const existing = operationsById.get(operation.operationId);
       if (existing) {
-        if (isDeepStrictEqual(existing, operation)) {
+        const originalBegin = operationBeginRequestsById.get(operation.operationId);
+        const request = { expectedGeneration, operation: clone(operation) };
+        if (originalBegin && isDeepStrictEqual(originalBegin, request)) {
           return success({ operation: clone(existing), replayed: true });
         }
         return failure("OPERATION_ID_CONFLICT");
       }
+
+      if (operation.liveness !== "LIVE") return failure("OPERATION_BEGIN_NOT_LIVE");
+      if (hasWorkspaceEdit(operation) && !operation.workspaceRef) return failure("MUTATION_WORKSPACE_REQUIRED");
 
       const currentWork = worksById.get(operation.workId);
       if (!currentWork) return failure("WORK_NOT_FOUND");
@@ -190,7 +199,7 @@ export function createReferenceState() {
         return failure("OPERATION_GENERATION_MISMATCH", { currentGeneration: currentWork.generation });
       }
 
-      if (operation.liveness === "LIVE" && hasWorkspaceEdit(operation)) {
+      if (hasWorkspaceEdit(operation)) {
         const incompatible = [...operationsById.values()].find((candidate) =>
           candidate.projectId === operation.projectId
           && candidate.workspaceRef === operation.workspaceRef
@@ -203,6 +212,10 @@ export function createReferenceState() {
 
       const stored = clone(operation);
       operationsById.set(stored.operationId, stored);
+      operationBeginRequestsById.set(stored.operationId, {
+        expectedGeneration,
+        operation: clone(operation),
+      });
       return success({ operation: clone(stored), replayed: false });
     },
 
