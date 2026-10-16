@@ -176,7 +176,19 @@ diagnostics exit `0` even when the semantic state is `MISSING`, `INVALID`, or
 JSON result separates lease status, binding status, and authority status so a
 missing lease cannot be confused with an invalid store or an authority denial.
 Actor-specific diagnosis is optional and may use `--session-id` only with the
-factual Codex-provided session id; the diagnostic never fabricates one.
+factual Codex-provided hook `session_id`; the diagnostic never fabricates one.
+The returned `subject` explicitly marks a caller-supplied actor identity as
+unverified as the current session, because the standalone diagnostic CLI cannot
+observe Codex hook stdin by itself.
+
+Do not derive actor identity from `CODEX_SESSION_ID`, `$env:CODEX_SESSION_ID`, or
+any other environment variable. Codex provides the factual current `session_id`
+to project hooks in their JSON stdin payload. If that value is not independently
+available, omit `--session-id`; the result is lease-only and does not prove or
+disprove CONTROL for the current session. During an in-session tool call,
+Orchestra's `PreToolUse` hook is the factual authority gate for that current
+session: if the tool executes, do not replace that hook decision with a denial
+computed against an inferred identity.
 
 The legacy boundary command remains available only for recovery/debug or an
 explicit rollback workflow:
