@@ -8,7 +8,7 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-hook.mjs\"",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')\"",
+            "commandWindows": "$root = (& git rev-parse --show-toplevel).Trim(); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')",
             "timeout": 10,
             "statusMessage": "Checking Orchestra session authority",
             "additionalContextLimit": 1200
@@ -23,7 +23,7 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-hook.mjs\"",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')\"",
+            "commandWindows": "$root = (& git rev-parse --show-toplevel).Trim(); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')",
             "timeout": 10,
             "statusMessage": "Checking Orchestra session authority"
           }
@@ -37,7 +37,7 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-post-tool-hook.mjs\"",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-post-tool-hook.mjs')\"",
+            "commandWindows": "$root = (& git rev-parse --show-toplevel).Trim(); & node (Join-Path $root '.codex/astra-orchestra/session-post-tool-hook.mjs')",
             "timeout": 10,
             "statusMessage": "Releasing Orchestra workspace writer lease"
           }
@@ -50,7 +50,7 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-hook.mjs\"",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"$root = (& git rev-parse --show-toplevel); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')\"",
+            "commandWindows": "$root = (& git rev-parse --show-toplevel).Trim(); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')",
             "timeout": 10,
             "statusMessage": "Checking Orchestra session authority"
           }
