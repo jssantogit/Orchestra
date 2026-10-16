@@ -32,11 +32,6 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
-      - name: Diagnose delegation hook boundary in isolation
-        run: |
-          node --test tests/delegation/workspace-git-hooks-mutation.test.mjs
-          node --test --test-concurrency=1 tests/delegation/*.test.mjs
-
       - name: Run full regression
         run: npm test
 
