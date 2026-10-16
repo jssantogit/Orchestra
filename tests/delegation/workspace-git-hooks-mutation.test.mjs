@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -80,6 +84,19 @@ function requestFor(repoRoot) {
   };
 }
 
+function fileSnapshot(path) {
+  if (!existsSync(path)) return { exists: false };
+  const contents = readFileSync(path);
+  const stat = statSync(path);
+  return {
+    exists: true,
+    mode: stat.mode & 0o7777,
+    size: stat.size,
+    sha256: createHash("sha256").update(contents).digest("hex"),
+    content: contents.toString("utf8"),
+  };
+}
+
 test("canonical hook mutation through shared Git metadata is reported as delegation dirtiness", async (t) => {
   const repoRoot = createRepo();
   const baseDir = mkdtempSync(join(tmpdir(), "orchestra-git-hook-mutation-root-"));
@@ -101,8 +118,13 @@ test("canonical hook mutation through shared Git metadata is reported as delegat
     : resolve(context.path, commonDirText);
   const hooksDir = join(commonDir, "hooks");
   mkdirSync(hooksDir, { recursive: true });
-  writeFileSync(join(hooksDir, "pre-commit"), "#!/bin/sh\nexit 0\n", "utf8");
+  const hookPath = join(hooksDir, "pre-commit");
+  const hookEntriesBefore = readdirSync(hooksDir).sort();
+  const hookBefore = fileSnapshot(hookPath);
 
+  writeFileSync(hookPath, "#!/bin/sh\nexit 0\n", "utf8");
+
+  const hookAfter = fileSnapshot(hookPath);
   const afterBoundary = await readDelegationGitBoundary(repoRoot);
   const env = buildDelegationGitEnvironment();
   console.error("ORCHESTRA_GIT_HOOK_DIAGNOSTIC", JSON.stringify({
@@ -114,7 +136,11 @@ test("canonical hook mutation through shared Git metadata is reported as delegat
     sourceCommonDirText,
     worktreeCommonDirText: commonDirText,
     resolvedCommonDir: commonDir,
-    hookEntries: readdirSync(hooksDir).sort(),
+    hookEntriesBefore,
+    hookBefore,
+    hookEntriesAfter: readdirSync(hooksDir).sort(),
+    hookAfter,
+    hookActuallyChanged: JSON.stringify(hookBefore) !== JSON.stringify(hookAfter),
     beforeBoundary,
     afterBoundary,
     boundaryChanged: beforeBoundary.fingerprint !== afterBoundary.fingerprint,
