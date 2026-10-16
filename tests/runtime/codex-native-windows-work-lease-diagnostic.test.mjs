@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import { enterCodexWorkLease } from "../../runtimes/codex/.codex/astra-orchestra
 const diagnosticModule = "../../runtimes/codex/.codex/astra-orchestra/work-lease-authority.mjs";
 const diagnosticCli = fileURLToPath(new URL("../../runtimes/codex/.codex/astra-orchestra/work-lease-diagnostic-cli.mjs", import.meta.url));
 const hooksPath = fileURLToPath(new URL("../../runtimes/codex/.codex/hooks.json", import.meta.url));
+const runtimeRoot = fileURLToPath(new URL("../../runtimes/codex/.codex/astra-orchestra/", import.meta.url));
 
 function project() {
   const root = mkdtempSync(join(tmpdir(), "orch-codex-native-diagnostic-"));
@@ -18,24 +19,64 @@ function project() {
   return root;
 }
 
+function windowsHookProject() {
+  const root = mkdtempSync(join(tmpdir(), "orch-codex-windows-hook-"));
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  mkdirSync(join(root, ".codex"), { recursive: true });
+  cpSync(runtimeRoot, join(root, ".codex", "astra-orchestra"), { recursive: true });
+  return root;
+}
+
 function writeActiveState(root, value = {}) {
   writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"), JSON.stringify(value, null, 2) + "\n");
 }
 
-test("Codex commandWindows hooks are native PowerShell bodies without nested powershell launchers", () => {
+function hookEntries() {
   const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
-  const entries = [
-    ...hooks.hooks.SessionStart,
-    ...hooks.hooks.UserPromptSubmit,
-    ...hooks.hooks.PreToolUse,
-    ...hooks.hooks.PostToolUse,
-  ];
+  return {
+    hooks,
+    entries: [
+      ...hooks.hooks.SessionStart,
+      ...hooks.hooks.UserPromptSubmit,
+      ...hooks.hooks.PreToolUse,
+      ...hooks.hooks.PostToolUse,
+    ],
+  };
+}
+
+test("Codex commandWindows hooks are native PowerShell bodies without nested powershell launchers", () => {
+  const { entries } = hookEntries();
 
   assert.equal(entries.length, 4);
   for (const entry of entries) {
     assert.doesNotMatch(entry.commandWindows, /^powershell(?:\.exe)?\s/i);
     assert.match(entry.commandWindows, /git rev-parse --show-toplevel\)\.Trim\(\)/);
     assert.match(entry.commandWindows, /Join-Path \$root '\.codex\/astra-orchestra\/session-(?:post-tool-)?hook\.mjs'/);
+  }
+});
+
+test("Codex Desktop-style outer PowerShell executes commandWindows without nested expansion", { skip: process.platform !== "win32" }, () => {
+  const root = windowsHookProject();
+  try {
+    const { hooks } = hookEntries();
+    const command = hooks.hooks.SessionStart[0].hooks[0].commandWindows;
+    const result = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", command], {
+      cwd: root,
+      encoding: "utf8",
+      input: JSON.stringify({
+        cwd: root,
+        hook_event_name: "SessionStart",
+        source: "startup",
+        session_id: "windows-native-root",
+      }),
+      env: { ...process.env, ORCHESTRA_AUTHORITY_MODE: "lease" },
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    const output = JSON.parse(result.stdout);
+    assert.match(output.hookSpecificOutput.additionalContext, /WORK LEASE AUTHORITY/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -95,6 +136,27 @@ test("read-only Work Lease diagnostic reports allowed and stale session authorit
     const stale = diagnoseCodexWorkLease(root, { sessionId: "root-a", mode: "lease" });
     assert.equal(stale.authority.status, "DENIED");
     assert.equal(stale.authority.reason, "STALE_WORK_LEASE");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read-only Work Lease diagnostic exposes invalid bindings without mutating them", async () => {
+  const root = project();
+  try {
+    writeActiveState(root, { taskId: "task-1", state: "VERIFYING" });
+    const first = enterCodexWorkLease(root, { sessionId: "root-a", mode: "lease" });
+    assert.equal(first.authoritative, true);
+    const bindingsPath = join(root, ".codex", "orchestra-state", "work-lease-session-bindings.json");
+    writeFileSync(bindingsPath, "{bad-json\n");
+
+    const { diagnoseCodexWorkLease } = await import(diagnosticModule);
+    const result = diagnoseCodexWorkLease(root, { sessionId: "root-a", mode: "lease" });
+    assert.equal(result.bindings.status, "INVALID");
+    assert.equal(result.bindings.reason, "LEASE_BINDINGS_INVALID");
+    assert.equal(result.authority.status, "DENIED");
+    assert.equal(result.authority.reason, "LEASE_BINDINGS_INVALID");
+    assert.equal(readFileSync(bindingsPath, "utf8"), "{bad-json\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
