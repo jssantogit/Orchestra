@@ -17,7 +17,7 @@
     "check:runtimes": "node scripts/check-runtime-build.mjs",
     "sync:runtime-core": "node scripts/sync-runtime-core.mjs",
     "check:runtime-core": "node scripts/check-runtime-core.mjs",
-    "test:codex": "node --test runtimes/codex/tests/routing-policy.test.mjs runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs runtimes/codex/tests/work-lease-authority.test.mjs",
+    "test:codex": "node --test runtimes/codex/tests/routing-policy.test.mjs runtimes/codex/tests/parity.test.mjs runtimes/codex/tests/evidence-observability.test.mjs runtimes/codex/tests/session-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs runtimes/codex/tests/work-lease-authority.test.mjs runtimes/codex/tests/work-lease-diagnostic.test.mjs runtimes/codex/tests/windows-hooks.test.mjs",
     "test:antigravity": "node --test runtimes/antigravity/tests/routing-policy.test.mjs tests/leases/antigravity-work-lease.test.mjs",
     "test:hooks": "node --test --test-concurrency=1 runtimes/antigravity/tests/hooks.test.mjs tests/leases/antigravity-work-lease.test.mjs",
     "test:dream": "node --test runtimes/antigravity/.agents/dream/dream.test.mjs runtimes/antigravity/.agents/dream/exploration.test.mjs runtimes/antigravity/.agents/dream/policy-lab.test.mjs runtimes/antigravity/.agents/dream/shadow-mode.test.mjs runtimes/antigravity/.agents/dream/canary-mode.test.mjs tests/exploration/full-exploration.test.mjs",
