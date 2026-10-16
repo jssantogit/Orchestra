@@ -73,7 +73,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Verify provider project lifecycles and runtime portability
-        run: node --test tests/installers/codex-v2-doctor.test.mjs tests/installers/antigravity-v2-doctor.test.mjs tests/runtime/runtime-builder.test.mjs tests/runtime/doctor.test.mjs tests/runtime/codex-native-windows-work-lease-diagnostic.test.mjs
+        run: node --test tests/installers/codex-v2-doctor.test.mjs tests/installers/antigravity-v2-doctor.test.mjs tests/runtime/runtime-builder.test.mjs tests/runtime/doctor.test.mjs tests/runtime/codex-native-windows-work-lease-diagnostic.test.mjs tests/runtime/codex-work-lease-diagnostic-runtime-errors.test.mjs
 
       - name: Build runtime distributions
         run: npm run build:runtimes
