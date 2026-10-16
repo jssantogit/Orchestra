@@ -11,6 +11,7 @@ import { authorizeLeaseMutation } from "./core/leases/lease-authorizer.mjs";
 
 const VALID_MODES = new Set(["session", "dual", "lease"]);
 const BINDINGS_SCHEMA = "orchestra.codex-work-lease-bindings.v1";
+const DIAGNOSTIC_SCHEMA = "orchestra.codex-work-lease-diagnostic.v1";
 const READ_ONLY_TOOL_NAMES = new Set([
   "read", "read_file", "view_file", "grep", "glob", "ls", "list_files", "search",
 ]);
@@ -65,6 +66,24 @@ function readBindings(repoRoot) {
   return value;
 }
 
+function inspectBindings(repoRoot) {
+  const path = bindingsPath(repoRoot);
+  if (!existsSync(path)) {
+    return { status: "MISSING", reason: null, bindingCount: 0, path, state: { schema: BINDINGS_SCHEMA, bindings: {} } };
+  }
+  const value = readJson(path, null);
+  if (!value || value.schema !== BINDINGS_SCHEMA || !value.bindings || typeof value.bindings !== "object" || Array.isArray(value.bindings)) {
+    return { status: "INVALID", reason: "LEASE_BINDINGS_INVALID", bindingCount: null, path, state: null };
+  }
+  return {
+    status: "VALID",
+    reason: null,
+    bindingCount: Object.keys(value.bindings).length,
+    path,
+    state: value,
+  };
+}
+
 function writeBindings(repoRoot, value) {
   const path = bindingsPath(repoRoot);
   mkdirSync(dirname(path), { recursive: true });
@@ -113,6 +132,36 @@ function readOnlyBash(command) {
   return /^(?:rg|grep|cat|head|tail|wc|ls|pwd)(?:\s|$)/u.test(text);
 }
 
+function diagnosticLease(current) {
+  if (!current.exists) {
+    return { status: "MISSING", reason: "WORK_LEASE_NOT_INITIALIZED", path: current.path, value: null };
+  }
+  if (!current.valid || !current.lease) {
+    return {
+      status: "INVALID",
+      reason: current.reason || "LEASE_SCHEMA_INVALID",
+      path: current.path,
+      value: null,
+      errors: current.errors || null,
+    };
+  }
+  const lease = current.lease;
+  return {
+    status: "VALID",
+    reason: null,
+    path: current.path,
+    value: {
+      workspaceId: lease.workspaceId,
+      taskId: lease.taskId,
+      generation: lease.generation,
+      state: lease.state,
+      capabilities: Array.isArray(lease.capabilities) ? [...lease.capabilities] : [],
+      candidate: lease.candidate ?? null,
+      actorProvider: lease.actor?.provider || null,
+    },
+  };
+}
+
 export function resolveCodexAuthorityMode(value = process.env.ORCHESTRA_AUTHORITY_MODE) {
   if (value === undefined || value === null || String(value).trim() === "") return "lease";
   const normalized = String(value).trim().toLowerCase();
@@ -128,6 +177,69 @@ export function codexCapabilityForTool(payload = {}) {
       : "WORKSPACE_EDIT";
   }
   return "WORKSPACE_EDIT";
+}
+
+export function diagnoseCodexWorkLease(repoRoot, { sessionId, mode = undefined } = {}) {
+  const authorityMode = resolveCodexAuthorityMode(mode);
+  const current = readWorkLease(repoRoot);
+  const lease = diagnosticLease(current);
+  const bindingInspection = inspectBindings(repoRoot);
+  const actor = actorFor(sessionId);
+  let actorBinding = null;
+  let bindings = {
+    status: bindingInspection.status,
+    reason: bindingInspection.reason,
+    path: bindingInspection.path,
+    bindingCount: bindingInspection.bindingCount,
+    generation: null,
+  };
+
+  if (actor && bindingInspection.status === "VALID") {
+    actorBinding = bindingInspection.state.bindings[actor.sessionIdHash] || null;
+    bindings = {
+      ...bindings,
+      status: actorBinding ? "BOUND" : "UNBOUND",
+      reason: actorBinding ? null : "LEASE_BINDING_MISSING",
+      generation: Number.isInteger(actorBinding?.generation) ? actorBinding.generation : null,
+    };
+  }
+
+  let authority = { status: "UNKNOWN", reason: null };
+  if (authorityMode === "session") {
+    authority = { status: "UNKNOWN", reason: "SESSION_AUTHORITY_MODE" };
+  } else if (!actor) {
+    authority = { status: "UNKNOWN", reason: "CODEX_SESSION_ID_REQUIRED" };
+  } else if (lease.status === "MISSING") {
+    authority = { status: "DENIED", reason: "WORK_LEASE_NOT_INITIALIZED" };
+  } else if (lease.status === "INVALID") {
+    authority = { status: "DENIED", reason: lease.reason };
+  } else if (bindingInspection.status === "INVALID") {
+    authority = { status: "DENIED", reason: "LEASE_BINDINGS_INVALID" };
+  } else if (!actorBinding) {
+    authority = { status: "DENIED", reason: "LEASE_BINDING_MISSING" };
+  } else if (actorBinding.generation !== current.lease.generation) {
+    authority = { status: "DENIED", reason: "STALE_WORK_LEASE" };
+  } else {
+    const decision = authorizeLeaseMutation({
+      lease: current.lease,
+      actor,
+      generation: actorBinding.generation,
+      capability: "CONTROL",
+    });
+    authority = {
+      status: decision.allowed ? "ALLOWED" : "DENIED",
+      reason: decision.allowed ? null : decision.reason,
+    };
+  }
+
+  return {
+    schema: DIAGNOSTIC_SCHEMA,
+    ok: true,
+    mode: authorityMode,
+    lease,
+    bindings,
+    authority,
+  };
 }
 
 export function enterCodexWorkLease(repoRoot, { sessionId, mode = undefined } = {}) {
