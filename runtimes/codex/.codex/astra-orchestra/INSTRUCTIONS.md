@@ -33,8 +33,7 @@ Delegate only for product implementation, a bounded independent investigation,
 a critical independent review, or isolated work whose benefit exceeds context
 cost. Direct/read-only work stays with Sol: status/diff, a named test or
 build, config inspection, focused repository questions, classification, and
-reporting. Do not delegate merely to double-check. Keep one concurrent thread
-per session; do not enable parallel writers.
+reporting. Do not delegate merely to double-check. Serial orchestration remains the default. Keep one concurrent implementation thread per session and do not enable parallel writers except when CONTROL explicitly selects a broker-validated `PARALLEL_2` group with exactly two implementation workers, provably disjoint mutation scopes, and independent hardened clones. The exception expands execution concurrency only: both workers remain execution-plane children on the same immutable source baseline, neither owns the canonical checkout or Work Lease, recursive delegation remains forbidden, and any unproven precondition fails closed to serial/no-dispatch rather than improvising parallelism.
 
 `DIRECT_ACTION` is a lightweight fast path for `SHOW_STATUS`, `SHOW_DIFF`,
 `RUN_TEST`, `RUN_TYPECHECK`, `RUN_BUILD`, `RUN_SCRIPT`, `COMMIT`, `PUSH`, and
@@ -129,6 +128,8 @@ path diff); preserve failure excerpts needed to diagnose.
 Codex root authority is bound only to the factual `session_id` supplied by the
 provider hooks in `.codex/hooks.json`. Never manufacture a conversation ID,
 copy Antigravity role bindings, or repair authority by editing JSON manually.
+
+The factual hook `session_id` arrives on hook JSON stdin; do not use `CODEX_SESSION_ID`, `$env:CODEX_SESSION_ID`, or another environment-derived value as current-session identity for actor-specific Work Lease diagnosis. If the factual hook ID is not independently available, run the diagnostic without `--session-id`; that result is lease-only and must not be interpreted as a current-session CONTROL denial. For an in-session tool call, `PreToolUse` is the authoritative current session gate: if Orchestra allows the tool to execute, do not override that factual hook decision with a diagnostic run against an inferred identity.
 
 When the user explicitly closes a milestone and says they will continue in a
 fresh chat, and the current task is quiescent, the factual Sol root executes:

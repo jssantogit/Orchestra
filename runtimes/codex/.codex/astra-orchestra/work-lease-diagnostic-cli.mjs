@@ -84,11 +84,13 @@ export function runWorkLeaseDiagnosticCli(argv = process.argv.slice(2)) {
         "",
         "Options:",
         "  --repo-root <path>   Project root (defaults to cwd)",
-        "  --session-id <id>    Factual Codex session id for actor-specific authority diagnosis",
+        "  --session-id <id>    Factual Codex hook session_id from hook stdin; actor-specific only",
         "  --mode <mode>        Authority mode override: lease, dual, or session",
         "  -h, --help           Show this help",
         "",
         "The command is read-only. Semantic states such as MISSING, INVALID, or DENIED exit 0.",
+        "Do not infer the current session id from environment variables, including CODEX_SESSION_ID.",
+        "Without --session-id the diagnostic is lease-only and does not evaluate current-session authority.",
       ].join("\n") + "\n");
       return 0;
     }
