@@ -249,6 +249,21 @@ export function createOperationReconciler({
       operationId: operation.operationId,
       workflowState: RECOVERY_WORKFLOW_STATE,
       resultRef: recoveryResultRef(operation.operationId),
+      expectedHeartbeatAt: operation.heartbeatAt,
+    });
+  }
+
+  function terminalizationFailure(operationId, terminal) {
+    if (terminal?.reason === "OPERATION_CHANGED") {
+      return failure("RECOVERY_RACE_LOST", {
+        operationId,
+        terminalized: false,
+        retryable: true,
+      });
+    }
+    return failure("RECOVERY_TERMINALIZATION_FAILED", {
+      operationId,
+      terminalReason: terminal?.reason ?? "UNKNOWN",
     });
   }
 
@@ -446,12 +461,7 @@ export function createOperationReconciler({
 
     if (operation.liveness !== "TERMINAL") {
       const terminal = terminalize(operation);
-      if (!terminal.ok) {
-        return failure("RECOVERY_TERMINALIZATION_FAILED", {
-          operationId,
-          terminalReason: terminal.reason,
-        });
-      }
+      if (!terminal.ok) return terminalizationFailure(operationId, terminal);
       operation = terminal.operation;
     }
 
@@ -652,12 +662,7 @@ export function createOperationReconciler({
       }
 
       const terminal = terminalize(operation);
-      if (!terminal.ok) {
-        return failure("RECOVERY_TERMINALIZATION_FAILED", {
-          operationId,
-          terminalReason: terminal.reason,
-        });
-      }
+      if (!terminal.ok) return terminalizationFailure(operationId, terminal);
       if (terminal.replayed) {
         const latest = store.recoveries.latest({
           projectId: operation.projectId,
