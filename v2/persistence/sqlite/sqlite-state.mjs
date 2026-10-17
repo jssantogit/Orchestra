@@ -52,6 +52,14 @@ function schemaTooNewError(version) {
   return error;
 }
 
+function activeWorkCorruptError(projectId, workId) {
+  const error = new Error(`ORCHESTRA_ACTIVE_WORK_HEAD_CORRUPT:${projectId}:${workId}`);
+  error.code = "ORCHESTRA_ACTIVE_WORK_HEAD_CORRUPT";
+  error.projectId = projectId;
+  error.workId = workId;
+  return error;
+}
+
 function transaction(db, fn) {
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -210,16 +218,6 @@ function applyMigration(db, migration) {
   });
 }
 
-function initializeDatabase(db) {
-  const row = db.prepare("PRAGMA user_version").get();
-  const version = Number(row?.user_version ?? 0);
-  if (version > CURRENT_SCHEMA_VERSION) throw schemaTooNewError(version);
-
-  for (const migration of MIGRATIONS) {
-    if (migration.version > version) applyMigration(db, migration);
-  }
-}
-
 function createProjectRegistry(db) {
   const getById = db.prepare("SELECT * FROM projects WHERE project_id = ?");
   const getByRoot = db.prepare("SELECT * FROM projects WHERE canonical_root = ?");
@@ -257,9 +255,7 @@ function createProjectRegistry(db) {
         }
 
         const rootOwner = getByRoot.get(project.workspace.canonicalRoot);
-        if (rootOwner) {
-          return fail("WORKSPACE_ALREADY_REGISTERED", { projectId: rootOwner.project_id });
-        }
+        if (rootOwner) return fail("WORKSPACE_ALREADY_REGISTERED", { projectId: rootOwner.project_id });
 
         const now = new Date().toISOString();
         insertProject.run(
@@ -300,28 +296,22 @@ function createProjectRegistry(db) {
       return transaction(db, () => {
         const current = getById.get(projectId);
         if (!current) return fail("PROJECT_NOT_FOUND");
-
         const replay = getRebind.get(digest);
         if (replay) return ok({ project: parseRecord(current), replayed: true });
-
         if (current.canonical_root !== expectedRoot) {
           return fail("STALE_PROJECT_ROOT", { currentRoot: current.canonical_root });
         }
-
         if (newRoot === expectedRoot) {
           insertRebind.run(digest, projectId, expectedRoot, newRoot, new Date().toISOString());
           return ok({ project: parseRecord(current), replayed: true });
         }
-
         const target = getByRoot.get(newRoot);
         if (target && target.project_id !== projectId) {
           return fail("WORKSPACE_ALREADY_REGISTERED", { projectId: target.project_id });
         }
-
         const next = parseRecord(current);
         next.workspace = { ...next.workspace, canonicalRoot: newRoot };
         if (!validateProjectV2(next).valid) return fail("PROJECT_INVALID");
-
         const now = new Date().toISOString();
         const update = updateRoot.run(newRoot, canonicalJson(next), now, projectId, expectedRoot);
         if (Number(update.changes) !== 1) {
@@ -410,7 +400,6 @@ function createWorkStore(db) {
       if (invalid) return invalid;
       const requestJson = canonicalJson(workUnit);
       const digest = requestDigest(workUnit);
-
       return transaction(db, () => {
         const existing = getById.get(workUnit.workId);
         if (existing) {
@@ -419,7 +408,6 @@ function createWorkStore(db) {
           }
           return fail("WORK_ID_CONFLICT");
         }
-
         const now = new Date().toISOString();
         insertNewWork(workUnit, requestJson, digest, now);
         return ok({ work: JSON.parse(requestJson), replayed: false });
@@ -430,13 +418,11 @@ function createWorkStore(db) {
       if (!validateWorkUnitV2(workUnit).valid) return fail("WORK_INVALID");
       const requestJson = canonicalJson(workUnit);
       const digest = requestDigest(workUnit);
-
       return transaction(db, () => {
         const project = getProject.get(workUnit.projectId);
         if (!project) return fail("PROJECT_NOT_FOUND");
         if (workUnit.runtimeImage !== project.runtime_image) return fail("RUNTIME_IMAGE_MISMATCH");
         if (workUnit.instructionEpoch !== Number(project.instruction_epoch)) return fail("INSTRUCTION_EPOCH_MISMATCH");
-
         const head = getHeadId.get(workUnit.projectId);
         if (head) {
           if (head.work_id === workUnit.workId) {
@@ -447,9 +433,7 @@ function createWorkStore(db) {
           }
           return fail("ACTIVE_WORK_EXISTS", { currentWorkId: head.work_id });
         }
-
         if (getById.get(workUnit.workId)) return fail("WORK_ID_CONFLICT");
-
         const now = new Date().toISOString();
         insertNewWork(workUnit, requestJson, digest, now);
         insertHead.run(workUnit.projectId, workUnit.workId, now, now);
@@ -458,7 +442,11 @@ function createWorkStore(db) {
     },
 
     current(projectId) {
-      return parseRecord(getHead.get(projectId));
+      const head = getHeadId.get(projectId);
+      if (!head) return null;
+      const row = getHead.get(projectId);
+      if (!row) throw activeWorkCorruptError(projectId, head.work_id);
+      return parseRecord(row);
     },
 
     read(projectId, workId) {
@@ -472,54 +460,33 @@ function createWorkStore(db) {
       const request = { projectId, workId, expectedGeneration, transitionId, patch };
       const requestJson = canonicalJson(request);
       const digest = requestDigest(request);
-
       return transaction(db, () => {
         const currentRow = getById.get(workId);
         if (!currentRow) return fail("WORK_NOT_FOUND");
         if (currentRow.project_id !== projectId) return fail("WORK_PROJECT_MISMATCH");
-
         const prior = getTransition.get(workId, transitionId);
         if (prior) {
           if (prior.request_digest !== digest || prior.request_json !== requestJson) return fail("IDEMPOTENCY_CONFLICT");
           return ok({ work: JSON.parse(prior.result_json), replayed: true });
         }
-
         const current = parseRecord(currentRow);
         if (expectedGeneration !== current.generation) {
           return fail("STALE_GENERATION", { currentGeneration: current.generation });
         }
-        if (Object.keys(patch).some((key) => WORK_IDENTITY_FIELDS.has(key))) {
-          return fail("IMMUTABLE_WORK_IDENTITY");
-        }
-
-        const next = {
-          ...current,
-          ...structuredClone(patch),
-          generation: current.generation + 1,
-        };
+        if (Object.keys(patch).some((key) => WORK_IDENTITY_FIELDS.has(key))) return fail("IMMUTABLE_WORK_IDENTITY");
+        const next = { ...current, ...structuredClone(patch), generation: current.generation + 1 };
         if (!validateWorkUnitV2(next).valid) return fail("WORK_TRANSITION_INVALID");
-
         const project = getProject.get(projectId);
         if (!project) return fail("PROJECT_NOT_FOUND");
         if (next.runtimeImage !== project.runtime_image) return fail("RUNTIME_IMAGE_MISMATCH");
         if (next.instructionEpoch !== Number(project.instruction_epoch)) return fail("INSTRUCTION_EPOCH_MISMATCH");
-
         const nextJson = canonicalJson(next);
         const now = new Date().toISOString();
-        const update = updateWork.run(
-          next.generation,
-          next.state,
-          nextJson,
-          now,
-          workId,
-          projectId,
-          expectedGeneration,
-        );
+        const update = updateWork.run(next.generation, next.state, nextJson, now, workId, projectId, expectedGeneration);
         if (Number(update.changes) !== 1) {
           const latest = getById.get(workId);
           return fail("STALE_GENERATION", { currentGeneration: Number(latest?.generation ?? -1) });
         }
-
         insertTransition.run(workId, transitionId, requestJson, digest, nextJson, now);
         return ok({ work: next, replayed: false });
       });
@@ -532,57 +499,41 @@ function createWorkStore(db) {
         || typeof reason !== "string" || reason.trim().length === 0) {
         return fail("WORK_ABANDON_INVALID");
       }
-
       const request = { projectId, expectedWorkId, expectedGeneration, commandId, reason };
       const requestJson = canonicalJson(request);
       const digest = requestDigest(request);
-
       return transaction(db, () => {
         const prior = getHeadCommand.get(projectId, commandId);
         if (prior) {
           if (prior.request_digest !== digest || prior.request_json !== requestJson) return fail("IDEMPOTENCY_CONFLICT");
           return ok({ work: JSON.parse(prior.result_json), replayed: true });
         }
-
         const head = getHeadId.get(projectId);
         if (!head) return fail("NO_ACTIVE_WORK");
         if (head.work_id !== expectedWorkId) return fail("STALE_ACTIVE_WORK", { currentWorkId: head.work_id });
-
         const currentRow = getById.get(head.work_id);
         if (!currentRow || currentRow.project_id !== projectId) return fail("ACTIVE_WORK_CORRUPT");
         const current = parseRecord(currentRow);
         if (current.generation !== expectedGeneration) {
           return fail("STALE_GENERATION", { currentGeneration: current.generation });
         }
-
         const live = findLiveOperation.get(projectId, current.workId, current.generation);
         if (live) return fail("LIVE_OPERATION_EXISTS", { operationId: live.operation_id });
-
         const next = { ...current, state: "ABANDONED", generation: current.generation + 1 };
         if (!validateWorkUnitV2(next).valid) return fail("WORK_ABANDON_INVALID");
         const nextJson = canonicalJson(next);
         const now = new Date().toISOString();
-        const update = updateWork.run(
-          next.generation,
-          next.state,
-          nextJson,
-          now,
-          current.workId,
-          projectId,
-          expectedGeneration,
-        );
+        const update = updateWork.run(next.generation, next.state, nextJson, now, current.workId, projectId, expectedGeneration);
         if (Number(update.changes) !== 1) {
           const latest = getById.get(current.workId);
           return fail("STALE_GENERATION", { currentGeneration: Number(latest?.generation ?? -1) });
         }
-
         const deleted = deleteHead.run(projectId, current.workId);
         if (Number(deleted.changes) !== 1) {
           const error = new Error("ORCHESTRA_ACTIVE_WORK_HEAD_CHANGED");
           error.code = "ORCHESTRA_ACTIVE_WORK_HEAD_CHANGED";
           throw error;
         }
-
         insertHeadCommand.run(projectId, commandId, requestJson, digest, nextJson, now);
         return ok({ work: next, replayed: false });
       });
@@ -622,7 +573,6 @@ function createOperationStore(db) {
       const request = { expectedGeneration, operation };
       const requestJson = canonicalJson(request);
       const digest = requestDigest(request);
-
       return transaction(db, () => {
         const existing = getById.get(operation.operationId);
         if (existing) {
@@ -631,11 +581,9 @@ function createOperationStore(db) {
           }
           return fail("OPERATION_ID_CONFLICT");
         }
-
         if (operation.liveness !== "LIVE") return fail("OPERATION_BEGIN_NOT_LIVE");
         const hasWorkspaceEdit = operation.capabilities.includes("WORKSPACE_EDIT");
         if (hasWorkspaceEdit && !operation.workspaceRef) return fail("MUTATION_WORKSPACE_REQUIRED");
-
         const currentWork = getWork.get(operation.workId);
         if (!currentWork) return fail("WORK_NOT_FOUND");
         if (operation.projectId !== currentWork.project_id) return fail("OPERATION_PROJECT_MISMATCH");
@@ -646,33 +594,17 @@ function createOperationStore(db) {
         if (operation.generation !== Number(currentWork.generation)) {
           return fail("OPERATION_GENERATION_MISMATCH", { currentGeneration: Number(currentWork.generation) });
         }
-
         if (hasWorkspaceEdit) {
           const incompatible = findLiveWriter.get(operation.projectId, operation.workspaceRef);
           if (incompatible) return fail("INCOMPATIBLE_LIVE_OPERATION", { operationId: incompatible.operation_id });
         }
-
         const recordJson = canonicalJson(operation);
         const now = new Date().toISOString();
         insertOperation.run(
-          operation.operationId,
-          operation.projectId,
-          operation.workId,
-          operation.generation,
-          operation.kind,
-          operation.actorRef,
-          hasWorkspaceEdit ? 1 : 0,
-          operation.workflowState,
-          operation.liveness,
-          operation.heartbeatAt,
-          operation.runtimeOwnerRef,
-          operation.workspaceRef,
-          operation.resultRef,
-          recordJson,
-          requestJson,
-          digest,
-          now,
-          now,
+          operation.operationId, operation.projectId, operation.workId, operation.generation,
+          operation.kind, operation.actorRef, hasWorkspaceEdit ? 1 : 0, operation.workflowState,
+          operation.liveness, operation.heartbeatAt, operation.runtimeOwnerRef, operation.workspaceRef,
+          operation.resultRef, recordJson, requestJson, digest, now, now,
         );
         return ok({ operation: JSON.parse(recordJson), replayed: false });
       });
@@ -696,12 +628,10 @@ function createOperationStore(db) {
         const current = parseRecord(currentRow);
         if (current.liveness === "TERMINAL") return fail("OPERATION_TERMINAL");
         if (current.runtimeOwnerRef !== runtimeOwnerRef) return fail("OWNER_PROOF_MISMATCH");
-
         const previousHeartbeat = current.heartbeatAt ? Date.parse(current.heartbeatAt) : Number.NEGATIVE_INFINITY;
         const nextHeartbeat = Date.parse(heartbeatAt);
         if (!Number.isFinite(nextHeartbeat)) return fail("HEARTBEAT_INVALID");
         if (nextHeartbeat < previousHeartbeat) return fail("STALE_HEARTBEAT");
-
         const next = { ...current, heartbeatAt };
         if (!validateOperationV2(next).valid) return fail("HEARTBEAT_INVALID");
         const now = new Date().toISOString();
@@ -715,20 +645,13 @@ function createOperationStore(db) {
         const currentRow = getById.get(operationId);
         if (!currentRow) return fail("OPERATION_NOT_FOUND");
         const current = parseRecord(currentRow);
-
         if (current.liveness === "TERMINAL") {
           if (current.workflowState === workflowState && current.resultRef === resultRef) {
             return ok({ operation: current, replayed: true });
           }
           return fail("TERMINAL_RESULT_CONFLICT");
         }
-
-        const next = {
-          ...current,
-          workflowState,
-          liveness: "TERMINAL",
-          resultRef,
-        };
+        const next = { ...current, workflowState, liveness: "TERMINAL", resultRef };
         if (!validateOperationV2(next).valid) return fail("TERMINAL_RESULT_INVALID");
         const now = new Date().toISOString();
         const update = updateTerminal.run(workflowState, resultRef, canonicalJson(next), now, operationId);
