@@ -98,7 +98,7 @@ test("opening a schema v1 registry migrates transactionally to v3 without losing
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3);
     const migrations = db.prepare("SELECT version, name FROM orchestra_migrations ORDER BY version").all()
       .map((row) => ({ version: row.version, name: row.name }));
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('work_units','operations','project_work_heads') ORDER BY name").all()
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('work_units','operations','project_work_heads','work_head_commands') ORDER BY name").all()
       .map((row) => row.name);
     db.close();
 
@@ -107,6 +107,6 @@ test("opening a schema v1 registry migrates transactionally to v3 without losing
       { version: 2, name: "v2_work_operations" },
       { version: 3, name: "v2_active_work_head" },
     ]);
-    assert.deepEqual(tables, ["operations", "project_work_heads", "work_units"]);
+    assert.deepEqual(tables, ["operations", "project_work_heads", "work_head_commands", "work_units"]);
   });
 });
