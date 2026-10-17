@@ -10,6 +10,23 @@ This file resolves the final implementation-local ambiguities found during plan 
 - Do not run optional tests with `|| true` or otherwise suppress failures. The corrected V2-5 plan already removes that pattern.
 - `tests/installers/codex-project-runtime-manager.test.mjs` is a required V2-5 Task 6 modification/test surface.
 
+### Task 1 exact SQLite paths
+
+The approved predecessor `a3002edb1493cc86e8e9f713477db3add31d1799` does not contain generic `migrations.mjs` or `state.mjs` files. The authoritative paths are:
+
+- Modify: `v2/persistence/sqlite/sqlite-state-core.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state.mjs`
+
+`sqlite-state-core.mjs` owns `CURRENT_SCHEMA_VERSION`, `MIGRATIONS`, schema initialization and the core SQLite state stores. `sqlite-state.mjs` owns composition/exposure of the public SQLite state. These paths are the intended Task 1 surfaces; do not create generic alias files merely to satisfy the earlier mistaken names.
+
+### Task 7 exact workflow path
+
+The canonical existing V2 persistence workflow at the same predecessor is:
+
+- Modify: `.github/workflows/v2-persistence.yml`
+
+Do not create `.github/workflows/orchestra-v2-persistence.yml` as an alias.
+
 ## V2-6
 
 ### Task 2 neutral helper rule
