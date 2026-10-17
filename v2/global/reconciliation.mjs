@@ -7,28 +7,26 @@ import {
 import { createOperationLivenessService } from "../liveness/operation-liveness-service.mjs";
 import { createRuntimeOwnerStore } from "../liveness/runtime-owner-store.mjs";
 import { createOperationReconciler } from "../reconciliation/reconciler.mjs";
-
-const UNRESOLVED_WORKSPACE_RECOVERY = Object.freeze({
-  async inspect(workspaceRef) {
-    return { workspaceRef, status: "UNKNOWN" };
-  },
-  async cleanup() {
-    throw new Error("workspace cleanup requires a factual global workspace identity");
-  },
-});
+import { createManagedWorkspaceRecovery } from "../workspaces/managed-workspace-recovery.mjs";
 
 export function createGlobalOperationReconciler({
   state,
   home,
   now = () => new Date().toISOString(),
   readProcessIdentity = createHostProcessIdentityReader(),
-  workspaceRecovery = UNRESOLVED_WORKSPACE_RECOVERY,
+  workspaceRecovery = null,
 } = {}) {
   if (!state) throw new TypeError("state is required");
   if (typeof home !== "string" || home.trim().length === 0) throw new TypeError("home is required");
   if (typeof now !== "function") throw new TypeError("now must be a function");
   if (typeof readProcessIdentity !== "function") throw new TypeError("readProcessIdentity must be a function");
-  if (typeof workspaceRecovery?.inspect !== "function" || typeof workspaceRecovery?.cleanup !== "function") {
+
+  const resolvedWorkspaceRecovery = workspaceRecovery ?? createManagedWorkspaceRecovery({
+    home,
+    state,
+  });
+  if (typeof resolvedWorkspaceRecovery?.inspect !== "function"
+    || typeof resolvedWorkspaceRecovery?.cleanup !== "function") {
     throw new TypeError("workspaceRecovery.inspect and cleanup are required");
   }
 
@@ -48,7 +46,7 @@ export function createGlobalOperationReconciler({
   return createOperationReconciler({
     state,
     operationLiveness,
-    workspaceRecovery,
+    workspaceRecovery: resolvedWorkspaceRecovery,
     now,
   });
 }
