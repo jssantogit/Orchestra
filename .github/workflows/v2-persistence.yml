@@ -30,6 +30,9 @@ jobs:
       - name: Run v2 persistence tests
         run: node --test tests/v2-persistence/*.test.mjs
 
+      - name: Run global Experience store tests
+        run: node --test tests/runtime/v2-global-experience-store.test.mjs
+
       - name: Run runtime image lifecycle tests
         run: node --test tests/runtime/v2-runtime-images.test.mjs tests/runtime/v2-runtime-upgrade.test.mjs
 
@@ -40,7 +43,7 @@ jobs:
         run: node --test tests/runtime/v2-antigravity-global-adapter.test.mjs tests/runtime/v2-provider-symmetry.test.mjs
 
       - name: Run v2 domain, reference state and continuation tests
-        run: node --test tests/runtime/v2-domain-invariants.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-capsule.test.mjs
+        run: node --test tests/runtime/v2-domain-foundation.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-boundary.test.mjs
 
   v1-regression:
     name: V1 Compatibility Guard
@@ -78,3 +81,6 @@ jobs:
 
       - name: Run full v1 regression
         run: npm test
+
+      - name: Verify contamination boundary
+        run: npm run check:contamination

@@ -209,9 +209,12 @@ test("cross-project operation facts fail closed", () => {
   assert.equal(decision.reason, "CROSS_PROJECT_OPERATION");
 });
 
-test("Experience projection strips raw project content and cannot globalize one lineage", () => {
-  const result = projectExperience({
+test("Experience projection rejects raw project content and cannot globalize one lineage", () => {
+  const rejected = projectExperience({
     category: "DIAGNOSTIC",
+    sourceProjectId: project.projectId,
+    sourceLineageId: project.lineageId,
+    domainCohort: "software-engineering",
     facts: {
       failureClass: "RG_NO_MATCH",
       sourceCode: "private bytes",
@@ -219,15 +222,24 @@ test("Experience projection strips raw project content and cannot globalize one 
       fileContents: "secret",
     },
     outcome: { recoveryClass: "CONTINUE" },
-    projectLineageIds: ["lineage-tsuzuki", "lineage-tsuzuki"],
+    projectLineageIds: [project.lineageId],
+    requestedScope: "GLOBAL_CANDIDATE",
+  });
+  assert.equal(rejected.valid, false);
+
+  const result = projectExperience({
+    category: "DIAGNOSTIC",
+    sourceProjectId: project.projectId,
+    sourceLineageId: project.lineageId,
+    domainCohort: "software-engineering",
+    facts: { failureClass: "RG_NO_MATCH" },
+    outcome: { recoveryClass: "CONTINUE" },
+    projectLineageIds: [project.lineageId, project.lineageId],
     requestedScope: "GLOBAL_CANDIDATE",
   });
 
   assert.equal(result.valid, true);
   assert.equal(result.experience.privacy.containsRawProjectContent, false);
-  assert.equal("sourceCode" in result.experience.facts, false);
-  assert.equal("prompt" in result.experience.facts, false);
-  assert.equal("fileContents" in result.experience.facts, false);
   assert.equal(result.experience.generalization.scope, "PROJECT");
   assert.equal(result.experience.generalization.projectLineageCount, 1);
 });

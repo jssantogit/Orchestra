@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import { createWorkAuthority } from "../../authority/work-authority.mjs";
+import { createExperienceRecorders } from "../../experience/recorders.mjs";
 import { createHostProcessIdentityReader, createLocalProcessOwnerProbe } from "../../liveness/local-process-probe.mjs";
 import { createOperationLivenessService } from "../../liveness/operation-liveness-service.mjs";
 import { createProviderEventProbe } from "../../liveness/provider-event-liveness.mjs";
@@ -92,7 +93,11 @@ function eventName(payload) {
   return names[0];
 }
 
-export function createAntigravityHookHandler({ registry, now = () => new Date().toISOString() } = {}) {
+export function createAntigravityHookHandler({
+  registry,
+  now = () => new Date().toISOString(),
+  experienceRecorder = null,
+} = {}) {
   if (!registry?.state || typeof registry.resolveWorkspace !== "function") {
     throw new TypeError("global project registry is required");
   }
@@ -111,6 +116,16 @@ export function createAntigravityHookHandler({ registry, now = () => new Date().
     now,
   });
   const authorizedAuthority = createWorkAuthority({ state: registry.state, operationLiveness });
+  const recorder = experienceRecorder
+    ?? (registry.state.experience ? createExperienceRecorders({ persistence: registry.state.experience }) : null);
+
+  async function safeRecord(method, payload) {
+    try {
+      if (typeof recorder?.[method] === "function") await recorder[method](payload);
+    } catch {
+      // Experience is non-authoritative and cannot alter provider execution outcomes.
+    }
+  }
 
   async function resolveProject(payload, cwd) {
     try {
@@ -183,6 +198,13 @@ export function createAntigravityHookHandler({ registry, now = () => new Date().
     if (isReadOnly) {
       const authorized = await authorizedAuthority.authorize({ ...expectedTuple, capability: "WORKSPACE_READ" });
       if (!authorized.allowed) return preToolUseResponse(false, authorized.reason, freshnessFields(authorized));
+      await safeRecord("recordProviderCapability", {
+        project,
+        workId: observation.observedWorkId,
+        providerFamily: "antigravity",
+        capabilityClass: "WORKSPACE_READ",
+        toolClass: event.sideEffectClass,
+      });
       return preToolUseResponse(true, null, { projectId: project.projectId });
     }
 
@@ -215,6 +237,14 @@ export function createAntigravityHookHandler({ registry, now = () => new Date().
           recoveryRequired: assessment.liveness === "STALE_RECOVERABLE",
         });
       }
+      await safeRecord("recordProviderCapability", {
+        project,
+        workId: operation.workId,
+        operationId: operation.operationId,
+        providerFamily: "antigravity",
+        capabilityClass: "WORKSPACE_EDIT",
+        toolClass: event.sideEffectClass,
+      });
       return preToolUseResponse(true, null, {
         projectId: project.projectId,
         operation: { operationId: operation.operationId },
@@ -278,6 +308,14 @@ export function createAntigravityHookHandler({ registry, now = () => new Date().
     });
     if (!correlation.ok) return preToolUseResponse(false, correlation.reason, { projectId: project.projectId });
 
+    await safeRecord("recordProviderCapability", {
+      project,
+      workId: observation.observedWorkId,
+      operationId,
+      providerFamily: "antigravity",
+      capabilityClass: "WORKSPACE_EDIT",
+      toolClass: event.sideEffectClass,
+    });
     return preToolUseResponse(true, null, {
       projectId: project.projectId,
       operation: { operationId },
@@ -343,6 +381,12 @@ export function createAntigravityHookHandler({ registry, now = () => new Date().
         : "ANTIGRAVITY_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });
     }
 
+    await safeRecord("recordProviderTerminal", {
+      project,
+      operation: terminal.operation,
+      providerFamily: "antigravity",
+      workflowState: terminal.operation.workflowState,
+    });
     return result(true, null, {
       projectId: project.projectId,
       operation: {

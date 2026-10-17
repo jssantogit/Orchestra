@@ -11,7 +11,7 @@ import {
 import { createOperationCorrelationStore } from "../../providers/operation-correlation-store.mjs";
 import { createSessionObservationStore } from "../../providers/session-observation-store.mjs";
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 const WORK_IDENTITY_FIELDS = new Set(["workId", "projectId", "taskId", "generation"]);
 
 function ok(payload = {}) {
@@ -243,6 +243,49 @@ const MIGRATIONS = Object.freeze([
 
         CREATE INDEX provider_correlations_operation_idx
           ON provider_operation_correlations(operation_id);
+      `);
+    },
+  }),
+  Object.freeze({
+    version: 5,
+    name: "v2_global_experience",
+    apply(db) {
+      db.exec(`
+        CREATE TABLE experience_records (
+          experience_id TEXT PRIMARY KEY,
+          category TEXT NOT NULL,
+          source_project_id TEXT NOT NULL,
+          source_lineage_id TEXT NOT NULL,
+          work_id TEXT,
+          operation_id TEXT,
+          domain_cohort TEXT NOT NULL,
+          provider_family TEXT,
+          failure_class TEXT,
+          recovery_class TEXT,
+          terminal_outcome TEXT,
+          eligibility_scope TEXT NOT NULL,
+          lineage_count INTEGER NOT NULL CHECK (lineage_count >= 1),
+          record_json TEXT NOT NULL,
+          record_digest TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX experience_category_idx
+          ON experience_records(category, experience_id);
+        CREATE INDEX experience_provider_idx
+          ON experience_records(provider_family, experience_id);
+        CREATE INDEX experience_domain_idx
+          ON experience_records(domain_cohort, experience_id);
+        CREATE INDEX experience_failure_idx
+          ON experience_records(failure_class, experience_id);
+        CREATE INDEX experience_recovery_idx
+          ON experience_records(recovery_class, experience_id);
+        CREATE INDEX experience_outcome_idx
+          ON experience_records(terminal_outcome, experience_id);
+        CREATE INDEX experience_scope_idx
+          ON experience_records(eligibility_scope, lineage_count, experience_id);
+        CREATE INDEX experience_project_idx
+          ON experience_records(source_project_id, experience_id);
       `);
     },
   }),
