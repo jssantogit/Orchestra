@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { access, readdir, readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -71,6 +71,51 @@ async function walkMjs(root) {
   return files;
 }
 
+function repositoryRelativePath(path) {
+  return relative(repoRoot, path).replaceAll("\\", "/");
+}
+
+function providerFamily(path) {
+  const match = /^v2\/providers\/(codex|antigravity)(?:\/|$)/.exec(path);
+  return match?.[1] ?? null;
+}
+
+function importBoundaryViolation(sourcePath, specifier) {
+  if (!specifier.startsWith(".")) {
+    if (specifier.startsWith("node:")) return null;
+
+    const normalizedSpecifier = specifier.replaceAll("\\", "/");
+    if (["/providers/", "/runtimes/", "/core/", ".codex", ".agents"].some((token) => normalizedSpecifier.includes(token))) {
+      return "legacy-runtime-boundary";
+    }
+    return null;
+  }
+
+  const sourceFile = join(repoRoot, sourcePath);
+  const destinationPath = resolve(dirname(sourceFile), specifier);
+  const destinationRelativePath = repositoryRelativePath(destinationPath);
+  const segments = destinationRelativePath.split("/");
+
+  if (destinationRelativePath === ".." || destinationRelativePath.startsWith("../")) {
+    return "outside-repository";
+  }
+  if (["providers", "runtimes", "core"].includes(segments[0])) {
+    return "legacy-runtime-boundary";
+  }
+  if (segments.includes(".codex") || segments.includes(".agents")) {
+    return "project-local-integration-tree";
+  }
+
+  const destinationFamily = providerFamily(destinationRelativePath);
+  if (destinationFamily) {
+    const sourceFamily = providerFamily(sourcePath);
+    if (sourceFamily === destinationFamily || sourcePath === "v2/global/cli.mjs") return null;
+    return "provider-family-boundary";
+  }
+
+  return null;
+}
+
 test("durable v2 authority contracts reject hidden session ownership fields", () => {
   assert.equal(validateProjectV2({ ...project, ownerSessionId: "chat-a" }).valid, false);
   assert.equal(validateWorkUnitV2({ ...work, conversationId: "chat-a" }).valid, false);
@@ -133,17 +178,43 @@ test("continuation verification detects mutation after sealing", () => {
   assert.equal(verification.reason, "CONTINUATION_DIGEST_MISMATCH");
 });
 
-test("global v2 core does not import provider runtimes or project-local integration trees", async () => {
+test("v2 imports preserve legacy, neutral-core and provider-family boundaries", async () => {
+  assert.equal(
+    importBoundaryViolation("v2/global/cli.mjs", "../../providers/codex/adapter/session.mjs"),
+    "legacy-runtime-boundary",
+  );
+  assert.equal(
+    importBoundaryViolation("v2/liveness/operation-liveness-service.mjs", "../providers/codex/hook-handler.mjs"),
+    "provider-family-boundary",
+  );
+  assert.equal(
+    importBoundaryViolation("v2/providers/codex/hook-handler.mjs", "../antigravity/hook-handler.mjs"),
+    "provider-family-boundary",
+  );
+  assert.equal(importBoundaryViolation("v2/global/cli.mjs", "../providers/codex/hook-handler.mjs"), null);
+  assert.equal(
+    importBoundaryViolation("v2/persistence/sqlite/sqlite-state-core.mjs", "../../providers/session-observation-store.mjs"),
+    null,
+  );
+  assert.equal(
+    importBoundaryViolation("v2/global/cli.mjs", "file:///C:/Orchestra/providers/codex/adapter.mjs"),
+    "legacy-runtime-boundary",
+  );
+  assert.equal(
+    importBoundaryViolation("v2/global/cli.mjs", "@orchestra/runtime/runtimes/codex-hook"),
+    "legacy-runtime-boundary",
+  );
+  assert.equal(importBoundaryViolation("v2/global/cli.mjs", "node:sqlite"), null);
+
   const files = await walkMjs(join(repoRoot, "v2"));
-  const forbidden = ["/providers/", "/runtimes/", ".codex", ".agents", "/core/"];
 
   for (const file of files) {
     const source = await readFile(file, "utf8");
     const specifiers = [...source.matchAll(/(?:from\s+|import\s*\()["']([^"']+)["']/g)].map((match) => match[1]);
+    const sourcePath = repositoryRelativePath(file);
     for (const specifier of specifiers) {
-      for (const token of forbidden) {
-        assert.equal(specifier.includes(token), false, `${file} imports forbidden v1/provider boundary ${specifier}`);
-      }
+      const violation = importBoundaryViolation(sourcePath, specifier);
+      assert.equal(violation, null, `${file} imports forbidden ${violation} boundary ${specifier}`);
     }
   }
 });
