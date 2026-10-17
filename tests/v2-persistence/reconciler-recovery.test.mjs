@@ -49,7 +49,7 @@ function operation({
     generation: 0,
     kind: "IMPLEMENTATION_MEMBER",
     actorRef: "actor:worker",
-    capabilities: ["WORKSPACE_EDIT"],
+    capabilities: workspaceRef === null ? [] : ["WORKSPACE_EDIT"],
     workflowState: "RUNNING",
     liveness: "LIVE",
     startedAt: "2026-10-17T05:00:00.000Z",
