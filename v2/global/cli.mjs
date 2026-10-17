@@ -53,36 +53,68 @@ function parseInstructionEpoch(value) {
   return parsed;
 }
 
-async function runRegistryCommand({ positionals, options, cwd, env }) {
+function validateCommand({ positionals, options }) {
   const command = positionals[0];
-  const home = explicitHome(options, env);
 
   if (command === "home") {
     if (positionals.length !== 1) usage("Usage: orchestra home [--home <path>]");
+    return Object.freeze({ kind: "HOME" });
+  }
+
+  if (command === "register") {
+    if (positionals.length > 2) {
+      usage("Usage: orchestra register [workspace] --runtime-image <version> --instruction-epoch <n> --trust <mode>");
+    }
+    if (!options["runtime-image"]) usage("--runtime-image is required");
+    if (!options.trust) usage("--trust is required");
+    return Object.freeze({
+      kind: "REGISTER",
+      root: positionals[1] || null,
+      runtimeImage: options["runtime-image"],
+      instructionEpoch: parseInstructionEpoch(options["instruction-epoch"]),
+      trustMode: options.trust,
+    });
+  }
+
+  if (command === "project" && positionals[1] === "status") {
+    if (positionals.length > 3) usage("Usage: orchestra project status [workspace|projectId]");
+    return Object.freeze({ kind: "PROJECT_STATUS", target: positionals[2] || null });
+  }
+
+  if (command === "project" && positionals[1] === "rebind") {
+    if (positionals.length !== 4) usage("Usage: orchestra project rebind <projectId> <newWorkspace>");
+    return Object.freeze({
+      kind: "PROJECT_REBIND",
+      projectId: positionals[2],
+      newRoot: positionals[3],
+    });
+  }
+
+  usage("Usage: orchestra <home|register|project status|project rebind> ...");
+}
+
+async function runRegistryCommand({ positionals, options, cwd, env }) {
+  const home = explicitHome(options, env);
+  const command = validateCommand({ positionals, options });
+
+  if (command.kind === "HOME") {
     return { exitCode: 0, payload: { ok: true, home } };
   }
 
   const registry = createGlobalProjectRegistry({ home });
   try {
-    if (command === "register") {
-      if (positionals.length > 2) {
-        usage("Usage: orchestra register [workspace] --runtime-image <version> --instruction-epoch <n> --trust <mode>");
-      }
-      if (!options["runtime-image"]) usage("--runtime-image is required");
-      if (!options.trust) usage("--trust is required");
-
+    if (command.kind === "REGISTER") {
       const result = await registry.registerWorkspace({
-        root: positionals[1] || cwd,
-        runtimeImage: options["runtime-image"],
-        instructionEpoch: parseInstructionEpoch(options["instruction-epoch"]),
-        trustMode: options.trust,
+        root: command.root || cwd,
+        runtimeImage: command.runtimeImage,
+        instructionEpoch: command.instructionEpoch,
+        trustMode: command.trustMode,
       });
       return { exitCode: result.ok ? 0 : 1, payload: result };
     }
 
-    if (command === "project" && positionals[1] === "status") {
-      if (positionals.length > 3) usage("Usage: orchestra project status [workspace|projectId]");
-      const target = positionals[2] || cwd;
+    if (command.kind === "PROJECT_STATUS") {
+      const target = command.target || cwd;
       const project = target.startsWith("prj_")
         ? registry.inspect(target)
         : await registry.resolveWorkspace(target);
@@ -95,16 +127,11 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
       return { exitCode: 0, payload: { ok: true, registered: true, project } };
     }
 
-    if (command === "project" && positionals[1] === "rebind") {
-      if (positionals.length !== 4) usage("Usage: orchestra project rebind <projectId> <newWorkspace>");
-      const result = await registry.rebindWorkspace({
-        projectId: positionals[2],
-        newRoot: positionals[3],
-      });
-      return { exitCode: result.ok ? 0 : 1, payload: result };
-    }
-
-    usage("Usage: orchestra <home|register|project status|project rebind> ...");
+    const result = await registry.rebindWorkspace({
+      projectId: command.projectId,
+      newRoot: command.newRoot,
+    });
+    return { exitCode: result.ok ? 0 : 1, payload: result };
   } finally {
     registry.close();
   }
