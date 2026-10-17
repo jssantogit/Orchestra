@@ -22,6 +22,7 @@ import { inventoryLegacyProject } from "../migration/inventory.mjs";
 import { classifyLegacyInventoryEntry } from "../migration/transient-classifier.mjs";
 import { createLegacyMigrationImporter } from "../migration/import.mjs";
 import { createMigrationLifecycleStore } from "../migration/rollback.mjs";
+import { createMigrationCleanup } from "../migration/cleanup.mjs";
 
 const V2_ENGINE_COMPATIBILITY_VERSION = "2.0.0";
 const V2_PROVIDER_ADAPTER_VERSIONS = Object.freeze({
@@ -152,7 +153,16 @@ function validateCommand({ positionals, options }) {
         commandId: options["command-id"],
       });
     }
-    usage("Usage: orchestra project migrate <inspect|apply|rollback> ...");
+    if (action === "cleanup") {
+      if (positionals.length !== 4) usage("Usage: orchestra project migrate cleanup <projectId> --command-id <id>");
+      if (!options["command-id"]) usage("--command-id is required");
+      return Object.freeze({
+        kind: "PROJECT_MIGRATE_CLEANUP",
+        projectId: positionals[3],
+        commandId: options["command-id"],
+      });
+    }
+    usage("Usage: orchestra project migrate <inspect|apply|rollback|cleanup> ...");
   }
 
   if (command === "project" && ["upgrade", "rollback"].includes(positionals[1])) {
@@ -221,7 +231,7 @@ function validateCommand({ positionals, options }) {
     return Object.freeze({ kind: "CODEX_SHIM_INSTALL" });
   }
 
-  usage("Usage: orchestra <home|runtime install|runtime list|register|project status|project migrate inspect|project migrate apply|project migrate rollback|project upgrade|project rollback|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install|provider antigravity hook> ...");
+  usage("Usage: orchestra <home|runtime install|runtime list|register|project status|project migrate inspect|project migrate apply|project migrate rollback|project migrate cleanup|project upgrade|project rollback|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install|provider antigravity hook> ...");
 }
 
 function notRegisteredResult() {
@@ -466,6 +476,24 @@ async function runMigrationCommand({ command, home }) {
     }
   }
 
+  if (command.kind === "PROJECT_MIGRATE_CLEANUP") {
+    if (!(await globalRegistryStateExists({ home }))) {
+      return { exitCode: 1, payload: { ok: false, code: "MIGRATION_NOT_FOUND" } };
+    }
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      const lifecycleStore = createMigrationLifecycleStore({ home, state: registry.state });
+      const cleanup = createMigrationCleanup({ registry, lifecycleStore, home });
+      const result = await cleanup.cleanup({
+        projectId: command.projectId,
+        commandId: command.commandId,
+      });
+      return { exitCode: result.ok ? 0 : 1, payload: result };
+    } finally {
+      registry.close();
+    }
+  }
+
   const report = await buildMigrationReport(command.workspace);
   if (migrationBlocked(report)) {
     return {
@@ -557,7 +585,7 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
     return runRuntimeCommand({ command, home, cwd });
   }
 
-  if (["PROJECT_MIGRATE_INSPECT", "PROJECT_MIGRATE_APPLY", "PROJECT_MIGRATE_ROLLBACK"].includes(command.kind)) {
+  if (["PROJECT_MIGRATE_INSPECT", "PROJECT_MIGRATE_APPLY", "PROJECT_MIGRATE_ROLLBACK", "PROJECT_MIGRATE_CLEANUP"].includes(command.kind)) {
     return runMigrationCommand({ command, home });
   }
 
