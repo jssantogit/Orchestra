@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { Worker } from "node:worker_threads";
 
@@ -436,6 +437,130 @@ async function invokeHook({ home, cwd, payload, rawInput, env = {} }) {
   });
   return { code, payload: JSON.parse(stdout || stderr) };
 }
+
+test("registering a Codex v2 project does not install a local governance runtime", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-codex-register-no-brain-"));
+  try {
+    const cwd = await makeWorkspace(root);
+    const home = join(root, "home");
+    let stdout = "";
+    const code = await runGlobalCli({
+      argv: ["register", cwd, "--runtime-image", "2.0.0", "--instruction-epoch", "7", "--trust", "trusted"],
+      cwd,
+      env: { ORCHESTRA_HOME: home },
+      stdin: Readable.from([]),
+      stdout: { write: (chunk) => { stdout += chunk; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(stdout).ok, true);
+    await assert.rejects(access(join(cwd, ".codex")), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit Codex shim installation requires registration and targets the stable global launcher", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-codex-shim-install-"));
+  try {
+    const home = join(root, "home");
+    const { cwd } = await prepareRegisteredWorkspace({ root, home, active: false });
+    let stdout = "";
+    const code = await runGlobalCli({
+      argv: ["provider", "codex", "shim", "install", "--home", home],
+      cwd,
+      env: {},
+      stdin: Readable.from([]),
+      stdout: { write: (chunk) => { stdout += chunk; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(stdout).ok, true);
+    const shim = await readFile(join(cwd, ".codex/orchestra-v2-hook.mjs"), "utf8");
+    const expectedLauncher = fileURLToPath(new URL("../../v2/global/orchestra.mjs", import.meta.url));
+    assert.equal(shim.includes(JSON.stringify(expectedLauncher)), true);
+    assert.equal(shim.includes(JSON.stringify(home)), true);
+    const hooks = JSON.parse(await readFile(join(cwd, ".codex/hooks.json"), "utf8"));
+    assert.equal(Array.isArray(hooks.hooks.SessionStart), true);
+    assert.equal(Array.isArray(hooks.hooks.PreToolUse), true);
+    assert.equal(Array.isArray(hooks.hooks.PostToolUse), true);
+    const shimEnv = { ...process.env };
+    delete shimEnv.ORCHESTRA_HOME;
+    const output = execFileSync(process.execPath, [join(cwd, ".codex/orchestra-v2-hook.mjs")], {
+      cwd,
+      env: shimEnv,
+      input: JSON.stringify({ hook_event_name: "SessionStart", session_id: "shim-home-test" }),
+      encoding: "utf8",
+    });
+    const forwarded = JSON.parse(output);
+    assert.equal(forwarded.reason, "ORCHESTRA_V2_INTAKE");
+    assert.equal(forwarded.hookSpecificOutput.hookEventName, "SessionStart");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("installed global shim preserves active Codex hook responses across attach and tool lifecycle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-codex-shim-active-"));
+  try {
+    const home = join(root, "home");
+    const { cwd } = await prepareRegisteredWorkspace({ root, home, active: true });
+    let installOutput = "";
+    const installCode = await runGlobalCli({
+      argv: ["provider", "codex", "shim", "install", "--home", home],
+      cwd,
+      env: {},
+      stdin: Readable.from([]),
+      stdout: { write: (chunk) => { installOutput += chunk; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(installCode, 0);
+    assert.equal(JSON.parse(installOutput).ok, true);
+
+    const shimPath = join(cwd, ".codex/orchestra-v2-hook.mjs");
+    const shimEnv = { ...process.env };
+    delete shimEnv.ORCHESTRA_HOME;
+    const invoke = (payload) => JSON.parse(execFileSync(process.execPath, [shimPath], {
+      cwd,
+      env: shimEnv,
+      input: JSON.stringify({ ...payload, cwd }),
+      encoding: "utf8",
+    }));
+
+    const attached = invoke({ hook_event_name: "SessionStart", session_id: "shim-active-session" });
+    assert.equal(attached.ok, true);
+    assert.equal(attached.hookSpecificOutput.hookEventName, "SessionStart");
+    assert.equal(JSON.parse(attached.hookSpecificOutput.additionalContext).work.workId, "work-hook");
+
+    const read = invoke({ hook_event_name: "PreToolUse", session_id: "shim-active-session", tool_name: "read_file" });
+    assert.equal(read.ok, true);
+    assert.equal(read.reason, null);
+    assert.equal(read.hookSpecificOutput.permissionDecision, "allow");
+
+    const mutation = invoke({
+      hook_event_name: "PreToolUse",
+      session_id: "shim-active-session",
+      tool_name: "write_file",
+      tool_call_id: "shim-active-call",
+    });
+    assert.equal(mutation.ok, true);
+    assert.equal(mutation.reason, null);
+    assert.equal(mutation.hookSpecificOutput.permissionDecision, "allow");
+
+    const terminal = invoke({
+      hook_event_name: "PostToolUse",
+      session_id: "shim-active-session",
+      tool_name: "write_file",
+      tool_call_id: "shim-active-call",
+      is_error: false,
+    });
+    assert.equal(terminal.ok, true);
+    assert.equal(terminal.reason, null);
+    assert.equal(terminal.operation.workflowState, "SUCCEEDED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function prepareRegisteredWorkspace({ root, home, active = true }) {
   const cwd = await makeWorkspace(root);
