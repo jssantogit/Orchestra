@@ -67,9 +67,9 @@ This program is transferred to Codex under a strict implementation-only workflow
 - checking RED/GREEN evidence, diffs and CI;
 - deciding retry, rollback or escalation;
 - ensuring no milestone silently expands scope;
-- preparing review checkpoints and final acceptance evidence.
+- preparing review checkpoints, PR metadata and final acceptance evidence.
 
-Sol should not perform substantial implementation itself merely because it can. It may make tiny orchestration-only edits when explicitly necessary to unblock the workflow, but ordinary code/test/doc changes belong to Luna.
+Sol does **not** edit product code, tests or implementation documentation in the normal path. If implementation needs another code change, Sol assigns another bounded task to Luna. Sol may change orchestration/checkpoint text or PR metadata because those are control-plane artifacts rather than implementation.
 
 **Luna = implementer.** Luna owns:
 
@@ -155,17 +155,17 @@ V2-11 Cutover / Self-host / Release
 
 This order is intentional.
 
-- V2-5 establishes the first real provider-to-global-core execution path and any neutral provider-managed Operation/liveness primitives required by host-driven tool calls.
-- V2-6 must reuse those primitives rather than independently inventing an AGY authority model.
+- V2-5 establishes the first real provider-to-global-core execution path and the neutral provider-managed Operation/liveness primitives required by host-driven tool calls.
+- V2-6 reuses those primitives rather than independently inventing an AGY authority/liveness model.
 - V2-7 depends on both provider adapters because runtime activation/epoch changes must be consumable by both hosts.
 - V2-8 begins only after provider and runtime facts have stable neutral shapes worth recording as Experience.
-- V2-9 depends on V2-8 because Dream/RSI must train/evaluate over sanitized durable episodes rather than ad-hoc logs.
+- V2-9 depends on V2-8 because Dream/RSI evaluates sanitized durable episodes rather than ad-hoc logs.
 - V2-10 migrates consumers only after the new provider/runtime/experience surfaces are production-capable.
 - V2-11 is a cutover gate, not a feature-development bucket.
 
 ## 5. Cross-program invariants
 
-Every remaining milestone must preserve these executable laws:
+Every remaining milestone must preserve these executable laws.
 
 ### Authority
 
@@ -249,21 +249,39 @@ A deliberately registered v2 project can run the Codex lifecycle against global 
 
 V2-6 gives Antigravity the same global-domain semantics without cloning Codex-specific behavior.
 
-### 7.1 Deliverables
+### 7.1 Fixed integration surface
+
+The v2 Antigravity project-local footprint is conceptually:
+
+```text
+.agents/hooks.json
+.agents/orchestra-v2-hook.mjs   # thin transport shim only when a script path is required
+```
+
+The shim invokes the exact global provider entry surface:
+
+```text
+orchestra provider antigravity hook
+```
+
+It does not host policy, authority, liveness, delegation state or a copied runtime.
+
+### 7.2 Deliverables
 
 1. Thin AGY project integration shim/configuration that delegates to global Orchestra.
-2. Global `provider antigravity ...` entry surface appropriate to AGY host protocol.
+2. Global `provider antigravity hook` entry surface.
 3. Factual AGY ActorProvenance normalization from provider-supplied identity only.
-4. Session/conversation observation equivalent to Codex Session Observation, with provider-specific shape behind a neutral freshness boundary.
+4. Provider-scoped Session/Conversation Observation with the same non-authoritative semantics as Codex Session Observation.
 5. Tool/delegation event normalization into existing neutral operation classes.
 6. Sessionless attach and INTAKE behavior through WorkAuthority.
 7. Mutation authorization through WorkAuthority and Operation Registry.
-8. Reuse of V2-5 provider-managed Operation/liveness primitives for host-owned execution where applicable.
-9. Provider-owned process invocation remains provider-specific but registers factual Operations and terminal facts globally.
-10. Global diagnostics/recovery references rather than project-local state edits.
-11. Additive compatibility with v1 AGY projects until migration.
+8. Reuse of the V2-5 neutral provider-managed Operation/liveness contract for AGY executions whose lifetime is owned by the host and represented by provider lifecycle events.
+9. AGY child processes directly spawned and owned by Orchestra use the existing factual local-process RuntimeOwner/liveness path; they do not use provider-event liveness when Orchestra itself owns the process.
+10. Provider-owned process invocation remains provider-specific but registers factual Operations and terminal facts globally.
+11. Global diagnostics/recovery references rather than project-local state edits.
+12. Additive compatibility with v1 AGY projects until migration.
 
-### 7.2 Provider symmetry rule
+### 7.3 Provider symmetry rule
 
 Codex and AGY must converge on the same neutral semantics for:
 
@@ -279,7 +297,7 @@ Codex and AGY must converge on the same neutral semantics for:
 
 They do not need identical hook/event mechanics.
 
-### 7.3 Required acceptance scenarios
+### 7.4 Required acceptance scenarios
 
 - fresh AGY conversation attaches to current Work without handoff;
 - stale AGY conversation cannot mutate after epoch/work/generation changes;
@@ -291,7 +309,7 @@ They do not need identical hook/event mechanics.
 - cross-provider Direct Work still uses neutral Candidate/Evidence boundaries;
 - v1 AGY compatibility remains green.
 
-### 7.4 Exit condition
+### 7.5 Exit condition
 
 Both supported providers consume one global authority/liveness/recovery model and neither project requires a full local Orchestra runtime for v2 operation.
 
@@ -358,15 +376,17 @@ No normal project update requires copying a new Orchestra runtime into the repos
 
 V2-8 turns reusable factual outcomes into a privacy-preserving, globally queryable experience substrate. It does not yet auto-promote learned policy.
 
-### 9.1 Experience classes
+### 9.1 Required Experience classes
 
-The store supports at least:
+The initial store implements exactly these five Experience classes:
 
 1. **Diagnostic Experience** — failure signature, factual conditions, root cause class, recovery and outcome.
 2. **Execution Experience** — abstract route/operation/providers, bounded metrics and terminal outcome.
 3. **Provider/Tool Fact** — versioned provider capability/behavior observations.
 4. **Performance Experience** — turn economy, latency buckets, retry counts and route outcome.
 5. **Counterexample** — a prior pattern/policy that failed under a distinct project/lineage/context class.
+
+Additional Experience classes are out of scope until a later approved design extends the schema.
 
 ### 9.2 Sanitization boundary
 
@@ -478,19 +498,20 @@ Out of scope for learned policy:
 - permission expansion;
 - arbitrary new tool access.
 
-### 10.3 Evaluation protocol
+### 10.3 Mandatory independent-lineage evaluation protocol
 
-A candidate learned policy must be evaluated across independent lineages.
-
-Canonical shape:
+A DOMAIN or GLOBAL candidate policy must use disjoint lineage cohorts:
 
 ```text
-Train cohort      = projects/lineages A, B, C
-Evaluation cohort = D
-Holdout cohort    = E, F
+Training cohort   >= 2 independent lineages
+Evaluation cohort >= 1 additional independent lineage
+Holdout cohort    >= 1 additional independent lineage
+Total             >= 4 independent lineages
 ```
 
-Exact minimum counts are plan-level constants, but global promotion requires more than one independent lineage and at least one true holdout not used for candidate fitting.
+No lineage may appear in more than one cohort for the same candidate evaluation.
+
+A PROJECT-scoped learned preference is not eligible for DOMAIN/GLOBAL promotion until it later satisfies the independent-lineage protocol above.
 
 Metrics must include both utility and safety/regression signals.
 
@@ -500,19 +521,20 @@ No candidate promotes solely because aggregate performance improves if a governa
 
 1. Generate candidate from eligible Experience.
 2. Seal candidate configuration and training cohort identity.
-3. Replay/evaluate against evaluation cohort.
-4. Run independent holdout.
-5. Compare against current policy using predeclared metrics/gates.
+3. Replay/evaluate against the disjoint evaluation cohort.
+4. Run the disjoint holdout cohort.
+5. Compare against current policy using predeclared metrics/gates from the implementation plan.
 6. Produce immutable evaluation artifact.
 7. Promote only through explicit policy transaction.
 8. Preserve prior policy for rollback.
 
-Initial implementation may require operator approval for global promotion. Automatic global self-promotion is not required to declare V2-9 complete.
+Initial implementation requires operator approval for GLOBAL policy promotion. Fully automatic global self-promotion is out of scope for V2-9.
 
 ### 10.5 Required acceptance scenarios
 
 - single-project success cannot produce global promotion;
 - candidate trained on one lineage and tested only on the same lineage is rejected;
+- overlapping training/evaluation/holdout lineage sets are rejected;
 - candidate with utility gain but safety invariant regression is rejected;
 - domain policy cannot leak into incompatible domain cohort;
 - promoted policy can be rolled back deterministically;
@@ -703,6 +725,8 @@ During implementation, Sol may make bounded decisions that do not change the arc
 - test fixture organization;
 - equivalent structured error naming where semantics remain identical;
 - internal SQL/index implementation that preserves the specified contract.
+
+Those decisions are communicated to Luna as bounded implementation instructions; Sol still does not implement product/test code itself.
 
 Sol may not unilaterally decide to:
 
