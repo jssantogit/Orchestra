@@ -19,7 +19,7 @@ function project() {
   };
 }
 
-function work() {
+function work(overrides = {}) {
   return {
     schema: "orchestra.work-unit.v2",
     workId: "work-sessionless",
@@ -35,6 +35,7 @@ function work() {
     evidenceRefs: [],
     blockers: [],
     continuationRef: "continuation:sessionless",
+    ...overrides,
   };
 }
 
@@ -153,7 +154,7 @@ for (const store of stores) {
     }
   });
 
-  test(`${store.name}: capability authorization is generation-fenced without session binding`, async () => {
+  test(`${store.name}: capability authorization is work-and-generation fenced without session binding`, async () => {
     const fixture = await store.create();
     try {
       seed(fixture.state);
@@ -169,6 +170,7 @@ for (const store of stores) {
 
       const stale = authority.authorize({
         projectId: "prj-sessionless",
+        expectedWorkId: "work-sessionless",
         actor: actor("sha256:any"),
         capability: "WORKSPACE_EDIT",
         workspaceRef: "workspace:canonical",
@@ -176,6 +178,52 @@ for (const store of stores) {
       });
       assert.equal(stale.allowed, false);
       assert.equal(stale.reason, "STALE_GENERATION");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test(`${store.name}: an old task cannot authorize against a new task with the same numeric generation`, async () => {
+    const fixture = await store.create();
+    try {
+      seed(fixture.state);
+      const authority = createWorkAuthority({ state: fixture.state });
+      assert.equal(authority.abandon({
+        projectId: "prj-sessionless",
+        expectedWorkId: "work-sessionless",
+        expectedGeneration: 0,
+        commandId: "abandon-for-new-task",
+        reason: "switch tasks",
+      }).ok, true);
+      assert.equal(authority.start(work({
+        workId: "work-next",
+        taskId: "task-next",
+        scopeRef: "scope:next",
+        directionRef: "direction:next",
+        continuationRef: "continuation:next",
+      })).ok, true);
+
+      const oldCommand = authority.authorize({
+        projectId: "prj-sessionless",
+        expectedWorkId: "work-sessionless",
+        actor: actor("sha256:old-session"),
+        capability: "WORKSPACE_EDIT",
+        workspaceRef: "workspace:canonical",
+        expectedGeneration: 0,
+      });
+      assert.equal(oldCommand.allowed, false);
+      assert.equal(oldCommand.reason, "STALE_ACTIVE_WORK");
+      assert.equal(oldCommand.currentWorkId, "work-next");
+
+      const currentCommand = authority.authorize({
+        projectId: "prj-sessionless",
+        expectedWorkId: "work-next",
+        actor: actor("sha256:fresh-session"),
+        capability: "WORKSPACE_EDIT",
+        workspaceRef: "workspace:canonical",
+        expectedGeneration: 0,
+      });
+      assert.equal(currentCommand.allowed, true);
     } finally {
       await fixture.cleanup();
     }
