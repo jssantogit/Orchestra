@@ -1,39 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { validateExperienceV2 } from "../domain/contracts.mjs";
-
-const PRIVATE_KEYS = new Set([
-  "sourcecode",
-  "sourcebytes",
-  "filecontents",
-  "prompt",
-  "prompts",
-  "transcript",
-  "providertranscript",
-  "hiddenreasoning",
-  "chainofthought",
-  "requirements",
-  "secrets",
-  "sessionid",
-  "conversationid",
-  "mainsessionid",
-  "ownersessionid",
-]);
-
-function normalizedKey(key) {
-  return String(key).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-}
-
-function sanitize(value) {
-  if (Array.isArray(value)) return value.map(sanitize);
-  if (!value || typeof value !== "object") return value;
-  const output = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (PRIVATE_KEYS.has(normalizedKey(key))) continue;
-    output[key] = sanitize(item);
-  }
-  return output;
-}
+import { validateExperienceRecord } from "./contracts.mjs";
 
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -47,25 +14,42 @@ function digest(value) {
   return createHash("sha256").update(JSON.stringify(canonicalize(value))).digest("hex");
 }
 
+function nonEmptyLineages(sourceLineageId, projectLineageIds) {
+  const entries = [sourceLineageId, ...(Array.isArray(projectLineageIds) ? projectLineageIds : [])];
+  return [...new Set(entries.filter((entry) => typeof entry === "string" && entry.trim()))];
+}
+
 export function projectExperience({
   category,
+  sourceProjectId,
+  sourceLineageId,
+  workId = null,
+  operationId = null,
+  domainCohort,
   facts = {},
   outcome = {},
   projectLineageIds = [],
   requestedScope = "PROJECT",
   projectionVersion = "1",
 } = {}) {
-  const distinctLineages = [...new Set(projectLineageIds.filter((entry) => typeof entry === "string" && entry.trim()))];
-  const sanitizedFacts = sanitize(facts);
-  const sanitizedOutcome = sanitize(outcome);
+  const distinctLineages = nonEmptyLineages(sourceLineageId, projectLineageIds);
   const scope = requestedScope === "GLOBAL_CANDIDATE" && distinctLineages.length < 2
     ? "PROJECT"
     : requestedScope;
 
   const content = {
+    schema: "orchestra.experience.v2",
+    version: 1,
     category,
-    facts: sanitizedFacts,
-    outcome: sanitizedOutcome,
+    source: {
+      projectId: sourceProjectId,
+      lineageId: sourceLineageId,
+      workId,
+      operationId,
+    },
+    domainCohort,
+    facts: structuredClone(facts),
+    outcome: structuredClone(outcome),
     generalization: {
       scope,
       projectLineageCount: distinctLineages.length,
@@ -77,10 +61,9 @@ export function projectExperience({
   };
 
   const experience = {
-    schema: "orchestra.experience.v2",
-    experienceId: `exp-${digest(content).slice(0, 24)}`,
     ...content,
+    experienceId: `exp-${digest(content).slice(0, 24)}`,
   };
-  const validation = validateExperienceV2(experience);
+  const validation = validateExperienceRecord(experience);
   return { ...validation, experience };
 }

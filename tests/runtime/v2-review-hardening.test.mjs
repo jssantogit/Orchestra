@@ -107,29 +107,33 @@ test("project registration and rebind retries return current state instead of fa
   assert.equal(rebindReplay.project.workspace.canonicalRoot, "C:/Projects/Review-Moved");
 });
 
-test("Experience sanitization recognizes normalized variants of private fields", () => {
-  const projected = projectExperience({
+test("Experience projection rejects normalized variants of private fields", () => {
+  const common = {
     category: "DIAGNOSTIC",
-    facts: {
-      source_code: "private code",
-      "File-Contents": "private bytes",
-      chain_of_thought: "private reasoning",
-      session_id: "raw session",
-      nested: { Transcript: "old chat", safeMetric: 3 },
-      safeClass: "OWNER_TERMINATED",
-    },
+    sourceProjectId: project.projectId,
+    sourceLineageId: project.lineageId,
+    domainCohort: "software-engineering",
     outcome: { recoveryClass: "RECONCILED" },
-    projectLineageIds: ["lineage-a", "lineage-b"],
+    projectLineageIds: [project.lineageId, "lineage-b"],
     requestedScope: "GLOBAL_CANDIDATE",
-  });
+  };
 
-  assert.equal(projected.valid, true);
-  assert.equal("source_code" in projected.experience.facts, false);
-  assert.equal("File-Contents" in projected.experience.facts, false);
-  assert.equal("chain_of_thought" in projected.experience.facts, false);
-  assert.equal("session_id" in projected.experience.facts, false);
-  assert.equal("Transcript" in projected.experience.facts.nested, false);
-  assert.equal(projected.experience.facts.nested.safeMetric, 3);
+  for (const facts of [
+    { failureClass: "OWNER_TERMINATED", source_code: "private code" },
+    { failureClass: "OWNER_TERMINATED", "File-Contents": "private bytes" },
+    { failureClass: "OWNER_TERMINATED", chain_of_thought: "private reasoning" },
+    { failureClass: "OWNER_TERMINATED", session_id: "raw session" },
+    { failureClass: "OWNER_TERMINATED", nested: { Transcript: "old chat" } },
+  ]) {
+    assert.equal(projectExperience({ ...common, facts }).valid, false);
+  }
+
+  const safe = projectExperience({
+    ...common,
+    facts: { failureClass: "OWNER_TERMINATED", retryCount: 0 },
+  });
+  assert.equal(safe.valid, true);
+  assert.equal(safe.experience.generalization.scope, "GLOBAL_CANDIDATE");
 });
 
 test("Continuation Capsule rejects non-JSON fact objects whose mutations would evade canonical digest", () => {
