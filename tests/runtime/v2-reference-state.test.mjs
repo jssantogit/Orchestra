@@ -60,7 +60,7 @@ function makeOperation(overrides = {}) {
 function seededState() {
   const state = createReferenceState();
   assert.equal(state.projects.register(makeProject()).ok, true);
-  assert.equal(state.work.open(makeWork()).ok, true);
+  assert.equal(state.work.startCurrent(makeWork()).ok, true);
   return state;
 }
 
