@@ -313,3 +313,176 @@ test("malformed, unsupported-version, or incomplete-provenance records fail clos
     assert.equal(result.authorityClaim, false);
   }
 });
+
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+const v2Only = { skip: nodeMajor < 24 };
+
+async function initGit(workspace) {
+  const { execFileSync } = await import("node:child_process");
+  execFileSync("git", ["init", workspace], { stdio: "ignore" });
+}
+
+function captureStream() {
+  let body = "";
+  return {
+    stream: { write(chunk) { body += String(chunk); } },
+    json() { return body.trim() ? JSON.parse(body.trim()) : null; },
+    text() { return body; },
+  };
+}
+
+async function runMigrationCli({ argv, cwd, env = {} }) {
+  const { runGlobalCli } = await import("../../v2/global/cli.mjs");
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const exitCode = await runGlobalCli({
+    argv,
+    cwd,
+    env,
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+  return { exitCode, stdout: stdout.json(), stderr: stderr.json(), stderrText: stderr.text() };
+}
+
+async function writePrivateArtifact(workspace, id, text = "private project bytes") {
+  const artifact = join(workspace, ".orchestra", "state", "delegation", "artifacts", id, "result.json");
+  await writeJson(artifact, {
+    schema: "orchestra.delegation-artifact.v1",
+    prompt: text,
+    source: `${text}-source`,
+  });
+  return artifact;
+}
+
+test("migration inspect CLI is read-only and does not create global registry state", v2Only, async () => {
+  await withWorkspace(async (workspace) => {
+    await initGit(workspace);
+    await writePrivateArtifact(workspace, "inspect-only");
+    const home = join(workspace, "global-home-must-not-exist");
+    const before = await snapshotTree(workspace);
+
+    const result = await runMigrationCli({
+      argv: ["project", "migrate", "inspect", workspace, "--home", home],
+      cwd: workspace,
+      env: {},
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout.ok, true);
+    assert.equal(result.stdout.code, "MIGRATION_INSPECTION_READY");
+    assert.equal(result.stdout.inventory.length, 1);
+    assert.equal(result.stdout.classifications[0].disposition, "PRIVATE_ARCHIVE");
+    await assert.rejects(lstat(home), { code: "ENOENT" });
+    assert.deepEqual(await snapshotTree(workspace), before);
+  });
+});
+
+test("migration apply refuses UNSUPPORTED_BLOCKED inventory before creating global authority", v2Only, async () => {
+  await withWorkspace(async (workspace) => {
+    await initGit(workspace);
+    const broken = join(workspace, ".orchestra", "state", "delegation", "parallel-groups", "broken", "group.json");
+    await mkdir(join(workspace, ".orchestra", "state", "delegation", "parallel-groups", "broken"), { recursive: true });
+    await writeFile(broken, "{ broken\n", "utf8");
+    const home = join(workspace, "global-home-blocked");
+
+    const result = await runMigrationCli({
+      argv: ["project", "migrate", "apply", workspace, "--command-id", "blocked-apply", "--home", home],
+      cwd: workspace,
+      env: {},
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout.ok, false);
+    assert.equal(result.stdout.code, "MIGRATION_BLOCKED");
+    assert.equal(result.stdout.classifications[0].disposition, "UNSUPPORTED_BLOCKED");
+    await assert.rejects(lstat(home), { code: "ENOENT" });
+  });
+});
+
+test("migration apply records sanitized manifest and replays idempotently", v2Only, async () => {
+  await withWorkspace(async (workspace) => {
+    await initGit(workspace);
+    const artifact = await writePrivateArtifact(workspace, "manifest", "private-do-not-inline");
+    const original = await readFile(artifact, "utf8");
+    const home = join(workspace, "global-home-apply");
+    const argv = ["project", "migrate", "apply", workspace, "--command-id", "apply-once", "--home", home];
+
+    const first = await runMigrationCli({ argv, cwd: workspace, env: {} });
+    const replay = await runMigrationCli({ argv, cwd: workspace, env: {} });
+
+    assert.equal(first.exitCode, 0);
+    assert.equal(first.stdout.ok, true);
+    assert.equal(first.stdout.manifest.schema, "orchestra.migration-manifest.v2");
+    assert.equal(first.stdout.manifest.status, "IMPORTED");
+    assert.equal(first.stdout.manifest.inventory.length, 1);
+    assert.equal(first.stdout.manifest.inventory[0].disposition, "PRIVATE_ARCHIVE");
+    assert.match(first.stdout.manifest.inventory[0].digest, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(JSON.stringify(first.stdout.manifest).includes("private-do-not-inline"), false);
+    assert.equal(replay.exitCode, 0);
+    assert.equal(replay.stdout.replayed, true);
+    assert.equal(replay.stdout.project.projectId, first.stdout.project.projectId);
+    assert.equal(replay.stdout.manifest.projectId, first.stdout.manifest.projectId);
+    assert.equal(await readFile(artifact, "utf8"), original);
+  });
+});
+
+test("migration rollback preserves imported audit history and private project data", v2Only, async () => {
+  await withWorkspace(async (workspace) => {
+    await initGit(workspace);
+    const artifact = await writePrivateArtifact(workspace, "rollback", "private-survives-rollback");
+    const original = await readFile(artifact, "utf8");
+    const home = join(workspace, "global-home-rollback");
+    const applied = await runMigrationCli({
+      argv: ["project", "migrate", "apply", workspace, "--command-id", "apply-before-rollback", "--home", home],
+      cwd: workspace,
+      env: {},
+    });
+    assert.equal(applied.exitCode, 0);
+
+    const rolled = await runMigrationCli({
+      argv: ["project", "migrate", "rollback", applied.stdout.project.projectId, "--command-id", "rollback-1", "--home", home],
+      cwd: workspace,
+      env: {},
+    });
+
+    assert.equal(rolled.exitCode, 0);
+    assert.equal(rolled.stdout.ok, true);
+    assert.equal(rolled.stdout.manifest.status, "ROLLED_BACK");
+    assert.equal(rolled.stdout.manifest.active, false);
+    assert.equal(rolled.stdout.manifest.inventory[0].disposition, "PRIVATE_ARCHIVE");
+    assert.equal(await readFile(artifact, "utf8"), original);
+  });
+});
+
+test("same migration command id is project-scoped and cannot replay another Project", v2Only, async () => {
+  await withWorkspace(async (root) => {
+    const projectA = join(root, "project-a");
+    const projectB = join(root, "project-b");
+    await mkdir(projectA, { recursive: true });
+    await mkdir(projectB, { recursive: true });
+    await initGit(projectA);
+    await initGit(projectB);
+    await writePrivateArtifact(projectA, "a", "private-a");
+    await writePrivateArtifact(projectB, "b", "private-b");
+    const home = join(root, "global-home-cross-project");
+
+    const a = await runMigrationCli({
+      argv: ["project", "migrate", "apply", projectA, "--command-id", "shared-command", "--home", home],
+      cwd: projectA,
+      env: {},
+    });
+    const b = await runMigrationCli({
+      argv: ["project", "migrate", "apply", projectB, "--command-id", "shared-command", "--home", home],
+      cwd: projectB,
+      env: {},
+    });
+
+    assert.equal(a.exitCode, 0);
+    assert.equal(b.exitCode, 0);
+    assert.notEqual(a.stdout.project.projectId, b.stdout.project.projectId);
+    assert.equal(b.stdout.replayed, false);
+    assert.equal(a.stdout.manifest.commands[0].commandId, "shared-command");
+    assert.equal(b.stdout.manifest.commands[0].commandId, "shared-command");
+  });
+});
