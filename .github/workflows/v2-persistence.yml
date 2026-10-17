@@ -30,6 +30,9 @@ jobs:
       - name: Run v2 persistence tests
         run: node --test tests/v2-persistence/*.test.mjs
 
+      - name: Run migration tests
+        run: node --test tests/runtime/v2-migration.test.mjs tests/runtime/v2-migration-import.test.mjs tests/runtime/v2-tsuzuki-f7-migration.test.mjs
+
       - name: Run global Experience store tests
         run: node --test tests/runtime/v2-global-experience-store.test.mjs
 
