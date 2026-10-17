@@ -1,0 +1,68 @@
+name: V2 Persistence
+
+on:
+  pull_request:
+    branches:
+      - main
+      - feat/v2-domain-contracts
+
+jobs:
+  persistence:
+    name: V2 Persistence (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run v2 persistence tests
+        run: node --test tests/v2-persistence/*.test.mjs
+
+  v1-regression:
+    name: V1 Compatibility Guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20 legacy baseline
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify generated artifacts remain isolated
+        run: |
+          npm run build:schemas
+          npm run build:runtimes
+          npm run check:schemas
+          npm run check:runtimes
+          npm run check:runtime-core
+          git diff --check
+
+      - name: Verify v2 launcher fails structurally before SQLite on Node 20
+        run: >-
+          node -e "const {spawnSync}=require('node:child_process');
+          const r=spawnSync(process.execPath,['v2/global/orchestra.mjs','home'],{encoding:'utf8'});
+          let body=null; try { body=JSON.parse(r.stderr); } catch {}
+          if (r.status!==2 || r.stdout!=='' || body?.code!=='ORCHESTRA_V2_RUNTIME_UNSUPPORTED' || body?.minimumNodeMajor!==24) {
+            console.error(JSON.stringify({status:r.status,stdout:r.stdout,stderr:r.stderr})); process.exit(1);
+          }"
+
+      - name: Run full v1 regression
+        run: npm test
