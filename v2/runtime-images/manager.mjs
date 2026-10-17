@@ -1,3 +1,4 @@
+import { createExperienceRecorders } from "../experience/recorders.mjs";
 import { assessRuntimeImageCompatibility } from "./compatibility.mjs";
 
 const SUPPORTED_PROVIDERS = Object.freeze(["codex", "antigravity"]);
@@ -40,8 +41,24 @@ export function createRuntimeImageManager({
   statusReconciler,
   engineVersion,
   providerAdapterVersions,
+  experienceRecorder = null,
 } = {}) {
   requireInputs({ state, imageStore, statusReconciler, engineVersion, providerAdapterVersions });
+  const recorder = experienceRecorder
+    ?? (state.experience ? createExperienceRecorders({ persistence: state.experience }) : null);
+
+  async function safeRecord(method, payload) {
+    try {
+      if (typeof recorder?.[method] === "function") await recorder[method](payload);
+    } catch {
+      // Experience is non-authoritative and cannot change runtime activation outcomes.
+    }
+  }
+
+  async function failAfterRecording(project, reason, fields = {}) {
+    await safeRecord("recordRuntimeFailure", { project, failureClass: reason });
+    return failure(reason, fields);
+  }
 
   async function changeProjectRuntime({ projectId, targetImageId, provider, commandId = null, action }) {
     const providers = providersFor(provider);
@@ -57,11 +74,14 @@ export function createRuntimeImageManager({
 
     const installed = await imageStore.list();
     const image = installed.find((entry) => entry.imageId === targetImageId);
-    if (!image) return failure("RUNTIME_IMAGE_NOT_INSTALLED", { targetImageId });
+    if (!image) return failAfterRecording(project, "RUNTIME_IMAGE_NOT_INSTALLED", { targetImageId });
 
     const integrity = await imageStore.verify(targetImageId);
     if (!integrity?.valid) {
-      return failure("RUNTIME_IMAGE_INTEGRITY_FAILED", { targetImageId, verification: integrity ?? null });
+      return failAfterRecording(project, "RUNTIME_IMAGE_INTEGRITY_FAILED", {
+        targetImageId,
+        verification: integrity ?? null,
+      });
     }
 
     const compatibilityByProvider = Object.create(null);
@@ -74,7 +94,7 @@ export function createRuntimeImageManager({
       });
       compatibilityByProvider[selectedProvider] = compatibility;
       if (!compatibility.ok) {
-        return failure("RUNTIME_IMAGE_INCOMPATIBLE", {
+        return failAfterRecording(project, "RUNTIME_IMAGE_INCOMPATIBLE", {
           targetImageId,
           provider: selectedProvider,
           compatibility,
@@ -98,6 +118,8 @@ export function createRuntimeImageManager({
       commandId,
     });
     if (!updated.ok) return updated;
+
+    await safeRecord("recordRuntimeChange", { project: updated.project, action });
 
     const compatibility = providers.length === 1
       ? compatibilityByProvider[providers[0]]
