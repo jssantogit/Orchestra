@@ -3,6 +3,17 @@ import { DatabaseSync } from "node:sqlite";
 
 import { validateExperienceRecord } from "../../experience/contracts.mjs";
 
+const QUERY_FILTER_COLUMNS = Object.freeze({
+  category: Object.freeze({ column: "category", operator: "=" }),
+  providerFamily: Object.freeze({ column: "provider_family", operator: "=" }),
+  domainCohort: Object.freeze({ column: "domain_cohort", operator: "=" }),
+  failureClass: Object.freeze({ column: "failure_class", operator: "=" }),
+  recoveryClass: Object.freeze({ column: "recovery_class", operator: "=" }),
+  terminalOutcome: Object.freeze({ column: "terminal_outcome", operator: "=" }),
+  eligibilityScope: Object.freeze({ column: "eligibility_scope", operator: "=" }),
+  minProjectLineageCount: Object.freeze({ column: "lineage_count", operator: ">=" }),
+});
+
 function storageError(message, experienceId = null) {
   const error = new Error(message);
   error.code = "ORCHESTRA_EXPERIENCE_STORE_INVALID";
@@ -92,6 +103,44 @@ function validateForWrite(record) {
   }
 }
 
+function validateQueryRequest({ filters = {}, projectId = null, afterId = null, limit } = {}) {
+  if (!isRecord(filters)) throw storageError("Experience query filters must be an object");
+  for (const key of Object.keys(filters)) {
+    if (!Object.hasOwn(QUERY_FILTER_COLUMNS, key)) {
+      throw storageError(`unsupported Experience query filter: ${key}`);
+    }
+  }
+  if (projectId !== null && (typeof projectId !== "string" || projectId.trim().length === 0)) {
+    throw storageError("Experience query project scope is invalid");
+  }
+  if (afterId !== null && (typeof afterId !== "string" || !/^exp-[0-9a-f]{24}$/.test(afterId))) {
+    throw storageError("Experience query cursor is invalid");
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw storageError("Experience query limit is invalid");
+  }
+  return { filters, projectId, afterId, limit };
+}
+
+function recordMatches(record, filters, projectId, afterId) {
+  if (projectId !== null && record.source.projectId !== projectId) return false;
+  if (afterId !== null && record.experienceId <= afterId) return false;
+  if (filters.category !== undefined && record.category !== filters.category) return false;
+  if (filters.providerFamily !== undefined && record.facts.providerFamily !== filters.providerFamily) return false;
+  if (filters.domainCohort !== undefined && record.domainCohort !== filters.domainCohort) return false;
+  if (filters.failureClass !== undefined
+    && (record.facts.failureClass ?? record.outcome.failureClass ?? null) !== filters.failureClass) return false;
+  if (filters.recoveryClass !== undefined
+    && (record.facts.recoveryClass ?? record.outcome.recoveryClass ?? null) !== filters.recoveryClass) return false;
+  if (filters.terminalOutcome !== undefined
+    && (record.outcome.terminalOutcome ?? null) !== filters.terminalOutcome) return false;
+  if (filters.eligibilityScope !== undefined
+    && record.generalization.scope !== filters.eligibilityScope) return false;
+  if (filters.minProjectLineageCount !== undefined
+    && record.generalization.projectLineageCount < filters.minProjectLineageCount) return false;
+  return true;
+}
+
 function createMemoryPersistence() {
   const records = new Map();
   return Object.freeze({
@@ -117,6 +166,14 @@ function createMemoryPersistence() {
       return [...records.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([, entry]) => JSON.parse(entry.json));
+    },
+    query(request = {}) {
+      const { filters, projectId, afterId, limit } = validateQueryRequest(request);
+      return [...records.values()]
+        .map((entry) => JSON.parse(entry.json))
+        .sort((left, right) => left.experienceId.localeCompare(right.experienceId))
+        .filter((record) => recordMatches(record, filters, projectId, afterId))
+        .slice(0, limit + 1);
     },
     close() {},
   });
@@ -193,6 +250,31 @@ export function createSqliteExperiencePersistence({ dbPath, timeoutMs = 5_000 } 
     list() {
       assertOpen();
       return listAll.all().map(validateStoredRow);
+    },
+
+    query(request = {}) {
+      assertOpen();
+      const { filters, projectId, afterId, limit } = validateQueryRequest(request);
+      const clauses = [];
+      const params = [];
+      if (projectId !== null) {
+        clauses.push("source_project_id = ?");
+        params.push(projectId);
+      }
+      if (afterId !== null) {
+        clauses.push("experience_id > ?");
+        params.push(afterId);
+      }
+      for (const [key, value] of Object.entries(filters)) {
+        const definition = QUERY_FILTER_COLUMNS[key];
+        clauses.push(`${definition.column} ${definition.operator} ?`);
+        params.push(value);
+      }
+      const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+      const statement = db.prepare(
+        `SELECT * FROM experience_records${where} ORDER BY experience_id ASC LIMIT ?`,
+      );
+      return statement.all(...params, limit + 1).map(validateStoredRow);
     },
 
     close() {
