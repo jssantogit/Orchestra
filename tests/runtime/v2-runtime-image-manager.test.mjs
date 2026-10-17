@@ -23,7 +23,7 @@ function image(imageId, overrides = {}) {
   };
 }
 
-function fixture({ status = null, target = image(IMAGE_B), projectId = "prj-a" } = {}) {
+function fixture({ status = null, target = image(IMAGE_B), projectId = "prj-a", experienceRecorder = null } = {}) {
   let project = {
     schema: "orchestra.project.v2",
     projectId,
@@ -80,6 +80,7 @@ function fixture({ status = null, target = image(IMAGE_B), projectId = "prj-a" }
     statusReconciler,
     engineVersion: "2.9.0",
     providerAdapterVersions: { codex: "2.9.0", antigravity: "2.9.0" },
+    experienceRecorder,
   });
   return { manager, updateCalls, state };
 }
@@ -108,6 +109,24 @@ test("rollback uses the same safe activation boundary and advances epoch once", 
   assert.equal(rolledBack.action, "ROLLBACK");
   assert.equal(rolledBack.project.runtime.pinnedImage, IMAGE_A);
   assert.equal(rolledBack.project.runtime.instructionEpoch, 6);
+});
+
+test("Experience recording failure cannot change successful runtime activation", async () => {
+  let calls = 0;
+  const { manager } = fixture({
+    experienceRecorder: {
+      async recordRuntimeChange() {
+        calls += 1;
+        throw new Error("experience unavailable");
+      },
+    },
+  });
+
+  const result = await manager.upgradeProject({ projectId: "prj-a", targetImageId: IMAGE_B, provider: "codex" });
+  assert.equal(result.ok, true);
+  assert.equal(result.project.runtime.pinnedImage, IMAGE_B);
+  assert.equal(result.project.runtime.instructionEpoch, 5);
+  assert.equal(calls, 1);
 });
 
 test("LIVE operation blocks runtime activation without mutating the project", async () => {
