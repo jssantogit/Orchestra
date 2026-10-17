@@ -25,6 +25,14 @@ function recoverySchemaTooNew(version) {
   return error;
 }
 
+function recoveryCorrupt(detail, fields = {}) {
+  const error = new Error(`ORCHESTRA_V2_RECOVERY_CORRUPT:${detail}`);
+  error.code = "ORCHESTRA_V2_RECOVERY_CORRUPT";
+  error.detail = detail;
+  Object.assign(error, fields);
+  return error;
+}
+
 function initializeRecoverySchema(db) {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`
@@ -86,7 +94,7 @@ export function createSqliteRecoveryJournal({ dbPath, state, timeoutMs = 5_000 }
   }
 
   const getByCommand = db.prepare(`
-    SELECT record_json, record_digest
+    SELECT project_id, operation_id, command_id, record_json, record_digest, recorded_at
     FROM operation_recovery_records
     WHERE project_id = ? AND command_id = ?
   `);
@@ -96,13 +104,61 @@ export function createSqliteRecoveryJournal({ dbPath, state, timeoutMs = 5_000 }
     ) VALUES (?, ?, ?, ?, ?, ?)
   `);
   const getLatest = db.prepare(`
-    SELECT record_json
+    SELECT project_id, operation_id, command_id, record_json, record_digest, recorded_at
     FROM operation_recovery_records
     WHERE project_id = ? AND operation_id = ?
     ORDER BY sequence DESC
     LIMIT 1
   `);
   let closed = false;
+
+  function decodeRow(row, expected = {}) {
+    if (!row) return null;
+    let recovery;
+    try {
+      recovery = JSON.parse(row.record_json);
+    } catch {
+      throw recoveryCorrupt("INVALID_JSON");
+    }
+
+    const encoded = canonicalRecoveryJson(recovery);
+    const digest = recoveryDigest(recovery);
+    if (row.record_json !== encoded || row.record_digest !== digest) {
+      throw recoveryCorrupt("DIGEST_MISMATCH", {
+        projectId: row.project_id,
+        operationId: row.operation_id,
+        commandId: row.command_id,
+      });
+    }
+
+    if (row.project_id !== recovery.projectId
+      || row.operation_id !== recovery.operationId
+      || row.command_id !== recovery.commandId
+      || row.recorded_at !== recovery.recordedAt) {
+      throw recoveryCorrupt("INDEX_IDENTITY_MISMATCH", {
+        projectId: row.project_id,
+        operationId: row.operation_id,
+        commandId: row.command_id,
+      });
+    }
+
+    if ((expected.projectId !== undefined && recovery.projectId !== expected.projectId)
+      || (expected.operationId !== undefined && recovery.operationId !== expected.operationId)
+      || (expected.commandId !== undefined && recovery.commandId !== expected.commandId)) {
+      throw recoveryCorrupt("QUERY_IDENTITY_MISMATCH", expected);
+    }
+
+    const identityFailure = validateRecoveryIdentity(store, recovery);
+    if (identityFailure) {
+      throw recoveryCorrupt("INVALID_RECOVERY_FACT", {
+        validationReason: identityFailure.reason,
+        projectId: recovery.projectId,
+        operationId: recovery.operationId,
+        commandId: recovery.commandId,
+      });
+    }
+    return recovery;
+  }
 
   return Object.freeze({
     record(recovery) {
@@ -113,13 +169,17 @@ export function createSqliteRecoveryJournal({ dbPath, state, timeoutMs = 5_000 }
       const fingerprint = recoveryDigest(recovery);
       db.exec("BEGIN IMMEDIATE");
       try {
-        const prior = getByCommand.get(recovery.projectId, recovery.commandId);
-        if (prior) {
+        const priorRow = getByCommand.get(recovery.projectId, recovery.commandId);
+        if (priorRow) {
+          const prior = decodeRow(priorRow, {
+            projectId: recovery.projectId,
+            commandId: recovery.commandId,
+          });
           db.exec("COMMIT");
-          if (prior.record_digest !== fingerprint || prior.record_json !== encoded) {
+          if (priorRow.record_digest !== fingerprint || priorRow.record_json !== encoded) {
             return failure("IDEMPOTENCY_CONFLICT");
           }
-          return success({ recovery: JSON.parse(prior.record_json), replayed: true });
+          return success({ recovery: prior, replayed: true });
         }
 
         insert.run(
@@ -143,13 +203,11 @@ export function createSqliteRecoveryJournal({ dbPath, state, timeoutMs = 5_000 }
     },
 
     byCommand({ projectId, commandId } = {}) {
-      const row = getByCommand.get(projectId, commandId);
-      return row ? JSON.parse(row.record_json) : null;
+      return decodeRow(getByCommand.get(projectId, commandId), { projectId, commandId });
     },
 
     latest({ projectId, operationId } = {}) {
-      const row = getLatest.get(projectId, operationId);
-      return row ? JSON.parse(row.record_json) : null;
+      return decodeRow(getLatest.get(projectId, operationId), { projectId, operationId });
     },
 
     close() {
