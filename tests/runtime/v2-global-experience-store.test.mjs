@@ -7,6 +7,7 @@ import {
   validateExperienceRecord,
 } from "../../v2/experience/contracts.mjs";
 import { projectExperience } from "../../v2/experience/projector.mjs";
+import { createExperienceQuery } from "../../v2/experience/query.mjs";
 
 const baseInput = {
   category: "DIAGNOSTIC",
@@ -32,6 +33,32 @@ const baseInput = {
   requestedScope: "PROJECT",
   projectionVersion: "1",
 };
+
+function projected(overrides = {}) {
+  const result = projectExperience({ ...baseInput, ...overrides });
+  assert.equal(result.valid, true, JSON.stringify(result.errors));
+  return result.experience;
+}
+
+function fakeQueryPersistence(records) {
+  const ordered = [...records].sort((left, right) => left.experienceId.localeCompare(right.experienceId));
+  return Object.freeze({
+    query({ filters, projectId = null, afterId = null, limit }) {
+      let selected = ordered;
+      if (projectId !== null) selected = selected.filter((record) => record.source.projectId === projectId);
+      if (afterId !== null) selected = selected.filter((record) => record.experienceId > afterId);
+      if (filters.category !== undefined) selected = selected.filter((record) => record.category === filters.category);
+      if (filters.providerFamily !== undefined) selected = selected.filter((record) => record.facts.providerFamily === filters.providerFamily);
+      if (filters.domainCohort !== undefined) selected = selected.filter((record) => record.domainCohort === filters.domainCohort);
+      if (filters.failureClass !== undefined) selected = selected.filter((record) => (record.facts.failureClass ?? record.outcome.failureClass) === filters.failureClass);
+      if (filters.recoveryClass !== undefined) selected = selected.filter((record) => (record.facts.recoveryClass ?? record.outcome.recoveryClass) === filters.recoveryClass);
+      if (filters.terminalOutcome !== undefined) selected = selected.filter((record) => record.outcome.terminalOutcome === filters.terminalOutcome);
+      if (filters.eligibilityScope !== undefined) selected = selected.filter((record) => record.generalization.scope === filters.eligibilityScope);
+      if (filters.minProjectLineageCount !== undefined) selected = selected.filter((record) => record.generalization.projectLineageCount >= filters.minProjectLineageCount);
+      return selected.slice(0, limit + 1).map(structuredClone);
+    },
+  });
+}
 
 test("Experience v1 closes the category set to exactly five approved classes", () => {
   assert.deepEqual([...EXPERIENCE_CATEGORIES], [
@@ -100,13 +127,13 @@ test("Experience contract accepts only normalized learning dimensions", () => {
 });
 
 test("containsRawProjectContent can never be true in a valid record", () => {
-  const projected = projectExperience(baseInput);
-  assert.equal(projected.valid, true);
+  const projectedRecord = projectExperience(baseInput);
+  assert.equal(projectedRecord.valid, true);
 
   const tampered = {
-    ...projected.experience,
+    ...projectedRecord.experience,
     privacy: {
-      ...projected.experience.privacy,
+      ...projectedRecord.experience.privacy,
       containsRawProjectContent: true,
     },
   };
@@ -142,4 +169,106 @@ test("cross-project payload omits source Project and originating private audit r
   assert.equal(crossProject.source?.operationId, undefined);
   assert.equal(crossProject.source?.lineageId, "lineage-tsuzuki");
   assert.equal(crossProject.domainCohort, "software-engineering");
+});
+
+test("bounded cross-project query supports the approved sanitized dimensions only", () => {
+  const matching = projected({
+    projectLineageIds: ["lineage-tsuzuki", "lineage-other"],
+    requestedScope: "GLOBAL_CANDIDATE",
+  });
+  const other = projected({
+    category: "PERFORMANCE",
+    sourceProjectId: "prj-other",
+    sourceLineageId: "lineage-other",
+    workId: "work-other",
+    operationId: "op-other",
+    domainCohort: "documentation",
+    facts: {
+      providerFamily: "antigravity",
+      osFamily: "linux",
+      runtimeVersion: "2.7.0",
+      routeClass: "DIRECT_WORK",
+      latencyBucket: "LOW",
+    },
+    outcome: { terminalOutcome: "SUCCEEDED", success: true },
+  });
+  const query = createExperienceQuery({ persistence: fakeQueryPersistence([other, matching]) });
+
+  const result = query.crossProject({
+    filters: {
+      category: "DIAGNOSTIC",
+      providerFamily: "codex",
+      domainCohort: "software-engineering",
+      failureClass: "OWNER_TERMINATED",
+      recoveryClass: "RECONCILED",
+      terminalOutcome: "RECOVERED",
+      eligibilityScope: "GLOBAL_CANDIDATE",
+      minProjectLineageCount: 2,
+    },
+  });
+
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].experienceId, matching.experienceId);
+  assert.equal(result.items[0].source.projectId, undefined);
+  assert.equal(result.items[0].source.workId, undefined);
+  assert.equal(result.items[0].source.operationId, undefined);
+  assert.equal(result.items[0].facts.providerFamily, "codex");
+});
+
+test("project-private query resolves provenance only when explicitly scoped to that Project", () => {
+  const a = projected();
+  const b = projected({
+    sourceProjectId: "prj-b",
+    sourceLineageId: "lineage-b",
+    workId: "work-b",
+    operationId: "op-b",
+    projectLineageIds: ["lineage-b"],
+  });
+  const query = createExperienceQuery({ persistence: fakeQueryPersistence([a, b]) });
+
+  assert.throws(
+    () => query.projectPrivate({}),
+    (error) => error?.code === "ORCHESTRA_EXPERIENCE_QUERY_INVALID",
+  );
+  const result = query.projectPrivate({ projectId: "prj-tsuzuki" });
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].source.projectId, "prj-tsuzuki");
+  assert.equal(result.items[0].source.workId, "work-f7");
+  assert.equal(result.items[0].source.operationId, "op-f7-1");
+});
+
+test("Experience query pagination and ordering are deterministic", () => {
+  const records = [
+    projected({ category: "EXECUTION", operationId: "op-c" }),
+    projected({ category: "EXECUTION", operationId: "op-a" }),
+    projected({ category: "EXECUTION", operationId: "op-b" }),
+  ];
+  const query = createExperienceQuery({ persistence: fakeQueryPersistence(records) });
+  const expected = [...records].sort((left, right) => left.experienceId.localeCompare(right.experienceId));
+
+  const first = query.crossProject({ filters: { category: "EXECUTION" }, limit: 1 });
+  assert.deepEqual(first.items.map((record) => record.experienceId), [expected[0].experienceId]);
+  assert.equal(first.nextCursor, expected[0].experienceId);
+
+  const second = query.crossProject({ filters: { category: "EXECUTION" }, limit: 1, cursor: first.nextCursor });
+  assert.deepEqual(second.items.map((record) => record.experienceId), [expected[1].experienceId]);
+  assert.equal(second.nextCursor, expected[1].experienceId);
+});
+
+test("unknown Experience query filter fails closed before persistence execution", () => {
+  let called = false;
+  const query = createExperienceQuery({
+    persistence: {
+      query() {
+        called = true;
+        return [];
+      },
+    },
+  });
+
+  assert.throws(
+    () => query.crossProject({ filters: { arbitrarySql: "DROP TABLE projects" } }),
+    (error) => error?.code === "ORCHESTRA_EXPERIENCE_QUERY_INVALID",
+  );
+  assert.equal(called, false);
 });
