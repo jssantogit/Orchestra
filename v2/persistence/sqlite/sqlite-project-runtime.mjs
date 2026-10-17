@@ -122,13 +122,7 @@ export function withSqliteProjectRuntimeUpdates(state, { dbPath, timeoutMs = 5_0
         return fail("PROJECT_RUNTIME_UPDATE_INVALID");
       }
 
-      const request = {
-        projectId,
-        expectedPinnedImage,
-        expectedInstructionEpoch,
-        targetImage,
-        commandId,
-      };
+      const request = { projectId, targetImage, commandId };
       const requestJson = canonicalJson(request);
       const requestDigest = digest(requestJson);
 
