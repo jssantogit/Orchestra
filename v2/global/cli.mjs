@@ -5,6 +5,7 @@ import {
   globalRegistryStateExists,
   resolveOrchestraHome,
 } from "./project-registry.mjs";
+import { createGlobalStatusReconciler } from "./reconciliation.mjs";
 
 function cliError(code, message, fields = {}) {
   const error = new Error(message);
@@ -134,7 +135,36 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
         ? registry.inspect(target)
         : await registry.resolveWorkspace(target);
       if (!project) return notRegisteredResult();
-      return { exitCode: 0, payload: { ok: true, registered: true, project } };
+
+      const reconciler = createGlobalStatusReconciler({
+        state: registry.state,
+        home,
+      });
+      const inspection = await reconciler.inspect({ projectId: project.projectId });
+      if (!inspection.ok) {
+        return {
+          exitCode: 1,
+          payload: {
+            ok: false,
+            reason: inspection.reason,
+            registered: true,
+            project,
+          },
+        };
+      }
+
+      return {
+        exitCode: 0,
+        payload: {
+          ok: true,
+          registered: true,
+          project,
+          reconciliation: {
+            work: inspection.work,
+            operations: inspection.operations,
+          },
+        },
+      };
     }
 
     const result = await registry.rebindWorkspace({
