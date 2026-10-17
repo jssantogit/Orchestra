@@ -10,8 +10,12 @@ function failure(reason, fields = {}) {
 }
 
 function requireState(state) {
-  if (!state?.projects?.inspect || !state?.operations?.inspect || !state?.operations?.terminalize) {
-    throw new TypeError("state with projects and operations is required");
+  if (!state?.projects?.inspect
+    || !state?.work?.current
+    || !state?.operations?.inspect
+    || !state?.operations?.listLive
+    || !state?.operations?.terminalize) {
+    throw new TypeError("state with projects, work and operations is required");
   }
   if (!state?.recoveries?.record || !state?.recoveries?.latest || !state?.recoveries?.byCommand) {
     throw new TypeError("state with recovery journal is required");
@@ -112,6 +116,21 @@ export function createOperationReconciler({
       return null;
     }
     return result;
+  }
+
+  function unknownAssessment(operationId, reason = "ASSESSMENT_INVALID") {
+    return {
+      schema: "orchestra.liveness-assessment.v2",
+      operationId,
+      observedAt: now(),
+      liveness: "UNKNOWN",
+      reason,
+      evidence: {
+        ownerStatus: null,
+        heartbeatFresh: null,
+        deadlineExpired: null,
+      },
+    };
   }
 
   async function inspectWorkspace(operation) {
@@ -282,6 +301,35 @@ export function createOperationReconciler({
   }
 
   return Object.freeze({
+    async inspect({ projectId } = {}) {
+      if (typeof projectId !== "string" || projectId.length === 0) {
+        return failure("PROJECT_ID_INVALID");
+      }
+      const project = store.projects.inspect(projectId);
+      if (!project) return failure("PROJECT_NOT_FOUND");
+      const work = store.work.current(projectId);
+      const candidates = store.operations.listLive({ projectId })
+        .sort((left, right) => left.operationId.localeCompare(right.operationId));
+      const operations = [];
+      for (const operation of candidates) {
+        const assessment = await assess(operation) ?? unknownAssessment(operation.operationId);
+        const recovery = store.recoveries.latest({ projectId, operationId: operation.operationId });
+        operations.push({
+          operation,
+          assessment,
+          recovery,
+          blocksMutation: assessment.liveness === "LIVE" || assessment.liveness === "UNKNOWN",
+          recoveryAvailable: assessment.liveness === "STALE_RECOVERABLE",
+        });
+      }
+      return {
+        ok: true,
+        project,
+        work,
+        operations,
+      };
+    },
+
     async recover({ projectId, operationId, commandId } = {}) {
       if (typeof projectId !== "string" || projectId.length === 0
         || typeof operationId !== "string" || operationId.length === 0
