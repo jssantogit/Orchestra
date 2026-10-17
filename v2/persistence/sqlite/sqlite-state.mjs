@@ -9,6 +9,23 @@ import { createSqliteState as createSqliteStateCore } from "./sqlite-state-core.
 
 export { createSqliteRuntimeImageRegistry } from "./sqlite-runtime-images.mjs";
 
+function createUnavailableExperiencePersistence(cause) {
+  function unavailable() {
+    const error = new Error("ORCHESTRA_EXPERIENCE_STORE_UNAVAILABLE");
+    error.code = "ORCHESTRA_EXPERIENCE_STORE_UNAVAILABLE";
+    error.cause = cause;
+    throw error;
+  }
+
+  return Object.freeze({
+    put: unavailable,
+    inspect: unavailable,
+    list: unavailable,
+    query: unavailable,
+    close() {},
+  });
+}
+
 export function createSqliteState(options = {}) {
   const listed = trackOperationListing(createSqliteStateCore(options));
   const runtimeMutable = withSqliteProjectRuntimeUpdates(listed, {
@@ -20,8 +37,8 @@ export function createSqliteState(options = {}) {
     dbPath: options.dbPath,
     timeoutMs: options.timeoutMs,
   });
+
   let recoveries;
-  let experience;
   try {
     recoveries = options.dbPath === ":memory:"
       ? createInMemoryRecoveryJournal({ state: core })
@@ -30,14 +47,19 @@ export function createSqliteState(options = {}) {
         state: core,
         timeoutMs: options.timeoutMs,
       });
+  } catch (error) {
+    core.close();
+    throw error;
+  }
+
+  let experience;
+  try {
     experience = createSqliteExperiencePersistence({
       dbPath: options.dbPath,
       timeoutMs: options.timeoutMs,
     });
   } catch (error) {
-    recoveries?.close?.();
-    core.close();
-    throw error;
+    experience = createUnavailableExperiencePersistence(error);
   }
 
   let closed = false;
