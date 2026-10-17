@@ -1,5 +1,6 @@
 const OWNER_KINDS = new Set(["LOCAL_PROCESS"]);
 const OWNER_STATUSES = new Set(["MATCH", "ABSENT", "MISMATCH", "UNAVAILABLE"]);
+const ASSESSMENT_LIVENESS = new Set(["LIVE", "TERMINAL", "STALE_RECOVERABLE", "UNKNOWN"]);
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/i;
 
 function ok() {
@@ -24,6 +25,10 @@ function isTimestamp(value) {
 
 function hasOnlyKeys(value, allowed) {
   return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isBooleanOrNull(value) {
+  return value === null || typeof value === "boolean";
 }
 
 export function validateRuntimeOwnerV2(value) {
@@ -91,6 +96,42 @@ export function validateOwnerObservationV2(value) {
     }
   } else if (value.observedProcessIdentity !== null) {
     return fail("absent/unavailable observation cannot claim process identity");
+  }
+
+  return ok();
+}
+
+export function validateLivenessAssessmentV2(value) {
+  if (!isRecord(value) || value.schema !== "orchestra.liveness-assessment.v2") {
+    return fail("invalid liveness assessment schema");
+  }
+
+  const allowed = new Set([
+    "schema",
+    "operationId",
+    "observedAt",
+    "liveness",
+    "reason",
+    "evidence",
+  ]);
+  if (!hasOnlyKeys(value, allowed)) return fail("unknown liveness assessment field");
+  if (!isNonEmptyString(value.operationId)) return fail("operation id required");
+  if (!isTimestamp(value.observedAt)) return fail("invalid liveness assessment timestamp");
+  if (!ASSESSMENT_LIVENESS.has(value.liveness)) return fail("invalid assessed liveness");
+  if (!isNonEmptyString(value.reason)) return fail("liveness reason required");
+
+  if (!isRecord(value.evidence)
+    || !hasOnlyKeys(value.evidence, new Set(["ownerStatus", "heartbeatFresh", "deadlineExpired"]))) {
+    return fail("invalid liveness evidence", "/evidence");
+  }
+  if (value.evidence.ownerStatus !== null && !OWNER_STATUSES.has(value.evidence.ownerStatus)) {
+    return fail("invalid liveness owner status", "/evidence/ownerStatus");
+  }
+  if (!isBooleanOrNull(value.evidence.heartbeatFresh)) {
+    return fail("invalid heartbeat freshness", "/evidence/heartbeatFresh");
+  }
+  if (!isBooleanOrNull(value.evidence.deadlineExpired)) {
+    return fail("invalid deadline expiry", "/evidence/deadlineExpired");
   }
 
   return ok();
