@@ -17,7 +17,7 @@ function isExplicitPreserve(recovery) {
   return recovery?.outcome === "STALE_DIRTY"
     && recovery.terminal !== null
     && recovery.cleanup?.status === "PRESERVED"
-    && recovery.assessment?.reason !== TERMINAL_CLEANUP_REASON;
+    && recovery.resolutionAction === "PRESERVE";
 }
 
 function terminalAssessment(operation, now) {
@@ -72,8 +72,8 @@ async function terminalReadiness({ operation, recovery, workspaceRecovery }) {
       blocksMutation: false,
       recoveryAvailable: false,
       humanGateRequired: false,
-      actionRequired: recovery?.outcome === "STALE_DIRTY"
-        ? "REVIEW_PRESERVED_WORKSPACE"
+      actionRequired: recovery?.resolutionAction === "DISCARD"
+        ? "RETRY_DIRTY_DISCARD"
         : "RESOLVE_DIRTY_WORKSPACE",
     };
   }
