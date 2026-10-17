@@ -35,40 +35,42 @@ function recoveryCorrupt(detail, fields = {}) {
 
 function initializeRecoverySchema(db) {
   db.exec("PRAGMA foreign_keys = ON");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS orchestra_recovery_migrations (
-      version INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      applied_at TEXT NOT NULL
-    ) STRICT;
-  `);
-
-  const maxRow = db.prepare("SELECT MAX(version) AS version FROM orchestra_recovery_migrations").get();
-  const current = Number(maxRow?.version ?? 0);
-  if (current > RECOVERY_SCHEMA_VERSION) throw recoverySchemaTooNew(current);
-  if (current >= 1) return;
-
   db.exec("BEGIN IMMEDIATE");
   try {
     db.exec(`
-      CREATE TABLE operation_recovery_records (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id TEXT NOT NULL,
-        operation_id TEXT NOT NULL,
-        command_id TEXT NOT NULL,
-        record_json TEXT NOT NULL,
-        record_digest TEXT NOT NULL,
-        recorded_at TEXT NOT NULL,
-        UNIQUE (project_id, command_id),
-        FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT,
-        FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE RESTRICT
+      CREATE TABLE IF NOT EXISTS orchestra_recovery_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
       ) STRICT;
-
-      CREATE INDEX operation_recovery_latest_idx
-        ON operation_recovery_records(project_id, operation_id, sequence DESC);
     `);
-    db.prepare("INSERT INTO orchestra_recovery_migrations(version, name, applied_at) VALUES (?, ?, ?)")
-      .run(1, "v2_operation_recovery_journal", new Date().toISOString());
+
+    const maxRow = db.prepare("SELECT MAX(version) AS version FROM orchestra_recovery_migrations").get();
+    const current = Number(maxRow?.version ?? 0);
+    if (current > RECOVERY_SCHEMA_VERSION) throw recoverySchemaTooNew(current);
+
+    if (current < 1) {
+      db.exec(`
+        CREATE TABLE operation_recovery_records (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id TEXT NOT NULL,
+          operation_id TEXT NOT NULL,
+          command_id TEXT NOT NULL,
+          record_json TEXT NOT NULL,
+          record_digest TEXT NOT NULL,
+          recorded_at TEXT NOT NULL,
+          UNIQUE (project_id, command_id),
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT,
+          FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE RESTRICT
+        ) STRICT;
+
+        CREATE INDEX operation_recovery_latest_idx
+          ON operation_recovery_records(project_id, operation_id, sequence DESC);
+      `);
+      db.prepare("INSERT INTO orchestra_recovery_migrations(version, name, applied_at) VALUES (?, ?, ?)")
+        .run(1, "v2_operation_recovery_journal", new Date().toISOString());
+    }
+
     db.exec("COMMIT");
   } catch (error) {
     try {
