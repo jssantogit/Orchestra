@@ -523,6 +523,14 @@ function verifiedV2Result(overrides = {}) {
   };
 }
 
+async function loadProviderShimInstallers() {
+  const [{ installCodexV2Shim }, { installAntigravityV2Shim }] = await Promise.all([
+    import("../../v2/providers/codex/shim-manager.mjs"),
+    import("../../v2/providers/antigravity/shim-manager.mjs"),
+  ]);
+  return { installCodexV2Shim, installAntigravityV2Shim };
+}
+
 test("migration activation installs only thin v2 shims, verifies global attach, and preserves legacy runtime", v2Only, async () => {
   await withWorkspace(async (root) => {
     const { workspace, home, legacyRuntime, applied } = await prepareManagedMigration(root, "activation-success");
@@ -537,6 +545,7 @@ test("migration activation installs only thin v2 shims, verifies global attach, 
       createMigrationShimActivator,
       readMigrationActivationReceipt,
     } = await import("../../v2/migration/shim-activation.mjs");
+    const { installCodexV2Shim, installAntigravityV2Shim } = await loadProviderShimInstallers();
 
     const registry = createGlobalProjectRegistry({ home });
     try {
@@ -547,6 +556,8 @@ test("migration activation installs only thin v2 shims, verifies global attach, 
         home,
         launcherPath,
         nodePath: process.execPath,
+        codexInstaller: installCodexV2Shim,
+        antigravityInstaller: installAntigravityV2Shim,
         verify: async ({ project, providers }) => ({
           ...verifiedV2Result(),
           rawSessionId: "must-not-persist",
@@ -599,6 +610,7 @@ test("failed or v1-fallback migration verification never opens cleanup and leave
       createMigrationShimActivator,
       readMigrationActivationReceipt,
     } = await import("../../v2/migration/shim-activation.mjs");
+    const { installCodexV2Shim, installAntigravityV2Shim } = await loadProviderShimInstallers();
 
     const registry = createGlobalProjectRegistry({ home });
     try {
@@ -613,6 +625,8 @@ test("failed or v1-fallback migration verification never opens cleanup and leave
           home,
           launcherPath,
           nodePath: process.execPath,
+          codexInstaller: installCodexV2Shim,
+          antigravityInstaller: installAntigravityV2Shim,
           verify: async () => verification,
         });
         const result = await activator.activate({
