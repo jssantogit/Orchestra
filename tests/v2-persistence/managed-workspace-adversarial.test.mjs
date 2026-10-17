@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -140,6 +140,23 @@ test("concurrent identical managed workspace registration converges on one immut
     assert.equal(results.filter((entry) => entry.replayed === false).length, 1);
     assert.equal(results.filter((entry) => entry.replayed === true).length, 1);
     assert.deepEqual(await left.read(record.workspaceRef), record);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("managed workspace root must be a direct child of the Orchestra instances directory", async () => {
+  const fx = await fixture();
+  try {
+    const nestedRoot = join(fx.paths.instancesRoot, "nested-parent", "managed");
+    await mkdir(nestedRoot, { recursive: true });
+    git("init", nestedRoot);
+    const store = createManagedWorkspaceStore({ home: fx.home });
+
+    const result = await store.register(workspace(await realpath(nestedRoot)));
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "MANAGED_WORKSPACE_ROOT_NOT_DIRECT_CHILD");
+    assert.equal(await store.read("workspace:adversarial"), null);
   } finally {
     await fx.cleanup();
   }
