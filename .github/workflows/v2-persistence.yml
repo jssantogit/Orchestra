@@ -30,6 +30,9 @@ jobs:
       - name: Run v2 persistence tests
         run: node --test tests/v2-persistence/*.test.mjs
 
+      - name: Run Codex global adapter and provider-event tests
+        run: node --test tests/runtime/v2-codex-global-adapter.test.mjs tests/runtime/v2-provider-event-liveness.test.mjs
+
   v1-regression:
     name: V1 Compatibility Guard
     runs-on: ubuntu-latest
