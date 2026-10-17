@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { evaluateHoldoutReplay } from "../../v2/rsi/replay.mjs";
-import { activatePromotionCandidate } from "../../v2/rsi/promotion.mjs";
+import { evaluateHoldoutReplay, evaluateCounterexampleDemotion } from "../../v2/rsi/replay.mjs";
+import { activatePromotionCandidate, demotePromotionCandidate } from "../../v2/rsi/promotion.mjs";
+import { createLearnedPolicyStore } from "../../v2/rsi/policy-store.mjs";
 import { resolveLearnedPolicyHierarchy } from "../../v2/rsi/evaluation.mjs";
 
 function policyCandidate(overrides = {}) {
@@ -287,4 +288,132 @@ test("activated learned policy remains below immutable governance", () => {
   assert.deepEqual(resolved.legalChoices.routes, ["DIRECT_WORK"]);
   assert.deepEqual(resolved.legalChoices.providerProfiles, ["CODEX_DEFAULT"]);
   assert.deepEqual(resolved.legalChoices.timeoutClasses, ["STANDARD"]);
+});
+
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+const sqliteAvailable = nodeMajor >= 22;
+
+async function withSqliteState(run) {
+  const [{ mkdtemp, rm }, { join }, { tmpdir }, { createSqliteState }] = await Promise.all([
+    import("node:fs/promises"),
+    import("node:path"),
+    import("node:os"),
+    import("../../v2/persistence/sqlite/sqlite-state.mjs"),
+  ]);
+  const root = await mkdtemp(join(tmpdir(), "orchestra-v2-rsi-rollback-"));
+  const dbPath = join(root, "state", "orchestra.db");
+  try {
+    await run({ dbPath, createSqliteState });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("activated policy rolls back to its exact predecessor revision idempotently and preserves audit history", { skip: !sqliteAvailable }, async () => {
+  await withSqliteState(async ({ dbPath, createSqliteState }) => {
+    const state = createSqliteState({ dbPath });
+    const store = createLearnedPolicyStore({ persistence: state.learnedPolicies });
+    const revision1 = policyCandidate({ revision: 1, createdAt: "2026-10-17T22:30:00.000Z" });
+    const revision2 = policyCandidate({ revision: 2, createdAt: "2026-10-17T22:35:00.000Z" });
+    assert.equal(store.putCandidate(revision1).ok, true);
+    assert.equal(store.putCandidate(revision2).ok, true);
+    assert.equal(store.activate({ policyId: revision1.policyId, revision: 1 }).ok, true);
+    assert.equal(store.activate({ policyId: revision2.policyId, revision: 2 }).ok, true);
+    assert.equal(store.history({ scope: "GLOBAL" }).length, 2);
+
+    const first = store.rollback({ policyId: revision2.policyId, revision: 2 });
+    assert.equal(first.ok, true);
+    assert.equal(first.replayed, false);
+    assert.equal(first.active.policy.revision, 1);
+    assert.equal(first.rolledBack.policyId, revision2.policyId);
+    assert.equal(first.rolledBack.revision, 2);
+    assert.equal(store.history({ scope: "GLOBAL" }).length, 3);
+    assert.deepEqual(store.inspect(revision2.policyId, 2), revision2);
+
+    const second = store.rollback({ policyId: revision2.policyId, revision: 2 });
+    assert.equal(second.ok, true);
+    assert.equal(second.replayed, true);
+    assert.equal(second.active.policy.revision, 1);
+    assert.equal(store.history({ scope: "GLOBAL" }).length, 3);
+    state.close();
+  });
+});
+
+test("qualifying Counterexample demotes active policy to pending review without mutating Experience", () => {
+  const candidate = policyCandidate();
+  const counterexample = experience("lineage-new", 301, { category: "COUNTEREXAMPLE", success: false });
+  const before = structuredClone(counterexample);
+  const assessment = evaluateCounterexampleDemotion({ candidate, counterexample });
+  assert.equal(assessment.ok, true);
+  assert.equal(assessment.qualifies, true);
+
+  const calls = [];
+  const policyStore = {
+    rollback(command) {
+      calls.push(command);
+      return {
+        ok: true,
+        replayed: false,
+        active: { policy: policyCandidate({ revision: 1 }) },
+        rolledBack: { policyId: candidate.policyId, revision: candidate.revision },
+      };
+    },
+  };
+  const result = demotePromotionCandidate({ candidate, counterexample, policyStore });
+  assert.equal(result.ok, true);
+  assert.equal(result.code, "RSI_POLICY_DEMOTED");
+  assert.equal(result.demotion.lifecycle, "PENDING_REVIEW");
+  assert.deepEqual(result.demotion.policy, { policyId: candidate.policyId, revision: candidate.revision });
+  assert.deepEqual(calls, [{ policyId: candidate.policyId, revision: candidate.revision }]);
+  assert.deepEqual(counterexample, before);
+});
+
+test("Counterexample outside a DOMAIN policy scope does not demote it", () => {
+  const candidate = policyCandidate({
+    scope: "DOMAIN",
+    domainCohort: "operations",
+    projectId: null,
+  });
+  const counterexample = experience("lineage-new", 302, { category: "COUNTEREXAMPLE", success: false });
+  const assessment = evaluateCounterexampleDemotion({ candidate, counterexample });
+  assert.equal(assessment.ok, true);
+  assert.equal(assessment.qualifies, false);
+  assert.equal(assessment.code, "RSI_COUNTEREXAMPLE_OUT_OF_SCOPE");
+});
+
+test("corrupt learned policy never makes immutable governance permissive", () => {
+  const corrupt = policyCandidate({ selectors: { allowedRoutes: ["FORBIDDEN_ROUTE"], executableCode: "return true" } });
+  const result = resolveLearnedPolicyHierarchy({
+    immutableChoices: {
+      routes: ["DIRECT_WORK"],
+      providerProfiles: ["CODEX_DEFAULT"],
+      retryClasses: ["STANDARD"],
+      timeoutClasses: ["STANDARD"],
+      turnEconomy: ["BALANCED"],
+    },
+    globalPolicy: corrupt,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "RSI_POLICY_INVALID");
+});
+
+test("execution without learned policy remains valid on deterministic static baseline", () => {
+  const result = resolveLearnedPolicyHierarchy({
+    immutableChoices: {
+      routes: ["DIRECT_WORK", "DELEGATED"],
+      providerProfiles: ["CODEX_DEFAULT", "AGY_DEFAULT"],
+      retryClasses: ["STANDARD", "RESILIENT"],
+      timeoutClasses: ["STANDARD", "LONG"],
+      turnEconomy: ["BALANCED", "AGGRESSIVE"],
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.appliedPolicies, []);
+  assert.deepEqual(result.preferences, {
+    route: "DIRECT_WORK",
+    providerProfile: "CODEX_DEFAULT",
+    retryClass: "STANDARD",
+    timeoutClass: "STANDARD",
+    turnEconomy: "BALANCED",
+  });
 });
