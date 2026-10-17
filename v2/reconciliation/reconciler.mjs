@@ -364,6 +364,20 @@ export function createOperationReconciler({
           terminalReason: terminal.reason,
         });
       }
+      if (terminal.replayed) {
+        const latest = store.recoveries.latest({
+          projectId: operation.projectId,
+          operationId: operation.operationId,
+        });
+        if (latest?.terminal?.resultRef === terminal.operation.resultRef) {
+          return replayRecordedRecovery(latest, terminal.operation);
+        }
+        return failure("RECOVERY_RACE_LOST", {
+          operationId,
+          terminalized: true,
+          retryable: true,
+        });
+      }
 
       if (workspace.status === "ABSENT") {
         const record = recoveryRecord({
