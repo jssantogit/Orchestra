@@ -8,6 +8,25 @@ const DIMENSIONS = Object.freeze([
   Object.freeze({ choices: "turnEconomy", allowed: "allowedTurnEconomy", preference: "turnEconomy", output: "turnEconomy" }),
 ]);
 
+const EXPERIENCE_CATEGORIES = new Set([
+  "DIAGNOSTIC",
+  "EXECUTION",
+  "PROVIDER_TOOL_FACT",
+  "PERFORMANCE",
+  "COUNTEREXAMPLE",
+]);
+const GENERALIZATION_SCOPES = new Set(["PROJECT", "DOMAIN", "GLOBAL_CANDIDATE"]);
+const PROMOTION_GATE_KEYS = new Set(["minTrainLineages", "requireSuccess", "metrics"]);
+const PROMOTION_METRICS = new Set(["retryCount", "durationMs"]);
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function onlyKeys(value, allowed) {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
 function validChoices(value) {
   return Array.isArray(value)
     && value.length > 0
@@ -21,6 +40,210 @@ function applies(policy, { domainCohort, projectId }) {
   if (policy.scope === "DOMAIN") return policy.domainCohort === domainCohort;
   if (policy.scope === "PROJECT") return policy.projectId === projectId;
   return false;
+}
+
+function evaluationFailure(code, payload = {}) {
+  return Object.freeze({ ok: false, passed: false, code, ...payload });
+}
+
+function validPromotionGate(gate) {
+  if (!isRecord(gate) || !onlyKeys(gate, PROMOTION_GATE_KEYS)) return false;
+  if (!Number.isInteger(gate.minTrainLineages) || gate.minTrainLineages < 2) return false;
+  if (typeof gate.requireSuccess !== "boolean") return false;
+  if (!isRecord(gate.metrics) || !onlyKeys(gate.metrics, PROMOTION_METRICS)) return false;
+  for (const [metric, rule] of Object.entries(gate.metrics)) {
+    if (!PROMOTION_METRICS.has(metric) || !isRecord(rule) || !onlyKeys(rule, new Set(["max"]))) return false;
+    if (typeof rule.max !== "number" || !Number.isFinite(rule.max) || rule.max < 0) return false;
+  }
+  return true;
+}
+
+function validCrossProjectExperience(record, gate) {
+  if (!isRecord(record)
+    || record.schema !== "orchestra.experience.v2"
+    || record.version !== 1
+    || typeof record.experienceId !== "string"
+    || !/^exp-[0-9a-f]{24}$/.test(record.experienceId)
+    || !EXPERIENCE_CATEGORIES.has(record.category)
+    || !isRecord(record.source)
+    || Object.keys(record.source).length !== 1
+    || typeof record.source.lineageId !== "string"
+    || record.source.lineageId.length === 0
+    || typeof record.domainCohort !== "string"
+    || record.domainCohort.length === 0
+    || !isRecord(record.facts)
+    || !isRecord(record.outcome)
+    || !isRecord(record.generalization)
+    || !GENERALIZATION_SCOPES.has(record.generalization.scope)
+    || !Number.isInteger(record.generalization.projectLineageCount)
+    || record.generalization.projectLineageCount < 1
+    || !isRecord(record.privacy)
+    || record.privacy.containsRawProjectContent !== false) {
+    return false;
+  }
+
+  if (gate.requireSuccess && typeof record.outcome.success !== "boolean") return false;
+  for (const metric of Object.keys(gate.metrics)) {
+    if (!Number.isInteger(record.facts[metric]) || record.facts[metric] < 0) return false;
+  }
+  return true;
+}
+
+function normalizeCohort(cohort, gate) {
+  if (!isRecord(cohort) || !Array.isArray(cohort.lineageIds) || !Array.isArray(cohort.records)) return null;
+  const records = [...cohort.records];
+  if (records.some((record) => !validCrossProjectExperience(record, gate))) return null;
+  const derivedLineages = [...new Set(records.map((record) => record.source.lineageId))].sort();
+  const declaredLineages = [...cohort.lineageIds].sort();
+  if (declaredLineages.length !== derivedLineages.length
+    || declaredLineages.some((lineageId, index) => lineageId !== derivedLineages[index])) {
+    return null;
+  }
+  return Object.freeze({
+    lineageIds: Object.freeze(derivedLineages),
+    records: Object.freeze(records.sort((left, right) => left.experienceId.localeCompare(right.experienceId))),
+  });
+}
+
+function recordInCandidateScope(record, candidate) {
+  if (candidate.scope === "GLOBAL") return record.generalization.scope === "GLOBAL_CANDIDATE";
+  if (candidate.scope === "DOMAIN") {
+    return record.domainCohort === candidate.domainCohort
+      && ["DOMAIN", "GLOBAL_CANDIDATE"].includes(record.generalization.scope);
+  }
+  return false;
+}
+
+function scopedCohort(cohort, candidate) {
+  const records = cohort.records.filter((record) => recordInCandidateScope(record, candidate));
+  return Object.freeze({
+    lineageIds: Object.freeze([...new Set(records.map((record) => record.source.lineageId))].sort()),
+    records: Object.freeze(records),
+  });
+}
+
+function metricSummary(records, metric) {
+  const values = records.map((record) => record.facts[metric]);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return Object.freeze({
+    count: values.length,
+    total,
+    average: values.length === 0 ? 0 : total / values.length,
+    max: values.length === 0 ? 0 : Math.max(...values),
+  });
+}
+
+function cohortEvidence(cohort, gate) {
+  const successCount = cohort.records.filter((record) => record.outcome.success === true).length;
+  const metrics = {
+    recordCount: cohort.records.length,
+    successCount,
+    successRate: cohort.records.length === 0 ? 0 : successCount / cohort.records.length,
+  };
+  for (const metric of Object.keys(gate.metrics).sort()) {
+    metrics[metric] = metricSummary(cohort.records, metric);
+  }
+  return Object.freeze({
+    lineageIds: Object.freeze([...cohort.lineageIds]),
+    experienceIds: Object.freeze(cohort.records.map((record) => record.experienceId)),
+    metrics: Object.freeze(metrics),
+  });
+}
+
+function gateFailure(cohort, gate, phase) {
+  if (gate.requireSuccess) {
+    const failed = cohort.records.find((record) => record.outcome.success !== true);
+    if (failed) {
+      return Object.freeze({ phase, outcome: "success", experienceId: failed.experienceId });
+    }
+  }
+  for (const metric of Object.keys(gate.metrics).sort()) {
+    const rule = gate.metrics[metric];
+    const failed = cohort.records.find((record) => record.facts[metric] > rule.max);
+    if (failed) {
+      return Object.freeze({
+        phase,
+        metric,
+        expectedMax: rule.max,
+        actual: failed.facts[metric],
+        experienceId: failed.experienceId,
+      });
+    }
+  }
+  return null;
+}
+
+export function evaluatePolicyCandidate({ candidate, cohorts, gate } = {}) {
+  const candidateValidation = validateLearnedPolicyCandidate(candidate);
+  if (!candidateValidation.valid) return evaluationFailure("RSI_POLICY_INVALID");
+  if (!validPromotionGate(gate)) return evaluationFailure("RSI_PROMOTION_GATE_INVALID");
+  if (!isRecord(cohorts)) return evaluationFailure("RSI_COHORTS_INVALID");
+
+  const train = normalizeCohort(cohorts.train, gate);
+  const evaluate = normalizeCohort(cohorts.evaluate, gate);
+  if (!train || !evaluate) return evaluationFailure("RSI_EXPERIENCE_INVALID");
+
+  const trainLineages = new Set(train.lineageIds);
+  if (evaluate.lineageIds.some((lineageId) => trainLineages.has(lineageId))) {
+    return evaluationFailure("RSI_EVALUATE_LINEAGE_OVERLAP");
+  }
+
+  const scopedTrain = scopedCohort(train, candidate);
+  const scopedEvaluate = scopedCohort(evaluate, candidate);
+  if (candidate.scope === "GLOBAL"
+    && (scopedTrain.lineageIds.length !== train.lineageIds.length
+      || scopedEvaluate.lineageIds.length !== evaluate.lineageIds.length)) {
+    return evaluationFailure("RSI_GLOBAL_EVIDENCE_SCOPE_INSUFFICIENT");
+  }
+  if (candidate.scope === "DOMAIN"
+    && (scopedTrain.lineageIds.length !== train.lineageIds.length
+      || scopedEvaluate.lineageIds.length !== evaluate.lineageIds.length)) {
+    return evaluationFailure("RSI_DOMAIN_EVIDENCE_SCOPE_INSUFFICIENT");
+  }
+  if (candidate.scope === "PROJECT") {
+    return evaluationFailure("RSI_PROJECT_EVIDENCE_REQUIRES_PRIVATE_SCOPE");
+  }
+
+  if (scopedTrain.lineageIds.length < gate.minTrainLineages) {
+    return evaluationFailure("RSI_TRAIN_LINEAGE_SUPPORT_INSUFFICIENT", {
+      distinctTrainLineages: scopedTrain.lineageIds.length,
+      requiredTrainLineages: gate.minTrainLineages,
+    });
+  }
+  if (scopedEvaluate.lineageIds.length < 1) {
+    return evaluationFailure("RSI_EVALUATE_LINEAGE_SUPPORT_INSUFFICIENT");
+  }
+
+  const counterexamples = [...scopedTrain.records, ...scopedEvaluate.records]
+    .filter((record) => record.category === "COUNTEREXAMPLE")
+    .map((record) => record.experienceId)
+    .sort();
+  if (counterexamples.length > 0) {
+    return evaluationFailure("RSI_COUNTEREXAMPLE_BLOCKS_PROMOTION", {
+      counterexampleExperienceIds: Object.freeze(counterexamples),
+    });
+  }
+
+  const trainFailure = gateFailure(scopedTrain, gate, "TRAIN");
+  if (trainFailure) return evaluationFailure("RSI_TRAIN_GATE_FAILED", { failure: trainFailure });
+  const evaluateFailure = gateFailure(scopedEvaluate, gate, "EVALUATE");
+  if (evaluateFailure) return evaluationFailure("RSI_EVALUATE_GATE_FAILED", { failure: evaluateFailure });
+
+  const evidence = Object.freeze({
+    schema: "orchestra.rsi-promotion-evidence.v2",
+    version: 1,
+    policy: Object.freeze({ policyId: candidate.policyId, revision: candidate.revision, scope: candidate.scope }),
+    gate: Object.freeze(structuredClone(gate)),
+    train: cohortEvidence(scopedTrain, gate),
+    evaluate: cohortEvidence(scopedEvaluate, gate),
+  });
+
+  return Object.freeze({
+    ok: true,
+    passed: true,
+    code: "RSI_EVALUATION_PASSED",
+    evidence,
+  });
 }
 
 export function resolveLearnedPolicyHierarchy({
