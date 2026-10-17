@@ -1,4 +1,4 @@
-const OWNER_KINDS = new Set(["LOCAL_PROCESS"]);
+const OWNER_KINDS = new Set(["LOCAL_PROCESS", "PROVIDER_EVENT"]);
 const OWNER_STATUSES = new Set(["MATCH", "ABSENT", "MISMATCH", "UNAVAILABLE"]);
 const ASSESSMENT_LIVENESS = new Set(["LIVE", "TERMINAL", "STALE_RECOVERABLE", "UNKNOWN"]);
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/i;
@@ -36,40 +36,69 @@ export function validateRuntimeOwnerV2(value) {
     return fail("invalid runtime owner schema");
   }
 
-  const allowed = new Set([
+  const commonAllowed = new Set([
     "schema",
     "runtimeOwnerId",
     "operationId",
     "kind",
-    "process",
-    "proof",
     "registeredAt",
   ]);
-  if (!hasOnlyKeys(value, allowed)) return fail("unknown runtime owner field");
   if (!isNonEmptyString(value.runtimeOwnerId) || !isNonEmptyString(value.operationId)) {
     return fail("runtime owner identity required");
   }
   if (!OWNER_KINDS.has(value.kind)) return fail("unsupported runtime owner kind");
   if (!isTimestamp(value.registeredAt)) return fail("invalid runtime owner registration timestamp");
 
-  if (!isRecord(value.process)) return fail("local process descriptor required", "/process");
-  if (!hasOnlyKeys(value.process, new Set(["pid", "startIdentity"]))) {
-    return fail("unknown local process field", "/process");
-  }
-  if (!Number.isInteger(value.process.pid) || value.process.pid <= 0) {
-    return fail("positive process pid required", "/process/pid");
-  }
-  if (!isNonEmptyString(value.process.startIdentity)) {
-    return fail("process birth identity required", "/process/startIdentity");
+  if (value.kind === "LOCAL_PROCESS") {
+    if (!hasOnlyKeys(value, new Set([...commonAllowed, "process", "proof"]))) {
+      return fail("unknown runtime owner field");
+    }
+    if (!isRecord(value.process)) return fail("local process descriptor required", "/process");
+    if (!hasOnlyKeys(value.process, new Set(["pid", "startIdentity"]))) {
+      return fail("unknown local process field", "/process");
+    }
+    if (!Number.isInteger(value.process.pid) || value.process.pid <= 0) {
+      return fail("positive process pid required", "/process/pid");
+    }
+    if (!isNonEmptyString(value.process.startIdentity)) {
+      return fail("process birth identity required", "/process/startIdentity");
+    }
+
+    if (!isRecord(value.proof) || !hasOnlyKeys(value.proof, new Set(["tokenHash"]))) {
+      return fail("runtime owner proof required", "/proof");
+    }
+    if (!isNonEmptyString(value.proof.tokenHash) || !SHA256_DIGEST.test(value.proof.tokenHash)) {
+      return fail("runtime owner proof must be a sha256 digest", "/proof/tokenHash");
+    }
+  } else {
+    const providerAllowed = new Set([...commonAllowed, "correlationRef", "startedAt", "lastProviderEventAt", "deadlineAt"]);
+    if (!hasOnlyKeys(value, providerAllowed)) return fail("unknown provider-event owner field");
+    if (!isNonEmptyString(value.correlationRef) || !SHA256_DIGEST.test(value.correlationRef)) {
+      return fail("provider correlation ref must be a sha256 digest", "/correlationRef");
+    }
+    for (const key of ["startedAt", "lastProviderEventAt", "deadlineAt"]) {
+      if (!isTimestamp(value[key])) return fail(`invalid provider-event ${key}`, `/${key}`);
+    }
   }
 
-  if (!isRecord(value.proof) || !hasOnlyKeys(value.proof, new Set(["tokenHash"]))) {
-    return fail("runtime owner proof required", "/proof");
-  }
-  if (!isNonEmptyString(value.proof.tokenHash) || !SHA256_DIGEST.test(value.proof.tokenHash)) {
-    return fail("runtime owner proof must be a sha256 digest", "/proof/tokenHash");
-  }
+  return ok();
+}
 
+export function validateProviderEventObservationV2(value) {
+  if (!isRecord(value) || value.schema !== "orchestra.provider-event-observation.v2") {
+    return fail("invalid provider-event observation schema");
+  }
+  const allowed = new Set(["schema", "runtimeOwnerId", "correlationRef", "status", "eventAt", "observedAt"]);
+  if (!hasOnlyKeys(value, allowed)) return fail("unknown provider-event observation field");
+  if (!isNonEmptyString(value.runtimeOwnerId)) return fail("runtime owner id required");
+  if (!isNonEmptyString(value.correlationRef) || !SHA256_DIGEST.test(value.correlationRef)) {
+    return fail("provider correlation ref must be a sha256 digest", "/correlationRef");
+  }
+  if (value.status !== "POSITIVE" && value.status !== "CONTRADICTORY") {
+    return fail("invalid provider-event status", "/status");
+  }
+  if (!isTimestamp(value.eventAt)) return fail("invalid provider-event timestamp", "/eventAt");
+  if (!isTimestamp(value.observedAt)) return fail("invalid provider-event observation timestamp", "/observedAt");
   return ok();
 }
 
@@ -121,7 +150,13 @@ export function validateLivenessAssessmentV2(value) {
   if (!isNonEmptyString(value.reason)) return fail("liveness reason required");
 
   if (!isRecord(value.evidence)
-    || !hasOnlyKeys(value.evidence, new Set(["ownerStatus", "heartbeatFresh", "deadlineExpired"]))) {
+    || !hasOnlyKeys(value.evidence, new Set([
+      "ownerStatus",
+      "heartbeatFresh",
+      "deadlineExpired",
+      "providerEventFresh",
+      "providerEventCorrelationMatched",
+    ]))) {
     return fail("invalid liveness evidence", "/evidence");
   }
   if (value.evidence.ownerStatus !== null && !OWNER_STATUSES.has(value.evidence.ownerStatus)) {
@@ -132,6 +167,11 @@ export function validateLivenessAssessmentV2(value) {
   }
   if (!isBooleanOrNull(value.evidence.deadlineExpired)) {
     return fail("invalid deadline expiry", "/evidence/deadlineExpired");
+  }
+  for (const key of ["providerEventFresh", "providerEventCorrelationMatched"]) {
+    if (key in value.evidence && !isBooleanOrNull(value.evidence[key])) {
+      return fail(`invalid ${key}`, `/evidence/${key}`);
+    }
   }
 
   return ok();
