@@ -58,7 +58,7 @@ function operation(overrides = {}) {
 function seeded() {
   const state = createReferenceState();
   assert.equal(state.projects.register(project()).ok, true);
-  assert.equal(state.work.open(work()).ok, true);
+  assert.equal(state.work.startCurrent(work()).ok, true);
   return state;
 }
 
