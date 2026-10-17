@@ -63,23 +63,46 @@ function windowsProbeScript(pid) {
   ].join("; ");
 }
 
+function parseWindowsProbeOutput(result) {
+  const stdout = typeof result === "string" ? result : result?.stdout;
+  const output = String(stdout ?? "").trim();
+  if (output === "ABSENT") return absent();
+  const match = /^PRESENT:(-?\d+)$/.exec(output);
+  if (!match) return unavailable();
+  return present(`windows:${match[1]}`);
+}
+
 function createWindowsReader({ execFileImpl }) {
+  const args = (pid) => [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    windowsProbeScript(pid),
+  ];
+
   return async function readWindowsProcessIdentity(pid) {
     const normalized = normalizePid(pid);
     if (normalized === null) return unavailable();
 
     try {
       const result = await execFileImpl(
-        "powershell.exe",
-        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsProbeScript(normalized)],
+        "pwsh.exe",
+        args(normalized),
         { encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024 },
       );
-      const stdout = typeof result === "string" ? result : result?.stdout;
-      const output = String(stdout ?? "").trim();
-      if (output === "ABSENT") return absent();
-      const match = /^PRESENT:(-?\d+)$/.exec(output);
-      if (!match) return unavailable();
-      return present(`windows:${match[1]}`);
+      return parseWindowsProbeOutput(result);
+    } catch (error) {
+      if (error?.code !== "ENOENT") return unavailable();
+    }
+
+    try {
+      const result = await execFileImpl(
+        "powershell.exe",
+        args(normalized),
+        { encoding: "utf8", windowsHide: true, timeout: 15_000, maxBuffer: 64 * 1024 },
+      );
+      return parseWindowsProbeOutput(result);
     } catch {
       return unavailable();
     }
