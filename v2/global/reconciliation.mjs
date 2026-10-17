@@ -58,10 +58,6 @@ function createGlobalReconciliationParts({
 }
 
 export function createGlobalOperationReconciler(options = {}) {
-  return createGlobalReconciliationParts(options).reconciler;
-}
-
-export function createGlobalStatusReconciler(options = {}) {
   const parts = createGlobalReconciliationParts(options);
   return createRecoveryAwareStatusReconciler({
     state: options.state,
@@ -69,4 +65,8 @@ export function createGlobalStatusReconciler(options = {}) {
     workspaceRecovery: parts.workspaceRecovery,
     now: parts.now,
   });
+}
+
+export function createGlobalStatusReconciler(options = {}) {
+  return createGlobalOperationReconciler(options);
 }
