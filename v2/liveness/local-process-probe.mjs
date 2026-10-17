@@ -58,7 +58,7 @@ function windowsProbeScript(pid) {
     "$ErrorActionPreference = 'Stop'",
     `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
     "if ($null -eq $p) { Write-Output 'ABSENT'; exit 0 }",
-    "$created = ([DateTimeOffset]$p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()",
+    "$created = $p.StartTime.ToUniversalTime().ToFileTimeUtc()",
     "Write-Output ('PRESENT:' + $created)",
   ].join("; ");
 }
