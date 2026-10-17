@@ -1,11 +1,13 @@
 import { createInMemoryRecoveryJournal } from "../../reconciliation/recovery-journal.mjs";
 import { fenceOperationsToActiveWork } from "../../state/active-work-operation-fence.mjs";
+import { trackOperationListing } from "../../state/operation-listing.mjs";
 import { fenceSqliteOperationTerminalization } from "./sqlite-operation-terminalization-fence.mjs";
 import { createSqliteRecoveryJournal } from "./sqlite-recovery-journal.mjs";
 import { createSqliteState as createSqliteStateCore } from "./sqlite-state-core.mjs";
 
 export function createSqliteState(options = {}) {
-  const activeWorkFenced = fenceOperationsToActiveWork(createSqliteStateCore(options));
+  const listed = trackOperationListing(createSqliteStateCore(options));
+  const activeWorkFenced = fenceOperationsToActiveWork(listed);
   const core = fenceSqliteOperationTerminalization(activeWorkFenced, {
     dbPath: options.dbPath,
     timeoutMs: options.timeoutMs,
