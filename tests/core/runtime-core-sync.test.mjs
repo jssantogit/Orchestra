@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { access, cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildSchemaValidators, SCHEMA_FILES } from "../../scripts/build-schema-validators.mjs";
 import { checkRuntimeCore } from "../../scripts/check-runtime-core.mjs";
 import { syncRuntimeCore } from "../../scripts/sync-runtime-core.mjs";
 
-const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
+const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const CODEX_MIRROR = "runtimes/codex/.codex/astra-orchestra/core";
 const AGY_MIRROR = "runtimes/antigravity/.agents/skills/orchestra/core";
 const CODEX_PROVIDER_MIRROR = "runtimes/codex/.codex/astra-orchestra/provider/codex";
