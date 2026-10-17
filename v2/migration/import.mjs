@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
+
+import { createRuntimeOwnerStore } from "../liveness/runtime-owner-store.mjs";
+import { classifyLegacyInventoryEntry } from "./transient-classifier.mjs";
 
 const EXPECTED_SCHEMAS = Object.freeze({
   candidate: "orchestra.candidate.v1",
@@ -22,15 +26,26 @@ function digest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
+function stableDigest(value) {
+  return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
 function normalizeBytes(bytes) {
   if (Buffer.isBuffer(bytes)) return bytes;
   if (bytes instanceof Uint8Array) return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return null;
 }
 
-function deterministicWorkId(projectId, commandId) {
-  const identity = JSON.stringify({ projectId, commandId });
-  return `work_migration_${createHash("sha256").update(identity, "utf8").digest("hex")}`;
+function deterministicWorkId(projectId, commandId, kind = "durable") {
+  return `work_migration_${stableDigest({ projectId, commandId, kind })}`;
+}
+
+function deterministicOperationId(projectId, commandId, path, factDigest) {
+  return `op_migration_${stableDigest({ projectId, commandId, path, factDigest })}`;
+}
+
+function deterministicRuntimeOwnerId(projectId, commandId, path, factDigest) {
+  return `owner_migration_${stableDigest({ projectId, commandId, path, factDigest })}`;
 }
 
 function inventoryEvidence(inventory, classificationByPath) {
@@ -112,6 +127,59 @@ function prepareArchive({ archive, inventoryByPath, classificationByPath }) {
   return { ok: true, path: archive.path, bytes, digest: actualDigest };
 }
 
+function prepareTransient({ fact, inventoryByPath, classificationByPath }) {
+  if (!isRecord(fact) || !nonEmptyString(fact.path) || !isRecord(fact.facts)) {
+    return fail("MIGRATION_TRANSIENT_INVALID");
+  }
+  if (fact.provenanceComplete !== true) {
+    return fail("MIGRATION_TRANSIENT_PROVENANCE_REQUIRED", { path: fact.path });
+  }
+  const entry = inventoryByPath.get(fact.path);
+  const suppliedClassification = classificationByPath.get(fact.path)?.result ?? null;
+  if (!entry || suppliedClassification?.disposition !== "RECOVERABLE_IMPORT"
+    || suppliedClassification?.reconciliation?.eligible !== true) {
+    return fail("MIGRATION_TRANSIENT_NOT_RECOVERABLE", { path: fact.path });
+  }
+  const classification = classifyLegacyInventoryEntry({ entry, facts: fact.facts });
+  if (classification.disposition !== suppliedClassification.disposition
+    || classification.reconciliation?.eligible !== suppliedClassification.reconciliation?.eligible
+    || classification.reconciliation?.operationImportEligible
+      !== suppliedClassification.reconciliation?.operationImportEligible) {
+    return fail("MIGRATION_TRANSIENT_CLASSIFICATION_MISMATCH", { path: fact.path });
+  }
+  const bytes = normalizeBytes(fact.bytes);
+  if (!bytes) return fail("MIGRATION_TRANSIENT_BYTES_REQUIRED", { path: fact.path });
+  const actualDigest = digest(bytes);
+  if (actualDigest !== entry.digest) {
+    return fail("MIGRATION_TRANSIENT_DIGEST_MISMATCH", {
+      path: fact.path,
+      expectedDigest: entry.digest ?? null,
+      actualDigest,
+    });
+  }
+  let record;
+  try {
+    record = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return fail("MIGRATION_TRANSIENT_JSON_INVALID", { path: fact.path });
+  }
+  if (!isRecord(record) || (entry.schema !== null && entry.schema !== undefined && record.schema !== entry.schema)) {
+    return fail("MIGRATION_TRANSIENT_SCHEMA_MISMATCH", {
+      path: fact.path,
+      expectedSchema: entry.schema ?? null,
+      actualSchema: record?.schema ?? null,
+    });
+  }
+  return {
+    ok: true,
+    path: fact.path,
+    bytes,
+    digest: actualDigest,
+    facts: fact.facts,
+    classification,
+  };
+}
+
 function validateRelationships(candidate, evidence, continuation) {
   const taskId = candidate.record.taskId;
   const candidateId = candidate.record.candidateId;
@@ -161,12 +229,72 @@ async function sealFact(blobs, fact) {
   return { ok: true, sealed };
 }
 
-export function createLegacyMigrationImporter({ projectRegistry } = {}) {
+function hasDurablePayload(durableFacts) {
+  return Object.keys(durableFacts).length > 0;
+}
+
+function recoveryBlocker(fact) {
+  const prefix = fact.classification.reconciliation.operationImportEligible === true
+    ? "MIGRATION_TRANSIENT_RECONCILE"
+    : "MIGRATION_TRANSIENT_UNKNOWN";
+  return `${prefix}:${fact.digest}`;
+}
+
+function createImportedOperation({ project, recoveryWork, commandId, fact }) {
+  const operationId = deterministicOperationId(project.projectId, commandId, fact.path, fact.digest);
+  const runtimeOwnerId = deterministicRuntimeOwnerId(project.projectId, commandId, fact.path, fact.digest);
+  return {
+    operationId,
+    runtimeOwnerId,
+    owner: {
+      schema: "orchestra.runtime-owner.v2",
+      runtimeOwnerId,
+      operationId,
+      kind: "LOCAL_PROCESS",
+      registeredAt: fact.facts.startedAt,
+      process: {
+        pid: fact.facts.ownerProcess.pid,
+        startIdentity: fact.facts.ownerProcess.startIdentity,
+      },
+      proof: { tokenHash: fact.facts.ownerProofTokenHash },
+    },
+    operation: {
+      schema: "orchestra.operation.v2",
+      operationId,
+      projectId: project.projectId,
+      workId: recoveryWork.workId,
+      generation: recoveryWork.generation,
+      kind: fact.facts.operationKind,
+      actorRef: `migration:${fact.digest}`,
+      capabilities: [],
+      workflowState: nonEmptyString(fact.facts.persistedState) ? fact.facts.persistedState : "RUNNING",
+      liveness: "LIVE",
+      startedAt: fact.facts.startedAt,
+      heartbeatAt: fact.facts.heartbeatAt,
+      deadlineAt: fact.facts.deadlineAt,
+      runtimeOwnerRef: runtimeOwnerId,
+      workspaceRef: fact.facts.survivingWorkspaceRef,
+      resultRef: null,
+    },
+  };
+}
+
+export function createLegacyMigrationImporter({ projectRegistry, runtimeOwnerStore = null } = {}) {
   if (!projectRegistry || typeof projectRegistry.registerWorkspace !== "function"
     || !projectRegistry.state?.work || typeof projectRegistry.state.work.open !== "function"
     || !projectRegistry.blobs || typeof projectRegistry.blobs.putBytes !== "function"
     || typeof projectRegistry.blobs.verify !== "function") {
     throw new TypeError("projectRegistry with state.work and blobs is required");
+  }
+  if (runtimeOwnerStore !== null && typeof runtimeOwnerStore?.register !== "function") {
+    throw new TypeError("runtimeOwnerStore.register is required");
+  }
+
+  function resolveRuntimeOwnerStore() {
+    if (runtimeOwnerStore) return runtimeOwnerStore;
+    const home = projectRegistry.paths?.home;
+    if (!nonEmptyString(home)) return null;
+    return createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
   }
 
   return Object.freeze({
@@ -181,12 +309,13 @@ export function createLegacyMigrationImporter({ projectRegistry } = {}) {
         classifications = [],
         durableFacts = {},
         privateArchives = [],
+        transientFacts = [],
       } = input;
 
       if (!nonEmptyString(workspace) || !nonEmptyString(commandId)
         || !nonEmptyString(runtimeImage) || !Number.isInteger(instructionEpoch) || instructionEpoch < 0
         || !nonEmptyString(trustMode) || !Array.isArray(inventory) || !Array.isArray(classifications)
-        || !isRecord(durableFacts) || !Array.isArray(privateArchives)) {
+        || !isRecord(durableFacts) || !Array.isArray(privateArchives) || !Array.isArray(transientFacts)) {
         return fail("MIGRATION_IMPORT_INVALID");
       }
 
@@ -213,34 +342,56 @@ export function createLegacyMigrationImporter({ projectRegistry } = {}) {
         return fail("MIGRATION_BLOCKED", { inventoryEvidence: evidence });
       }
 
-      const candidate = prepareFact({
-        fact: durableFacts.candidate,
-        expectedSchema: EXPECTED_SCHEMAS.candidate,
-        inventoryByPath,
-        classificationByPath,
-      });
-      if (!candidate.ok) return candidate;
+      const preparedTransients = [];
+      const transientPaths = new Set();
+      for (const fact of transientFacts) {
+        const prepared = prepareTransient({ fact, inventoryByPath, classificationByPath });
+        if (!prepared.ok) return prepared;
+        if (transientPaths.has(prepared.path)) return fail("MIGRATION_TRANSIENT_DUPLICATE", { path: prepared.path });
+        transientPaths.add(prepared.path);
+        preparedTransients.push(prepared);
+      }
 
-      if (!Array.isArray(durableFacts.evidence)) return fail("MIGRATION_EVIDENCE_INVALID");
-      const preparedEvidence = [];
-      for (const fact of durableFacts.evidence) {
-        const prepared = prepareFact({
-          fact,
-          expectedSchema: EXPECTED_SCHEMAS.evidence,
+      const durableRequested = hasDurablePayload(durableFacts);
+      let candidate = null;
+      let continuation = null;
+      let preparedEvidence = [];
+      let relationships = null;
+      if (durableRequested) {
+        candidate = prepareFact({
+          fact: durableFacts.candidate,
+          expectedSchema: EXPECTED_SCHEMAS.candidate,
           inventoryByPath,
           classificationByPath,
         });
-        if (!prepared.ok) return prepared;
-        preparedEvidence.push(prepared);
-      }
+        if (!candidate.ok) return candidate;
 
-      const continuation = prepareFact({
-        fact: durableFacts.continuation,
-        expectedSchema: EXPECTED_SCHEMAS.continuation,
-        inventoryByPath,
-        classificationByPath,
-      });
-      if (!continuation.ok) return continuation;
+        if (!Array.isArray(durableFacts.evidence)) return fail("MIGRATION_EVIDENCE_INVALID");
+        preparedEvidence = [];
+        for (const fact of durableFacts.evidence) {
+          const prepared = prepareFact({
+            fact,
+            expectedSchema: EXPECTED_SCHEMAS.evidence,
+            inventoryByPath,
+            classificationByPath,
+          });
+          if (!prepared.ok) return prepared;
+          preparedEvidence.push(prepared);
+        }
+
+        continuation = prepareFact({
+          fact: durableFacts.continuation,
+          expectedSchema: EXPECTED_SCHEMAS.continuation,
+          inventoryByPath,
+          classificationByPath,
+        });
+        if (!continuation.ok) return continuation;
+
+        relationships = validateRelationships(candidate, preparedEvidence, continuation);
+        if (!relationships.ok) return relationships;
+      } else if (preparedTransients.length === 0 && privateArchives.length === 0) {
+        return fail("MIGRATION_IMPORT_EMPTY");
+      }
 
       const preparedArchives = [];
       for (const archive of privateArchives) {
@@ -248,9 +399,6 @@ export function createLegacyMigrationImporter({ projectRegistry } = {}) {
         if (!prepared.ok) return prepared;
         preparedArchives.push(prepared);
       }
-
-      const relationships = validateRelationships(candidate, preparedEvidence, continuation);
-      if (!relationships.ok) return relationships;
 
       let registration;
       try {
@@ -268,8 +416,8 @@ export function createLegacyMigrationImporter({ projectRegistry } = {}) {
       }
       const project = registration.project;
 
-      const factsToSeal = [candidate, ...preparedEvidence, continuation];
-      for (const fact of factsToSeal) {
+      const factsToSeal = durableRequested ? [candidate, ...preparedEvidence, continuation] : [];
+      for (const fact of [...factsToSeal, ...preparedTransients]) {
         let sealed;
         try {
           sealed = await sealFact(projectRegistry.blobs, fact);
@@ -296,51 +444,152 @@ export function createLegacyMigrationImporter({ projectRegistry } = {}) {
         });
       }
 
-      const work = {
-        schema: "orchestra.work-unit.v2",
-        workId: deterministicWorkId(project.projectId, commandId),
-        projectId: project.projectId,
-        taskId: relationships.taskId,
-        generation: 0,
-        runtimeImage: project.runtime.pinnedImage,
-        instructionEpoch: project.runtime.instructionEpoch,
-        state: "IMPORTED",
-        scopeRef: null,
-        directionRef: null,
-        candidateRef: candidate.digest,
-        evidenceRefs: preparedEvidence.map((fact) => fact.digest),
-        blockers: [],
-        continuationRef: continuation.digest,
-      };
+      let workResult = null;
+      if (durableRequested) {
+        const work = {
+          schema: "orchestra.work-unit.v2",
+          workId: deterministicWorkId(project.projectId, commandId),
+          projectId: project.projectId,
+          taskId: relationships.taskId,
+          generation: 0,
+          runtimeImage: project.runtime.pinnedImage,
+          instructionEpoch: project.runtime.instructionEpoch,
+          state: "IMPORTED",
+          scopeRef: null,
+          directionRef: null,
+          candidateRef: candidate.digest,
+          evidenceRefs: preparedEvidence.map((fact) => fact.digest),
+          blockers: [],
+          continuationRef: continuation.digest,
+        };
 
-      let workResult;
-      try {
-        workResult = projectRegistry.state.work.open(work);
-      } catch (error) {
-        return fail("MIGRATION_WORK_IMPORT_FAILED", {
-          reason: error?.code ?? error?.message ?? "UNKNOWN",
-          project,
-          archives,
-          inventoryEvidence: evidence,
-        });
-      }
-      if (!workResult?.ok || !workResult.work) {
-        return fail("MIGRATION_WORK_IMPORT_FAILED", {
-          reason: workResult?.reason ?? null,
-          project,
-          archives,
-          inventoryEvidence: evidence,
-        });
+        try {
+          workResult = projectRegistry.state.work.open(work);
+        } catch (error) {
+          return fail("MIGRATION_WORK_IMPORT_FAILED", {
+            reason: error?.code ?? error?.message ?? "UNKNOWN",
+            project,
+            archives,
+            inventoryEvidence: evidence,
+          });
+        }
+        if (!workResult?.ok || !workResult.work) {
+          return fail("MIGRATION_WORK_IMPORT_FAILED", {
+            reason: workResult?.reason ?? null,
+            project,
+            archives,
+            inventoryEvidence: evidence,
+          });
+        }
       }
 
+      let recoveryWorkResult = null;
+      const transient = [];
+      if (preparedTransients.length > 0) {
+        if (typeof projectRegistry.state.work.startCurrent !== "function") {
+          return fail("MIGRATION_RECOVERY_WORK_UNAVAILABLE", { project, inventoryEvidence: evidence });
+        }
+        const recoveryWork = {
+          schema: "orchestra.work-unit.v2",
+          workId: deterministicWorkId(project.projectId, commandId, "recovery"),
+          projectId: project.projectId,
+          taskId: `migration-recovery:${commandId}`,
+          generation: 0,
+          runtimeImage: project.runtime.pinnedImage,
+          instructionEpoch: project.runtime.instructionEpoch,
+          state: "MIGRATION_RECOVERY_REQUIRED",
+          scopeRef: null,
+          directionRef: null,
+          candidateRef: null,
+          evidenceRefs: preparedTransients.map((fact) => fact.digest),
+          blockers: preparedTransients.map(recoveryBlocker),
+          continuationRef: null,
+        };
+        recoveryWorkResult = projectRegistry.state.work.startCurrent(recoveryWork);
+        if (!recoveryWorkResult?.ok || !recoveryWorkResult.work) {
+          return fail("MIGRATION_RECOVERY_WORK_IMPORT_FAILED", {
+            reason: recoveryWorkResult?.reason ?? null,
+            project,
+            work: workResult?.work ?? null,
+            inventoryEvidence: evidence,
+          });
+        }
+
+        const requiresOperationImport = preparedTransients.some(
+          (fact) => fact.classification.reconciliation.operationImportEligible === true,
+        );
+        const ownerStore = requiresOperationImport ? resolveRuntimeOwnerStore() : null;
+        if (requiresOperationImport && (!ownerStore || typeof projectRegistry.state.operations?.begin !== "function")) {
+          return fail("MIGRATION_TRANSIENT_OPERATION_UNAVAILABLE", {
+            project,
+            recoveryWork: recoveryWorkResult.work,
+            inventoryEvidence: evidence,
+          });
+        }
+
+        for (const fact of preparedTransients) {
+          let operationId = null;
+          if (fact.classification.reconciliation.operationImportEligible === true) {
+            const imported = createImportedOperation({
+              project,
+              recoveryWork: recoveryWorkResult.work,
+              commandId,
+              fact,
+            });
+            let ownerResult;
+            try {
+              ownerResult = await ownerStore.register(imported.owner);
+            } catch (error) {
+              return fail("MIGRATION_RUNTIME_OWNER_IMPORT_FAILED", {
+                path: fact.path,
+                reason: error?.code ?? error?.message ?? "UNKNOWN",
+                project,
+                recoveryWork: recoveryWorkResult.work,
+              });
+            }
+            if (!ownerResult?.ok) {
+              return fail("MIGRATION_RUNTIME_OWNER_IMPORT_FAILED", {
+                path: fact.path,
+                reason: ownerResult?.reason ?? null,
+                project,
+                recoveryWork: recoveryWorkResult.work,
+              });
+            }
+            const operationResult = projectRegistry.state.operations.begin({
+              expectedGeneration: recoveryWorkResult.work.generation,
+              operation: imported.operation,
+            });
+            if (!operationResult?.ok || !operationResult.operation) {
+              return fail("MIGRATION_TRANSIENT_OPERATION_IMPORT_FAILED", {
+                path: fact.path,
+                reason: operationResult?.reason ?? null,
+                project,
+                recoveryWork: recoveryWorkResult.work,
+              });
+            }
+            operationId = operationResult.operation.operationId;
+          }
+          transient.push({
+            path: fact.path,
+            digest: fact.digest,
+            disposition: fact.classification.disposition,
+            reconciliation: fact.classification.reconciliation,
+            operationId,
+          });
+        }
+      }
+
+      const hasTransient = preparedTransients.length > 0;
       return {
         ok: true,
-        code: "MIGRATION_DURABLE_IMPORT_APPLIED",
+        code: hasTransient ? "MIGRATION_TRANSIENT_IMPORT_APPLIED" : "MIGRATION_DURABLE_IMPORT_APPLIED",
         project,
-        work: workResult.work,
+        work: workResult?.work ?? null,
+        recoveryWork: recoveryWorkResult?.work ?? null,
+        transient,
         archives,
         inventoryEvidence: evidence,
-        replayed: workResult.replayed === true,
+        replayed: Boolean(workResult?.replayed || recoveryWorkResult?.replayed),
         successClaim: false,
       };
     },
