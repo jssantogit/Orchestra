@@ -13,7 +13,15 @@ export function createWorkAuthority({ state } = {}) {
   function currentFacts(projectId) {
     const project = store.projects.inspect(projectId);
     if (!project) return { error: { allowed: false, reason: "PROJECT_NOT_FOUND" } };
-    const work = store.work.current(projectId);
+    let work;
+    try {
+      work = store.work.current(projectId);
+    } catch (error) {
+      if (error?.code === "ORCHESTRA_ACTIVE_WORK_HEAD_CORRUPT") {
+        return { project, error: { allowed: false, reason: "ACTIVE_WORK_CORRUPT" } };
+      }
+      throw error;
+    }
     if (!work) return { project, error: { allowed: false, reason: "NO_ACTIVE_WORK" } };
     const liveOperations = store.operations.listLive({
       projectId,
