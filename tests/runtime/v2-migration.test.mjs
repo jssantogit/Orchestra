@@ -486,3 +486,213 @@ test("same migration command id is project-scoped and cannot replay another Proj
     assert.equal(b.stdout.manifest.commands[0].commandId, "shared-command");
   });
 });
+
+async function prepareManagedMigration(root, name = "managed-project") {
+  const workspace = join(root, name);
+  await mkdir(workspace, { recursive: true });
+  await initGit(workspace);
+  const legacyRuntime = join(workspace, ".codex", "astra-orchestra", "runtime", "orchestra-v2-runtime.json");
+  await writeJson(legacyRuntime, {
+    schema: "orchestra.runtime-manifest.v1",
+    version: 1,
+    provider: "codex",
+  });
+  const home = join(root, `${name}-global-home`);
+  const applied = await runMigrationCli({
+    argv: ["project", "migrate", "apply", workspace, "--command-id", `apply-${name}`, "--home", home],
+    cwd: workspace,
+    env: {},
+  });
+  assert.equal(applied.exitCode, 0);
+  assert.equal(applied.stdout.ok, true);
+  return { workspace, home, legacyRuntime, applied };
+}
+
+function verifiedV2Result(overrides = {}) {
+  return {
+    ok: true,
+    mode: "V2_GLOBAL",
+    fallbackUsed: false,
+    globalStatus: { ok: true },
+    providers: {
+      codex: { sessionStart: true, attached: true },
+      antigravity: { sessionStart: true, attached: true },
+    },
+    recovery: { ok: true },
+    ...overrides,
+  };
+}
+
+test("migration activation installs only thin v2 shims, verifies global attach, and preserves legacy runtime", v2Only, async () => {
+  await withWorkspace(async (root) => {
+    const { workspace, home, legacyRuntime, applied } = await prepareManagedMigration(root, "activation-success");
+    const globalDir = join(root, "global-engine");
+    await mkdir(globalDir, { recursive: true });
+    const launcherPath = join(globalDir, "orchestra.mjs");
+    await writeFile(launcherPath, "// global launcher fixture\n", "utf8");
+
+    const { createGlobalProjectRegistry } = await import("../../v2/global/project-registry.mjs");
+    const { createMigrationLifecycleStore } = await import("../../v2/migration/rollback.mjs");
+    const {
+      createMigrationShimActivator,
+      readMigrationActivationReceipt,
+    } = await import("../../v2/migration/shim-activation.mjs");
+
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      const lifecycleStore = createMigrationLifecycleStore({ home, state: registry.state });
+      const activator = createMigrationShimActivator({
+        registry,
+        lifecycleStore,
+        home,
+        launcherPath,
+        nodePath: process.execPath,
+        verify: async ({ project, providers }) => ({
+          ...verifiedV2Result(),
+          rawSessionId: "must-not-persist",
+          projectId: project.projectId,
+          verifiedProviders: providers,
+        }),
+      });
+      const activated = await activator.activate({
+        projectId: applied.stdout.project.projectId,
+        providers: ["codex", "antigravity"],
+      });
+
+      assert.equal(activated.ok, true);
+      assert.equal(activated.code, "MIGRATION_V2_ACTIVATED");
+      assert.equal(activated.cleanupEligible, true);
+      assert.equal(activated.receipt.verified, true);
+      assert.deepEqual(activated.receipt.providers, ["antigravity", "codex"]);
+      assert.deepEqual(activated.receipt.thinShims, [
+        ".agents/hooks.json",
+        ".agents/orchestra-v2-hook.mjs",
+        ".codex/hooks.json",
+        ".codex/orchestra-v2-hook.mjs",
+      ]);
+      assert.equal(JSON.stringify(activated.receipt).includes("must-not-persist"), false);
+      assert.equal(await readFile(legacyRuntime, "utf8").then((text) => text.includes("runtime-manifest")), true);
+      assert.equal(await lstat(join(workspace, ".codex", "orchestra-v2-hook.mjs")).then((stat) => stat.isFile()), true);
+      assert.equal(await lstat(join(workspace, ".agents", "orchestra-v2-hook.mjs")).then((stat) => stat.isFile()), true);
+
+      const persisted = await readMigrationActivationReceipt({ home, projectId: applied.stdout.project.projectId });
+      assert.equal(persisted.ok, true);
+      assert.equal(persisted.receipt.cleanupEligible, true);
+      assert.equal(JSON.stringify(persisted.receipt).includes("must-not-persist"), false);
+    } finally {
+      registry.close();
+    }
+  });
+});
+
+test("failed or v1-fallback migration verification never opens cleanup and leaves rollback available", v2Only, async () => {
+  await withWorkspace(async (root) => {
+    const { home, legacyRuntime, applied } = await prepareManagedMigration(root, "activation-failure");
+    const globalDir = join(root, "global-engine-failure");
+    await mkdir(globalDir, { recursive: true });
+    const launcherPath = join(globalDir, "orchestra.mjs");
+    await writeFile(launcherPath, "// global launcher fixture\n", "utf8");
+
+    const { createGlobalProjectRegistry } = await import("../../v2/global/project-registry.mjs");
+    const { createMigrationLifecycleStore } = await import("../../v2/migration/rollback.mjs");
+    const {
+      createMigrationShimActivator,
+      readMigrationActivationReceipt,
+    } = await import("../../v2/migration/shim-activation.mjs");
+
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      const lifecycleStore = createMigrationLifecycleStore({ home, state: registry.state });
+      for (const verification of [
+        { ok: false, mode: "V2_GLOBAL", fallbackUsed: false },
+        verifiedV2Result({ mode: "V1_COMPATIBILITY", fallbackUsed: true }),
+      ]) {
+        const activator = createMigrationShimActivator({
+          registry,
+          lifecycleStore,
+          home,
+          launcherPath,
+          nodePath: process.execPath,
+          verify: async () => verification,
+        });
+        const result = await activator.activate({
+          projectId: applied.stdout.project.projectId,
+          providers: ["codex"],
+        });
+        assert.equal(result.ok, false);
+        assert.equal(result.code, "MIGRATION_V2_VERIFICATION_FAILED");
+        assert.equal(result.cleanupEligible, false);
+      }
+
+      const receipt = await readMigrationActivationReceipt({ home, projectId: applied.stdout.project.projectId });
+      assert.equal(receipt.ok, true);
+      assert.equal(receipt.receipt, null);
+      assert.equal(await readFile(legacyRuntime, "utf8").then((text) => text.includes("runtime-manifest")), true);
+
+      const rolled = await lifecycleStore.rollback({
+        projectId: applied.stdout.project.projectId,
+        commandId: "rollback-after-verification-failure",
+      });
+      assert.equal(rolled.ok, true);
+      assert.equal(rolled.manifest.status, "ROLLED_BACK");
+    } finally {
+      registry.close();
+    }
+  });
+});
+
+test("migration activation requires factual recovery verification when imported transient work exists", v2Only, async () => {
+  await withWorkspace(async (root) => {
+    const workspace = join(root, "recovery-project");
+    await mkdir(workspace, { recursive: true });
+    await initGit(workspace);
+    const home = join(root, "recovery-home");
+    const launcherPath = join(root, "recovery-global-launcher.mjs");
+    await writeFile(launcherPath, "// global launcher fixture\n", "utf8");
+
+    const project = {
+      projectId: "prj_recovery_fixture",
+      lineageId: "lineage_recovery_fixture",
+      workspace: { canonicalRoot: workspace, vcs: "git" },
+      runtime: { pinnedImage: "legacy-migration-compat", instructionEpoch: 0 },
+      trust: { mode: "migration" },
+    };
+    const manifest = {
+      schema: "orchestra.migration-manifest.v2",
+      projectId: project.projectId,
+      workspace,
+      status: "IMPORTED",
+      active: true,
+      import: { recoveryWorkId: "work_recovery_fixture" },
+      integration: { mode: "LEGACY_COMPATIBILITY", verified: false, thinShims: [] },
+    };
+    const registry = {
+      paths: { home },
+      inspect(projectId) { return projectId === project.projectId ? project : null; },
+      async resolveWorkspace() { return project; },
+    };
+    const lifecycleStore = {
+      async read(projectId) {
+        return projectId === project.projectId ? { ok: true, manifest } : { ok: true, manifest: null };
+      },
+    };
+    const fakeInstaller = () => ({ ok: true, files: [".codex/hooks.json", ".codex/orchestra-v2-hook.mjs"] });
+    const { createMigrationShimActivator } = await import("../../v2/migration/shim-activation.mjs");
+
+    const activator = createMigrationShimActivator({
+      registry,
+      lifecycleStore,
+      home,
+      launcherPath,
+      nodePath: process.execPath,
+      codexInstaller: fakeInstaller,
+      antigravityInstaller: async () => ({ ok: true, files: [] }),
+      verify: async () => verifiedV2Result({ recovery: { ok: false } }),
+    });
+    const blocked = await activator.activate({ projectId: project.projectId, providers: ["codex"] });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.code, "MIGRATION_V2_VERIFICATION_FAILED");
+    assert.equal(blocked.reason, "MIGRATION_RECOVERY_VERIFICATION_REQUIRED");
+    assert.equal(blocked.cleanupEligible, false);
+  });
+});
