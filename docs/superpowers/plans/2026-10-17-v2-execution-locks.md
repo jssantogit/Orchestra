@@ -139,6 +139,14 @@ Do not create `.github/workflows/orchestra-v2-persistence.yml` or substitute the
 
 ## V2-10
 
+The exact reviewed predecessor is V2-9 head `179589b317725f9d6ba7aa686f21bff68bcf1bd6`.
+
+### Task 3 exact SQLite path
+
+- Reuse: `v2/persistence/sqlite/sqlite-state.mjs`
+
+The predecessor has no `v2/persistence/sqlite/state.mjs`. `sqlite-state.mjs` is the existing public SQLite state composition boundary. Do not create a generic `state.mjs` alias.
+
 ### Task 7 exact cleanup command
 
 The CLI surface is exactly:
@@ -148,6 +156,15 @@ orchestra project migrate cleanup <projectId> --command-id <id>
 ```
 
 Do not select an alternate command name during implementation.
+
+### Task 8 exact workflow and invariant paths
+
+- Modify: `.github/workflows/v2-persistence.yml`
+- Verify: `tests/runtime/v2-domain-foundation.test.mjs`
+- Verify: `tests/runtime/v2-reference-state.test.mjs`
+- Verify: `tests/runtime/v2-continuation-boundary.test.mjs`
+
+Do not create `.github/workflows/orchestra-v2-persistence.yml` or substitute the nonexistent `v2-domain-invariants.test.mjs` / `v2-continuation-capsule.test.mjs` names.
 
 ## V2-11
 
