@@ -3,6 +3,7 @@ const RECOVERY_ASSESSMENT_LIVENESS = new Set(["TERMINAL", "STALE_RECOVERABLE"]);
 const WORKSPACE_STATUS = new Set(["ABSENT", "CLEAN", "DIRTY", "UNKNOWN"]);
 const CLEANUP_STATUS = new Set(["NOT_REQUIRED", "CLEANED", "FAILED", "PRESERVED", "PENDING"]);
 const OUTCOME = new Set(["RECOVERED", "STALE_DIRTY", "CLEANUP_FAILED"]);
+const RESOLUTION_ACTIONS = new Set(["PRESERVE", "DISCARD"]);
 const RECOVERY_WORKFLOW_STATE = "ABORTED";
 const RECOVERY_RESULT_REASON = "OWNER_TERMINATED_WITHOUT_TERMINALIZATION";
 
@@ -34,6 +35,25 @@ function expectedRecoveryResultRef(operationId) {
   return `recovery:${operationId}:${RECOVERY_RESULT_REASON}`;
 }
 
+function validateResolutionAction(value) {
+  if (value.resolutionAction === undefined) return null;
+  if (!RESOLUTION_ACTIONS.has(value.resolutionAction)) {
+    return invalid("invalid dirty resolution action", "/resolutionAction");
+  }
+  if (value.terminal === null) {
+    return invalid("dirty resolution action requires factual terminalization", "/terminal");
+  }
+  if (value.resolutionAction === "PRESERVE"
+    && (value.outcome !== "STALE_DIRTY" || value.cleanup.status !== "PRESERVED")) {
+    return invalid("preserve resolution must retain a stale-dirty preserved workspace", "/resolutionAction");
+  }
+  if (value.resolutionAction === "DISCARD"
+    && !new Set(["STALE_DIRTY", "RECOVERED"]).has(value.outcome)) {
+    return invalid("discard resolution must either remain stale-dirty or recover", "/resolutionAction");
+  }
+  return null;
+}
+
 function validateRecoverySemantics(value) {
   if (!RECOVERY_ASSESSMENT_LIVENESS.has(value.assessment.liveness)) {
     return invalid("recovery assessment must be stale-recoverable or terminal", "/assessment/liveness");
@@ -54,6 +74,9 @@ function validateRecoverySemantics(value) {
       return invalid("recovery terminal result must bind to the recovered operation", "/terminal/resultRef");
     }
   }
+
+  const resolutionError = validateResolutionAction(value);
+  if (resolutionError) return resolutionError;
 
   if (value.outcome === "RECOVERED") {
     if (value.terminal === null) {
@@ -100,7 +123,7 @@ function validateRecoverySemantics(value) {
 export function validateOperationRecoveryV2(value) {
   const top = new Set([
     "schema", "projectId", "operationId", "workId", "generation", "commandId",
-    "assessment", "workspace", "terminal", "cleanup", "outcome", "recordedAt",
+    "assessment", "workspace", "terminal", "cleanup", "outcome", "recordedAt", "resolutionAction",
   ]);
   if (!hasOnlyKeys(value, top) || value.schema !== "orchestra.operation-recovery.v2") {
     return invalid("invalid recovery schema");
