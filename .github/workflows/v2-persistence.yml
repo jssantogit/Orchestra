@@ -2,10 +2,13 @@ name: V2 Persistence
 
 on:
   pull_request:
-    branches:
-      - main
-      - feat/v2-domain-contracts
-      - feat/v2-project-registry
+    paths:
+      - 'v2/**'
+      - 'tests/v2-persistence/**'
+      - 'tests/runtime/v2-*.test.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/v2-persistence.yml'
 
 jobs:
   persistence:
