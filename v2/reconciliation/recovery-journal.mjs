@@ -59,6 +59,12 @@ export function validateRecoveryIdentity(state, recovery) {
   if (operation.workId !== recovery.workId || operation.generation !== recovery.generation) {
     return failure("RECOVERY_OPERATION_MISMATCH");
   }
+  if (recovery.terminal !== null
+    && (operation.liveness !== "TERMINAL"
+      || operation.workflowState !== recovery.terminal.workflowState
+      || operation.resultRef !== recovery.terminal.resultRef)) {
+    return failure("RECOVERY_TERMINAL_STATE_MISMATCH");
+  }
   return null;
 }
 
