@@ -175,8 +175,11 @@ test("recognized private delegation artifacts are inventory-only private archive
 test("provider-managed runtime files are inventoried by exact known managed paths, not whole provider directories", async () => {
   await withWorkspace(async (workspace) => {
     const managed = join(workspace, ".codex", "astra-orchestra", "runtime", "orchestra-v2-runtime.json");
-    await mkdir(join(workspace, ".codex", "astra-orchestra", "runtime"), { recursive: true });
-    await writeFile(managed, "managed runtime bytes\n", "utf8");
+    await writeJson(managed, {
+      schema: "orchestra.runtime-manifest.v1",
+      version: 1,
+      provider: "codex",
+    });
     await writeFile(join(workspace, ".codex", "notes.txt"), "user data\n", "utf8");
 
     const result = await inventoryLegacyProject({ workspace });
