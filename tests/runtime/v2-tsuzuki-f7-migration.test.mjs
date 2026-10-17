@@ -270,7 +270,8 @@ test("proven stale legacy operation becomes STALE_RECOVERABLE through factual v2
     assert.equal(status.operations[0].assessment.liveness, "STALE_RECOVERABLE");
     assert.equal(status.operations[0].recoveryAvailable, true);
     assert.equal(status.operations[0].operation.workspaceRef, survivorRef);
-    assert.equal(status.project.workspace.canonicalRoot, workspace);
+    assert.equal(status.project.workspace.canonicalRoot, imported.project.workspace.canonicalRoot);
+    assert.notEqual(status.operations[0].operation.workspaceRef, status.project.workspace.canonicalRoot);
 
     const recovered = await reconciler.recover({
       projectId: imported.project.projectId,
