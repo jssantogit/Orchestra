@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
+const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 const MODULES = [
   {

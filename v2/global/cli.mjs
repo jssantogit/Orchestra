@@ -6,6 +6,9 @@ import {
   resolveOrchestraHome,
 } from "./project-registry.mjs";
 import { createGlobalOperationReconciler } from "./reconciliation.mjs";
+import { createCodexHookHandler } from "../providers/codex/hook-handler.mjs";
+import { installCodexV2Shim } from "../providers/codex/shim-manager.mjs";
+import { fileURLToPath } from "node:url";
 
 function cliError(code, message, fields = {}) {
   const error = new Error(message);
@@ -131,7 +134,18 @@ function validateCommand({ positionals, options }) {
     });
   }
 
-  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind> ...");
+  if (command === "provider" && positionals[1] === "codex" && positionals[2] === "hook") {
+    if (positionals.length !== 3) usage("Usage: orchestra provider codex hook");
+    return Object.freeze({ kind: "CODEX_HOOK" });
+  }
+
+  if (command === "provider" && positionals[1] === "codex" && positionals[2] === "shim"
+    && positionals[3] === "install") {
+    if (positionals.length !== 4) usage("Usage: orchestra provider codex shim install");
+    return Object.freeze({ kind: "CODEX_SHIM_INSTALL" });
+  }
+
+  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install> ...");
 }
 
 function notRegisteredResult() {
@@ -241,16 +255,87 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
   }
 }
 
+async function readHookPayload(stdin) {
+  let input = "";
+  for await (const chunk of stdin) input += chunk.toString();
+  if (!input.trim()) return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+  try {
+    const payload = JSON.parse(input);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+    }
+    return { ok: true, payload };
+  } catch {
+    return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+  }
+}
+
+async function runCodexHook({ home, cwd, stdin }) {
+  const decoded = await readHookPayload(stdin);
+  if (!decoded.ok) return { exitCode: 1, payload: decoded };
+  if (!(await globalRegistryStateExists({ home }))) {
+    const payload = { ok: false, reason: "PROJECT_NOT_REGISTERED", registered: false };
+    if (decoded.payload.hook_event_name === "PreToolUse") {
+      payload.hookSpecificOutput = {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "PROJECT_NOT_REGISTERED",
+      };
+    } else if (decoded.payload.hook_event_name === "SessionStart") {
+      payload.hookSpecificOutput = {
+        hookEventName: "SessionStart",
+        additionalContext: "PROJECT_NOT_REGISTERED",
+      };
+    } else if (decoded.payload.hook_event_name === "PostToolUse") {
+      payload.hookSpecificOutput = { hookEventName: "PostToolUse" };
+    }
+    return { exitCode: 1, payload };
+  }
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    const handler = createCodexHookHandler({ registry });
+    const payload = await handler.handle(decoded.payload, { cwd });
+    return { exitCode: payload.ok ? 0 : 1, payload };
+  } finally {
+    registry.close();
+  }
+}
+
+async function runCodexShimInstall({ home, cwd, launcherPath, nodePath }) {
+  if (!(await globalRegistryStateExists({ home }))) return notRegisteredResult();
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    const project = await registry.resolveWorkspace(cwd);
+    if (!project) return notRegisteredResult();
+    const installed = installCodexV2Shim({
+      targetDir: project.workspace.canonicalRoot,
+      launcherPath,
+      nodePath,
+      orchestraHome: home,
+    });
+    return { exitCode: 0, payload: installed };
+  } finally {
+    registry.close();
+  }
+}
+
 export async function runGlobalCli({
   argv = process.argv.slice(2),
   cwd = process.cwd(),
   env = process.env,
+  stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
 } = {}) {
   try {
     const parsed = parseArgs(argv);
-    const result = await runRegistryCommand({ ...parsed, cwd, env });
+    const command = validateCommand(parsed);
+    const home = explicitHome(parsed.options, env);
+    const result = command.kind === "CODEX_HOOK"
+      ? await runCodexHook({ home, cwd, stdin })
+      : command.kind === "CODEX_SHIM_INSTALL"
+      ? await runCodexShimInstall({ home, cwd, launcherPath: fileURLToPath(new URL("./orchestra.mjs", import.meta.url)), nodePath: process.execPath })
+        : await runRegistryCommand({ ...parsed, cwd, env });
     writeJson(stdout, result.payload);
     return result.exitCode;
   } catch (error) {

@@ -5,12 +5,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +26,10 @@ import {
   rollbackCodexProjectRuntime,
   updateCodexProjectRuntime,
 } from "../../runtimes/codex/.codex/astra-orchestra/codex-runtime-manager.mjs";
+import {
+  buildCodexV2ShimArtifacts,
+  installCodexV2Shim,
+} from "../../v2/providers/codex/shim-manager.mjs";
 
 const orchestraRoot = fileURLToPath(new URL("../../", import.meta.url));
 const realSource = join(orchestraRoot, "runtimes", "codex");
@@ -96,6 +101,177 @@ test("Codex project runtime clean install is managed and healthy", () => {
     assert.equal(doctor.sourceComparison.upToDate, true);
   } finally {
     rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("Codex v2 shim installs only hook config and thin transport shim", () => {
+  const project = makeProject();
+  const global = makeProject("orch-global-launcher-");
+  const launcher = join(global, "cli.mjs");
+  const orchestraHome = relative(process.cwd(), join(global, "orchestra-home"));
+  mkdirSync(project, { recursive: true });
+  writeFileSync(launcher, "process.stdin.pipe(process.stdout);\n");
+  try {
+    const installed = installCodexV2Shim({ targetDir: project, launcherPath: launcher, orchestraHome });
+    assert.equal(installed.ok, true);
+    assert.deepEqual([...installed.files].sort(), [".codex/hooks.json", ".codex/orchestra-v2-hook.mjs"].sort());
+    const localFiles = [];
+    const collect = (directory, prefix = "") => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const relative = join(prefix, entry.name).replaceAll("\\", "/");
+        if (entry.isDirectory()) collect(join(directory, entry.name), relative);
+        else localFiles.push(`.codex/${relative}`);
+      }
+    };
+    collect(join(project, ".codex"));
+    assert.deepEqual(localFiles.sort(), [".codex/hooks.json", ".codex/orchestra-v2-hook.mjs"].sort());
+    const shim = readFileSync(join(project, ".codex/orchestra-v2-hook.mjs"), "utf8");
+    assert.doesNotMatch(shim, /WorkLease|Work Lease|Reconciler|reconciler|policy|copied global core/i);
+    assert.doesNotMatch(shim, /from\s+["'][^"']*(?:v2\/|core\/)/);
+    assert.equal(shim.includes(JSON.stringify(resolve(orchestraHome))), true);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(global, { recursive: true, force: true });
+  }
+});
+
+test("Codex v2 shim forwards stdin and preserves global launcher stdout", () => {
+  const project = makeProject();
+  const global = makeProject("orch-global-launcher-");
+  const launcher = join(global, "cli.mjs");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(launcher, `
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const payload = Buffer.concat(chunks).toString();
+    if (process.argv.slice(2).join(" ") !== "provider codex hook") process.exit(9);
+    process.stdout.write(JSON.stringify({
+      ok: true,
+      reason: "FORWARDED",
+      forwarded: payload,
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "forwarded" },
+    }));
+  `);
+  try {
+    installCodexV2Shim({ targetDir: project, launcherPath: launcher });
+    const input = JSON.stringify({ hook_event_name: "SessionStart", session_id: "factual-id" });
+    const output = execFileSync(process.execPath, [join(project, ".codex/orchestra-v2-hook.mjs")], {
+      cwd: project,
+      input,
+      encoding: "utf8",
+    });
+    assert.deepEqual(JSON.parse(output), {
+      ok: true,
+      reason: "FORWARDED",
+      forwarded: input,
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "forwarded" },
+    });
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(global, { recursive: true, force: true });
+  }
+});
+
+test("Codex v2 shim returns structured unavailable failure for malformed or missing launcher", () => {
+  const project = makeProject();
+  const global = makeProject("orch-global-launcher-");
+  const launcher = join(global, "cli.mjs");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(launcher, "process.stdout.write('not-json');\n");
+  try {
+    installCodexV2Shim({ targetDir: project, launcherPath: launcher });
+    const shim = join(project, ".codex/orchestra-v2-hook.mjs");
+    const malformedResponses = [
+      { hookEventName: "PreToolUse", response: "not-json" },
+      { hookEventName: "PreToolUse", response: "{}" },
+      {
+        hookEventName: "PreToolUse",
+        response: JSON.stringify({
+          ok: true,
+          reason: "ALLOW",
+          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "maybe" },
+        }),
+      },
+      {
+        hookEventName: "PreToolUse",
+        response: JSON.stringify({
+          ok: false,
+          reason: "denied",
+          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+        }),
+      },
+      { hookEventName: "SessionStart", response: JSON.stringify({ ok: true, reason: null }) },
+    ];
+    for (const { hookEventName, response } of malformedResponses) {
+      writeFileSync(launcher, `process.stdout.write(${JSON.stringify(response)});\n`);
+      const result = spawnSync(process.execPath, [shim], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: hookEventName }),
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0);
+      assert.equal(JSON.parse(result.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
+      assert.equal(JSON.parse(result.stdout).hookSpecificOutput.hookEventName, hookEventName);
+      if (hookEventName === "PreToolUse") assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, "deny");
+    }
+    rmSync(launcher);
+    const unavailable = spawnSync(process.execPath, [shim], {
+      cwd: project,
+      input: JSON.stringify({ hook_event_name: "PreToolUse" }),
+      encoding: "utf8",
+    });
+    assert.notEqual(unavailable.status, 0);
+    assert.equal(JSON.parse(unavailable.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(global, { recursive: true, force: true });
+  }
+});
+
+test("Codex v2 shim is additive and safely quotes Windows and POSIX launcher paths", () => {
+  const v2Windows = buildCodexV2ShimArtifacts({
+    launcherPath: "C:\\Program Files\\Orchestra\\cli.mjs",
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+    shimPath: "C:\\Project Space\\.codex\\orchestra-v2-hook.mjs",
+  });
+  const v2Posix = buildCodexV2ShimArtifacts({
+    launcherPath: "/opt/Orchestra Tools/cli.mjs",
+    nodePath: "/opt/Node Runtime/bin/node",
+    shimPath: "/opt/Project Space/.codex/orchestra-v2-hook.mjs",
+  });
+  assert.match(v2Windows.hooksJson, /commandWindows/);
+  assert.match(v2Windows.hooksJson, /Program Files/);
+  assert.match(v2Posix.hooksJson, /command/);
+  assert.match(v2Posix.hooksJson, /Project Space/);
+  assert.match(v2Posix.shimSource, /Orchestra Tools/);
+
+  const project = makeProject();
+  const global = makeProject("orch-global-launcher-");
+  const launcher = join(global, "cli.mjs");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(launcher, "process.stdin.pipe(process.stdout);\n");
+  mkdirSync(join(project, ".codex", "astra-orchestra"), { recursive: true });
+  writeFileSync(join(project, ".codex", "astra-orchestra", "legacy.mjs"), "legacy\n");
+  writeFileSync(join(project, ".codex", "orchestra-state.json"), "v1-state\n");
+  writeFileSync(join(project, ".codex", "hooks.json"), JSON.stringify({
+    hooks: {
+      SessionStart: [{ matcher: ".*", hooks: [{ type: "command", command: "node .codex/astra-orchestra/session-hook.mjs" }] }],
+      PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", commandWindows: "node .codex/astra-orchestra/session-hook.mjs" }] }],
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: "node .codex/astra-orchestra/session-hook.mjs" }, { type: "command", command: "user-hook" }] }],
+    },
+  }));
+  try {
+    installCodexV2Shim({ targetDir: project, launcherPath: launcher });
+    assert.equal(readFileSync(join(project, ".codex/astra-orchestra/legacy.mjs"), "utf8"), "legacy\n");
+    assert.equal(readFileSync(join(project, ".codex/orchestra-state.json"), "utf8"), "v1-state\n");
+    const hooks = JSON.parse(readFileSync(join(project, ".codex/hooks.json"), "utf8")).hooks;
+    assert.equal(hooks.SessionStart[0].hooks[0].command.includes("orchestra-v2-hook.mjs"), true);
+    assert.equal(hooks.PreToolUse[0].hooks[0].commandWindows.includes("orchestra-v2-hook.mjs"), true);
+    assert.equal(hooks.UserPromptSubmit.length, 1);
+    assert.deepEqual(hooks.UserPromptSubmit[0].hooks, [{ type: "command", command: "user-hook" }]);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(global, { recursive: true, force: true });
   }
 });
 

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   DISCOVERY_MODES,
@@ -15,7 +16,7 @@ import { assertAuditResult, validateAuditResult } from "../../core/domain/audit-
 import { assertWorkLease, validateWorkLease } from "../../core/domain/work-lease.mjs";
 import { assertRuntimeEvent, validateRuntimeEvent } from "../../core/domain/runtime-event.mjs";
 
-const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
+const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 const fixtures = {
   packet: {

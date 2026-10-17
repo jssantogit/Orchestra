@@ -84,29 +84,45 @@ function createLegacyV1Database(dbPath) {
   db.close();
 }
 
-test("opening a schema v1 registry migrates transactionally to v3 without losing project facts", async () => {
+test("opening a schema v1 registry migrates transactionally to v4 without losing project facts", async () => {
   await withDb(async ({ dbPath }) => {
     createLegacyV1Database(dbPath);
 
     const state = createSqliteState({ dbPath });
-    assert.equal(state.schemaVersion, 3);
-    assert.equal(state.projects.inspect("prj-legacy").lineageId, "lineage-legacy");
-    assert.equal(state.work.current("prj-legacy"), null);
-    state.close();
+    try {
+      assert.equal(state.schemaVersion, 4);
+      assert.equal(state.projects.inspect("prj-legacy").lineageId, "lineage-legacy");
+      assert.equal(state.work.current("prj-legacy"), null);
+    } finally {
+      state.close();
+    }
 
     const db = new DatabaseSync(dbPath);
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3);
-    const migrations = db.prepare("SELECT version, name FROM orchestra_migrations ORDER BY version").all()
-      .map((row) => ({ version: row.version, name: row.name }));
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('work_units','operations','project_work_heads','work_head_commands') ORDER BY name").all()
-      .map((row) => row.name);
-    db.close();
+    let migrations;
+    let tables;
+    try {
+      assert.equal(db.prepare("PRAGMA user_version").get().user_version, 4);
+      migrations = db.prepare("SELECT version, name FROM orchestra_migrations ORDER BY version").all()
+        .map((row) => ({ version: row.version, name: row.name }));
+      tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('work_units','operations','project_work_heads','work_head_commands','provider_session_observations','provider_operation_correlations') ORDER BY name").all()
+        .map((row) => row.name);
+    } finally {
+      db.close();
+    }
 
     assert.deepEqual(migrations, [
       { version: 1, name: "v2_initial_registry" },
       { version: 2, name: "v2_work_operations" },
       { version: 3, name: "v2_active_work_head" },
+      { version: 4, name: "v2_provider_observations_and_correlations" },
     ]);
-    assert.deepEqual(tables, ["operations", "project_work_heads", "work_head_commands", "work_units"]);
+    assert.deepEqual(tables, [
+      "operations",
+      "project_work_heads",
+      "provider_operation_correlations",
+      "provider_session_observations",
+      "work_head_commands",
+      "work_units",
+    ]);
   });
 });

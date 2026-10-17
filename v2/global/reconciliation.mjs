@@ -5,6 +5,7 @@ import {
   createLocalProcessOwnerProbe,
 } from "../liveness/local-process-probe.mjs";
 import { createOperationLivenessService } from "../liveness/operation-liveness-service.mjs";
+import { createProviderEventProbe } from "../liveness/provider-event-liveness.mjs";
 import { createRuntimeOwnerStore } from "../liveness/runtime-owner-store.mjs";
 import { createOperationReconciler } from "../reconciliation/reconciler.mjs";
 import { createRecoveryAwareStatusReconciler } from "../reconciliation/recovery-aware-status.mjs";
@@ -41,6 +42,7 @@ function createGlobalReconciliationParts({
   const operationLiveness = createOperationLivenessService({
     runtimeOwnerStore,
     ownerProbe,
+    providerEventProbe: createProviderEventProbe({ now }),
     now,
   });
   const reconciler = createOperationReconciler({
