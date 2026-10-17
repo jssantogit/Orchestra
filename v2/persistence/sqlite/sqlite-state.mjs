@@ -1,10 +1,15 @@
 import { createInMemoryRecoveryJournal } from "../../reconciliation/recovery-journal.mjs";
 import { fenceOperationsToActiveWork } from "../../state/active-work-operation-fence.mjs";
+import { fenceSqliteOperationTerminalization } from "./sqlite-operation-terminalization-fence.mjs";
 import { createSqliteRecoveryJournal } from "./sqlite-recovery-journal.mjs";
 import { createSqliteState as createSqliteStateCore } from "./sqlite-state-core.mjs";
 
 export function createSqliteState(options = {}) {
-  const core = fenceOperationsToActiveWork(createSqliteStateCore(options));
+  const activeWorkFenced = fenceOperationsToActiveWork(createSqliteStateCore(options));
+  const core = fenceSqliteOperationTerminalization(activeWorkFenced, {
+    dbPath: options.dbPath,
+    timeoutMs: options.timeoutMs,
+  });
   let recoveries;
   try {
     recoveries = options.dbPath === ":memory:"
