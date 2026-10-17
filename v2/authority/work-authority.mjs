@@ -1,3 +1,4 @@
+import { validateLivenessAssessmentV2 } from "../liveness/contracts.mjs";
 import { authorizeAttach, authorizeCapability } from "./authority.mjs";
 
 function requireState(state) {
@@ -24,11 +25,8 @@ function factualDenial(reason, operation, assessment = null) {
 }
 
 function validAssessment(operation, assessment) {
-  return Boolean(assessment)
-    && assessment.schema === "orchestra.liveness-assessment.v2"
-    && assessment.operationId === operation.operationId
-    && new Set(["LIVE", "TERMINAL", "STALE_RECOVERABLE", "UNKNOWN"]).has(assessment.liveness)
-    && typeof assessment.reason === "string";
+  return validateLivenessAssessmentV2(assessment).valid
+    && assessment.operationId === operation.operationId;
 }
 
 export function createWorkAuthority({ state, operationLiveness = null } = {}) {
