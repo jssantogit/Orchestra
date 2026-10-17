@@ -117,22 +117,38 @@ export function createManagedWorkspaceRecovery({ home, state, store = null } = {
     }
   }
 
-  async function cleanup(workspaceRef, operation) {
+  async function removeBoundWorkspace(workspaceRef, operation, expectedStatus, errorCode) {
     const inspection = await inspect(workspaceRef, operation);
-    if (inspection.status === "ABSENT") return { workspaceRef, cleaned: true };
-    if (inspection.status === "DIRTY") throw cleanupError("ORCHESTRA_MANAGED_WORKSPACE_DIRTY", workspaceRef);
-    if (inspection.status !== "CLEAN") throw cleanupError("ORCHESTRA_MANAGED_WORKSPACE_UNSAFE", workspaceRef);
+    if (inspection.status === "ABSENT") return { workspaceRef, removed: true };
+    if (inspection.status !== expectedStatus) throw cleanupError(errorCode, workspaceRef);
 
     const record = await workspaceStore.read(workspaceRef);
     if (!record || !operationMatchesRecord(operation, record)) {
       throw cleanupError("ORCHESTRA_MANAGED_WORKSPACE_UNSAFE", workspaceRef);
     }
 
-    // inspect() immediately re-proved direct-child containment, binding, Git root identity, and cleanliness.
-    // Never derive a filesystem path from workspaceRef itself.
     await rm(record.root, { recursive: true, force: true });
+    return { workspaceRef, removed: true };
+  }
+
+  async function cleanup(workspaceRef, operation) {
+    const inspection = await inspect(workspaceRef, operation);
+    if (inspection.status === "ABSENT") return { workspaceRef, cleaned: true };
+    if (inspection.status === "DIRTY") throw cleanupError("ORCHESTRA_MANAGED_WORKSPACE_DIRTY", workspaceRef);
+    if (inspection.status !== "CLEAN") throw cleanupError("ORCHESTRA_MANAGED_WORKSPACE_UNSAFE", workspaceRef);
+
+    await removeBoundWorkspace(workspaceRef, operation, "CLEAN", "ORCHESTRA_MANAGED_WORKSPACE_UNSAFE");
     return { workspaceRef, cleaned: true };
   }
 
-  return Object.freeze({ inspect, cleanup });
+  async function discard(workspaceRef, operation) {
+    const inspection = await inspect(workspaceRef, operation);
+    if (inspection.status === "ABSENT") return { workspaceRef, discarded: true };
+    if (inspection.status !== "DIRTY") throw cleanupError("ORCHESTRA_MANAGED_WORKSPACE_DISCARD_UNSAFE", workspaceRef);
+
+    await removeBoundWorkspace(workspaceRef, operation, "DIRTY", "ORCHESTRA_MANAGED_WORKSPACE_DISCARD_UNSAFE");
+    return { workspaceRef, discarded: true };
+  }
+
+  return Object.freeze({ inspect, cleanup, discard });
 }
