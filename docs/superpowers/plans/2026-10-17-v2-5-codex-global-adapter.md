@@ -10,7 +10,7 @@
 
 **Base:** `feat/v2-reconciler-recovery` at reviewed head `a3002edb1493cc86e8e9f713477db3add31d1799`.
 
-**Locked-path correction:** the approved predecessor stores SQLite migrations in `v2/persistence/sqlite/sqlite-state-core.mjs` and exposes the composed public SQLite state from `v2/persistence/sqlite/sqlite-state.mjs`. The canonical V2 persistence workflow is `.github/workflows/v2-persistence.yml`. These paths supersede the earlier nonexistent generic names and are the authoritative implementation paths for this plan.
+**Locked-path correction:** the approved predecessor stores SQLite migrations in `v2/persistence/sqlite/sqlite-state-core.mjs` and exposes the composed public SQLite state from `v2/persistence/sqlite/sqlite-state.mjs`. The canonical V2 persistence workflow is `.github/workflows/v2-persistence.yml`. Existing V2 verification surfaces are `tests/runtime/v2-domain-foundation.test.mjs`, `tests/runtime/v2-reference-state.test.mjs`, and `tests/runtime/v2-continuation-boundary.test.mjs`. These paths supersede the earlier nonexistent generic names and are the authoritative implementation/verification paths for this plan.
 
 ---
 
@@ -85,7 +85,7 @@ Expected: FAIL because provider-event owner class is unsupported.
 Verify:
 ```bash
 node --test tests/runtime/v2-provider-event-liveness.test.mjs
-node --test tests/runtime/v2-domain-invariants.test.mjs
+node --test tests/runtime/v2-domain-foundation.test.mjs
 ```
 
 Commit:
@@ -127,7 +127,7 @@ Run the single test file and prove RED, then implement minimal handler and CLI r
 Verify:
 ```bash
 node --test tests/runtime/v2-codex-global-adapter.test.mjs
-node --test tests/runtime/v2-domain-invariants.test.mjs
+node --test tests/runtime/v2-domain-foundation.test.mjs
 node --test tests/runtime/v2-reference-state.test.mjs
 ```
 All commands must pass; do not suppress failures.
@@ -258,7 +258,7 @@ Do not remove existing jobs.
 Run locally:
 ```bash
 node --test tests/runtime/v2-codex-global-adapter.test.mjs tests/runtime/v2-provider-event-liveness.test.mjs
-node --test tests/runtime/v2-domain-invariants.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-capsule.test.mjs
+node --test tests/runtime/v2-domain-foundation.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-boundary.test.mjs
 npm run test:firewall
 npm run test:installers
 npm run check:runtimes
