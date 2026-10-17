@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
-import { createGlobalProjectRegistry, resolveOrchestraHome } from "./project-registry.mjs";
+import {
+  createGlobalProjectRegistry,
+  globalRegistryStateExists,
+  resolveOrchestraHome,
+} from "./project-registry.mjs";
 
 function cliError(code, message, fields = {}) {
   const error = new Error(message);
@@ -93,12 +97,23 @@ function validateCommand({ positionals, options }) {
   usage("Usage: orchestra <home|register|project status|project rebind> ...");
 }
 
+function notRegisteredResult() {
+  return {
+    exitCode: 1,
+    payload: { ok: false, reason: "PROJECT_NOT_REGISTERED", registered: false },
+  };
+}
+
 async function runRegistryCommand({ positionals, options, cwd, env }) {
   const home = explicitHome(options, env);
   const command = validateCommand({ positionals, options });
 
   if (command.kind === "HOME") {
     return { exitCode: 0, payload: { ok: true, home } };
+  }
+
+  if (command.kind === "PROJECT_STATUS" && !(await globalRegistryStateExists({ home }))) {
+    return notRegisteredResult();
   }
 
   const registry = createGlobalProjectRegistry({ home });
@@ -118,12 +133,7 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
       const project = target.startsWith("prj_")
         ? registry.inspect(target)
         : await registry.resolveWorkspace(target);
-      if (!project) {
-        return {
-          exitCode: 1,
-          payload: { ok: false, reason: "PROJECT_NOT_REGISTERED", registered: false },
-        };
-      }
+      if (!project) return notRegisteredResult();
       return { exitCode: 0, payload: { ok: true, registered: true, project } };
     }
 
