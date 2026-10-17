@@ -17,7 +17,7 @@
 
 **Files:**
 - Create: `v2/experience/contracts.mjs`
-- Modify: `v2/experience/project.mjs`
+- Modify: `v2/experience/projector.mjs`
 - Test: `tests/runtime/v2-global-experience-store.test.mjs`
 
 The accepted categories are exactly:
@@ -57,8 +57,8 @@ git commit -m "feat(v2): close sanitized experience contract"
 
 **Files:**
 - Create: `v2/experience/store.mjs`
-- Modify: `v2/persistence/sqlite/migrations.mjs`
-- Modify: `v2/persistence/sqlite/state.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state-core.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state.mjs`
 - Test: `tests/runtime/v2-global-experience-store.test.mjs`
 
 **RED cases:**
@@ -179,7 +179,7 @@ git commit -m "test(v2): harden experience privacy boundary"
 ### Task 6: Close V2-8 with exact-head CI
 
 **Files:**
-- Modify: `.github/workflows/orchestra-v2-persistence.yml`
+- Modify: `.github/workflows/v2-persistence.yml`
 
 Add Ubuntu/Windows Node 24 execution of:
 ```bash
@@ -191,7 +191,7 @@ Final local verification:
 node --test tests/runtime/v2-global-experience-store.test.mjs
 node --test tests/runtime/v2-runtime-images.test.mjs tests/runtime/v2-runtime-upgrade.test.mjs
 node --test tests/runtime/v2-provider-symmetry.test.mjs tests/runtime/v2-provider-event-liveness.test.mjs
-node --test tests/runtime/v2-domain-invariants.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-capsule.test.mjs
+node --test tests/runtime/v2-domain-foundation.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-boundary.test.mjs
 npm run test:firewall
 npm run check:contamination
 npm test
