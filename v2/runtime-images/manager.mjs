@@ -1,5 +1,7 @@
 import { assessRuntimeImageCompatibility } from "./compatibility.mjs";
 
+const SUPPORTED_PROVIDERS = Object.freeze(["codex", "antigravity"]);
+
 function failure(reason, fields = {}) {
   return { ok: false, reason, ...fields };
 }
@@ -20,6 +22,16 @@ function requireInputs({ state, imageStore, statusReconciler, engineVersion, pro
   if (!providerAdapterVersions || typeof providerAdapterVersions !== "object") {
     throw new TypeError("providerAdapterVersions is required");
   }
+  for (const provider of SUPPORTED_PROVIDERS) {
+    if (typeof providerAdapterVersions[provider] !== "string" || providerAdapterVersions[provider].length === 0) {
+      throw new TypeError(`providerAdapterVersions.${provider} is required`);
+    }
+  }
+}
+
+function providersFor(provider) {
+  if (provider === undefined || provider === null) return SUPPORTED_PROVIDERS;
+  return SUPPORTED_PROVIDERS.includes(provider) ? [provider] : null;
 }
 
 export function createRuntimeImageManager({
@@ -31,10 +43,12 @@ export function createRuntimeImageManager({
 } = {}) {
   requireInputs({ state, imageStore, statusReconciler, engineVersion, providerAdapterVersions });
 
-  async function changeProjectRuntime({ projectId, targetImageId, provider, action }) {
+  async function changeProjectRuntime({ projectId, targetImageId, provider, commandId = null, action }) {
+    const providers = providersFor(provider);
     if (typeof projectId !== "string" || projectId.length === 0
       || typeof targetImageId !== "string" || targetImageId.length === 0
-      || !["codex", "antigravity"].includes(provider)) {
+      || (commandId !== null && (typeof commandId !== "string" || commandId.length === 0))
+      || !providers) {
       return failure("PROJECT_RUNTIME_CHANGE_INVALID");
     }
 
@@ -50,15 +64,23 @@ export function createRuntimeImageManager({
       return failure("RUNTIME_IMAGE_INTEGRITY_FAILED", { targetImageId, verification: integrity ?? null });
     }
 
-    const providerAdapterVersion = providerAdapterVersions[provider];
-    const compatibility = assessRuntimeImageCompatibility({
-      image,
-      engineVersion,
-      provider,
-      providerAdapterVersion,
-    });
-    if (!compatibility.ok) {
-      return failure("RUNTIME_IMAGE_INCOMPATIBLE", { targetImageId, compatibility });
+    const compatibilityByProvider = Object.create(null);
+    for (const selectedProvider of providers) {
+      const compatibility = assessRuntimeImageCompatibility({
+        image,
+        engineVersion,
+        provider: selectedProvider,
+        providerAdapterVersion: providerAdapterVersions[selectedProvider],
+      });
+      compatibilityByProvider[selectedProvider] = compatibility;
+      if (!compatibility.ok) {
+        return failure("RUNTIME_IMAGE_INCOMPATIBLE", {
+          targetImageId,
+          provider: selectedProvider,
+          compatibility,
+          compatibilityByProvider,
+        });
+      }
     }
 
     const status = await statusReconciler.inspect({ projectId });
@@ -73,17 +95,23 @@ export function createRuntimeImageManager({
       expectedPinnedImage: previousImageId,
       expectedInstructionEpoch: project.runtime.instructionEpoch,
       targetImage: targetImageId,
+      commandId,
     });
     if (!updated.ok) return updated;
 
+    const compatibility = providers.length === 1
+      ? compatibilityByProvider[providers[0]]
+      : compatibilityByProvider;
     return {
       ok: true,
       action,
+      commandId,
       previousImageId,
       targetImageId,
       project: updated.project,
       replayed: Boolean(updated.replayed),
       compatibility,
+      compatibilityByProvider,
     };
   }
 
