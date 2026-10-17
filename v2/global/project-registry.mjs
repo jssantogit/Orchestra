@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
-import { realpath } from "node:fs/promises";
+import { access, realpath } from "node:fs/promises";
 
 import { createBlobStore } from "../persistence/blob-store.mjs";
 import { createSqliteState } from "../persistence/sqlite/sqlite-state.mjs";
@@ -33,6 +33,26 @@ export function resolveOrchestraHome({
   }
   const dataHome = env.XDG_DATA_HOME || path.join(homeDir, ".local", "share");
   return path.join(dataHome, "orchestra");
+}
+
+export function resolveGlobalRegistryPaths({ home = resolveOrchestraHome() } = {}) {
+  if (typeof home !== "string" || home.trim().length === 0) throw new TypeError("home is required");
+  return Object.freeze({
+    home,
+    statePath: join(home, "state", "orchestra.db"),
+    blobRoot: join(home, "blobs"),
+  });
+}
+
+export async function globalRegistryStateExists({ home = resolveOrchestraHome() } = {}) {
+  const { statePath } = resolveGlobalRegistryPaths({ home });
+  try {
+    await access(statePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function gitTopLevel(cwd, gitBinary) {
@@ -68,8 +88,6 @@ async function canonicalGitRoot(inputRoot, gitBinary) {
   }
 
   let probe = resolved;
-  // A caller may point directly at .git. Git treats that directory as the
-  // repository metadata directory rather than the work tree, so probe its parent.
   if (basename(probe).toLowerCase() === ".git") probe = dirname(probe);
 
   const topLevel = gitTopLevel(probe, gitBinary);
@@ -101,12 +119,9 @@ export function createGlobalProjectRegistry({
   gitBinary = "git",
   sqliteTimeoutMs = 5_000,
 } = {}) {
-  if (typeof home !== "string" || home.trim().length === 0) throw new TypeError("home is required");
-
-  const statePath = join(home, "state", "orchestra.db");
-  const blobRoot = join(home, "blobs");
-  const state = createSqliteState({ dbPath: statePath, timeoutMs: sqliteTimeoutMs });
-  const blobs = createBlobStore({ root: blobRoot });
+  const paths = resolveGlobalRegistryPaths({ home });
+  const state = createSqliteState({ dbPath: paths.statePath, timeoutMs: sqliteTimeoutMs });
+  const blobs = createBlobStore({ root: paths.blobRoot });
   let closed = false;
 
   function assertOpen() {
@@ -114,7 +129,7 @@ export function createGlobalProjectRegistry({
   }
 
   return Object.freeze({
-    paths: Object.freeze({ home, statePath, blobRoot }),
+    paths,
     state,
     blobs,
 
@@ -146,9 +161,6 @@ export function createGlobalProjectRegistry({
       const result = state.projects.register(project);
       if (result.ok) return result;
 
-      // Another process may have registered this exact workspace after our
-      // optimistic pre-check. Resolve the authoritative winner instead of
-      // creating a false conflict between concurrent global registries.
       if (result.reason === "WORKSPACE_ALREADY_REGISTERED") {
         const winner = state.projects.resolve(canonicalRoot);
         if (winner) return { ok: true, project: winner, replayed: true };
