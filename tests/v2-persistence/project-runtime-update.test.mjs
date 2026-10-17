@@ -38,6 +38,7 @@ test("project runtime pin update advances instruction epoch exactly once", async
       expectedPinnedImage: "image-a",
       expectedInstructionEpoch: 7,
       targetImage: "image-b",
+      commandId: "runtime-change-1",
     });
     assert.equal(changed.ok, true);
     assert.equal(changed.replayed, false);
@@ -49,6 +50,7 @@ test("project runtime pin update advances instruction epoch exactly once", async
       expectedPinnedImage: "image-a",
       expectedInstructionEpoch: 7,
       targetImage: "image-b",
+      commandId: "runtime-change-1",
     });
     assert.equal(replay.ok, true);
     assert.equal(replay.replayed, true);
@@ -65,6 +67,7 @@ test("stale runtime pin update fails closed without changing project state", asy
       expectedPinnedImage: "wrong-image",
       expectedInstructionEpoch: 7,
       targetImage: "image-b",
+      commandId: "runtime-stale-1",
     });
     assert.deepEqual(stale, {
       ok: false,
@@ -85,6 +88,7 @@ test("same runtime target is an idempotent no-op with no epoch advance", async (
       expectedPinnedImage: "image-a",
       expectedInstructionEpoch: 7,
       targetImage: "image-a",
+      commandId: "runtime-noop-1",
     });
     assert.equal(result.ok, true);
     assert.equal(result.replayed, true);
@@ -102,9 +106,70 @@ test("runtime pin update preserves unrelated project state", async () => {
       expectedPinnedImage: "image-a",
       expectedInstructionEpoch: 7,
       targetImage: "image-c",
+      commandId: "runtime-project-a-1",
     }).ok, true);
 
     assert.equal(state.projects.inspect("prj-b").runtime.pinnedImage, "image-b");
     assert.equal(state.projects.inspect("prj-b").runtime.instructionEpoch, 7);
+  });
+});
+
+test("runtime command replay survives close and reopen without a second epoch advance", async () => {
+  await withState(async (state, dbPath) => {
+    assert.equal(state.projects.register(project()).ok, true);
+    const command = {
+      projectId: "prj-runtime-update",
+      expectedPinnedImage: "image-a",
+      expectedInstructionEpoch: 7,
+      targetImage: "image-b",
+      commandId: "runtime-restart-1",
+    };
+    const changed = state.projects.updateRuntime(command);
+    assert.equal(changed.ok, true);
+    assert.equal(changed.replayed, false);
+    state.close();
+
+    const reopened = createSqliteState({ dbPath });
+    try {
+      const replay = reopened.projects.updateRuntime(command);
+      assert.equal(replay.ok, true);
+      assert.equal(replay.replayed, true);
+      assert.equal(replay.project.runtime.pinnedImage, "image-b");
+      assert.equal(replay.project.runtime.instructionEpoch, 8);
+    } finally {
+      reopened.close();
+    }
+  });
+});
+
+test("runtime command id cannot be rebound to a different activation after restart", async () => {
+  await withState(async (state, dbPath) => {
+    assert.equal(state.projects.register(project()).ok, true);
+    const changed = state.projects.updateRuntime({
+      projectId: "prj-runtime-update",
+      expectedPinnedImage: "image-a",
+      expectedInstructionEpoch: 7,
+      targetImage: "image-b",
+      commandId: "runtime-command-conflict",
+    });
+    assert.equal(changed.ok, true);
+    state.close();
+
+    const reopened = createSqliteState({ dbPath });
+    try {
+      const conflict = reopened.projects.updateRuntime({
+        projectId: "prj-runtime-update",
+        expectedPinnedImage: "image-b",
+        expectedInstructionEpoch: 8,
+        targetImage: "image-c",
+        commandId: "runtime-command-conflict",
+      });
+      assert.deepEqual(conflict, { ok: false, reason: "IDEMPOTENCY_CONFLICT" });
+      const current = reopened.projects.inspect("prj-runtime-update");
+      assert.equal(current.runtime.pinnedImage, "image-b");
+      assert.equal(current.runtime.instructionEpoch, 8);
+    } finally {
+      reopened.close();
+    }
   });
 });
