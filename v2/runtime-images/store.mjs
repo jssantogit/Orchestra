@@ -5,6 +5,7 @@ import { createBlobStore } from "../persistence/blob-store.mjs";
 import { validateRuntimeImageRecord } from "./contracts.mjs";
 
 const MANIFEST_SCHEMA = "orchestra.runtime-image-manifest.v2";
+const PERSISTENT_REGISTRY_NODE_MAJOR = 24;
 
 function imageError(code, message, fields = {}) {
   const error = new Error(message);
@@ -104,6 +105,11 @@ function sameMetadata(left, right) {
     && canonicalJson(left.providerAdapterCompatibility) === canonicalJson(right.providerAdapterCompatibility);
 }
 
+function runtimeSupportsPersistentRegistry() {
+  const major = Number.parseInt(process.versions.node.split(".")[0], 10);
+  return Number.isInteger(major) && major >= PERSISTENT_REGISTRY_NODE_MAJOR;
+}
+
 async function serialize(key, queues, operation) {
   const previous = queues.get(key) ?? Promise.resolve();
   let release;
@@ -123,13 +129,50 @@ export function createRuntimeImageStore({ orchestraHome } = {}) {
   if (typeof orchestraHome !== "string" || orchestraHome.trim().length === 0) {
     throw new TypeError("orchestraHome is required");
   }
-  const root = resolve(orchestraHome, "runtime-images");
+  const resolvedHome = resolve(orchestraHome);
+  const root = resolve(resolvedHome, "runtime-images");
+  const registryDbPath = join(resolvedHome, "state", "orchestra.db");
   const blobs = createBlobStore({ root: join(root, "blobs") });
   const installed = new Map();
   const installQueues = new Map();
+  const persistentRegistry = runtimeSupportsPersistentRegistry();
+
+  function remember(record) {
+    if (!record) return null;
+    const validation = validateRuntimeImageRecord(record);
+    if (!validation.valid) {
+      throw imageError(
+        "ORCHESTRA_RUNTIME_IMAGE_REGISTRY_INVALID",
+        `Persisted runtime image record is invalid: ${record.imageId ?? "unknown"}`,
+        { imageId: record.imageId ?? null, reason: validation.reason },
+      );
+    }
+    const immutable = deepFreeze(JSON.parse(JSON.stringify(record)));
+    installed.set(immutable.imageId, immutable);
+    return immutable;
+  }
+
+  async function withRegistry(operation) {
+    if (!persistentRegistry) return null;
+    const { createSqliteRuntimeImageRegistry } = await import("../persistence/sqlite/sqlite-runtime-images.mjs");
+    const registry = createSqliteRuntimeImageRegistry({ dbPath: registryDbPath });
+    try {
+      return await operation(registry);
+    } finally {
+      registry.close();
+    }
+  }
+
+  async function findInstalled(imageId) {
+    if (persistentRegistry) {
+      const record = await withRegistry((registry) => registry.inspect(imageId));
+      return record ? remember(record) : null;
+    }
+    return installed.get(imageId) ?? null;
+  }
 
   async function verify(imageId) {
-    const image = installed.get(imageId);
+    const image = await findInstalled(imageId);
     if (!image) return { valid: false, reason: "IMAGE_NOT_INSTALLED", imageId };
     const recordVerification = validateRuntimeImageRecord(image);
     if (!recordVerification.valid) {
@@ -193,7 +236,7 @@ export function createRuntimeImageStore({ orchestraHome } = {}) {
     }
 
     return serialize(imageId, installQueues, async () => {
-      const existing = installed.get(imageId);
+      const existing = await findInstalled(imageId);
       if (existing) {
         if (!sameMetadata(existing, metadata)) {
           throw imageError(
@@ -215,14 +258,49 @@ export function createRuntimeImageStore({ orchestraHome } = {}) {
 
       for (const file of files) await blobs.putBytes(file.bytes);
       await blobs.putBytes(manifestBytes);
-      const immutable = deepFreeze(candidate);
-      installed.set(imageId, immutable);
+
+      let immutable = deepFreeze(candidate);
+      if (persistentRegistry) {
+        const persisted = await withRegistry((registry) => registry.put(candidate));
+        if (!persisted.ok) {
+          const winner = remember(persisted.image);
+          if (!winner || !sameMetadata(winner, metadata)) {
+            throw imageError(
+              "ORCHESTRA_RUNTIME_IMAGE_IDENTITY_CONFLICT",
+              `Runtime image ${imageId} was concurrently installed with different metadata`,
+              { imageId },
+            );
+          }
+          const verification = await verify(imageId);
+          if (!verification.valid) {
+            throw imageError(
+              "ORCHESTRA_RUNTIME_IMAGE_INTEGRITY_FAILED",
+              `Runtime image ${imageId} failed integrity verification`,
+              { imageId, verification },
+            );
+          }
+          return winner;
+        }
+        immutable = remember(persisted.image);
+      } else {
+        installed.set(imageId, immutable);
+      }
       return immutable;
     });
   }
 
+  async function list() {
+    if (persistentRegistry) {
+      const records = await withRegistry((registry) => registry.list());
+      return records.map(remember);
+    }
+    return [...installed.values()].sort((left, right) => (
+      left.imageId < right.imageId ? -1 : left.imageId > right.imageId ? 1 : 0
+    ));
+  }
+
   async function readManifest(imageId) {
-    const image = installed.get(imageId);
+    const image = await findInstalled(imageId);
     if (!image) throw imageError("ORCHESTRA_RUNTIME_IMAGE_NOT_FOUND", `Runtime image not installed: ${imageId}`, { imageId });
     return Buffer.from(await blobs.read(image.manifestDigest));
   }
@@ -232,7 +310,8 @@ export function createRuntimeImageStore({ orchestraHome } = {}) {
     if (!verification.valid) {
       throw imageError("ORCHESTRA_RUNTIME_IMAGE_INTEGRITY_FAILED", `Runtime image ${imageId} failed integrity verification`, { imageId, verification });
     }
-    const manifest = JSON.parse((await blobs.read(imageId)).toString("utf8"));
+    const image = installed.get(imageId);
+    const manifest = JSON.parse((await blobs.read(image.manifestDigest)).toString("utf8"));
     const entry = manifest.files.find((file) => file.path === filePath);
     if (!entry) throw imageError("ORCHESTRA_RUNTIME_IMAGE_FILE_NOT_FOUND", `Runtime image file not found: ${filePath}`, { imageId, filePath });
     return Buffer.from(await blobs.read(entry.digest));
@@ -247,6 +326,7 @@ export function createRuntimeImageStore({ orchestraHome } = {}) {
   return Object.freeze({
     root,
     install,
+    list,
     verify,
     readManifest,
     readFile,

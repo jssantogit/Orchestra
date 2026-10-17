@@ -5,6 +5,8 @@ import { fenceSqliteOperationTerminalization } from "./sqlite-operation-terminal
 import { createSqliteRecoveryJournal } from "./sqlite-recovery-journal.mjs";
 import { createSqliteState as createSqliteStateCore } from "./sqlite-state-core.mjs";
 
+export { createSqliteRuntimeImageRegistry } from "./sqlite-runtime-images.mjs";
+
 export function createSqliteState(options = {}) {
   const listed = trackOperationListing(createSqliteStateCore(options));
   const activeWorkFenced = fenceOperationsToActiveWork(listed);
