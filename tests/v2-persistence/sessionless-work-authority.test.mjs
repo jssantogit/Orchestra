@@ -160,7 +160,7 @@ for (const store of stores) {
       seed(fixture.state);
       const authority = createWorkAuthority({ state: fixture.state });
 
-      const staleEpoch = authority.authorize({
+      const staleEpoch = await authority.authorize({
         projectId: "prj-sessionless",
         expectedWorkId: "work-sessionless",
         actor: actor("sha256:stale-epoch"),
@@ -182,7 +182,7 @@ for (const store of stores) {
       });
       assert.equal(transitioned.ok, true);
 
-      const staleGeneration = authority.authorize({
+      const staleGeneration = await authority.authorize({
         projectId: "prj-sessionless",
         expectedWorkId: "work-sessionless",
         actor: actor("sha256:any"),
@@ -218,7 +218,7 @@ for (const store of stores) {
         continuationRef: "continuation:next",
       })).ok, true);
 
-      const oldCommand = authority.authorize({
+      const oldCommand = await authority.authorize({
         projectId: "prj-sessionless",
         expectedWorkId: "work-sessionless",
         actor: actor("sha256:old-session"),
@@ -231,7 +231,7 @@ for (const store of stores) {
       assert.equal(oldCommand.reason, "STALE_ACTIVE_WORK");
       assert.equal(oldCommand.currentWorkId, "work-next");
 
-      const currentCommand = authority.authorize({
+      const currentCommand = await authority.authorize({
         projectId: "prj-sessionless",
         expectedWorkId: "work-next",
         actor: actor("sha256:fresh-session"),
@@ -246,7 +246,7 @@ for (const store of stores) {
     }
   });
 
-  test(`${store.name}: abandon refuses a factual LIVE operation and preserves the head`, async () => {
+  test(`${store.name}: abandon refuses a persisted LIVE operation and preserves the head until reconciliation`, async () => {
     const fixture = await store.create();
     try {
       seed(fixture.state);
