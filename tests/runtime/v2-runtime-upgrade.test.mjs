@@ -16,4 +16,5 @@ if (currentNodeMajor < MINIMUM_NODE_MAJOR) {
   });
 } else {
   await import("./v2-runtime-upgrade.cases.mjs");
+  await import("./v2-runtime-bootstrap-recovery.cases.mjs");
 }
