@@ -125,10 +125,10 @@ Run the single test file and prove RED, then implement minimal handler and CLI r
 Verify:
 ```bash
 node --test tests/runtime/v2-codex-global-adapter.test.mjs
-node --test tests/runtime/v2-sessionless-work.test.mjs 2>/dev/null || true
 node --test tests/runtime/v2-domain-invariants.test.mjs
+node --test tests/runtime/v2-reference-state.test.mjs
 ```
-If the named historical suite does not exist, omit only that command; do not create substitute architecture.
+All commands must pass; do not suppress failures.
 
 Commit:
 ```bash
@@ -160,7 +160,10 @@ git commit -m "feat(v2): attach Codex sessions to global work authority"
 
 Implement by calling `WorkAuthority.authorize`; do not repeat its generation/active-work logic in the adapter. Begin Operation only after authorization succeeds.
 
-Verify focused tests + provider-event liveness suite.
+Verify:
+```bash
+node --test tests/runtime/v2-codex-global-adapter.test.mjs tests/runtime/v2-provider-event-liveness.test.mjs
+```
 
 Commit:
 ```bash
@@ -207,8 +210,8 @@ git commit -m "feat(v2): terminalize correlated Codex tool operations"
 - Create: `v2/providers/codex/shim-template.mjs`
 - Create: `v2/providers/codex/shim-manager.mjs`
 - Modify: `v2/global/cli.mjs`
+- Modify: `tests/installers/codex-project-runtime-manager.test.mjs`
 - Test: `tests/runtime/v2-codex-global-adapter.test.mjs`
-- Modify only if required by the existing installer contract: `tests/installers/codex-project-runtime-manager.test.mjs`
 
 **RED cases:**
 - generated local surface contains only hook config + thin transport shim;
@@ -232,7 +235,7 @@ npm run check:runtime-core
 
 Commit:
 ```bash
-git add v2/providers/codex v2/global/cli.mjs tests/runtime tests/installers
+git add v2/providers/codex v2/global/cli.mjs tests/runtime/v2-codex-global-adapter.test.mjs tests/installers/codex-project-runtime-manager.test.mjs
 git commit -m "feat(v2): add thin Codex global control plane shim"
 ```
 
