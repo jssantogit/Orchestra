@@ -118,7 +118,7 @@ test("sqlite: operation begin racing abandon cannot create a live writer on aban
         assert.equal(state.work.read("prj-race", "work-race").generation, 0);
         assert.equal(state.operations.listLive({ projectId: "prj-race", workId: "work-race", generation: 0 }).length, 1);
       } else {
-        assert.equal(beginResult.reason, "STALE_GENERATION");
+        assert.equal(beginResult.reason, "NO_ACTIVE_WORK");
         assert.equal(abandonResult.ok, true);
         assert.equal(state.work.current("prj-race"), null);
         assert.equal(state.work.read("prj-race", "work-race").generation, 1);
