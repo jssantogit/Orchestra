@@ -185,6 +185,22 @@ test("upgrade and rollback require explicit command ids and expose pin plus resu
     assert.equal(replay.json.replayed, true);
     assert.equal(replay.json.instructionEpoch, 1);
 
+    const conflictingReuse = await cli({
+      home,
+      cwd: root,
+      args: [
+        "project", "rollback", project.projectId,
+        "--runtime-image", imageA.imageId,
+        "--command-id", "upgrade-1",
+      ],
+    });
+    assert.equal(conflictingReuse.status, 1);
+    assert.equal(conflictingReuse.json.reason, "IDEMPOTENCY_CONFLICT");
+    const afterConflict = await cli({ home, cwd: root, args: ["project", "status", project.projectId] });
+    assert.equal(afterConflict.status, 0);
+    assert.equal(afterConflict.json.project.runtime.pinnedImage, imageB.imageId);
+    assert.equal(afterConflict.json.project.runtime.instructionEpoch, 1);
+
     const rolledBack = await cli({
       home,
       cwd: root,
