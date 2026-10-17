@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,12 +18,17 @@ import { installCodexV2Shim } from "../providers/codex/shim-manager.mjs";
 import { createRuntimeImageManager } from "../runtime-images/manager.mjs";
 import { loadRuntimeImageSource } from "../runtime-images/source.mjs";
 import { createRuntimeImageStore } from "../runtime-images/store.mjs";
+import { inventoryLegacyProject } from "../migration/inventory.mjs";
+import { classifyLegacyInventoryEntry } from "../migration/transient-classifier.mjs";
+import { createLegacyMigrationImporter } from "../migration/import.mjs";
+import { createMigrationLifecycleStore } from "../migration/rollback.mjs";
 
 const V2_ENGINE_COMPATIBILITY_VERSION = "2.0.0";
 const V2_PROVIDER_ADAPTER_VERSIONS = Object.freeze({
   codex: "2.0.0",
   antigravity: "2.0.0",
 });
+const MIGRATION_COMPAT_RUNTIME_IMAGE = "legacy-migration-compat";
 
 function cliError(code, message, fields = {}) {
   const error = new Error(message);
@@ -123,6 +128,33 @@ function validateCommand({ positionals, options }) {
     return Object.freeze({ kind: "PROJECT_STATUS", target: positionals[2] || null });
   }
 
+  if (command === "project" && positionals[1] === "migrate") {
+    const action = positionals[2];
+    if (action === "inspect") {
+      if (positionals.length !== 4) usage("Usage: orchestra project migrate inspect <workspace>");
+      return Object.freeze({ kind: "PROJECT_MIGRATE_INSPECT", workspace: positionals[3] });
+    }
+    if (action === "apply") {
+      if (positionals.length !== 4) usage("Usage: orchestra project migrate apply <workspace> --command-id <id>");
+      if (!options["command-id"]) usage("--command-id is required");
+      return Object.freeze({
+        kind: "PROJECT_MIGRATE_APPLY",
+        workspace: positionals[3],
+        commandId: options["command-id"],
+      });
+    }
+    if (action === "rollback") {
+      if (positionals.length !== 4) usage("Usage: orchestra project migrate rollback <projectId> --command-id <id>");
+      if (!options["command-id"]) usage("--command-id is required");
+      return Object.freeze({
+        kind: "PROJECT_MIGRATE_ROLLBACK",
+        projectId: positionals[3],
+        commandId: options["command-id"],
+      });
+    }
+    usage("Usage: orchestra project migrate <inspect|apply|rollback> ...");
+  }
+
   if (command === "project" && ["upgrade", "rollback"].includes(positionals[1])) {
     if (positionals.length !== 3) {
       usage(`Usage: orchestra project ${positionals[1]} <projectId> --runtime-image <imageId> --command-id <id>`);
@@ -189,7 +221,7 @@ function validateCommand({ positionals, options }) {
     return Object.freeze({ kind: "CODEX_SHIM_INSTALL" });
   }
 
-  usage("Usage: orchestra <home|runtime install|runtime list|register|project status|project upgrade|project rollback|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install|provider antigravity hook> ...");
+  usage("Usage: orchestra <home|runtime install|runtime list|register|project status|project migrate inspect|project migrate apply|project migrate rollback|project upgrade|project rollback|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install|provider antigravity hook> ...");
 }
 
 function notRegisteredResult() {
@@ -273,6 +305,246 @@ async function runProjectRuntimeChange({ command, home }) {
   }
 }
 
+function migrationEntryPath(workspaceRoot, entry) {
+  return join(workspaceRoot, ...entry.path.split("/"));
+}
+
+async function readMigrationEntry(workspaceRoot, entry) {
+  let bytes = null;
+  let record = null;
+  try {
+    bytes = await readFile(migrationEntryPath(workspaceRoot, entry));
+    if (entry.integrity === "PARSED" && entry.path.endsWith(".json")) {
+      record = JSON.parse(bytes.toString("utf8"));
+    }
+  } catch {
+    record = null;
+  }
+  return { bytes, record };
+}
+
+function migrationFacts(entry, record) {
+  if (entry.category === "DURABLE_LEGACY_STATE") {
+    return {
+      provenanceComplete: Boolean(record && record.schema === entry.schema),
+      unresolvedTransientAuthority: false,
+    };
+  }
+  if (!["TRANSIENT_PARALLEL_GROUP", "TRANSIENT_LEGACY_STATE", "PROVIDER_LEGACY_STATE", "MANAGED_RUNTIME"].includes(entry.category)) {
+    return {};
+  }
+  const source = record && typeof record === "object" ? record : {};
+  const embedded = source.facts && typeof source.facts === "object" ? source.facts : {};
+  return {
+    persistedState: embedded.persistedState ?? source.state ?? source.workflowState ?? null,
+    runtimeVersion: embedded.runtimeVersion ?? source.runtimeVersion ?? source.orchestraVersion ?? null,
+    ownerProcessProof: embedded.ownerProcessProof ?? source.ownerProcessProof ?? "UNKNOWN",
+    survivingWorkspaces: Number.isInteger(embedded.survivingWorkspaces)
+      ? embedded.survivingWorkspaces
+      : Number.isInteger(source.survivingWorkspaces) ? source.survivingWorkspaces : 0,
+    canonicalPromotion: embedded.canonicalPromotion === true || source.canonicalPromotion === true,
+    workspaceIdentityProven: embedded.workspaceIdentityProven === true || source.workspaceIdentityProven === true,
+    survivingWorkspaceRef: embedded.survivingWorkspaceRef ?? source.survivingWorkspaceRef ?? null,
+    operationProvenanceComplete: embedded.operationProvenanceComplete === true || source.operationProvenanceComplete === true,
+    operationKind: embedded.operationKind ?? source.operationKind ?? null,
+    startedAt: embedded.startedAt ?? source.startedAt ?? null,
+    heartbeatAt: embedded.heartbeatAt ?? source.heartbeatAt ?? null,
+    deadlineAt: embedded.deadlineAt ?? source.deadlineAt ?? null,
+    ownerProcess: embedded.ownerProcess ?? source.ownerProcess ?? null,
+    ownerProofTokenHash: embedded.ownerProofTokenHash ?? source.ownerProofTokenHash ?? null,
+  };
+}
+
+async function buildMigrationReport(workspace) {
+  const inventoryResult = await inventoryLegacyProject({ workspace });
+  const entryData = new Map();
+  const classificationPairs = [];
+  const classifications = [];
+  for (const entry of inventoryResult.entries ?? []) {
+    const data = await readMigrationEntry(inventoryResult.workspaceRoot ?? resolve(workspace), entry);
+    const facts = migrationFacts(entry, data.record);
+    const result = classifyLegacyInventoryEntry({ entry, facts });
+    entryData.set(entry.path, { ...data, facts });
+    classificationPairs.push({ path: entry.path, result });
+    classifications.push({ path: entry.path, ...result });
+  }
+  return {
+    ok: inventoryResult.ok,
+    workspaceRoot: inventoryResult.workspaceRoot ?? resolve(workspace),
+    inventory: inventoryResult.entries ?? [],
+    issues: inventoryResult.issues ?? [],
+    classifications,
+    classificationPairs,
+    entryData,
+  };
+}
+
+function publicMigrationReport(report) {
+  return {
+    inventory: report.inventory,
+    issues: report.issues,
+    classifications: report.classifications,
+  };
+}
+
+function migrationBlocked(report) {
+  return !report.ok || report.classifications.some((item) => item.disposition === "UNSUPPORTED_BLOCKED");
+}
+
+function migrationPayload(report) {
+  const privateArchives = [];
+  const transientFacts = [];
+  const candidates = [];
+  const continuations = [];
+  const evidence = [];
+
+  for (const entry of report.inventory) {
+    const classification = report.classifications.find((item) => item.path === entry.path);
+    const data = report.entryData.get(entry.path);
+    if (classification?.disposition === "PRIVATE_ARCHIVE" && data?.bytes) {
+      privateArchives.push({ path: entry.path, bytes: data.bytes });
+      continue;
+    }
+    if (classification?.disposition === "RECOVERABLE_IMPORT"
+      && ["TRANSIENT_PARALLEL_GROUP", "TRANSIENT_LEGACY_STATE", "PROVIDER_LEGACY_STATE"].includes(entry.category)
+      && data?.bytes) {
+      transientFacts.push({
+        path: entry.path,
+        bytes: data.bytes,
+        provenanceComplete: true,
+        facts: data.facts,
+      });
+      continue;
+    }
+    if (classification?.disposition === "CLEAN_IMPORT" && data?.bytes) {
+      const fact = { path: entry.path, bytes: data.bytes, provenanceComplete: true };
+      if (entry.schema === "orchestra.candidate.v1") candidates.push(fact);
+      else if (entry.schema === "orchestra.work-continuation.v1") continuations.push(fact);
+      else if (entry.schema === "orchestra.evidence.v1") evidence.push(fact);
+    }
+  }
+
+  const durableCount = candidates.length + continuations.length + evidence.length;
+  if (durableCount > 0 && (candidates.length !== 1 || continuations.length !== 1)) {
+    return { ok: false, code: "MIGRATION_DURABLE_SET_AMBIGUOUS" };
+  }
+  return {
+    ok: true,
+    privateArchives,
+    transientFacts,
+    durableFacts: durableCount > 0
+      ? { candidate: candidates[0], evidence, continuation: continuations[0] }
+      : {},
+    hasImportableFacts: durableCount > 0 || privateArchives.length > 0 || transientFacts.length > 0,
+  };
+}
+
+async function runMigrationCommand({ command, home }) {
+  if (command.kind === "PROJECT_MIGRATE_INSPECT") {
+    const report = await buildMigrationReport(command.workspace);
+    return {
+      exitCode: report.ok ? 0 : 1,
+      payload: {
+        ok: report.ok,
+        code: report.ok ? "MIGRATION_INSPECTION_READY" : "MIGRATION_BLOCKED",
+        ...publicMigrationReport(report),
+      },
+    };
+  }
+
+  if (command.kind === "PROJECT_MIGRATE_ROLLBACK") {
+    if (!(await globalRegistryStateExists({ home }))) {
+      return { exitCode: 1, payload: { ok: false, code: "MIGRATION_NOT_FOUND" } };
+    }
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      const store = createMigrationLifecycleStore({ home, state: registry.state });
+      const result = await store.rollback({ projectId: command.projectId, commandId: command.commandId });
+      return { exitCode: result.ok ? 0 : 1, payload: result };
+    } finally {
+      registry.close();
+    }
+  }
+
+  const report = await buildMigrationReport(command.workspace);
+  if (migrationBlocked(report)) {
+    return {
+      exitCode: 1,
+      payload: { ok: false, code: "MIGRATION_BLOCKED", ...publicMigrationReport(report) },
+    };
+  }
+  const payload = migrationPayload(report);
+  if (!payload.ok) {
+    return {
+      exitCode: 1,
+      payload: { ok: false, code: payload.code, ...publicMigrationReport(report) },
+    };
+  }
+
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    let importResult;
+    if (payload.hasImportableFacts) {
+      const importer = createLegacyMigrationImporter({ projectRegistry: registry });
+      importResult = await importer.apply({
+        workspace: report.workspaceRoot,
+        commandId: command.commandId,
+        runtimeImage: MIGRATION_COMPAT_RUNTIME_IMAGE,
+        instructionEpoch: 0,
+        trustMode: "migration",
+        inventory: report.inventory,
+        classifications: report.classificationPairs,
+        durableFacts: payload.durableFacts,
+        privateArchives: payload.privateArchives,
+        transientFacts: payload.transientFacts,
+      });
+      if (!importResult.ok) {
+        return { exitCode: 1, payload: { ...importResult, ...publicMigrationReport(report) } };
+      }
+    } else {
+      const registered = await registry.registerWorkspace({
+        root: report.workspaceRoot,
+        runtimeImage: MIGRATION_COMPAT_RUNTIME_IMAGE,
+        instructionEpoch: 0,
+        trustMode: "migration",
+      });
+      if (!registered.ok) return { exitCode: 1, payload: registered };
+      importResult = {
+        ok: true,
+        project: registered.project,
+        work: null,
+        recoveryWork: null,
+        transient: [],
+        archives: [],
+        replayed: registered.replayed === true,
+      };
+    }
+
+    const store = createMigrationLifecycleStore({ home, state: registry.state });
+    const recorded = await store.recordApply({
+      project: importResult.project,
+      workspace: report.workspaceRoot,
+      commandId: command.commandId,
+      inventory: report.inventory,
+      classifications: report.classifications,
+      importResult,
+    });
+    if (!recorded.ok) return { exitCode: 1, payload: recorded };
+    return {
+      exitCode: 0,
+      payload: {
+        ok: true,
+        code: "MIGRATION_APPLIED",
+        project: importResult.project,
+        manifest: recorded.manifest,
+        replayed: recorded.replayed === true,
+      },
+    };
+  } finally {
+    registry.close();
+  }
+}
+
 async function runRegistryCommand({ positionals, options, cwd, env }) {
   const home = explicitHome(options, env);
   const command = validateCommand({ positionals, options });
@@ -283,6 +555,10 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
 
   if (["RUNTIME_LIST", "RUNTIME_INSTALL"].includes(command.kind)) {
     return runRuntimeCommand({ command, home, cwd });
+  }
+
+  if (["PROJECT_MIGRATE_INSPECT", "PROJECT_MIGRATE_APPLY", "PROJECT_MIGRATE_ROLLBACK"].includes(command.kind)) {
+    return runMigrationCommand({ command, home });
   }
 
   if (["PROJECT_UPGRADE", "PROJECT_ROLLBACK"].includes(command.kind)) {
