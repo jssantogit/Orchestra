@@ -56,6 +56,27 @@ function addMilliseconds(value, milliseconds) {
   return new Date(Date.parse(value) + milliseconds).toISOString();
 }
 
+function classifyToolResult(payload) {
+  const hasSnakeErrorFlag = Object.hasOwn(payload, "is_error");
+  const hasCamelErrorFlag = Object.hasOwn(payload, "isError");
+  const hasErrorFlag = hasSnakeErrorFlag || hasCamelErrorFlag;
+  const errorFlag = hasSnakeErrorFlag ? payload.is_error : payload.isError;
+  const hasSnakeExitCode = Object.hasOwn(payload, "exit_code");
+  const hasCamelExitCode = Object.hasOwn(payload, "exitCode");
+  const hasExitCode = hasSnakeExitCode || hasCamelExitCode;
+  const exitCode = hasSnakeExitCode ? payload.exit_code : payload.exitCode;
+
+  if (hasErrorFlag && typeof errorFlag !== "boolean") return null;
+  if (hasExitCode && (!Number.isSafeInteger(exitCode) || exitCode < 0)) return null;
+  if (hasSnakeErrorFlag && hasCamelErrorFlag && payload.is_error !== payload.isError) return null;
+  if (hasSnakeExitCode && hasCamelExitCode && payload.exit_code !== payload.exitCode) return null;
+  if (hasErrorFlag && hasExitCode && errorFlag === false && exitCode !== 0) return null;
+  if (hasErrorFlag && hasExitCode && errorFlag === true && exitCode === 0) return null;
+  if (errorFlag === true || (hasExitCode && exitCode > 0)) return "FAILED";
+  if (errorFlag === false || (hasExitCode && exitCode === 0)) return "SUCCEEDED";
+  return null;
+}
+
 export function createCodexHookHandler({ registry, now = () => new Date().toISOString() } = {}) {
   if (!registry?.state || typeof registry.resolveWorkspace !== "function") {
     throw new TypeError("global project registry is required");
@@ -259,6 +280,83 @@ export function createCodexHookHandler({ registry, now = () => new Date().toISOS
     });
   }
 
+  async function postToolUse(payload, actor, cwd) {
+    let event;
+    try {
+      event = normalizeCodexToolEvent(payload);
+    } catch (error) {
+      return result(false, error.code || "CODEX_HOOK_PAYLOAD_INVALID");
+    }
+    if (event.eventType !== "TOOL_RESULT") return result(false, "CODEX_HOOK_EVENT_UNSUPPORTED");
+    if (event.sideEffectClass === "READ_ONLY") return result(true, null, { readOnly: true });
+    if (!event.factualIds.toolCallId) return result(false, "CODEX_TOOL_OPERATION_NOT_FOUND");
+
+    const project = await resolveProject(payload, cwd);
+    if (!project) return result(false, "PROJECT_NOT_REGISTERED", { registered: false });
+
+    const correlationHash = hash(event.factualIds.toolCallId);
+    const found = registry.state.operationCorrelations.get({
+      provider: "codex",
+      projectId: project.projectId,
+      correlationHash,
+    });
+    if (Array.isArray(found)) {
+      if (found.length > 1) return result(false, "CODEX_TOOL_OPERATION_AMBIGUOUS", { projectId: project.projectId });
+      if (found.length === 0) return result(false, "CODEX_TOOL_OPERATION_NOT_FOUND", { projectId: project.projectId });
+    }
+    const correlation = Array.isArray(found) ? found[0] : found;
+    if (!correlation) return result(false, "CODEX_TOOL_OPERATION_NOT_FOUND", { projectId: project.projectId });
+    if (correlation.provider !== "codex" || correlation.projectId !== project.projectId
+      || correlation.correlationHash !== correlationHash
+      || correlation.actorIdHash !== actor.actorIdHash) {
+      return result(false, "CODEX_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });
+    }
+
+    const observation = registry.state.sessionObservations.get({
+      provider: "codex",
+      projectId: project.projectId,
+      actorIdHash: actor.actorIdHash,
+    });
+    if (!observation || observation.observedWorkId !== correlation.workId
+      || observation.observedGeneration !== correlation.generation) {
+      return result(false, "CODEX_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });
+    }
+
+    const operation = registry.state.operations.inspect(correlation.operationId);
+    if (!operation) return result(false, "CODEX_TOOL_OPERATION_NOT_FOUND", { projectId: project.projectId });
+    if (operation.projectId !== project.projectId || operation.projectId !== correlation.projectId
+      || operation.workId !== correlation.workId || operation.generation !== correlation.generation
+      || operation.actorRef !== actor.actorIdHash || correlation.actorIdHash !== actor.actorIdHash) {
+      return result(false, "CODEX_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });
+    }
+
+    const workflowState = classifyToolResult(payload);
+    if (!workflowState) return result(false, "CODEX_TOOL_RESULT_INVALID", { projectId: project.projectId });
+    const resultRef = `provider-result:${workflowState.toLowerCase()}:${correlationHash}`;
+    const terminal = registry.state.operations.terminalize({
+      operationId: correlation.operationId,
+      workflowState,
+      resultRef,
+      expectedHeartbeatAt: operation.heartbeatAt,
+    });
+    if (!terminal.ok) {
+      if (terminal.reason === "OPERATION_NOT_FOUND") {
+        return result(false, "CODEX_TOOL_OPERATION_NOT_FOUND", { projectId: project.projectId });
+      }
+      return result(false, "CODEX_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });
+    }
+
+    return result(true, null, {
+      projectId: project.projectId,
+      operation: {
+        operationId: terminal.operation.operationId,
+        workflowState: terminal.operation.workflowState,
+        liveness: terminal.operation.liveness,
+      },
+      replayed: terminal.replayed,
+    });
+  }
+
   return Object.freeze({
     async handle(payload = {}, { cwd = process.cwd() } = {}) {
       let actor;
@@ -272,6 +370,7 @@ export function createCodexHookHandler({ registry, now = () => new Date().toISOS
       }
 
       if (payload.hook_event_name === "PreToolUse") return preToolUse(payload, actor, cwd);
+      if (payload.hook_event_name === "PostToolUse") return postToolUse(payload, actor, cwd);
       if (payload.hook_event_name !== "SessionStart") return result(false, "CODEX_HOOK_EVENT_UNSUPPORTED");
 
       const project = await resolveProject(payload, cwd);

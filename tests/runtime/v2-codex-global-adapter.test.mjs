@@ -848,3 +848,374 @@ test("replaying a correlated mutation after its provider-event deadline requires
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("PostToolUse terminalizes only its correlated Operation and duplicate events converge", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-posttool-terminalize-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const session = "posttool-session";
+    const callId = "posttool-call";
+    await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: session } });
+    const before = await invokeHook({
+      home, cwd,
+      payload: { hook_event_name: "PreToolUse", session_id: session, tool_name: "write_file", tool_call_id: callId, cwd },
+    });
+    assert.equal(before.code, 0);
+
+    const post = {
+      hook_event_name: "PostToolUse",
+      session_id: session,
+      tool_name: "write_file",
+      tool_call_id: callId,
+      is_error: false,
+      tool_response: "done",
+      cwd,
+    };
+    const completed = await invokeHook({ home, cwd, payload: post });
+    assert.equal(completed.code, 0);
+    assert.equal(completed.payload.reason, null);
+    assert.equal(completed.payload.operation.operationId, before.payload.operation.operationId);
+    assert.equal(completed.payload.operation.workflowState, "SUCCEEDED");
+    assert.equal(completed.payload.replayed, false);
+
+    const replay = await invokeHook({ home, cwd, payload: post });
+    assert.equal(replay.code, 0);
+    assert.equal(replay.payload.operation.operationId, before.payload.operation.operationId);
+    assert.equal(replay.payload.operation.workflowState, "SUCCEEDED");
+    assert.equal(replay.payload.replayed, true);
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const terminal = state.operations.inspect(before.payload.operation.operationId);
+      assert.equal(terminal.projectId, registered.projectId);
+      assert.equal(terminal.liveness, "TERMINAL");
+      assert.equal(terminal.workflowState, "SUCCEEDED");
+      assert.equal(JSON.stringify(terminal).includes(callId), false);
+      assert.equal(JSON.stringify(terminal).includes(session), false);
+      assert.equal(JSON.stringify(terminal).includes("done"), false);
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PostToolUse failure remains factual and missing or mismatched correlation cannot terminalize a writer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-posttool-mismatch-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const session = "posttool-failure-session";
+    const callId = "posttool-failure-call";
+    await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: session } });
+    const before = await invokeHook({
+      home, cwd,
+      payload: { hook_event_name: "PreToolUse", session_id: session, tool_name: "write_file", tool_call_id: callId, cwd },
+    });
+    assert.equal(before.code, 0);
+
+    const missing = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: "missing-posttool-call", is_error: false, cwd,
+      },
+    });
+    assert.equal(missing.code, 1);
+    assert.equal(missing.payload.reason, "CODEX_TOOL_OPERATION_NOT_FOUND");
+
+    const wrongActor = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: "different-session",
+        tool_name: "write_file", tool_call_id: callId, is_error: false, cwd,
+      },
+    });
+    assert.equal(wrongActor.code, 1);
+    assert.equal(wrongActor.payload.reason, "CODEX_PROVIDER_EVENT_MISMATCH");
+
+    const unclassified = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: callId, tool_response: "no explicit outcome", cwd,
+      },
+    });
+    assert.equal(unclassified.code, 1);
+    assert.equal(unclassified.payload.reason, "CODEX_TOOL_RESULT_INVALID");
+
+    const contradictory = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: callId, is_error: false, exit_code: 1, cwd,
+      },
+    });
+    assert.equal(contradictory.code, 1);
+    assert.equal(contradictory.payload.reason, "CODEX_TOOL_RESULT_INVALID");
+
+    const failed = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: callId, exit_code: 1, tool_response: "tool failed", cwd,
+      },
+    });
+    assert.equal(failed.code, 0);
+    assert.equal(failed.payload.operation.operationId, before.payload.operation.operationId);
+    assert.equal(failed.payload.operation.workflowState, "FAILED");
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const terminal = state.operations.inspect(before.payload.operation.operationId);
+      assert.equal(terminal.projectId, registered.projectId);
+      assert.equal(terminal.liveness, "TERMINAL");
+      assert.equal(terminal.workflowState, "FAILED");
+      assert.equal(terminal.resultRef.includes("failed"), true);
+      assert.equal(JSON.stringify(terminal).includes("tool failed"), false);
+      assert.equal(JSON.stringify(terminal).includes(callId), false);
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PostToolUse rejects changed Work identity or generation without terminalizing the tracked Operation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-posttool-work-mismatch-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const session = "posttool-work-session";
+    const callId = "posttool-work-call";
+    await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: session } });
+    const before = await invokeHook({
+      home, cwd,
+      payload: { hook_event_name: "PreToolUse", session_id: session, tool_name: "write_file", tool_call_id: callId, cwd },
+    });
+    assert.equal(before.code, 0);
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      assert.equal(state.work.open(work("work-other", registered.projectId)).ok, true);
+      const changedWork = state.sessionObservations.put({
+        provider: "codex",
+        projectId: registered.projectId,
+        actorIdHash: hash(session),
+        observedInstructionEpoch: 7,
+        observedWorkId: "work-other",
+        observedGeneration: 3,
+        observedAt: "2099-10-17T10:01:00.000Z",
+      });
+      assert.equal(changedWork.ok, true);
+    } finally {
+      state.close();
+    }
+
+    const mismatchedWork = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: callId, is_error: false, cwd,
+      },
+    });
+    assert.equal(mismatchedWork.code, 1);
+    assert.equal(mismatchedWork.payload.reason, "CODEX_PROVIDER_EVENT_MISMATCH");
+
+    const updateState = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const changedGeneration = updateState.sessionObservations.put({
+        provider: "codex",
+        projectId: registered.projectId,
+        actorIdHash: hash(session),
+        observedInstructionEpoch: 7,
+        observedWorkId: "work-other",
+        observedGeneration: 4,
+        observedAt: "2099-10-17T10:02:00.000Z",
+      });
+      assert.equal(changedGeneration.ok, true);
+    } finally {
+      updateState.close();
+    }
+
+    const mismatchedGeneration = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: callId, is_error: false, cwd,
+      },
+    });
+    assert.equal(mismatchedGeneration.code, 1);
+    assert.equal(mismatchedGeneration.payload.reason, "CODEX_PROVIDER_EVENT_MISMATCH");
+
+    const check = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const operation = check.operations.inspect(before.payload.operation.operationId);
+      assert.equal(operation.liveness, "LIVE");
+      assert.equal(operation.workflowState, "RUNNING");
+    } finally {
+      check.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PostToolUse rejects contradictory or mis-scoped correlation-store results", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-posttool-project-mismatch-"));
+  const home = join(root, "home");
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    const workspaceA = await makeWorkspace(join(root, "a"));
+    const workspaceB = await makeWorkspace(join(root, "b"));
+    const registeredA = await registry.registerWorkspace({ root: workspaceA, runtimeImage: "2.0.0", instructionEpoch: 7, trustMode: "trusted" });
+    const registeredB = await registry.registerWorkspace({ root: workspaceB, runtimeImage: "2.0.0", instructionEpoch: 7, trustMode: "trusted" });
+    assert.equal(registeredA.ok, true);
+    assert.equal(registeredB.ok, true);
+    assert.equal(registry.state.work.startCurrent(work("work-project-a", registeredA.project.projectId)).ok, true);
+    assert.equal(registry.state.work.startCurrent(work("work-project-b", registeredB.project.projectId)).ok, true);
+
+    const session = "project-mismatch-session";
+    const callId = "same-project-scoped-call";
+    await invokeHook({ home, cwd: workspaceA, payload: { hook_event_name: "SessionStart", session_id: session } });
+    await invokeHook({ home, cwd: workspaceB, payload: { hook_event_name: "SessionStart", session_id: session } });
+    const pre = await invokeHook({
+      home, cwd: workspaceA,
+      payload: { hook_event_name: "PreToolUse", session_id: session, tool_name: "write_file", tool_call_id: callId, cwd: workspaceA },
+    });
+    assert.equal(pre.code, 0);
+    const correlation = registry.state.operationCorrelations.get({
+      provider: "codex", projectId: registeredA.project.projectId, correlationHash: hash(callId),
+    });
+    assert.ok(correlation);
+
+    const facadeFor = (get) => ({
+      paths: registry.paths,
+      resolveWorkspace: registry.resolveWorkspace.bind(registry),
+      state: { ...registry.state, operationCorrelations: { get } },
+    });
+    await invokeHook({ home, cwd: workspaceB, payload: { hook_event_name: "SessionStart", session_id: session } });
+    const post = {
+      hook_event_name: "PostToolUse", session_id: session,
+      tool_name: "write_file", tool_call_id: callId, is_error: false,
+    };
+    const misScoped = await createCodexHookHandler({ registry: facadeFor(() => correlation) })
+      .handle({ ...post, cwd: workspaceB }, { cwd: workspaceB });
+    assert.equal(misScoped.reason, "CODEX_PROVIDER_EVENT_MISMATCH");
+
+    const ambiguous = await createCodexHookHandler({
+      registry: facadeFor(() => [correlation, { ...correlation, operationId: "op-contradictory" }]),
+    }).handle({ ...post, cwd: workspaceA }, { cwd: workspaceA });
+    assert.equal(ambiguous.reason, "CODEX_TOOL_OPERATION_AMBIGUOUS");
+    assert.equal(registry.state.operations.inspect(pre.payload.operation.operationId).liveness, "LIVE");
+  } finally {
+    registry.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PostToolUse rejects conflicting result aliases without terminalizing either Operation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-posttool-result-aliases-"));
+  const home = join(root, "home");
+  try {
+    const workspaceA = await makeWorkspace(join(root, "a"));
+    const workspaceB = await makeWorkspace(join(root, "b"));
+    const registry = createGlobalProjectRegistry({ home });
+    let projectA;
+    let projectB;
+    try {
+      const registeredA = await registry.registerWorkspace({ root: workspaceA, runtimeImage: "2.0.0", instructionEpoch: 7, trustMode: "trusted" });
+      const registeredB = await registry.registerWorkspace({ root: workspaceB, runtimeImage: "2.0.0", instructionEpoch: 7, trustMode: "trusted" });
+      assert.equal(registeredA.ok, true);
+      assert.equal(registeredB.ok, true);
+      projectA = registeredA.project;
+      projectB = registeredB.project;
+      assert.equal(registry.state.work.startCurrent(work("work-alias-a", projectA.projectId)).ok, true);
+      assert.equal(registry.state.work.startCurrent(work("work-alias-b", projectB.projectId)).ok, true);
+    } finally {
+      registry.close();
+    }
+
+    const session = "result-alias-session";
+    const callA = "result-alias-error-call";
+    const callB = "result-alias-exit-call";
+    for (const [cwd, callId] of [[workspaceA, callA], [workspaceB, callB]]) {
+      await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: session } });
+      const pre = await invokeHook({
+        home, cwd,
+        payload: { hook_event_name: "PreToolUse", session_id: session, tool_name: "write_file", tool_call_id: callId, cwd },
+      });
+      assert.equal(pre.code, 0);
+    }
+
+    const contradictoryError = await invokeHook({
+      home, cwd: workspaceA,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: callA, is_error: false, isError: true, cwd: workspaceA,
+      },
+    });
+    const contradictoryExit = await invokeHook({
+      home, cwd: workspaceB,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "write_file", tool_call_id: callB, exit_code: 0, exitCode: 1, cwd: workspaceB,
+      },
+    });
+    assert.equal(contradictoryError.code, 1);
+    assert.equal(contradictoryError.payload.reason, "CODEX_TOOL_RESULT_INVALID");
+    assert.equal(contradictoryExit.code, 1);
+    assert.equal(contradictoryExit.payload.reason, "CODEX_TOOL_RESULT_INVALID");
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      assert.equal(state.operations.listLive({ projectId: projectA.projectId }).length, 1);
+      assert.equal(state.operations.listLive({ projectId: projectB.projectId }).length, 1);
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PostToolUse read-only results are a successful no-op and preserve a different live writer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-posttool-readonly-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const session = "posttool-readonly-session";
+    await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: session } });
+    const writer = await invokeHook({
+      home, cwd,
+      payload: { hook_event_name: "PreToolUse", session_id: session, tool_name: "write_file", tool_call_id: "live-writer-call", cwd },
+    });
+    assert.equal(writer.code, 0);
+
+    const readResult = await invokeHook({
+      home, cwd,
+      payload: {
+        hook_event_name: "PostToolUse", session_id: session,
+        tool_name: "read_file", tool_call_id: "read-result-call", is_error: false, cwd,
+      },
+    });
+    assert.equal(readResult.code, 0);
+    assert.equal(readResult.payload.reason, null);
+    assert.equal(readResult.payload.operation, undefined);
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const live = state.operations.listLive({ projectId: registered.projectId });
+      assert.equal(live.length, 1);
+      assert.equal(live[0].operationId, writer.payload.operation.operationId);
+      assert.equal(live[0].workflowState, "RUNNING");
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
