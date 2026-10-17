@@ -7,9 +7,18 @@ import {
 import { createOperationLivenessService } from "../liveness/operation-liveness-service.mjs";
 import { createRuntimeOwnerStore } from "../liveness/runtime-owner-store.mjs";
 import { createOperationReconciler } from "../reconciliation/reconciler.mjs";
+import { createRecoveryAwareStatusReconciler } from "../reconciliation/recovery-aware-status.mjs";
 import { createManagedWorkspaceRecovery } from "../workspaces/managed-workspace-recovery.mjs";
 
-export function createGlobalOperationReconciler({
+function resolveWorkspaceRecovery({ home, state, workspaceRecovery }) {
+  const resolved = workspaceRecovery ?? createManagedWorkspaceRecovery({ home, state });
+  if (typeof resolved?.inspect !== "function" || typeof resolved?.cleanup !== "function") {
+    throw new TypeError("workspaceRecovery.inspect and cleanup are required");
+  }
+  return resolved;
+}
+
+function createGlobalReconciliationParts({
   state,
   home,
   now = () => new Date().toISOString(),
@@ -21,15 +30,7 @@ export function createGlobalOperationReconciler({
   if (typeof now !== "function") throw new TypeError("now must be a function");
   if (typeof readProcessIdentity !== "function") throw new TypeError("readProcessIdentity must be a function");
 
-  const resolvedWorkspaceRecovery = workspaceRecovery ?? createManagedWorkspaceRecovery({
-    home,
-    state,
-  });
-  if (typeof resolvedWorkspaceRecovery?.inspect !== "function"
-    || typeof resolvedWorkspaceRecovery?.cleanup !== "function") {
-    throw new TypeError("workspaceRecovery.inspect and cleanup are required");
-  }
-
+  const resolvedWorkspaceRecovery = resolveWorkspaceRecovery({ home, state, workspaceRecovery });
   const runtimeOwnerStore = createRuntimeOwnerStore({
     rootDir: join(home, "runtime-owners"),
   });
@@ -42,15 +43,30 @@ export function createGlobalOperationReconciler({
     ownerProbe,
     now,
   });
-
-  return createOperationReconciler({
+  const reconciler = createOperationReconciler({
     state,
     operationLiveness,
     workspaceRecovery: resolvedWorkspaceRecovery,
     now,
   });
+
+  return {
+    reconciler,
+    workspaceRecovery: resolvedWorkspaceRecovery,
+    now,
+  };
+}
+
+export function createGlobalOperationReconciler(options = {}) {
+  return createGlobalReconciliationParts(options).reconciler;
 }
 
 export function createGlobalStatusReconciler(options = {}) {
-  return createGlobalOperationReconciler(options);
+  const parts = createGlobalReconciliationParts(options);
+  return createRecoveryAwareStatusReconciler({
+    state: options.state,
+    reconciler: parts.reconciler,
+    workspaceRecovery: parts.workspaceRecovery,
+    now: parts.now,
+  });
 }
