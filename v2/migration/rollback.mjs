@@ -36,6 +36,11 @@ function normalizeInventory(inventory, classifications) {
   }));
 }
 
+function normalizePathList(paths) {
+  if (!Array.isArray(paths) || paths.some((path) => !nonEmptyString(path))) return null;
+  return [...new Set(paths)].sort((left, right) => left.localeCompare(right, "en"));
+}
+
 function commandRequest(kind, fields) {
   return digest({ kind, ...fields });
 }
@@ -146,6 +151,100 @@ export function createMigrationLifecycleStore({ home, state = null, now = () => 
       return { ok: true, manifest, replayed: false };
     },
 
+    async prepareCleanup({ projectId, commandId, inventoryDigest, removedPaths, thinShims }) {
+      const normalizedRemovedPaths = normalizePathList(removedPaths);
+      const normalizedThinShims = normalizePathList(thinShims);
+      if (!nonEmptyString(projectId) || !nonEmptyString(commandId)
+        || !/^sha256:[0-9a-f]{64}$/.test(inventoryDigest ?? "")
+        || normalizedRemovedPaths === null || normalizedThinShims === null) {
+        return { ok: false, code: "MIGRATION_CLEANUP_INVALID" };
+      }
+      const path = manifestFile(root, projectId);
+      const current = await readManifest(path);
+      if (!current.ok) return current;
+      if (!current.manifest) return { ok: false, code: "MIGRATION_NOT_FOUND" };
+      const requestDigest = commandRequest("CLEANUP", {
+        projectId,
+        inventoryDigest,
+        removedPaths: normalizedRemovedPaths,
+        thinShims: normalizedThinShims,
+      });
+      const replay = findCommand(current.manifest, commandId);
+      if (replay) {
+        if (replay.kind !== "CLEANUP" || replay.requestDigest !== requestDigest) {
+          return { ok: false, code: "IDEMPOTENCY_CONFLICT" };
+        }
+        if (current.manifest.cleanup?.commandId !== commandId) {
+          return { ok: false, code: "MIGRATION_MANIFEST_CORRUPT" };
+        }
+        return {
+          ok: true,
+          manifest: current.manifest,
+          replayed: true,
+          complete: current.manifest.cleanup.state === "COMPLETE",
+        };
+      }
+      if (current.manifest.cleanup?.state === "PREPARED") {
+        return { ok: false, code: "MIGRATION_CLEANUP_IN_PROGRESS" };
+      }
+      if (current.manifest.cleanup?.state === "COMPLETE" || current.manifest.status === "CLEANED") {
+        return { ok: false, code: "MIGRATION_CLEANUP_ALREADY_COMPLETE" };
+      }
+      if (current.manifest.status !== "IMPORTED" || current.manifest.active !== true) {
+        return { ok: false, code: "MIGRATION_CLEANUP_NOT_ACTIVE" };
+      }
+
+      const at = now();
+      current.manifest.updatedAt = at;
+      current.manifest.integration = {
+        mode: "V2_GLOBAL",
+        verified: true,
+        thinShims: normalizedThinShims,
+      };
+      current.manifest.cleanup = {
+        state: "PREPARED",
+        commandId,
+        requestDigest,
+        inventoryDigest,
+        removedPaths: normalizedRemovedPaths,
+        thinShims: normalizedThinShims,
+        preparedAt: at,
+        completedAt: null,
+      };
+      current.manifest.commands.push({ kind: "CLEANUP", commandId, requestDigest, at });
+      await writeManifest(root, path, current.manifest);
+      return { ok: true, manifest: current.manifest, replayed: false, complete: false };
+    },
+
+    async completeCleanup({ projectId, commandId }) {
+      if (!nonEmptyString(projectId) || !nonEmptyString(commandId)) {
+        return { ok: false, code: "MIGRATION_CLEANUP_INVALID" };
+      }
+      const path = manifestFile(root, projectId);
+      const current = await readManifest(path);
+      if (!current.ok) return current;
+      if (!current.manifest) return { ok: false, code: "MIGRATION_NOT_FOUND" };
+      const cleanup = current.manifest.cleanup;
+      if (!cleanup || cleanup.commandId !== commandId) {
+        return { ok: false, code: "MIGRATION_CLEANUP_NOT_PREPARED" };
+      }
+      if (cleanup.state === "COMPLETE") {
+        return { ok: true, manifest: current.manifest, replayed: true };
+      }
+      if (cleanup.state !== "PREPARED") {
+        return { ok: false, code: "MIGRATION_MANIFEST_CORRUPT" };
+      }
+
+      const at = now();
+      cleanup.state = "COMPLETE";
+      cleanup.completedAt = at;
+      current.manifest.status = "CLEANED";
+      current.manifest.active = true;
+      current.manifest.updatedAt = at;
+      await writeManifest(root, path, current.manifest);
+      return { ok: true, manifest: current.manifest, replayed: false };
+    },
+
     async rollback({ projectId, commandId }) {
       if (!nonEmptyString(projectId) || !nonEmptyString(commandId)) {
         return { ok: false, code: "MIGRATION_ROLLBACK_INVALID" };
@@ -154,6 +253,14 @@ export function createMigrationLifecycleStore({ home, state = null, now = () => 
       const current = await readManifest(path);
       if (!current.ok) return current;
       if (!current.manifest) return { ok: false, code: "MIGRATION_NOT_FOUND" };
+      if (current.manifest.cleanup?.state === "PREPARED" || current.manifest.cleanup?.state === "COMPLETE"
+        || current.manifest.status === "CLEANED") {
+        return {
+          ok: false,
+          code: "MIGRATION_ROLLBACK_BLOCKED",
+          reason: "MIGRATION_CLEANUP_ACCEPTED",
+        };
+      }
       const requestDigest = commandRequest("ROLLBACK", { projectId });
       const replay = findCommand(current.manifest, commandId);
       if (replay) {
