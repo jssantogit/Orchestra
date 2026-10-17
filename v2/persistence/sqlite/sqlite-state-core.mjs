@@ -11,7 +11,7 @@ import {
 import { createOperationCorrelationStore } from "../../providers/operation-correlation-store.mjs";
 import { createSessionObservationStore } from "../../providers/session-observation-store.mjs";
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 const WORK_IDENTITY_FIELDS = new Set(["workId", "projectId", "taskId", "generation"]);
 
 function ok(payload = {}) {
@@ -286,6 +286,56 @@ const MIGRATIONS = Object.freeze([
           ON experience_records(eligibility_scope, lineage_count, experience_id);
         CREATE INDEX experience_project_idx
           ON experience_records(source_project_id, experience_id);
+      `);
+    },
+  }),
+  Object.freeze({
+    version: 6,
+    name: "v2_learned_policies",
+    apply(db) {
+      db.exec(`
+        CREATE TABLE learned_policy_candidates (
+          policy_id TEXT NOT NULL,
+          revision INTEGER NOT NULL CHECK (revision >= 1),
+          scope_key TEXT NOT NULL,
+          scope TEXT NOT NULL CHECK (scope IN ('GLOBAL', 'DOMAIN', 'PROJECT')),
+          domain_cohort TEXT,
+          project_id TEXT,
+          record_json TEXT NOT NULL,
+          record_digest TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (policy_id, revision)
+        ) STRICT;
+
+        CREATE INDEX learned_policy_candidates_scope_idx
+          ON learned_policy_candidates(scope_key, policy_id, revision);
+
+        CREATE TABLE learned_policy_activations (
+          activation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          scope_key TEXT NOT NULL,
+          policy_id TEXT NOT NULL,
+          policy_revision INTEGER NOT NULL CHECK (policy_revision >= 1),
+          predecessor_policy_id TEXT,
+          predecessor_revision INTEGER CHECK (predecessor_revision IS NULL OR predecessor_revision >= 1),
+          activated_at TEXT NOT NULL,
+          FOREIGN KEY (policy_id, policy_revision)
+            REFERENCES learned_policy_candidates(policy_id, revision) ON DELETE RESTRICT
+        ) STRICT;
+
+        CREATE INDEX learned_policy_activations_scope_idx
+          ON learned_policy_activations(scope_key, activation_id);
+
+        CREATE TABLE learned_policy_active (
+          scope_key TEXT PRIMARY KEY,
+          policy_id TEXT NOT NULL,
+          policy_revision INTEGER NOT NULL CHECK (policy_revision >= 1),
+          activation_id INTEGER NOT NULL UNIQUE,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (policy_id, policy_revision)
+            REFERENCES learned_policy_candidates(policy_id, revision) ON DELETE RESTRICT,
+          FOREIGN KEY (activation_id)
+            REFERENCES learned_policy_activations(activation_id) ON DELETE RESTRICT
+        ) STRICT;
       `);
     },
   }),
