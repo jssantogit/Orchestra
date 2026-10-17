@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feat/v2-domain-contracts
+      - feat/v2-project-registry
 
 jobs:
   persistence:
