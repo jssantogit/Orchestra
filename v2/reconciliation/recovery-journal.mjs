@@ -64,7 +64,7 @@ export function validateRecoveryIdentity(state, recovery) {
 
 export function createInMemoryRecoveryJournal({ state } = {}) {
   const store = requireRecoveryState(state);
-  const byCommand = new Map();
+  const commands = new Map();
   const byOperation = new Map();
 
   return Object.freeze({
@@ -75,7 +75,7 @@ export function createInMemoryRecoveryJournal({ state } = {}) {
       const key = commandKey(recovery.projectId, recovery.commandId);
       const encoded = canonicalRecoveryJson(recovery);
       const fingerprint = recoveryDigest(recovery);
-      const prior = byCommand.get(key);
+      const prior = commands.get(key);
       if (prior) {
         if (prior.digest !== fingerprint || prior.encoded !== encoded) {
           return failure("IDEMPOTENCY_CONFLICT");
@@ -84,12 +84,16 @@ export function createInMemoryRecoveryJournal({ state } = {}) {
       }
 
       const stored = clone(recovery);
-      byCommand.set(key, { recovery: stored, encoded, digest: fingerprint });
+      commands.set(key, { recovery: stored, encoded, digest: fingerprint });
       const opKey = operationKey(recovery.projectId, recovery.operationId);
       const records = byOperation.get(opKey) ?? [];
       records.push(stored);
       byOperation.set(opKey, records);
       return success({ recovery: clone(stored), replayed: false });
+    },
+
+    byCommand({ projectId, commandId } = {}) {
+      return clone(commands.get(commandKey(projectId, commandId))?.recovery ?? null);
     },
 
     latest({ projectId, operationId } = {}) {
