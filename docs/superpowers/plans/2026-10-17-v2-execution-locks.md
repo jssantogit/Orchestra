@@ -19,6 +19,16 @@ The approved predecessor `a3002edb1493cc86e8e9f713477db3add31d1799` does not con
 
 `sqlite-state-core.mjs` owns `CURRENT_SCHEMA_VERSION`, `MIGRATIONS`, schema initialization and the core SQLite state stores. `sqlite-state.mjs` owns composition/exposure of the public SQLite state. These paths are the intended Task 1 surfaces; do not create generic alias files merely to satisfy the earlier mistaken names.
 
+### Existing V2 verification paths
+
+Use the repository's real predecessor test surfaces:
+
+- `tests/runtime/v2-domain-foundation.test.mjs`
+- `tests/runtime/v2-reference-state.test.mjs`
+- `tests/runtime/v2-continuation-boundary.test.mjs`
+
+Do not substitute the nonexistent names `v2-domain-invariants.test.mjs` or `v2-continuation-capsule.test.mjs`.
+
 ### Task 7 exact workflow path
 
 The canonical existing V2 persistence workflow at the same predecessor is:
