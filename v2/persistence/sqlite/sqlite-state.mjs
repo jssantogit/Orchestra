@@ -9,7 +9,7 @@ import {
   validateWorkUnitV2,
 } from "../../domain/contracts.mjs";
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 const WORK_IDENTITY_FIELDS = new Set(["workId", "projectId", "taskId", "generation"]);
 
 function ok(payload = {}) {
@@ -170,6 +170,23 @@ const MIGRATIONS = Object.freeze([
       `);
     },
   }),
+  Object.freeze({
+    version: 3,
+    name: "v2_active_work_head",
+    apply(db) {
+      db.exec(`
+        CREATE TABLE project_work_heads (
+          project_id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL UNIQUE,
+          revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT,
+          FOREIGN KEY (work_id, project_id) REFERENCES work_units(work_id, project_id) ON DELETE RESTRICT
+        ) STRICT;
+      `);
+    },
+  }),
 ]);
 
 function applyMigration(db, migration) {
@@ -311,6 +328,17 @@ function createWorkStore(db) {
   const getById = db.prepare("SELECT * FROM work_units WHERE work_id = ?");
   const getByProject = db.prepare("SELECT * FROM work_units WHERE project_id = ? AND work_id = ?");
   const getProject = db.prepare("SELECT * FROM projects WHERE project_id = ?");
+  const getHead = db.prepare(`
+    SELECT w.*
+    FROM project_work_heads h
+    JOIN work_units w ON w.work_id = h.work_id AND w.project_id = h.project_id
+    WHERE h.project_id = ?
+  `);
+  const getHeadId = db.prepare("SELECT work_id FROM project_work_heads WHERE project_id = ?");
+  const insertHead = db.prepare(`
+    INSERT INTO project_work_heads(project_id, work_id, revision, created_at, updated_at)
+    VALUES (?, ?, 0, ?, ?)
+  `);
   const insertWork = db.prepare(`
     INSERT INTO work_units(
       work_id, project_id, task_id, generation, runtime_image, instruction_epoch,
@@ -328,8 +356,55 @@ function createWorkStore(db) {
     WHERE work_id = ? AND project_id = ? AND generation = ?
   `);
 
+  function validateWorkForProject(workUnit) {
+    if (!validateWorkUnitV2(workUnit).valid) return fail("WORK_INVALID");
+    const project = getProject.get(workUnit.projectId);
+    if (!project) return fail("PROJECT_NOT_FOUND");
+    if (workUnit.runtimeImage !== project.runtime_image) return fail("RUNTIME_IMAGE_MISMATCH");
+    if (workUnit.instructionEpoch !== Number(project.instruction_epoch)) return fail("INSTRUCTION_EPOCH_MISMATCH");
+    return null;
+  }
+
+  function insertNewWork(workUnit, requestJson, digest, now) {
+    insertWork.run(
+      workUnit.workId,
+      workUnit.projectId,
+      workUnit.taskId,
+      workUnit.generation,
+      workUnit.runtimeImage,
+      workUnit.instructionEpoch,
+      workUnit.state,
+      requestJson,
+      requestJson,
+      digest,
+      now,
+      now,
+    );
+  }
+
   return Object.freeze({
     open(workUnit) {
+      const invalid = validateWorkForProject(workUnit);
+      if (invalid) return invalid;
+      const requestJson = canonicalJson(workUnit);
+      const digest = requestDigest(workUnit);
+
+      return transaction(db, () => {
+        const existing = getById.get(workUnit.workId);
+        if (existing) {
+          if (existing.original_request_digest === digest && existing.original_request_json === requestJson) {
+            return ok({ work: parseRecord(existing), replayed: true });
+          }
+          return fail("WORK_ID_CONFLICT");
+        }
+
+        const now = new Date().toISOString();
+        insertNewWork(workUnit, requestJson, digest, now);
+        return ok({ work: JSON.parse(requestJson), replayed: false });
+      });
+    },
+
+    startCurrent(workUnit) {
       if (!validateWorkUnitV2(workUnit).valid) return fail("WORK_INVALID");
       const requestJson = canonicalJson(workUnit);
       const digest = requestDigest(workUnit);
@@ -340,31 +415,28 @@ function createWorkStore(db) {
         if (workUnit.runtimeImage !== project.runtime_image) return fail("RUNTIME_IMAGE_MISMATCH");
         if (workUnit.instructionEpoch !== Number(project.instruction_epoch)) return fail("INSTRUCTION_EPOCH_MISMATCH");
 
-        const existing = getById.get(workUnit.workId);
-        if (existing) {
-          if (existing.original_request_digest === digest && existing.original_request_json === requestJson) {
-            return ok({ work: parseRecord(existing), replayed: true });
+        const head = getHeadId.get(workUnit.projectId);
+        if (head) {
+          if (head.work_id === workUnit.workId) {
+            const existing = getById.get(workUnit.workId);
+            if (existing && existing.original_request_digest === digest && existing.original_request_json === requestJson) {
+              return ok({ work: parseRecord(existing), replayed: true });
+            }
           }
-          return fail("WORK_ID_CONFLICT");
+          return fail("ACTIVE_WORK_EXISTS", { currentWorkId: head.work_id });
         }
 
+        if (getById.get(workUnit.workId)) return fail("WORK_ID_CONFLICT");
+
         const now = new Date().toISOString();
-        insertWork.run(
-          workUnit.workId,
-          workUnit.projectId,
-          workUnit.taskId,
-          workUnit.generation,
-          workUnit.runtimeImage,
-          workUnit.instructionEpoch,
-          workUnit.state,
-          requestJson,
-          requestJson,
-          digest,
-          now,
-          now,
-        );
+        insertNewWork(workUnit, requestJson, digest, now);
+        insertHead.run(workUnit.projectId, workUnit.workId, now, now);
         return ok({ work: JSON.parse(requestJson), replayed: false });
       });
+    },
+
+    current(projectId) {
+      return parseRecord(getHead.get(projectId));
     },
 
     read(projectId, workId) {
