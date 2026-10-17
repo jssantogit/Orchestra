@@ -13,6 +13,13 @@ function isRecoveryTerminal(operation) {
     && operation.resultRef === recoveryResultRef(operation.operationId);
 }
 
+function isExplicitPreserve(recovery) {
+  return recovery?.outcome === "STALE_DIRTY"
+    && recovery.terminal !== null
+    && recovery.cleanup?.status === "PRESERVED"
+    && recovery.assessment?.reason !== TERMINAL_CLEANUP_REASON;
+}
+
 function terminalAssessment(operation, now) {
   return {
     schema: "orchestra.liveness-assessment.v2",
@@ -110,7 +117,7 @@ export function createRecoveryAwareStatusReconciler({
       for (const operation of state.operations.list({ projectId, liveness: "TERMINAL" })) {
         if (!isRecoveryTerminal(operation)) continue;
         const recovery = state.recoveries.latest({ projectId, operationId: operation.operationId });
-        if (recovery?.outcome === "RECOVERED") continue;
+        if (recovery?.outcome === "RECOVERED" || isExplicitPreserve(recovery)) continue;
 
         pending.push({
           operation,
