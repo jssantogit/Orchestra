@@ -2,6 +2,7 @@ import { createInMemoryRecoveryJournal } from "../../reconciliation/recovery-jou
 import { fenceOperationsToActiveWork } from "../../state/active-work-operation-fence.mjs";
 import { trackOperationListing } from "../../state/operation-listing.mjs";
 import { fenceSqliteOperationTerminalization } from "./sqlite-operation-terminalization-fence.mjs";
+import { withSqliteProjectRuntimeUpdates } from "./sqlite-project-runtime.mjs";
 import { createSqliteRecoveryJournal } from "./sqlite-recovery-journal.mjs";
 import { createSqliteState as createSqliteStateCore } from "./sqlite-state-core.mjs";
 
@@ -9,7 +10,11 @@ export { createSqliteRuntimeImageRegistry } from "./sqlite-runtime-images.mjs";
 
 export function createSqliteState(options = {}) {
   const listed = trackOperationListing(createSqliteStateCore(options));
-  const activeWorkFenced = fenceOperationsToActiveWork(listed);
+  const runtimeMutable = withSqliteProjectRuntimeUpdates(listed, {
+    dbPath: options.dbPath,
+    timeoutMs: options.timeoutMs,
+  });
+  const activeWorkFenced = fenceOperationsToActiveWork(runtimeMutable);
   const core = fenceSqliteOperationTerminalization(activeWorkFenced, {
     dbPath: options.dbPath,
     timeoutMs: options.timeoutMs,
