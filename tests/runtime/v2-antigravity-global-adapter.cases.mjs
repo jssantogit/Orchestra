@@ -10,6 +10,11 @@ import { DatabaseSync } from "node:sqlite";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { createGlobalProjectRegistry } from "../../v2/global/project-registry.mjs";
 import { runGlobalCli } from "../../v2/global/cli.mjs";
+import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
+import { createProviderEventProbe } from "../../v2/liveness/provider-event-liveness.mjs";
+import { createOperationLivenessService } from "../../v2/liveness/operation-liveness-service.mjs";
+import { createHostProcessIdentityReader } from "../../v2/liveness/local-process-probe.mjs";
+import { createAntigravityHookHandler } from "../../v2/providers/antigravity/hook-handler.mjs";
 
 import { normalizeAntigravityActor } from "../../v2/providers/antigravity/actor.mjs";
 import { normalizeAntigravityToolEvent } from "../../v2/providers/antigravity/tool-event.mjs";
@@ -183,8 +188,8 @@ async function makeGitWorkspace(root, name = "workspace") {
   return workspace;
 }
 
-async function prepareProject({ root, home, active = true }) {
-  const cwd = await makeGitWorkspace(root);
+async function prepareProject({ root, home, active = true, workspaceName = "workspace", workId = "work-antigravity" }) {
+  const cwd = await makeGitWorkspace(root, workspaceName);
   const registry = createGlobalProjectRegistry({ home });
   try {
     const registered = await registry.registerWorkspace({
@@ -196,7 +201,7 @@ async function prepareProject({ root, home, active = true }) {
     assert.equal(registered.ok, true);
     if (active) {
       assert.equal(registry.state.work.startCurrent(
-        v2Work("work-antigravity", registered.project.projectId),
+        v2Work(workId, registered.project.projectId),
       ).ok, true);
     }
     return { cwd, project: registered.project };
@@ -221,6 +226,34 @@ async function invokeAntigravityHook({ home, cwd, payload }) {
 
 function actorHash(conversationId) {
   return hashId(conversationId);
+}
+
+async function startAntigravityMutation({ home, cwd, conversationId, toolCallId }) {
+  const attached = await invokeAntigravityHook({
+    home, cwd,
+    payload: { hookEventName: "SessionStart", conversationId },
+  });
+  assert.equal(attached.code, 0);
+  const started = await invokeAntigravityHook({
+    home, cwd,
+    payload: {
+      hookEventName: "PreToolUse",
+      conversationId,
+      toolCall: { id: toolCallId, name: "write_file", args: { path: "src/main.mjs" } },
+    },
+  });
+  return { attached, started };
+}
+
+function mutateObservation(state, { projectId, conversationId, ...updates }) {
+  const current = state.sessionObservations.get({
+    provider: "antigravity",
+    projectId,
+    actorIdHash: actorHash(conversationId),
+  });
+  assert.ok(current);
+  const observedAt = new Date(Date.parse(current.observedAt) + 1_000).toISOString();
+  return state.sessionObservations.put({ ...current, ...updates, observedAt });
 }
 
 test("Antigravity SessionStart attaches fresh conversations to the current Work", async () => {
@@ -376,6 +409,478 @@ test("Antigravity SessionStart preserves the neutral stale instruction epoch rea
     } finally {
       registry.close();
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity protected mutation binds the current observed work and generation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-authorize-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const conversationId = "authorized-mutation";
+    const toolCallId = "authorized-call";
+    const { started } = await startAntigravityMutation({ home, cwd, conversationId, toolCallId });
+
+    assert.equal(started.code, 0);
+    assert.equal(started.payload.ok, true);
+    assert.equal(started.payload.replayed, false);
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      const operation = registry.state.operations.inspect(started.payload.operation.operationId);
+      const observation = registry.state.sessionObservations.get({
+        provider: "antigravity",
+        projectId: project.projectId,
+        actorIdHash: actorHash(conversationId),
+      });
+      assert.equal(operation.workId, observation.observedWorkId);
+      assert.equal(operation.generation, observation.observedGeneration);
+      assert.equal(observation.observedInstructionEpoch, 7);
+    } finally {
+      registry.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity protected mutations preserve stale work, generation, and epoch reasons", async (t) => {
+  const cases = [
+    ["work", "STALE_ACTIVE_WORK", { observedWorkId: "previous-work" }],
+    ["generation", "STALE_GENERATION", { observedGeneration: 2 }],
+    ["instruction epoch", "SESSION_RUNTIME_STALE", { observedInstructionEpoch: 6 }],
+  ];
+  for (const [name, reason, updates] of cases) {
+    await t.test(name, async () => {
+      const root = await mkdtemp(join(tmpdir(), `orchestra-antigravity-stale-${name.replaceAll(" ", "-")}-`));
+      try {
+        const home = join(root, "home");
+        const { cwd, project } = await prepareProject({ root, home });
+        const conversationId = `stale-${name}`;
+        const attached = await invokeAntigravityHook({
+          home, cwd,
+          payload: { hookEventName: "SessionStart", conversationId },
+        });
+        assert.equal(attached.code, 0);
+        const registry = createGlobalProjectRegistry({ home });
+        try {
+          if (name === "work") {
+            assert.equal(registry.state.work.open(v2Work("previous-work", project.projectId)).ok, true);
+          }
+          assert.equal(mutateObservation(registry.state, { projectId: project.projectId, conversationId, ...updates }).ok, true);
+        } finally {
+          registry.close();
+        }
+
+        const denied = await invokeAntigravityHook({
+          home, cwd,
+          payload: {
+            hookEventName: "PreToolUse",
+            conversationId,
+            toolCall: { id: `call-${name}`, name: "write_file" },
+          },
+        });
+        assert.equal(denied.code, 1);
+        assert.equal(denied.payload.reason, reason);
+        assert.equal(denied.payload.hookSpecificOutput.permissionDecision, "deny");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("Antigravity host mutation requires factual tool-call correlation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-correlation-required-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const conversationId = "missing-correlation";
+    const attached = await invokeAntigravityHook({
+      home, cwd,
+      payload: { hookEventName: "SessionStart", conversationId },
+    });
+    assert.equal(attached.code, 0);
+    const denied = await invokeAntigravityHook({
+      home, cwd,
+      payload: {
+        hookEventName: "PreToolUse",
+        conversationId,
+        toolCall: { name: "write_file" },
+      },
+    });
+
+    assert.equal(denied.code, 1);
+    assert.equal(denied.payload.reason, "ANTIGRAVITY_TOOL_CORRELATION_REQUIRED");
+    assert.equal(denied.payload.hookSpecificOutput.permissionDecision, "deny");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity host mutation uses provider-event ownership without process identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-provider-owner-"));
+  try {
+    const home = join(root, "home");
+    const { cwd } = await prepareProject({ root, home });
+    const { started } = await startAntigravityMutation({
+      home, cwd, conversationId: "provider-owned", toolCallId: "provider-owned-call",
+    });
+    assert.equal(started.code, 0);
+
+    const registry = createGlobalProjectRegistry({ home });
+    const owners = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+    try {
+      const operation = registry.state.operations.inspect(started.payload.operation.operationId);
+      const owner = await owners.read(operation.runtimeOwnerRef);
+      assert.equal(owner.kind, "PROVIDER_EVENT");
+      assert.equal(Object.hasOwn(owner, "process"), false);
+      assert.equal(owner.correlationRef, hashId("provider-owned-call"));
+    } finally {
+      registry.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity duplicate terminal events converge idempotently", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-terminal-replay-"));
+  try {
+    const home = join(root, "home");
+    const { cwd } = await prepareProject({ root, home });
+    const conversationId = "terminal-replay";
+    const toolCallId = "terminal-replay-call";
+    const { started } = await startAntigravityMutation({ home, cwd, conversationId, toolCallId });
+    assert.equal(started.code, 0);
+    const terminalPayload = {
+      hookEventName: "PostToolUse",
+      conversationId,
+      toolCall: { id: toolCallId, name: "write_file" },
+      is_error: false,
+    };
+    const first = await invokeAntigravityHook({ home, cwd, payload: terminalPayload });
+    const replay = await invokeAntigravityHook({ home, cwd, payload: terminalPayload });
+
+    assert.equal(first.code, 0);
+    assert.equal(first.payload.operation.workflowState, "SUCCEEDED");
+    assert.equal(first.payload.replayed, false);
+    assert.equal(replay.code, 0);
+    assert.equal(replay.payload.operation.workflowState, "SUCCEEDED");
+    assert.equal(replay.payload.replayed, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity terminal correlation cannot cross provider, project, work, or actor", async (t) => {
+  const cases = ["provider", "project", "work", "actor"];
+  for (const mismatch of cases) {
+    await t.test(mismatch, async () => {
+      const root = await mkdtemp(join(tmpdir(), `orchestra-antigravity-mismatch-${mismatch}-`));
+      try {
+        const home = join(root, "home");
+        const { cwd, project } = await prepareProject({ root, home });
+        const conversationId = "mismatch-owner";
+        const toolCallId = `mismatch-call-${mismatch}`;
+        const { started } = await startAntigravityMutation({ home, cwd, conversationId, toolCallId });
+        assert.equal(started.code, 0);
+        const registry = createGlobalProjectRegistry({ home });
+        try {
+          const operationId = started.payload.operation.operationId;
+          if (mismatch === "provider") {
+            const codexOnlyToolCallId = `codex-only-${toolCallId}`;
+            assert.equal(registry.state.operationCorrelations.put({
+              provider: "codex",
+              projectId: project.projectId,
+              correlationHash: hashId(codexOnlyToolCallId),
+              operationId,
+              workId: "work-antigravity",
+              generation: 3,
+              actorIdHash: actorHash(conversationId),
+            }).ok, true);
+            assert.ok(registry.state.operationCorrelations.get({
+              provider: "codex",
+              projectId: project.projectId,
+              correlationHash: hashId(codexOnlyToolCallId),
+            }));
+            assert.equal(registry.state.operationCorrelations.get({
+              provider: "antigravity",
+              projectId: project.projectId,
+              correlationHash: hashId(codexOnlyToolCallId),
+            }), null);
+          } else if (mismatch === "work") {
+            assert.equal(registry.state.work.open(v2Work("previous-work", project.projectId)).ok, true);
+            assert.equal(mutateObservation(registry.state, {
+              projectId: project.projectId,
+              conversationId,
+              observedWorkId: "previous-work",
+            }).ok, true);
+          }
+        } finally {
+          registry.close();
+        }
+
+        let terminalCwd = cwd;
+        let terminalConversationId = conversationId;
+        let terminalToolCallId = toolCallId;
+        if (mismatch === "project") {
+          const other = await prepareProject({
+            root,
+            home,
+            workspaceName: "other-workspace",
+            workId: "work-antigravity-other",
+          });
+          const attached = await invokeAntigravityHook({
+            home, cwd: other.cwd,
+            payload: { hookEventName: "SessionStart", conversationId },
+          });
+          assert.equal(attached.code, 0);
+          terminalCwd = other.cwd;
+        }
+        if (mismatch === "actor") terminalConversationId = "different-actor";
+        if (mismatch === "provider") terminalToolCallId = `codex-only-${toolCallId}`;
+        const terminal = await invokeAntigravityHook({
+          home,
+          cwd: terminalCwd,
+          payload: {
+            hookEventName: "PostToolUse",
+            conversationId: terminalConversationId,
+            toolCall: { id: terminalToolCallId, name: "write_file" },
+            is_error: false,
+          },
+        });
+        assert.equal(terminal.code, 1);
+
+        const verify = createGlobalProjectRegistry({ home });
+        try {
+          const operation = verify.state.operations.inspect(started.payload.operation.operationId);
+          assert.equal(operation.workflowState, "RUNNING");
+          assert.equal(operation.liveness, "LIVE");
+        } finally {
+          verify.close();
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("lost Antigravity provider terminal event follows generic recoverable liveness", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-lost-terminal-"));
+  try {
+    const home = join(root, "home");
+    const { cwd } = await prepareProject({ root, home });
+    const { started } = await startAntigravityMutation({
+      home, cwd, conversationId: "lost-terminal", toolCallId: "lost-terminal-call",
+    });
+    assert.equal(started.code, 0);
+    const registry = createGlobalProjectRegistry({ home });
+    const ownerStore = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+    try {
+      const operation = registry.state.operations.inspect(started.payload.operation.operationId);
+      const observedAt = new Date(Date.parse(operation.deadlineAt) + 1_000).toISOString();
+      const liveness = createOperationLivenessService({
+        runtimeOwnerStore: ownerStore,
+        providerEventProbe: createProviderEventProbe({ now: () => observedAt }),
+        now: () => observedAt,
+      });
+      const assessment = await liveness.assess(operation);
+      assert.equal(assessment.liveness, "STALE_RECOVERABLE");
+      assert.equal(assessment.reason, "PROVIDER_EVENT_DEADLINE_EXPIRED_STALE");
+    } finally {
+      registry.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity public handler dispatches provider request event aliases", async (t) => {
+  const requestAliases = [
+    ["ToolCall", "ToolCall"],
+    ["BeforeTool", "BeforeTool"],
+    ["toolCall without event", null],
+  ];
+  for (const [name, eventName] of requestAliases) {
+    await t.test(name, async () => {
+      const root = await mkdtemp(join(tmpdir(), `orchestra-antigravity-request-alias-${name.replaceAll(" ", "-")}-`));
+      try {
+        const home = join(root, "home");
+        const { cwd } = await prepareProject({ root, home });
+        const conversationId = `request-${name}`;
+        assert.equal((await invokeAntigravityHook({
+          home, cwd,
+          payload: { hookEventName: "SessionStart", conversationId },
+        })).code, 0);
+        const payload = {
+          conversationId,
+          ...(eventName ? { eventType: eventName } : {}),
+          toolCall: { name: "read_file", args: { path: "src/main.mjs" } },
+        };
+        const request = await invokeAntigravityHook({ home, cwd, payload });
+        assert.equal(request.code, 0);
+        assert.equal(request.payload.ok, true);
+        assert.equal(request.payload.hookSpecificOutput.permissionDecision, "allow");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("Antigravity public handler dispatches provider result event aliases", async (t) => {
+  const resultAliases = ["ToolResult", "AfterTool"];
+  for (const eventName of resultAliases) {
+    await t.test(eventName, async () => {
+      const root = await mkdtemp(join(tmpdir(), `orchestra-antigravity-result-alias-${eventName}-`));
+      try {
+        const home = join(root, "home");
+        const { cwd } = await prepareProject({ root, home });
+        const conversationId = `result-${eventName}`;
+        const toolCallId = `call-${eventName}`;
+        const { started } = await startAntigravityMutation({ home, cwd, conversationId, toolCallId });
+        assert.equal(started.code, 0);
+        const terminal = await invokeAntigravityHook({
+          home, cwd,
+          payload: {
+            eventType: eventName,
+            conversationId,
+            toolCall: { id: toolCallId, name: "write_file" },
+            is_error: false,
+          },
+        });
+        assert.equal(terminal.code, 0);
+        assert.equal(terminal.payload.operation.workflowState, "SUCCEEDED");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("Antigravity public handler rejects contradictory event aliases without authorizing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-conflicting-events-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const conversationId = "conflicting-event-alias";
+    assert.equal((await invokeAntigravityHook({
+      home, cwd,
+      payload: { hookEventName: "SessionStart", conversationId },
+    })).code, 0);
+    const denied = await invokeAntigravityHook({
+      home, cwd,
+      payload: {
+        hookEventName: "AfterTool",
+        eventType: "ToolCall",
+        conversationId,
+        toolCall: { id: "conflicting-event-call", name: "write_file" },
+      },
+    });
+
+    assert.equal(denied.code, 1);
+    assert.equal(denied.payload.reason, "ANTIGRAVITY_HOOK_EVENT_UNSUPPORTED");
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(registry.state.operations.listLive({ projectId: project.projectId }).length, 0);
+    } finally {
+      registry.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity public handler fails closed on null payload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-null-payload-"));
+  try {
+    const home = join(root, "home");
+    await prepareProject({ root, home });
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      const handler = createAntigravityHookHandler({ registry });
+      assert.deepEqual(await handler.handle(null), {
+        ok: false,
+        reason: "ANTIGRAVITY_HOOK_PAYLOAD_INVALID",
+      });
+    } finally {
+      registry.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity authority assesses coexisting factual local-process operations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-local-owner-assessment-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const conversationId = "writer-blocked-by-process";
+    assert.equal((await invokeAntigravityHook({
+      home, cwd,
+      payload: { hookEventName: "SessionStart", conversationId },
+    })).code, 0);
+
+    const readProcessIdentity = createHostProcessIdentityReader();
+    const hostFact = await readProcessIdentity(process.pid);
+    assert.equal(hostFact.status, "PRESENT");
+    const now = new Date();
+    const startedAt = now.toISOString();
+    const operationId = "op-existing-local-process";
+    const runtimeOwnerId = "runtime-owner-existing-local-process";
+    const owner = {
+      schema: "orchestra.runtime-owner.v2",
+      runtimeOwnerId,
+      operationId,
+      kind: "LOCAL_PROCESS",
+      registeredAt: startedAt,
+      process: { pid: process.pid, startIdentity: hostFact.processIdentity },
+      proof: { tokenHash: hashId("local-owner-proof") },
+    };
+    const registry = createGlobalProjectRegistry({ home });
+    const ownerStore = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+    try {
+      assert.equal((await ownerStore.register(owner)).ok, true);
+      const began = registry.state.operations.begin({
+        expectedGeneration: 3,
+        operation: {
+          schema: "orchestra.operation.v2",
+          operationId,
+          projectId: project.projectId,
+          workId: "work-antigravity",
+          generation: 3,
+          kind: "DIRECT_MUTATION",
+          actorRef: hashId("another-owner"),
+          capabilities: ["WORKSPACE_EDIT"],
+          workflowState: "RUNNING",
+          liveness: "LIVE",
+          startedAt,
+          heartbeatAt: startedAt,
+          deadlineAt: new Date(now.valueOf() + 5 * 60_000).toISOString(),
+          runtimeOwnerRef: runtimeOwnerId,
+          workspaceRef: project.workspace.canonicalRoot,
+          resultRef: null,
+        },
+      });
+      assert.equal(began.ok, true);
+    } finally {
+      registry.close();
+    }
+
+    const denied = await invokeAntigravityHook({
+      home, cwd,
+      payload: {
+        hookEventName: "PreToolUse",
+        conversationId,
+        toolCall: { id: "blocked-by-process", name: "write_file" },
+      },
+    });
+    assert.equal(denied.code, 1);
+    assert.equal(denied.payload.reason, "INCOMPATIBLE_LIVE_OPERATION");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
