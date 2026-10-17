@@ -1,5 +1,6 @@
 import {
   EXPERIENCE_CATEGORIES,
+  EXPERIENCE_DOMAIN_COHORTS,
   toCrossProjectExperience,
   validateExperienceRecord,
 } from "./contracts.mjs";
@@ -15,6 +16,7 @@ const FILTER_KEYS = new Set([
   "minProjectLineageCount",
 ]);
 const CATEGORY_SET = new Set(EXPERIENCE_CATEGORIES);
+const DOMAIN_COHORT_SET = new Set(EXPERIENCE_DOMAIN_COHORTS);
 const SCOPES = new Set(["PROJECT", "DOMAIN", "GLOBAL_CANDIDATE"]);
 const PROVIDER_FAMILIES = new Set(["codex", "antigravity", "other"]);
 
@@ -26,10 +28,6 @@ function queryError(message) {
 
 function isClass(value) {
   return typeof value === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(value);
-}
-
-function isDomainCohort(value) {
-  return typeof value === "string" && /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(value);
 }
 
 function validateFilters(filters) {
@@ -45,7 +43,7 @@ function validateFilters(filters) {
   if (filters.providerFamily !== undefined && !PROVIDER_FAMILIES.has(filters.providerFamily)) {
     throw queryError("invalid provider family filter");
   }
-  if (filters.domainCohort !== undefined && !isDomainCohort(filters.domainCohort)) {
+  if (filters.domainCohort !== undefined && !DOMAIN_COHORT_SET.has(filters.domainCohort)) {
     throw queryError("invalid domain cohort filter");
   }
   for (const key of ["failureClass", "recoveryClass", "terminalOutcome"]) {
