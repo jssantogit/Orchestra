@@ -38,6 +38,32 @@ function rollbackQuietly(db) {
   }
 }
 
+function corruptOperation(operationId) {
+  const error = new Error(`ORCHESTRA_V2_OPERATION_CORRUPT:${operationId}`);
+  error.code = "ORCHESTRA_V2_OPERATION_CORRUPT";
+  error.operationId = operationId;
+  return error;
+}
+
+function parseOperationRow(row, operationId = null) {
+  let operation;
+  try {
+    operation = JSON.parse(row.record_json);
+  } catch {
+    throw corruptOperation(operationId ?? "UNKNOWN");
+  }
+  if (!validateOperationV2(operation).valid) throw corruptOperation(operationId ?? operation.operationId ?? "UNKNOWN");
+  return operation;
+}
+
+function matches(operation, { projectId, workId = null, generation = null, liveness = null } = {}) {
+  if (!operation || operation.projectId !== projectId) return false;
+  if (workId !== null && operation.workId !== workId) return false;
+  if (generation !== null && operation.generation !== generation) return false;
+  if (liveness !== null && operation.liveness !== liveness) return false;
+  return true;
+}
+
 export function fenceSqliteOperationTerminalization(state, {
   dbPath,
   timeoutMs = 5_000,
@@ -52,6 +78,19 @@ export function fenceSqliteOperationTerminalization(state, {
   const underlying = state.operations;
   const operations = Object.freeze({
     ...underlying,
+    list(query = {}) {
+      if (dbPath === ":memory:") return underlying.list(query);
+      const db = new DatabaseSync(dbPath, { timeout: timeoutMs, readOnly: true });
+      try {
+        return db.prepare("SELECT operation_id, record_json FROM operations WHERE project_id = ? ORDER BY operation_id")
+          .all(query.projectId)
+          .map((row) => parseOperationRow(row, row.operation_id))
+          .filter((operation) => matches(operation, query))
+          .map(clone);
+      } finally {
+        db.close();
+      }
+    },
     terminalize(command = {}) {
       if (!Object.prototype.hasOwnProperty.call(command, "expectedHeartbeatAt") || dbPath === ":memory:") {
         return underlying.terminalize(command);
@@ -68,22 +107,7 @@ export function fenceSqliteOperationTerminalization(state, {
           return failure("OPERATION_NOT_FOUND");
         }
 
-        let current;
-        try {
-          current = JSON.parse(row.record_json);
-        } catch {
-          const error = new Error(`ORCHESTRA_V2_OPERATION_CORRUPT:${command.operationId}`);
-          error.code = "ORCHESTRA_V2_OPERATION_CORRUPT";
-          error.operationId = command.operationId;
-          throw error;
-        }
-        if (!validateOperationV2(current).valid) {
-          const error = new Error(`ORCHESTRA_V2_OPERATION_CORRUPT:${command.operationId}`);
-          error.code = "ORCHESTRA_V2_OPERATION_CORRUPT";
-          error.operationId = command.operationId;
-          throw error;
-        }
-
+        const current = parseOperationRow(row, command.operationId);
         if (current.liveness === "TERMINAL") {
           db.exec("COMMIT");
           if (sameTerminalResult(current, command)) {
