@@ -47,7 +47,7 @@ function operation() {
     generation: 0,
     kind: "IMPLEMENTATION_MEMBER",
     actorRef: "actor:recovery-corrupt",
-    capabilities: ["WORKSPACE_EDIT"],
+    capabilities: [],
     workflowState: "RUNNING",
     liveness: "LIVE",
     startedAt: "2026-10-17T10:00:00.000Z",
