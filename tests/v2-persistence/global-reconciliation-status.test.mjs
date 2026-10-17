@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { resolveGlobalRegistryPaths } from "../../v2/global/project-registry.mjs";
+import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "v2", "global", "orchestra.mjs");
@@ -149,6 +150,102 @@ test("project status with no active Work exposes an empty reconciliation view", 
     assert.equal(status.status, 0);
     assert.equal(status.json.reconciliation.work, null);
     assert.deepEqual(status.json.reconciliation.operations, []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("global status recovers provider-event Operations after the neutral deadline without success", async () => {
+  const fx = await fixture();
+  try {
+    const registered = runCli({
+      home: fx.home,
+      cwd: fx.repo,
+      args: [
+        "register",
+        "--runtime-image", "2.0.0",
+        "--instruction-epoch", "3",
+        "--trust", "trusted",
+      ],
+    });
+    assert.equal(registered.status, 0);
+    const project = registered.json.project;
+    const startedMs = Date.now() - 2 * 60_000;
+    const startedAt = new Date(startedMs).toISOString();
+    const deadlineAt = new Date(startedMs + 60_000).toISOString();
+    const operationId = "op-provider-event-expired";
+    const runtimeOwnerRef = "provider-owner:op-provider-event-expired";
+    const statePath = resolveGlobalRegistryPaths({ home: fx.home }).statePath;
+    const state = createSqliteState({ dbPath: statePath });
+    try {
+      const work = {
+        schema: "orchestra.work-unit.v2",
+        workId: "work-provider-event-expired",
+        projectId: project.projectId,
+        taskId: "task-provider-event-expired",
+        generation: 0,
+        runtimeImage: "2.0.0",
+        instructionEpoch: 3,
+        state: "IMPLEMENTING",
+        scopeRef: null,
+        directionRef: null,
+        candidateRef: null,
+        evidenceRefs: [],
+        blockers: [],
+        continuationRef: null,
+      };
+      assert.equal(state.work.startCurrent(work).ok, true);
+      assert.equal(state.operations.begin({
+        expectedGeneration: 0,
+        operation: {
+          schema: "orchestra.operation.v2",
+          operationId,
+          projectId: project.projectId,
+          workId: work.workId,
+          generation: 0,
+          kind: "DIRECT_MUTATION",
+          actorRef: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          capabilities: ["WORKSPACE_EDIT"],
+          workflowState: "RUNNING",
+          liveness: "LIVE",
+          startedAt,
+          heartbeatAt: startedAt,
+          deadlineAt,
+          runtimeOwnerRef,
+          workspaceRef: "workspace:provider-event-expired",
+          resultRef: null,
+        },
+      }).ok, true);
+    } finally {
+      state.close();
+    }
+
+    const ownerStore = createRuntimeOwnerStore({ rootDir: join(fx.home, "runtime-owners") });
+    assert.equal((await ownerStore.register({
+      schema: "orchestra.runtime-owner.v2",
+      runtimeOwnerId: runtimeOwnerRef,
+      operationId,
+      kind: "PROVIDER_EVENT",
+      registeredAt: startedAt,
+      correlationRef: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      startedAt,
+      lastProviderEventAt: startedAt,
+      deadlineAt,
+    })).ok, true);
+
+    const status = runCli({
+      home: fx.home,
+      cwd: fx.repo,
+      args: ["project", "status", project.projectId],
+    });
+    assert.equal(status.status, 0);
+    const entry = status.json.reconciliation.operations.find((item) => item.operation.operationId === operationId);
+    assert.equal(entry.assessment.liveness, "STALE_RECOVERABLE");
+    assert.equal(entry.actionRequired, "PROVE_WORKSPACE_IDENTITY");
+    assert.equal(entry.humanGateRequired, true);
+    assert.equal(entry.operation.workflowState, "RUNNING");
+    assert.equal(entry.operation.liveness, "LIVE");
+    assert.notEqual(entry.operation.workflowState, "SUCCEEDED", "deadline expiry never terminalizes as success");
   } finally {
     await fx.cleanup();
   }

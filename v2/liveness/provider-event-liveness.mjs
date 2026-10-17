@@ -26,6 +26,22 @@ function assessment(operationId, observedAt, liveness, reason, evidence = {}) {
   };
 }
 
+export function createProviderEventProbe({ now = () => new Date().toISOString() } = {}) {
+  if (typeof now !== "function") throw new TypeError("now must be a function");
+  return Object.freeze({
+    async observe(runtimeOwner) {
+      return {
+        schema: "orchestra.provider-event-observation.v2",
+        runtimeOwnerId: runtimeOwner?.runtimeOwnerId,
+        correlationRef: runtimeOwner?.correlationRef,
+        status: "POSITIVE",
+        eventAt: runtimeOwner?.lastProviderEventAt,
+        observedAt: now(),
+      };
+    },
+  });
+}
+
 export function assessProviderEventLiveness({
   operation,
   runtimeOwner,

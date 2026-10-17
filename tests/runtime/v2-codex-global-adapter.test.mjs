@@ -11,8 +11,10 @@ import { Worker } from "node:worker_threads";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { normalizeCodexActor } from "../../v2/providers/codex/actor.mjs";
 import { normalizeCodexToolEvent } from "../../v2/providers/codex/tool-event.mjs";
+import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
 import { runGlobalCli } from "../../v2/global/cli.mjs";
 import { createGlobalProjectRegistry } from "../../v2/global/project-registry.mjs";
+import { createCodexHookHandler } from "../../v2/providers/codex/hook-handler.mjs";
 
 const actorA = `sha256:${"a".repeat(64)}`;
 const actorB = `sha256:${"b".repeat(64)}`;
@@ -583,6 +585,266 @@ test("provider CLI emits structured invalid-payload and identity errors without 
     assert.equal(JSON.stringify(noProject.payload).includes("secret-session"), false);
     await assert.rejects(access(home), { code: "ENOENT" });
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PreToolUse requires a current Session Observation and delegates freshness and identity fences", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-pretool-fences-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const invoke = (sessionId) => invokeHook({
+      home,
+      cwd,
+      payload: {
+        hook_event_name: "PreToolUse",
+        session_id: sessionId,
+        tool_name: "write_file",
+        tool_call_id: `call-${sessionId}`,
+        cwd,
+      },
+    });
+
+    const missing = await invoke("missing-observation");
+    assert.equal(missing.code, 1);
+    assert.equal(missing.payload.reason, "CODEX_SESSION_OBSERVATION_MISSING");
+    assert.equal(missing.payload.hookSpecificOutput.permissionDecision, "deny");
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const putObservation = (sessionId, overrides = {}) => state.sessionObservations.put({
+        provider: "codex",
+        projectId: registered.projectId,
+        actorIdHash: hash(sessionId),
+        observedInstructionEpoch: 7,
+        observedWorkId: "work-hook",
+        observedGeneration: 3,
+        observedAt: "2026-10-17T10:00:00.000Z",
+        ...overrides,
+      });
+      assert.equal(putObservation("epoch-drift", { observedInstructionEpoch: 6 }).ok, true);
+      assert.equal(state.work.open(work("old-work", registered.projectId)).ok, true);
+      assert.equal(putObservation("stale-work", { observedWorkId: "old-work" }).ok, true);
+      assert.equal(putObservation("stale-generation", { observedGeneration: 2 }).ok, true);
+    } finally {
+      state.close();
+    }
+
+    const epochDrift = await invoke("epoch-drift");
+    assert.equal(epochDrift.code, 1);
+    assert.equal(epochDrift.payload.reason, "SESSION_RUNTIME_STALE");
+    assert.equal(epochDrift.payload.hookSpecificOutput.permissionDecision, "deny");
+    const staleWork = await invoke("stale-work");
+    assert.equal(staleWork.code, 1);
+    assert.equal(staleWork.payload.reason, "STALE_ACTIVE_WORK");
+    const staleGeneration = await invoke("stale-generation");
+    assert.equal(staleGeneration.code, 1);
+    assert.equal(staleGeneration.payload.reason, "STALE_GENERATION");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PreToolUse allows proven read-only tools without creating a mutation Operation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-pretool-read-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const started = await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: "reader" } });
+    assert.equal(started.code, 0);
+    const response = await invokeHook({
+      home,
+      cwd,
+      payload: {
+        hook_event_name: "PreToolUse",
+        session_id: "reader",
+        tool_name: "read_file",
+        tool_call_id: "read-call",
+        cwd,
+      },
+    });
+    assert.equal(response.code, 0);
+    assert.equal(response.payload.hookSpecificOutput.permissionDecision, "allow");
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      assert.deepEqual(state.operations.listLive({ projectId: registered.projectId }), []);
+      assert.equal(state.operationCorrelations.get({
+        provider: "codex", projectId: registered.projectId, correlationHash: hash("read-call"),
+      }), null);
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PreToolUse tracks conservative mutations by exact hashed tool correlation and blocks competing writers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-pretool-mutation-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const started = await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: "mutator" } });
+    assert.equal(started.code, 0);
+
+    const missingId = await invokeHook({
+      home,
+      cwd,
+      payload: { hook_event_name: "PreToolUse", session_id: "mutator", tool_name: "bash", cwd },
+    });
+    assert.equal(missingId.code, 1);
+    assert.equal(missingId.payload.reason, "CODEX_TOOL_CORRELATION_REQUIRED");
+
+    const mutation = {
+      hook_event_name: "PreToolUse",
+      session_id: "mutator",
+      tool_name: "bash",
+      tool_call_id: "exact-tool-call-1",
+      cwd,
+    };
+    const first = await invokeHook({ home, cwd, payload: mutation });
+    assert.equal(first.code, 0);
+    assert.equal(first.payload.hookSpecificOutput.permissionDecision, "allow");
+    const replay = await invokeHook({ home, cwd, payload: mutation });
+    assert.equal(replay.code, 0);
+    assert.equal(replay.payload.operation.operationId, first.payload.operation.operationId);
+    assert.equal(replay.payload.replayed, true);
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const operations = state.operations.listLive({ projectId: registered.projectId });
+      assert.equal(operations.length, 1);
+      assert.equal(operations[0].workId, "work-hook");
+      assert.equal(operations[0].generation, 3);
+      assert.match(operations[0].runtimeOwnerRef, /^provider-owner:/);
+      assert.equal(String(operations[0].runtimeOwnerRef).includes(String(process.pid)), false);
+      const correlation = state.operationCorrelations.get({
+        provider: "codex",
+        projectId: registered.projectId,
+        correlationHash: hash("exact-tool-call-1"),
+      });
+      assert.equal(correlation.operationId, operations[0].operationId);
+      assert.equal(correlation.actorIdHash, hash("mutator"));
+      assert.equal(JSON.stringify(correlation).includes("exact-tool-call-1"), false);
+
+      const incompatible = await invokeHook({
+        home,
+        cwd,
+        payload: { ...mutation, tool_call_id: "exact-tool-call-2" },
+      });
+      assert.equal(incompatible.code, 1);
+      assert.equal(incompatible.payload.hookSpecificOutput.permissionDecision, "deny");
+      assert.equal(incompatible.payload.reason, "INCOMPATIBLE_LIVE_OPERATION");
+      assert.equal(state.operations.listLive({ projectId: registered.projectId }).length, 1);
+      const ownerStore = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+      const owner = await ownerStore.read(operations[0].runtimeOwnerRef);
+      assert.equal(owner.kind, "PROVIDER_EVENT");
+      assert.equal(owner.correlationRef, hash("exact-tool-call-1"));
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("unknown tools take the mutation path instead of being silently classified as read-only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-pretool-unknown-"));
+  const home = join(root, "home");
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: "unknown-tool" } });
+    const response = await invokeHook({
+      home,
+      cwd,
+      payload: {
+        hook_event_name: "PreToolUse",
+        session_id: "unknown-tool",
+        tool_name: "custom_side_effect_tool",
+        tool_call_id: "custom-call",
+        cwd,
+      },
+    });
+    assert.equal(response.code, 0);
+    assert.equal(response.payload.hookSpecificOutput.permissionDecision, "allow");
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      const operations = state.operations.listLive({ projectId: registered.projectId });
+      assert.equal(operations.length, 1);
+      assert.equal(state.operationCorrelations.get({
+        provider: "codex", projectId: registered.projectId, correlationHash: hash("custom-call"),
+      }).operationId, operations[0].operationId);
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("replaying a correlated mutation after its Operation is terminal fails closed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-pretool-terminal-replay-"));
+  const home = join(root, "home");
+  let registry;
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: "terminal-replay" } });
+    const payload = {
+      hook_event_name: "PreToolUse",
+      session_id: "terminal-replay",
+      tool_name: "write_file",
+      tool_call_id: "terminal-replay-call",
+      cwd,
+    };
+    const first = await invokeHook({ home, cwd, payload });
+    assert.equal(first.code, 0);
+    registry = createGlobalProjectRegistry({ home });
+    assert.equal(registry.state.operations.terminalize({
+      operationId: first.payload.operation.operationId,
+      workflowState: "SUCCEEDED",
+      resultRef: "provider-result:terminal-replay",
+    }).ok, true);
+
+    const handler = createCodexHookHandler({ registry });
+    const replay = await handler.handle(payload, { cwd });
+    assert.equal(replay.ok, false);
+    assert.equal(replay.reason, "CODEX_TOOL_OPERATION_NOT_REPLAYABLE");
+    assert.equal(replay.liveness, "TERMINAL");
+    assert.equal(replay.projectId, registered.projectId);
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("replaying a correlated mutation after its provider-event deadline requires recovery", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-pretool-stale-replay-"));
+  const home = join(root, "home");
+  let registry;
+  try {
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    await invokeHook({ home, cwd, payload: { hook_event_name: "SessionStart", session_id: "stale-replay" } });
+    const payload = {
+      hook_event_name: "PreToolUse",
+      session_id: "stale-replay",
+      tool_name: "write_file",
+      tool_call_id: "stale-replay-call",
+      cwd,
+    };
+    const first = await invokeHook({ home, cwd, payload });
+    assert.equal(first.code, 0);
+    registry = createGlobalProjectRegistry({ home });
+    const operation = registry.state.operations.inspect(first.payload.operation.operationId);
+    const afterDeadline = new Date(Date.parse(operation.deadlineAt) + 1_000).toISOString();
+    const handler = createCodexHookHandler({ registry, now: () => afterDeadline });
+    const replay = await handler.handle(payload, { cwd });
+    assert.equal(replay.ok, false);
+    assert.equal(replay.reason, "STALE_OPERATION_RECOVERY_REQUIRED");
+    assert.equal(replay.liveness, "STALE_RECOVERABLE");
+    assert.equal(replay.projectId, registered.projectId);
+  } finally {
+    registry?.close();
     await rm(root, { recursive: true, force: true });
   }
 });
