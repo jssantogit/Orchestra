@@ -56,9 +56,9 @@ function createLinuxReader({ readFileImpl }) {
 function windowsProbeScript(pid) {
   return [
     "$ErrorActionPreference = 'Stop'",
-    `$p = Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\"`,
+    `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
     "if ($null -eq $p) { Write-Output 'ABSENT'; exit 0 }",
-    "$created = ([DateTimeOffset]$p.CreationDate).ToUniversalTime().ToUnixTimeMilliseconds()",
+    "$created = ([DateTimeOffset]$p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()",
     "Write-Output ('PRESENT:' + $created)",
   ].join("; ");
 }
@@ -72,7 +72,7 @@ function createWindowsReader({ execFileImpl }) {
       const result = await execFileImpl(
         "powershell.exe",
         ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsProbeScript(normalized)],
-        { encoding: "utf8", windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024 },
+        { encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024 },
       );
       const stdout = typeof result === "string" ? result : result?.stdout;
       const output = String(stdout ?? "").trim();
