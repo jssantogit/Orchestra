@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createOperationReconciler } from "../../v2/reconciliation/reconciler.mjs";
+import { createRecoveryAwareStatusReconciler } from "../../v2/reconciliation/recovery-aware-status.mjs";
 import { createReferenceState } from "../../v2/state/reference-state.mjs";
 
 const PROJECT_ID = "prj-pending-recovery";
@@ -86,6 +87,22 @@ function workspacePort({ failCleanup = false } = {}) {
   };
 }
 
+function statusReconciler({ state, workspaceRecovery }) {
+  const reconciler = createOperationReconciler({
+    state,
+    operationLiveness: {
+      async assess() { throw new Error("terminal recovery status must not probe liveness"); },
+    },
+    workspaceRecovery,
+  });
+  return createRecoveryAwareStatusReconciler({
+    state,
+    reconciler,
+    workspaceRecovery,
+    now: () => "2026-10-17T07:30:00.000Z",
+  });
+}
+
 test("status keeps a terminal Operation visible while cleanup recovery is still pending", async () => {
   const state = seed();
   const recovery = createOperationReconciler({
@@ -102,14 +119,8 @@ test("status keeps a terminal Operation visible while cleanup recovery is still 
   assert.equal(failed.reason, "RECOVERY_CLEANUP_FAILED");
   assert.equal(state.operations.inspect(OPERATION_ID).liveness, "TERMINAL");
 
-  const statusReconciler = createOperationReconciler({
-    state,
-    operationLiveness: {
-      async assess() { throw new Error("terminal recovery status must not probe liveness"); },
-    },
-    workspaceRecovery: workspacePort(),
-  });
-  const status = await statusReconciler.inspect({ projectId: PROJECT_ID });
+  const status = await statusReconciler({ state, workspaceRecovery: workspacePort() })
+    .inspect({ projectId: PROJECT_ID });
 
   assert.equal(status.ok, true);
   assert.equal(status.operations.length, 1, "pending terminal recovery must not disappear from status");
@@ -133,14 +144,8 @@ test("status exposes crash window after recovery terminalization but before jour
   }).ok, true);
   assert.equal(state.recoveries.latest({ projectId: PROJECT_ID, operationId: OPERATION_ID }), null);
 
-  const reconciler = createOperationReconciler({
-    state,
-    operationLiveness: {
-      async assess() { throw new Error("terminal recovery status must not probe liveness"); },
-    },
-    workspaceRecovery: workspacePort(),
-  });
-  const status = await reconciler.inspect({ projectId: PROJECT_ID });
+  const status = await statusReconciler({ state, workspaceRecovery: workspacePort() })
+    .inspect({ projectId: PROJECT_ID });
 
   assert.equal(status.ok, true);
   assert.equal(status.operations.length, 1, "crash-resumable terminal recovery must remain discoverable");
