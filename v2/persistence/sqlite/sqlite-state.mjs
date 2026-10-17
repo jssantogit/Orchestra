@@ -1,5 +1,6 @@
-import { createInMemoryRecoveryJournal, createSqliteRecoveryJournal } from "../../reconciliation/recovery-journal.mjs";
+import { createInMemoryRecoveryJournal } from "../../reconciliation/recovery-journal.mjs";
 import { fenceOperationsToActiveWork } from "../../state/active-work-operation-fence.mjs";
+import { createSqliteRecoveryJournal } from "./sqlite-recovery-journal.mjs";
 import { createSqliteState as createSqliteStateCore } from "./sqlite-state-core.mjs";
 
 export function createSqliteState(options = {}) {
