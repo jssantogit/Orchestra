@@ -6,7 +6,17 @@ export const EXPERIENCE_CATEGORIES = Object.freeze([
   "COUNTEREXAMPLE",
 ]);
 
+export const EXPERIENCE_DOMAIN_COHORTS = Object.freeze([
+  "software-engineering",
+  "documentation",
+  "operations",
+  "data",
+  "research",
+  "other",
+]);
+
 const CATEGORY_SET = new Set(EXPERIENCE_CATEGORIES);
+const DOMAIN_COHORT_SET = new Set(EXPERIENCE_DOMAIN_COHORTS);
 const SCOPES = new Set(["PROJECT", "DOMAIN", "GLOBAL_CANDIDATE"]);
 const LATENCY_BUCKETS = new Set(["LOW", "MEDIUM", "HIGH", "UNKNOWN"]);
 const OS_FAMILIES = new Set(["windows", "linux", "macos", "other"]);
@@ -89,7 +99,7 @@ function isNormalizedToken(value) {
 }
 
 function isDomainCohort(value) {
-  return isNonEmptyString(value) && /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(value);
+  return DOMAIN_COHORT_SET.has(value);
 }
 
 function isClass(value) {
