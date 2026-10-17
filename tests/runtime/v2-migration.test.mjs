@@ -5,6 +5,10 @@ import { join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 import { inventoryLegacyProject } from "../../v2/migration/inventory.mjs";
+import {
+  MIGRATION_DISPOSITIONS,
+  classifyLegacyInventoryEntry,
+} from "../../v2/migration/transient-classifier.mjs";
 
 async function withWorkspace(run) {
   const root = await mkdtemp(join(tmpdir(), "orchestra-v2-migration-inventory-"));
@@ -56,6 +60,20 @@ function parallelGroupRecord(overrides = {}) {
   };
 }
 
+function entry(overrides = {}) {
+  return {
+    path: ".orchestra/state/candidates/task-1/candidate.json",
+    category: "DURABLE_LEGACY_STATE",
+    schema: "orchestra.candidate.v1",
+    version: 1,
+    digest: `sha256:${"a".repeat(64)}`,
+    integrity: "PARSED",
+    dispositionBasis: "DURABLE_STATE",
+    private: false,
+    ...overrides,
+  };
+}
+
 test("legacy inventory is read-only and does not create Orchestra state in an empty workspace", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(join(workspace, "README.md"), "user file\n", "utf8");
@@ -81,15 +99,15 @@ test("known parallel-group state records path, schema/version, digest, category 
     const result = await inventoryLegacyProject({ workspace });
     assert.equal(result.ok, true);
     assert.equal(result.entries.length, 1);
-    const [entry] = result.entries;
+    const [entryRecord] = result.entries;
     assert.deepEqual({
-      path: entry.path,
-      category: entry.category,
-      schema: entry.schema,
-      version: entry.version,
-      integrity: entry.integrity,
-      dispositionBasis: entry.dispositionBasis,
-      private: entry.private,
+      path: entryRecord.path,
+      category: entryRecord.category,
+      schema: entryRecord.schema,
+      version: entryRecord.version,
+      integrity: entryRecord.integrity,
+      dispositionBasis: entryRecord.dispositionBasis,
+      private: entryRecord.private,
     }, {
       path: ".orchestra/state/delegation/parallel-groups/migration-group-1/group.json",
       category: "TRANSIENT_PARALLEL_GROUP",
@@ -99,7 +117,7 @@ test("known parallel-group state records path, schema/version, digest, category 
       dispositionBasis: "TRANSIENT_STATE",
       private: false,
     });
-    assert.match(entry.digest, /^sha256:[0-9a-f]{64}$/);
+    assert.match(entryRecord.digest, /^sha256:[0-9a-f]{64}$/);
   });
 });
 
@@ -206,11 +224,92 @@ test("symlink or junction egress under a managed state root is blocked without r
 
       const result = await inventoryLegacyProject({ workspace });
       assert.equal(result.ok, false);
-      assert.equal(result.entries.some((entry) => entry.path.endsWith("escape/group.json")), false);
+      assert.equal(result.entries.some((item) => item.path.endsWith("escape/group.json")), false);
       assert.ok(result.issues.some((issue) => issue.code === "MIGRATION_PATH_ESCAPE_BLOCKED" && issue.path.endsWith("escape")));
       assert.equal(await readFile(join(outsideGroup, "group.json"), "utf8").then((text) => text.includes("outside")), true);
     });
   } finally {
     await rm(outer, { recursive: true, force: true });
+  }
+});
+
+test("migration classifier exposes exactly the four approved dispositions", () => {
+  assert.deepEqual(MIGRATION_DISPOSITIONS, [
+    "CLEAN_IMPORT",
+    "RECOVERABLE_IMPORT",
+    "PRIVATE_ARCHIVE",
+    "UNSUPPORTED_BLOCKED",
+  ]);
+});
+
+test("recognized durable fact with complete provenance classifies CLEAN_IMPORT", () => {
+  const result = classifyLegacyInventoryEntry({
+    entry: entry(),
+    facts: { provenanceComplete: true, unresolvedTransientAuthority: false },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.disposition, "CLEAN_IMPORT");
+  assert.equal(result.blocksActivation, false);
+  assert.equal(result.authorityClaim, false);
+});
+
+test("recognized transient RUNNING fact remains RECOVERABLE_IMPORT and never claims liveness or success", () => {
+  const result = classifyLegacyInventoryEntry({
+    entry: entry({
+      path: ".orchestra/state/delegation/parallel-groups/group-1/group.json",
+      category: "TRANSIENT_PARALLEL_GROUP",
+      schema: "orchestra.parallel-group-state.v1",
+      dispositionBasis: "TRANSIENT_STATE",
+    }),
+    facts: {
+      persistedState: "RUNNING",
+      ownerProcessProof: "ABSENT",
+      survivingWorkspaces: 1,
+      canonicalPromotion: false,
+      runtimeVersion: "v1.4.2",
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.disposition, "RECOVERABLE_IMPORT");
+  assert.equal(result.authorityClaim, false);
+  assert.equal(result.reconciliation.liveness, "UNKNOWN");
+  assert.equal(result.reconciliation.successClaim, false);
+  assert.equal(result.reconciliation.eligible, true);
+  assert.equal(result.reconciliation.cleanupAuthorized, false);
+});
+
+test("recognized private artifact classifies PRIVATE_ARCHIVE and cannot become authority", () => {
+  const result = classifyLegacyInventoryEntry({
+    entry: entry({
+      path: ".orchestra/state/delegation/artifacts/artifact-1/result.json",
+      category: "PRIVATE_PROJECT_ARTIFACT",
+      schema: "orchestra.delegation-artifact.v1",
+      dispositionBasis: "PRIVATE_ARCHIVE",
+      private: true,
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.disposition, "PRIVATE_ARCHIVE");
+  assert.equal(result.authorityClaim, false);
+  assert.equal(result.blocksActivation, false);
+});
+
+test("malformed, unsupported-version, or incomplete-provenance records fail closed", () => {
+  const malformed = classifyLegacyInventoryEntry({
+    entry: entry({ integrity: "MALFORMED_JSON", schema: null, version: null, dispositionBasis: "UNSUPPORTED_OR_MALFORMED" }),
+  });
+  const unsupported = classifyLegacyInventoryEntry({
+    entry: entry({ schema: "orchestra.candidate.v9", version: 9 }),
+    facts: { provenanceComplete: true, unresolvedTransientAuthority: false },
+  });
+  const provenanceMissing = classifyLegacyInventoryEntry({
+    entry: entry(),
+    facts: { provenanceComplete: false, unresolvedTransientAuthority: false },
+  });
+  for (const result of [malformed, unsupported, provenanceMissing]) {
+    assert.equal(result.ok, true);
+    assert.equal(result.disposition, "UNSUPPORTED_BLOCKED");
+    assert.equal(result.blocksActivation, true);
+    assert.equal(result.authorityClaim, false);
   }
 });
