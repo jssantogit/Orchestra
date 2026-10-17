@@ -6,7 +6,11 @@ import {
   createLearnedPolicyStore,
   validateLearnedPolicyCandidate,
 } from "../../v2/rsi/policy-store.mjs";
-import { resolveLearnedPolicyHierarchy } from "../../v2/rsi/evaluation.mjs";
+import {
+  evaluatePolicyCandidate,
+  resolveLearnedPolicyHierarchy,
+} from "../../v2/rsi/evaluation.mjs";
+import { evaluatePromotionCandidate } from "../../v2/rsi/promotion.mjs";
 
 function experience(lineageId, suffix, { domainCohort = "software-engineering", extra = {} } = {}) {
   return {
@@ -333,4 +337,180 @@ test("learned policy activation never changes Project or Work generation by itse
     assert.equal(state.work.read(project.projectId, work.workId).generation, 0);
     state.close();
   });
+});
+
+function promotionExperience(lineageId, suffix, {
+  category = "EXECUTION",
+  success = true,
+  retryCount = 0,
+  durationMs = 100,
+  generalizationScope = "GLOBAL_CANDIDATE",
+} = {}) {
+  return experience(lineageId, suffix, {
+    extra: {
+      category,
+      facts: {
+        providerFamily: "codex",
+        routeClass: "DIRECT_WORK",
+        retryCount,
+        durationMs,
+      },
+      outcome: {
+        terminalOutcome: success ? "SUCCEEDED" : "FAILED",
+        success,
+      },
+      generalization: {
+        scope: generalizationScope,
+        projectLineageCount: 4,
+      },
+    },
+  });
+}
+
+function fixedCohort(records) {
+  return {
+    lineageIds: [...new Set(records.map((record) => record.source.lineageId))],
+    records,
+  };
+}
+
+function promotionCohorts({ train, evaluate, holdout = [] }) {
+  return {
+    train: fixedCohort(train),
+    evaluate: fixedCohort(evaluate),
+    holdout: fixedCohort(holdout),
+  };
+}
+
+const promotionGate = Object.freeze({
+  minTrainLineages: 2,
+  requireSuccess: true,
+  metrics: Object.freeze({
+    retryCount: Object.freeze({ max: 1 }),
+    durationMs: Object.freeze({ max: 1_000 }),
+  }),
+});
+
+test("promotion requires factual TRAIN support from at least two independent lineages", () => {
+  const result = evaluatePromotionCandidate({
+    candidate: policyCandidate(),
+    cohorts: promotionCohorts({
+      train: [promotionExperience("lineage-a", 101)],
+      evaluate: [promotionExperience("lineage-b", 102)],
+    }),
+    gate: promotionGate,
+  });
+  assert.equal(result.promotable, false);
+  assert.equal(result.code, "RSI_TRAIN_LINEAGE_SUPPORT_INSUFFICIENT");
+});
+
+test("EVALUATE lineage must be unseen in TRAIN and meet configured factual gates", () => {
+  const train = [promotionExperience("lineage-a", 111), promotionExperience("lineage-b", 112)];
+  const overlapping = evaluatePromotionCandidate({
+    candidate: policyCandidate(),
+    cohorts: promotionCohorts({ train, evaluate: [promotionExperience("lineage-b", 113)] }),
+    gate: promotionGate,
+  });
+  assert.equal(overlapping.promotable, false);
+  assert.equal(overlapping.code, "RSI_EVALUATE_LINEAGE_OVERLAP");
+
+  const independent = evaluatePromotionCandidate({
+    candidate: policyCandidate(),
+    cohorts: promotionCohorts({ train, evaluate: [promotionExperience("lineage-c", 114)] }),
+    gate: promotionGate,
+  });
+  assert.equal(independent.promotable, true);
+  assert.equal(independent.code, "RSI_EVALUATION_PASSED");
+});
+
+test("candidate that passes TRAIN but regresses EVALUATE is rejected", () => {
+  const result = evaluatePromotionCandidate({
+    candidate: policyCandidate(),
+    cohorts: promotionCohorts({
+      train: [promotionExperience("lineage-a", 121), promotionExperience("lineage-b", 122)],
+      evaluate: [promotionExperience("lineage-c", 123, { durationMs: 2_500 })],
+    }),
+    gate: promotionGate,
+  });
+  assert.equal(result.promotable, false);
+  assert.equal(result.code, "RSI_EVALUATE_GATE_FAILED");
+  assert.equal(result.failure?.metric, "durationMs");
+});
+
+test("insufficient or corrupt sanitized Experience never yields promotion", () => {
+  const corrupt = promotionExperience("lineage-c", 133);
+  delete corrupt.privacy;
+  const result = evaluatePromotionCandidate({
+    candidate: policyCandidate(),
+    cohorts: promotionCohorts({
+      train: [promotionExperience("lineage-a", 131), promotionExperience("lineage-b", 132)],
+      evaluate: [corrupt],
+    }),
+    gate: promotionGate,
+  });
+  assert.equal(result.promotable, false);
+  assert.equal(result.code, "RSI_EXPERIENCE_INVALID");
+});
+
+test("Counterexample within candidate scope blocks promotion", () => {
+  const result = evaluatePromotionCandidate({
+    candidate: policyCandidate(),
+    cohorts: promotionCohorts({
+      train: [promotionExperience("lineage-a", 141), promotionExperience("lineage-b", 142)],
+      evaluate: [promotionExperience("lineage-c", 143, { category: "COUNTEREXAMPLE" })],
+    }),
+    gate: promotionGate,
+  });
+  assert.equal(result.promotable, false);
+  assert.equal(result.code, "RSI_COUNTEREXAMPLE_BLOCKS_PROMOTION");
+  assert.deepEqual(result.counterexampleExperienceIds, ["exp-000000000000000000000143"]);
+});
+
+test("project-specific successes alone cannot promote a GLOBAL learned policy", () => {
+  const result = evaluatePromotionCandidate({
+    candidate: policyCandidate(),
+    cohorts: promotionCohorts({
+      train: [
+        promotionExperience("lineage-a", 151, { generalizationScope: "PROJECT" }),
+        promotionExperience("lineage-b", 152, { generalizationScope: "PROJECT" }),
+      ],
+      evaluate: [promotionExperience("lineage-c", 153, { generalizationScope: "PROJECT" })],
+    }),
+    gate: promotionGate,
+  });
+  assert.equal(result.promotable, false);
+  assert.equal(result.code, "RSI_GLOBAL_EVIDENCE_SCOPE_INSUFFICIENT");
+});
+
+test("promotion evidence deterministically records exact Experience IDs, lineages, metrics and policy revision", () => {
+  const input = {
+    candidate: policyCandidate({ revision: 7 }),
+    cohorts: promotionCohorts({
+      train: [
+        promotionExperience("lineage-b", 162, { retryCount: 1, durationMs: 300 }),
+        promotionExperience("lineage-a", 161, { retryCount: 0, durationMs: 100 }),
+      ],
+      evaluate: [promotionExperience("lineage-c", 163, { retryCount: 1, durationMs: 500 })],
+    }),
+    gate: promotionGate,
+  };
+  const first = evaluatePolicyCandidate(input);
+  const second = evaluatePolicyCandidate(structuredClone(input));
+  assert.deepEqual(first, second);
+  assert.equal(first.passed, true);
+  assert.deepEqual(first.evidence.policy, { policyId: "policy-global-1", revision: 7, scope: "GLOBAL" });
+  assert.deepEqual(first.evidence.train.lineageIds, ["lineage-a", "lineage-b"]);
+  assert.deepEqual(first.evidence.train.experienceIds, [
+    "exp-000000000000000000000161",
+    "exp-000000000000000000000162",
+  ]);
+  assert.deepEqual(first.evidence.train.metrics, {
+    recordCount: 2,
+    successCount: 2,
+    successRate: 1,
+    retryCount: { count: 2, total: 1, average: 0.5, max: 1 },
+    durationMs: { count: 2, total: 400, average: 200, max: 300 },
+  });
+  assert.deepEqual(first.evidence.evaluate.lineageIds, ["lineage-c"]);
+  assert.deepEqual(first.evidence.evaluate.experienceIds, ["exp-000000000000000000000163"]);
 });
