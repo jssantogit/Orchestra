@@ -44,6 +44,7 @@ export function createReferenceState() {
   const worksById = new Map();
   const workOpenRequestsById = new Map();
   const transitionsByWork = new Map();
+  const currentWorkIdByProject = new Map();
   const operationsById = new Map();
   const operationBeginRequestsById = new Map();
 
@@ -119,14 +120,27 @@ export function createReferenceState() {
     },
   };
 
+  function validateWorkForProject(workUnit) {
+    if (!validateWorkUnitV2(workUnit).valid) return failure("WORK_INVALID");
+    const project = projectsById.get(workUnit.projectId);
+    if (!project) return failure("PROJECT_NOT_FOUND");
+    if (workUnit.runtimeImage !== project.runtime.pinnedImage) return failure("RUNTIME_IMAGE_MISMATCH");
+    if (workUnit.instructionEpoch !== project.runtime.instructionEpoch) return failure("INSTRUCTION_EPOCH_MISMATCH");
+    return null;
+  }
+
+  function storeNewWork(workUnit) {
+    const stored = clone(workUnit);
+    worksById.set(stored.workId, stored);
+    workOpenRequestsById.set(stored.workId, clone(workUnit));
+    transitionsByWork.set(stored.workId, new Map());
+    return stored;
+  }
+
   const work = {
     open(workUnit) {
-      if (!validateWorkUnitV2(workUnit).valid) return failure("WORK_INVALID");
-
-      const project = projectsById.get(workUnit.projectId);
-      if (!project) return failure("PROJECT_NOT_FOUND");
-      if (workUnit.runtimeImage !== project.runtime.pinnedImage) return failure("RUNTIME_IMAGE_MISMATCH");
-      if (workUnit.instructionEpoch !== project.runtime.instructionEpoch) return failure("INSTRUCTION_EPOCH_MISMATCH");
+      const invalid = validateWorkForProject(workUnit);
+      if (invalid) return invalid;
 
       const existing = worksById.get(workUnit.workId);
       if (existing) {
@@ -137,11 +151,38 @@ export function createReferenceState() {
         return failure("WORK_ID_CONFLICT");
       }
 
-      const stored = clone(workUnit);
-      worksById.set(stored.workId, stored);
-      workOpenRequestsById.set(stored.workId, clone(workUnit));
-      transitionsByWork.set(stored.workId, new Map());
+      const stored = storeNewWork(workUnit);
       return success({ work: clone(stored), replayed: false });
+    },
+
+    startCurrent(workUnit) {
+      const invalid = validateWorkForProject(workUnit);
+      if (invalid) return invalid;
+
+      const currentWorkId = currentWorkIdByProject.get(workUnit.projectId) ?? null;
+      if (currentWorkId) {
+        if (currentWorkId === workUnit.workId) {
+          const originalOpen = workOpenRequestsById.get(workUnit.workId);
+          const existing = worksById.get(workUnit.workId);
+          if (existing && originalOpen && isDeepStrictEqual(originalOpen, workUnit)) {
+            return success({ work: clone(existing), replayed: true });
+          }
+        }
+        return failure("ACTIVE_WORK_EXISTS", { currentWorkId });
+      }
+
+      if (worksById.has(workUnit.workId)) return failure("WORK_ID_CONFLICT");
+
+      const stored = storeNewWork(workUnit);
+      currentWorkIdByProject.set(workUnit.projectId, stored.workId);
+      return success({ work: clone(stored), replayed: false });
+    },
+
+    current(projectId) {
+      const workId = currentWorkIdByProject.get(projectId);
+      if (!workId) return null;
+      const current = worksById.get(workId);
+      return current?.projectId === projectId ? clone(current) : null;
     },
 
     read(projectId, workId) {
