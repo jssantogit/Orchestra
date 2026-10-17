@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
@@ -13,8 +14,10 @@ import { runGlobalCli } from "../../v2/global/cli.mjs";
 import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
 import { createProviderEventProbe } from "../../v2/liveness/provider-event-liveness.mjs";
 import { createOperationLivenessService } from "../../v2/liveness/operation-liveness-service.mjs";
-import { createHostProcessIdentityReader } from "../../v2/liveness/local-process-probe.mjs";
+import { createHostProcessIdentityReader, createLocalProcessOwnerProbe } from "../../v2/liveness/local-process-probe.mjs";
 import { createAntigravityHookHandler } from "../../v2/providers/antigravity/hook-handler.mjs";
+import { createAntigravityProcessExecution } from "../../v2/providers/antigravity/process-execution.mjs";
+import { createAntigravityDelegationExecutor } from "../../providers/antigravity/delegation-executor.mjs";
 
 import { normalizeAntigravityActor } from "../../v2/providers/antigravity/actor.mjs";
 import { normalizeAntigravityToolEvent } from "../../v2/providers/antigravity/tool-event.mjs";
@@ -882,6 +885,398 @@ test("Antigravity authority assesses coexisting factual local-process operations
     assert.equal(denied.code, 1);
     assert.equal(denied.payload.reason, "INCOMPATIBLE_LIVE_OPERATION");
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+
+test("Antigravity Orchestra process execution records factual local ownership through the executor seam", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-process-execution-"));
+  let registry;
+  let executionPromise;
+  const releaseMarker = join(root, "release-child");
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    const readProcessIdentity = createHostProcessIdentityReader();
+    const now = () => new Date().toISOString();
+    const actor = {
+      schema: "orchestra.actor-provenance.v2",
+      provider: "antigravity",
+      subjectHash: actorHash("orchestra-owned-child"),
+      source: "PROVIDER_FACT",
+      observedAt: now(),
+    };
+    const report = { summary: "child completed", findings: [], evidenceRefs: [] };
+    const processExecution = createAntigravityProcessExecution({
+      registry,
+      projectId: project.projectId,
+      expectedWorkId: "work-antigravity",
+      expectedGeneration: 3,
+      observedInstructionEpoch: 7,
+      actor,
+      workspaceRef: project.workspace.canonicalRoot,
+      readProcessIdentity,
+      heartbeatIntervalMs: 20,
+      spawnImpl: (_command, _args, options) => spawn(process.execPath, [
+        "-e",
+        `const fs = require("node:fs"); const marker = ${JSON.stringify(releaseMarker)}; const timer = setInterval(() => { if (fs.existsSync(marker)) { clearInterval(timer); process.stdout.write(${JSON.stringify(JSON.stringify(report))}); } }, 10)`,
+      ], options),
+    });
+    const executor = createAntigravityDelegationExecutor({ runProcess: processExecution.runProcess });
+    executionPromise = executor.execute({
+      request: {
+        target: { provider: "antigravity", logicalRole: "IMPLEMENTER" },
+        limits: { timeoutMs: 15_000, maxOutputBytes: 4_096 },
+      },
+      workerEnvelope: { objective: "run the bounded AGY child" },
+      workspace: { path: cwd },
+    });
+
+    const ownerStore = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+    let operation;
+    let owner;
+    for (let attempt = 0; attempt < 1_000 && !owner; attempt += 1) {
+      operation = registry.state.operations.listLive({ projectId: project.projectId })[0] ?? null;
+      if (operation) owner = await ownerStore.read(operation.runtimeOwnerRef);
+      if (!owner) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(operation, "spawned process must have a live global Operation");
+    assert.equal(operation.kind, "DIRECT_MUTATION");
+    assert.equal(operation.projectId, project.projectId);
+    assert.equal(operation.workId, "work-antigravity");
+    assert.equal(operation.generation, 3);
+    assert.equal(operation.actorRef, actor.subjectHash);
+    assert.equal(operation.workspaceRef, project.workspace.canonicalRoot);
+
+    assert.equal(owner.kind, "LOCAL_PROCESS");
+    assert.equal(owner.operationId, operation.operationId);
+    assert.ok(owner.process.pid > 0);
+    assert.equal(typeof owner.process.startIdentity, "string");
+    assert.ok(owner.process.startIdentity.length > 0);
+    assert.equal(Object.hasOwn(owner, "correlationRef"), false);
+
+    const ownerProbe = createLocalProcessOwnerProbe({ readProcessIdentity, now });
+    const liveness = createOperationLivenessService({ runtimeOwnerStore: ownerStore, ownerProbe, now });
+    const assessment = await liveness.assess(operation);
+    assert.equal(assessment.liveness, "LIVE");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const heartbeated = registry.state.operations.inspect(operation.operationId);
+    assert.ok(Date.parse(heartbeated.heartbeatAt) > Date.parse(operation.heartbeatAt));
+    await mkdir(releaseMarker);
+    const execution = await executionPromise;
+    assert.equal(execution.ok, true);
+    assert.deepEqual(execution.report, report);
+    const terminal = registry.state.operations.inspect(operation.operationId);
+    assert.equal(terminal.liveness, "TERMINAL");
+    assert.equal(terminal.workflowState, "SUCCEEDED");
+    assert.ok(Date.parse(terminal.deadlineAt) > Date.parse(terminal.startedAt));
+  } finally {
+    await mkdir(releaseMarker, { recursive: true }).catch(() => {});
+    await executionPromise?.catch(() => {});
+    registry?.close();
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("Antigravity Orchestra process liveness cannot stay LIVE after PID birth identity mismatch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-process-identity-mismatch-"));
+  let registry;
+  let executionPromise;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    let currentIdentity = { status: "PRESENT", processIdentity: "test:birth-1" };
+    const readProcessIdentity = async () => currentIdentity;
+    const actor = {
+      schema: "orchestra.actor-provenance.v2",
+      provider: "antigravity",
+      subjectHash: actorHash("identity-mismatch-child"),
+      source: "PROVIDER_FACT",
+      observedAt: new Date().toISOString(),
+    };
+    const processExecution = createAntigravityProcessExecution({
+      registry,
+      projectId: project.projectId,
+      expectedWorkId: "work-antigravity",
+      expectedGeneration: 3,
+      observedInstructionEpoch: 7,
+      actor,
+      workspaceRef: project.workspace.canonicalRoot,
+      readProcessIdentity,
+      heartbeatIntervalMs: 20,
+      spawnImpl: (_command, _args, options) => spawn(process.execPath, [
+        "-e",
+        "setTimeout(() => process.stdout.write('done'), 500)",
+      ], options),
+    });
+    executionPromise = processExecution.runProcess({
+      command: "agy", args: [], cwd, timeoutMs: 2_000, maxOutputBytes: 1_024,
+    });
+    const ownerStore = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+    let operation;
+    let owner;
+    for (let attempt = 0; attempt < 1_000 && !owner; attempt += 1) {
+      operation = registry.state.operations.listLive({ projectId: project.projectId })[0] ?? null;
+      if (operation) owner = await ownerStore.read(operation.runtimeOwnerRef);
+      if (!owner) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(operation);
+    assert.ok(owner);
+    currentIdentity = { status: "PRESENT", processIdentity: "test:reused-pid-birth" };
+    const ownerProbe = createLocalProcessOwnerProbe({ readProcessIdentity });
+    const liveness = createOperationLivenessService({ runtimeOwnerStore: ownerStore, ownerProbe });
+    const assessment = await liveness.assess(operation);
+    assert.equal(assessment.liveness, "UNKNOWN");
+    assert.equal(assessment.reason, "OWNER_MISMATCH_HEARTBEAT_FRESH");
+    assert.equal(registry.state.operations.listLive({ projectId: project.projectId }).length, 1);
+    currentIdentity = { status: "ABSENT" };
+    const execution = await executionPromise;
+    assert.equal(execution.exitCode, 0);
+    assert.equal(registry.state.operations.inspect(operation.operationId).liveness, "TERMINAL");
+  } finally {
+    await executionPromise?.catch(() => {});
+    registry?.close();
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("Antigravity process execution fails closed when host start identity is unavailable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-process-no-identity-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    let child;
+    let childClosed;
+    const actor = {
+      schema: "orchestra.actor-provenance.v2",
+      provider: "antigravity",
+      subjectHash: actorHash("no-child-identity"),
+      source: "PROVIDER_FACT",
+      observedAt: new Date().toISOString(),
+    };
+    const processExecution = createAntigravityProcessExecution({
+      registry,
+      projectId: project.projectId,
+      expectedWorkId: "work-antigravity",
+      expectedGeneration: 3,
+      observedInstructionEpoch: 7,
+      actor,
+      workspaceRef: project.workspace.canonicalRoot,
+      readProcessIdentity: async () => ({ status: "UNAVAILABLE" }),
+      spawnImpl: (_command, _args, options) => {
+        child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 500)"], options);
+        childClosed = new Promise((resolve) => child.once("close", resolve));
+        return child;
+      },
+    });
+    await assert.rejects(processExecution.runProcess({
+      command: "agy", args: [], cwd, timeoutMs: 2_000, maxOutputBytes: 1_024,
+    }));
+    assert.equal(registry.state.operations.listLive({ projectId: project.projectId }).length, 0);
+    assert.ok(child);
+    await childClosed;
+    assert.notEqual(child.exitCode, null);
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity process execution rejects a cwd outside its registered Project before spawn", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-process-cross-project-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { project } = await prepareProject({ root, home, workspaceName: "project-a" });
+    const otherCwd = await makeGitWorkspace(root, "project-b");
+    registry = createGlobalProjectRegistry({ home });
+    const other = await registry.registerWorkspace({
+      root: otherCwd,
+      runtimeImage: "2.0.0",
+      instructionEpoch: 7,
+      trustMode: "trusted",
+    });
+    assert.equal(other.ok, true);
+    let spawnCount = 0;
+    const actor = {
+      schema: "orchestra.actor-provenance.v2",
+      provider: "antigravity",
+      subjectHash: actorHash("cross-project-process"),
+      source: "PROVIDER_FACT",
+      observedAt: new Date().toISOString(),
+    };
+    const processExecution = createAntigravityProcessExecution({
+      registry,
+      projectId: project.projectId,
+      expectedWorkId: "work-antigravity",
+      expectedGeneration: 3,
+      observedInstructionEpoch: 7,
+      actor,
+      workspaceRef: project.workspace.canonicalRoot,
+      readProcessIdentity: async () => ({ status: "PRESENT", processIdentity: "test:identity" }),
+      spawnImpl: () => {
+        spawnCount += 1;
+        throw new Error("spawn must not run for another Project");
+      },
+    });
+    await assert.rejects(processExecution.runProcess({
+      command: "agy", args: [], cwd: otherCwd, timeoutMs: 1_000, maxOutputBytes: 1_024,
+    }), (error) => /PROJECT|WORKSPACE/.test(error.code));
+    assert.equal(spawnCount, 0);
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity process execution captures asynchronous spawn errors as structured failures", () => {
+  const moduleUrl = new URL("../../v2/providers/antigravity/process-execution.mjs", import.meta.url).href;
+  const script = `
+    import { createAntigravityProcessExecution } from ${JSON.stringify(moduleUrl)};
+    const root = process.cwd();
+    const project = { schema: "orchestra.project.v2", projectId: "project-test", lineageId: "lineage-test", workspace: { canonicalRoot: root, vcs: "git" }, runtime: { pinnedImage: "2.0.0", instructionEpoch: 7 }, trust: { mode: "trusted" } };
+    const work = { schema: "orchestra.work-unit.v2", workId: "work-test", projectId: project.projectId, taskId: "task-test", generation: 3, runtimeImage: "2.0.0", instructionEpoch: 7, state: "INTAKE", scopeRef: null, directionRef: null, candidateRef: null, evidenceRefs: [], blockers: [], continuationRef: null };
+    const state = { projects: { inspect: () => project }, work: { current: () => work }, operations: { listLive: () => [], begin: () => ({ ok: true }), inspect: () => null, heartbeat: () => ({ ok: true }), terminalize: () => ({ ok: true }) } };
+    const execution = createAntigravityProcessExecution({ registry: { paths: { home: root }, state, resolveWorkspace: async () => ({ projectId: project.projectId, workspace: project.workspace }) }, projectId: project.projectId, expectedWorkId: work.workId, expectedGeneration: work.generation, observedInstructionEpoch: 7, actor: { schema: "orchestra.actor-provenance.v2", provider: "antigravity", subjectHash: "sha256:${"a".repeat(64)}", source: "PROVIDER_FACT", observedAt: new Date().toISOString() }, workspaceRef: root });
+    try { await execution.runProcess({ command: "orchestra-command-that-does-not-exist", args: [], cwd: root, timeoutMs: 1000, maxOutputBytes: 1024 }); process.exitCode = 10; }
+    catch (error) { process.stdout.write(JSON.stringify({ code: error.code })); }
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { code: "PROCESS_SPAWN_FAILED" });
+});
+
+test("Antigravity process authority assesses existing live local-process writers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-process-live-owner-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    const readProcessIdentity = createHostProcessIdentityReader();
+    const hostFact = await readProcessIdentity(process.pid);
+    assert.equal(hostFact.status, "PRESENT");
+    const startedAt = new Date().toISOString();
+    const runtimeOwnerId = "runtime-owner-existing-process";
+    const operationId = "op-existing-process";
+    const ownerStore = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+    assert.equal((await ownerStore.register({
+      schema: "orchestra.runtime-owner.v2",
+      runtimeOwnerId,
+      operationId,
+      kind: "LOCAL_PROCESS",
+      registeredAt: startedAt,
+      process: { pid: process.pid, startIdentity: hostFact.processIdentity },
+      proof: { tokenHash: hashId("existing-process-owner-proof") },
+    })).ok, true);
+    assert.equal(registry.state.operations.begin({
+      expectedGeneration: 3,
+      operation: {
+        schema: "orchestra.operation.v2",
+        operationId,
+        projectId: project.projectId,
+        workId: "work-antigravity",
+        generation: 3,
+        kind: "DIRECT_MUTATION",
+        actorRef: actorHash("existing-process-writer"),
+        capabilities: ["WORKSPACE_EDIT"],
+        workflowState: "RUNNING",
+        liveness: "LIVE",
+        startedAt,
+        heartbeatAt: startedAt,
+        deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+        runtimeOwnerRef: runtimeOwnerId,
+        workspaceRef: project.workspace.canonicalRoot,
+        resultRef: null,
+      },
+    }).ok, true);
+    let spawnCount = 0;
+    const actor = {
+      schema: "orchestra.actor-provenance.v2",
+      provider: "antigravity",
+      subjectHash: actorHash("blocked-process-writer"),
+      source: "PROVIDER_FACT",
+      observedAt: new Date().toISOString(),
+    };
+    const processExecution = createAntigravityProcessExecution({
+      registry,
+      projectId: project.projectId,
+      expectedWorkId: "work-antigravity",
+      expectedGeneration: 3,
+      observedInstructionEpoch: 7,
+      actor,
+      workspaceRef: project.workspace.canonicalRoot,
+      readProcessIdentity,
+      spawnImpl: () => {
+        spawnCount += 1;
+        throw new Error("live writer should deny before spawn");
+      },
+    });
+    await assert.rejects(processExecution.runProcess({
+      command: "agy", args: [], cwd, timeoutMs: 1_000, maxOutputBytes: 1_024,
+    }), (error) => error.code === "INCOMPATIBLE_LIVE_OPERATION");
+    assert.equal(spawnCount, 0);
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity process fencing rejects an Operation before the child payload can run", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-process-begin-fence-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    const deniedOperations = Object.freeze({
+      ...registry.state.operations,
+      begin: () => ({ ok: false, reason: "STALE_GENERATION" }),
+    });
+    const executionRegistry = {
+      ...registry,
+      state: { ...registry.state, operations: deniedOperations },
+    };
+    const payloadMarker = join(root, "child-payload-ran");
+    const actor = {
+      schema: "orchestra.actor-provenance.v2",
+      provider: "antigravity",
+      subjectHash: actorHash("fenced-child"),
+      source: "PROVIDER_FACT",
+      observedAt: new Date().toISOString(),
+    };
+    const processExecution = createAntigravityProcessExecution({
+      registry: executionRegistry,
+      projectId: project.projectId,
+      expectedWorkId: "work-antigravity",
+      expectedGeneration: 3,
+      observedInstructionEpoch: 7,
+      actor,
+      workspaceRef: project.workspace.canonicalRoot,
+      readProcessIdentity: async () => ({ status: "PRESENT", processIdentity: "test:identity" }),
+      spawnImpl: (_command, _args, options) => spawn(process.execPath, [
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(payloadMarker)}, "ran"); setTimeout(() => {}, 1000)`,
+      ], options),
+    });
+    await assert.rejects(processExecution.runProcess({
+      command: "agy", args: [], cwd, timeoutMs: 2_000, maxOutputBytes: 1_024,
+    }), (error) => error.code === "STALE_GENERATION");
+    assert.equal(existsSync(payloadMarker), false);
+  } finally {
+    registry?.close();
     await rm(root, { recursive: true, force: true });
   }
 });
