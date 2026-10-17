@@ -14,9 +14,18 @@ const SUPPORTED_DURABLE_SCHEMAS = new Set([
 const SUPPORTED_PARALLEL_GROUP_SCHEMA = "orchestra.parallel-group-state.v1";
 const MALFORMED_INTEGRITY = new Set(["MALFORMED_JSON", "MALFORMED_SCHEMA"]);
 const SUPPORTED_RUNTIME_VERSIONS = new Set(["v1.4.2", "1.4.2", "v1.4.3", "1.4.3"]);
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/i;
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isTimestamp(value) {
+  return nonEmptyString(value) && Number.isFinite(Date.parse(value));
 }
 
 function blocked(code, details = {}) {
@@ -31,6 +40,7 @@ function blocked(code, details = {}) {
       liveness: "UNKNOWN",
       successClaim: false,
       cleanupAuthorized: false,
+      operationImportEligible: false,
     }),
   });
 }
@@ -53,6 +63,7 @@ function clean(entry) {
       liveness: "UNKNOWN",
       successClaim: false,
       cleanupAuthorized: false,
+      operationImportEligible: false,
     }),
   });
 }
@@ -74,6 +85,7 @@ function privateArchive(entry) {
       liveness: "UNKNOWN",
       successClaim: false,
       cleanupAuthorized: false,
+      operationImportEligible: false,
     }),
   });
 }
@@ -93,12 +105,35 @@ function transientEvidence(facts) {
 function workspaceIdentity(facts) {
   if (!Number.isInteger(facts.survivingWorkspaces) || facts.survivingWorkspaces < 0) return "UNKNOWN";
   if (facts.survivingWorkspaces === 0) return "NONE_OBSERVED";
-  if (facts.survivingWorkspaces === 1) return "SINGLE_SURVIVOR_UNVERIFIED";
+  if (facts.survivingWorkspaces === 1) {
+    if (facts.workspaceIdentityProven === true && nonEmptyString(facts.survivingWorkspaceRef)) {
+      return "SINGLE_SURVIVOR_VERIFIED";
+    }
+    return "SINGLE_SURVIVOR_UNVERIFIED";
+  }
   return "AMBIGUOUS";
+}
+
+function operationImportEligible(facts) {
+  return facts.operationProvenanceComplete === true
+    && facts.ownerProcessProof === "ABSENT"
+    && facts.survivingWorkspaces === 1
+    && facts.workspaceIdentityProven === true
+    && nonEmptyString(facts.survivingWorkspaceRef)
+    && nonEmptyString(facts.operationKind)
+    && isTimestamp(facts.startedAt)
+    && isTimestamp(facts.heartbeatAt)
+    && isTimestamp(facts.deadlineAt)
+    && isRecord(facts.ownerProcess)
+    && Number.isInteger(facts.ownerProcess.pid)
+    && facts.ownerProcess.pid > 0
+    && nonEmptyString(facts.ownerProcess.startIdentity)
+    && SHA256_DIGEST.test(facts.ownerProofTokenHash ?? "");
 }
 
 function recoverable(entry, facts, code = "LEGACY_TRANSIENT_REQUIRES_RECONCILIATION") {
   const evidence = transientEvidence(facts);
+  const importEligible = operationImportEligible(facts);
   return Object.freeze({
     ok: true,
     disposition: "RECOVERABLE_IMPORT",
@@ -119,7 +154,8 @@ function recoverable(entry, facts, code = "LEGACY_TRANSIENT_REQUIRES_RECONCILIAT
       workspaceIdentity: workspaceIdentity(facts),
       cleanupAuthorized: false,
       canonicalPromotionClaim: evidence.canonicalPromotion,
-      actionRequired: "RECONCILE_LEGACY_TRANSIENT_STATE",
+      operationImportEligible: importEligible,
+      actionRequired: importEligible ? "RECONCILE_IMPORTED_OPERATION" : "RECONCILE_LEGACY_TRANSIENT_STATE",
     }),
   });
 }
