@@ -23,6 +23,16 @@ export function createWorkAuthority({ state } = {}) {
     return { project, work, liveOperations };
   }
 
+  function freshnessDecision(facts, actor, observedInstructionEpoch) {
+    return authorizeAttach({
+      project: facts.project,
+      work: facts.work,
+      actor,
+      observedInstructionEpoch,
+      liveOperations: facts.liveOperations,
+    });
+  }
+
   return Object.freeze({
     current(projectId) {
       const facts = currentFacts(projectId);
@@ -41,13 +51,7 @@ export function createWorkAuthority({ state } = {}) {
     attach({ projectId, actor, observedInstructionEpoch } = {}) {
       const facts = currentFacts(projectId);
       if (facts.error) return facts.error;
-      const decision = authorizeAttach({
-        project: facts.project,
-        work: facts.work,
-        actor,
-        observedInstructionEpoch,
-        liveOperations: facts.liveOperations,
-      });
+      const decision = freshnessDecision(facts, actor, observedInstructionEpoch);
       if (!decision.allowed) return decision;
       return {
         allowed: true,
@@ -64,6 +68,7 @@ export function createWorkAuthority({ state } = {}) {
       projectId,
       expectedWorkId,
       actor,
+      observedInstructionEpoch,
       capability,
       workspaceRef = null,
       expectedGeneration,
@@ -77,6 +82,8 @@ export function createWorkAuthority({ state } = {}) {
           currentWorkId: facts.work.workId,
         };
       }
+      const freshness = freshnessDecision(facts, actor, observedInstructionEpoch);
+      if (!freshness.allowed) return freshness;
       return authorizeCapability({
         project: facts.project,
         work: facts.work,
@@ -89,6 +96,8 @@ export function createWorkAuthority({ state } = {}) {
     },
 
     abandon(command) {
+      const projectId = command?.projectId;
+      if (!store.projects.inspect(projectId)) return { ok: false, reason: "PROJECT_NOT_FOUND" };
       return store.work.abandonCurrent(command);
     },
   });
