@@ -183,104 +183,114 @@ export function createSqliteExperiencePersistence({ dbPath, timeoutMs = 5_000 } 
   if (typeof dbPath !== "string" || dbPath.trim().length === 0) throw new TypeError("dbPath is required");
   if (dbPath === ":memory:") return createMemoryPersistence();
 
-  const db = new DatabaseSync(dbPath, { timeout: timeoutMs });
-  const getById = db.prepare("SELECT * FROM experience_records WHERE experience_id = ?");
-  const listAll = db.prepare("SELECT * FROM experience_records ORDER BY experience_id ASC");
-  const insert = db.prepare(`
-    INSERT INTO experience_records(
-      experience_id, category, source_project_id, source_lineage_id, work_id, operation_id,
-      domain_cohort, provider_family, failure_class, recovery_class, terminal_outcome,
-      eligibility_scope, lineage_count, record_json, record_digest, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  let closed = false;
+  let db = null;
+  try {
+    db = new DatabaseSync(dbPath, { timeout: timeoutMs });
+    const getById = db.prepare("SELECT * FROM experience_records WHERE experience_id = ?");
+    const listAll = db.prepare("SELECT * FROM experience_records ORDER BY experience_id ASC");
+    const insert = db.prepare(`
+      INSERT INTO experience_records(
+        experience_id, category, source_project_id, source_lineage_id, work_id, operation_id,
+        domain_cohort, provider_family, failure_class, recovery_class, terminal_outcome,
+        eligibility_scope, lineage_count, record_json, record_digest, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    let closed = false;
 
-  function assertOpen() {
-    if (closed) throw storageError("Experience persistence is closed");
-  }
+    function assertOpen() {
+      if (closed) throw storageError("Experience persistence is closed");
+    }
 
-  return Object.freeze({
-    put(record) {
-      assertOpen();
-      validateForWrite(record);
-      const recordJson = canonicalJson(record);
-      const digest = digestRecord(recordJson);
-      return transaction(db, () => {
-        const existingRow = getById.get(record.experienceId);
-        if (existingRow) {
-          const existing = validateStoredRow(existingRow);
-          if (existingRow.record_json === recordJson && existingRow.record_digest === digest) {
-            return { ok: true, experience: existing, replayed: true, digest };
+    return Object.freeze({
+      put(record) {
+        assertOpen();
+        validateForWrite(record);
+        const recordJson = canonicalJson(record);
+        const digest = digestRecord(recordJson);
+        return transaction(db, () => {
+          const existingRow = getById.get(record.experienceId);
+          if (existingRow) {
+            const existing = validateStoredRow(existingRow);
+            if (existingRow.record_json === recordJson && existingRow.record_digest === digest) {
+              return { ok: true, experience: existing, replayed: true, digest };
+            }
+            return {
+              ok: false,
+              reason: "EXPERIENCE_ID_CONFLICT",
+              experience: existing,
+              digest: existingRow.record_digest,
+            };
           }
-          return {
-            ok: false,
-            reason: "EXPERIENCE_ID_CONFLICT",
-            experience: existing,
-            digest: existingRow.record_digest,
-          };
+
+          insert.run(
+            record.experienceId,
+            record.category,
+            record.source.projectId,
+            record.source.lineageId,
+            record.source.workId,
+            record.source.operationId,
+            record.domainCohort,
+            record.facts.providerFamily ?? null,
+            record.facts.failureClass ?? record.outcome.failureClass ?? null,
+            record.facts.recoveryClass ?? record.outcome.recoveryClass ?? null,
+            record.outcome.terminalOutcome ?? null,
+            record.generalization.scope,
+            record.generalization.projectLineageCount,
+            recordJson,
+            digest,
+            new Date().toISOString(),
+          );
+          return { ok: true, experience: JSON.parse(recordJson), replayed: false, digest };
+        });
+      },
+
+      inspect(experienceId) {
+        assertOpen();
+        return validateStoredRow(getById.get(experienceId));
+      },
+
+      list() {
+        assertOpen();
+        return listAll.all().map(validateStoredRow);
+      },
+
+      query(request = {}) {
+        assertOpen();
+        const { filters, projectId, afterId, limit } = validateQueryRequest(request);
+        const clauses = [];
+        const params = [];
+        if (projectId !== null) {
+          clauses.push("source_project_id = ?");
+          params.push(projectId);
         }
-
-        insert.run(
-          record.experienceId,
-          record.category,
-          record.source.projectId,
-          record.source.lineageId,
-          record.source.workId,
-          record.source.operationId,
-          record.domainCohort,
-          record.facts.providerFamily ?? null,
-          record.facts.failureClass ?? record.outcome.failureClass ?? null,
-          record.facts.recoveryClass ?? record.outcome.recoveryClass ?? null,
-          record.outcome.terminalOutcome ?? null,
-          record.generalization.scope,
-          record.generalization.projectLineageCount,
-          recordJson,
-          digest,
-          new Date().toISOString(),
+        if (afterId !== null) {
+          clauses.push("experience_id > ?");
+          params.push(afterId);
+        }
+        for (const [key, value] of Object.entries(filters)) {
+          const definition = QUERY_FILTER_COLUMNS[key];
+          clauses.push(`${definition.column} ${definition.operator} ?`);
+          params.push(value);
+        }
+        const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+        const statement = db.prepare(
+          `SELECT * FROM experience_records${where} ORDER BY experience_id ASC LIMIT ?`,
         );
-        return { ok: true, experience: JSON.parse(recordJson), replayed: false, digest };
-      });
-    },
+        return statement.all(...params, limit + 1).map(validateStoredRow);
+      },
 
-    inspect(experienceId) {
-      assertOpen();
-      return validateStoredRow(getById.get(experienceId));
-    },
-
-    list() {
-      assertOpen();
-      return listAll.all().map(validateStoredRow);
-    },
-
-    query(request = {}) {
-      assertOpen();
-      const { filters, projectId, afterId, limit } = validateQueryRequest(request);
-      const clauses = [];
-      const params = [];
-      if (projectId !== null) {
-        clauses.push("source_project_id = ?");
-        params.push(projectId);
-      }
-      if (afterId !== null) {
-        clauses.push("experience_id > ?");
-        params.push(afterId);
-      }
-      for (const [key, value] of Object.entries(filters)) {
-        const definition = QUERY_FILTER_COLUMNS[key];
-        clauses.push(`${definition.column} ${definition.operator} ?`);
-        params.push(value);
-      }
-      const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
-      const statement = db.prepare(
-        `SELECT * FROM experience_records${where} ORDER BY experience_id ASC LIMIT ?`,
-      );
-      return statement.all(...params, limit + 1).map(validateStoredRow);
-    },
-
-    close() {
-      if (closed) return;
-      db.close();
-      closed = true;
-    },
-  });
+      close() {
+        if (closed) return;
+        db.close();
+        closed = true;
+      },
+    });
+  } catch (error) {
+    try {
+      db?.close();
+    } catch {
+      // Preserve the initialization failure.
+    }
+    throw error;
+  }
 }
