@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { access, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,12 +9,26 @@ import { fileURLToPath } from "node:url";
 import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { resolveGlobalRegistryPaths } from "../../v2/global/project-registry.mjs";
+import {
+  createManagedWorkspaceStore,
+  resolveManagedWorkspacePaths,
+} from "../../v2/workspaces/managed-workspace-store.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repoRoot, "v2", "global", "orchestra.mjs");
 
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+async function exists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function runCli({ home, cwd, args }) {
@@ -119,6 +133,29 @@ async function seedStaleOperation({ fx, workspaceRef = null, withOwner = true, o
   return { project, work, operation };
 }
 
+async function registerManagedClone({ fx, seeded, dirty = false }) {
+  const paths = resolveManagedWorkspacePaths({ home: fx.home });
+  const root = join(paths.instancesRoot, seeded.operation.operationId);
+  await mkdir(root, { recursive: true });
+  git("init", root);
+  if (dirty) await writeFile(join(root, "keep.txt"), "preserve\n", "utf8");
+  const canonicalRoot = await realpath(root);
+  const store = createManagedWorkspaceStore({ home: fx.home });
+  const registered = await store.register({
+    schema: "orchestra.managed-workspace.v2",
+    workspaceRef: seeded.operation.workspaceRef,
+    operationId: seeded.operation.operationId,
+    projectId: seeded.operation.projectId,
+    workId: seeded.operation.workId,
+    generation: seeded.operation.generation,
+    kind: "TRANSIENT_GIT_CLONE",
+    root: canonicalRoot,
+    registeredAt: "2026-10-17T10:00:00.000Z",
+  });
+  assert.equal(registered.ok, true);
+  return canonicalRoot;
+}
+
 test("global project recover terminalizes a factually stale operation with no workspace and replays by command id", async () => {
   const fx = await fixture();
   try {
@@ -170,6 +207,72 @@ test("global project recover fails closed for a stale workspace-backed operation
     assert.equal(result.json.ok, false);
     assert.equal(result.json.reason, "RECOVERY_WORKSPACE_UNKNOWN");
     assert.equal(result.json.humanGate, true);
+
+    const { statePath } = resolveGlobalRegistryPaths({ home: fx.home });
+    const state = createSqliteState({ dbPath: statePath });
+    assert.equal(state.operations.inspect(seeded.operation.operationId).liveness, "LIVE");
+    state.close();
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("global project recover cleans a factually registered clean transient workspace", async () => {
+  const fx = await fixture();
+  try {
+    const seeded = await seedStaleOperation({
+      fx,
+      workspaceRef: "workspace:managed-clean",
+      operationId: "op-managed-clean",
+    });
+    const managedRoot = await registerManagedClone({ fx, seeded });
+    const result = runCli({
+      home: fx.home,
+      cwd: fx.repo,
+      args: [
+        "project", "recover",
+        seeded.project.projectId,
+        seeded.operation.operationId,
+        "--command-id", "recover-cli-managed-clean",
+      ],
+    });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.json.ok, true);
+    assert.equal(result.json.operation.liveness, "TERMINAL");
+    assert.equal(result.json.cleanup.status, "CLEANED");
+    assert.equal(await exists(managedRoot), false);
+    assert.equal(await exists(fx.repo), true, "canonical project workspace is never cleanup target");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("global project recover preserves a factually registered dirty transient workspace", async () => {
+  const fx = await fixture();
+  try {
+    const seeded = await seedStaleOperation({
+      fx,
+      workspaceRef: "workspace:managed-dirty",
+      operationId: "op-managed-dirty",
+    });
+    const managedRoot = await registerManagedClone({ fx, seeded, dirty: true });
+    const result = runCli({
+      home: fx.home,
+      cwd: fx.repo,
+      args: [
+        "project", "recover",
+        seeded.project.projectId,
+        seeded.operation.operationId,
+        "--command-id", "recover-cli-managed-dirty",
+      ],
+    });
+
+    assert.equal(result.status, 1);
+    assert.equal(result.json.reason, "STALE_DIRTY");
+    assert.equal(result.json.preserved, true);
+    assert.equal(result.json.actionRequired, "RESOLVE_DIRTY_WORKSPACE");
+    assert.equal(await exists(managedRoot), true);
 
     const { statePath } = resolveGlobalRegistryPaths({ home: fx.home });
     const state = createSqliteState({ dbPath: statePath });
