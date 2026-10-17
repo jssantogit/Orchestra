@@ -10,6 +10,8 @@
 
 **Base:** `feat/v2-reconciler-recovery` at reviewed head `a3002edb1493cc86e8e9f713477db3add31d1799`.
 
+**Locked-path correction:** the approved predecessor stores SQLite migrations in `v2/persistence/sqlite/sqlite-state-core.mjs` and exposes the composed public SQLite state from `v2/persistence/sqlite/sqlite-state.mjs`. The canonical V2 persistence workflow is `.github/workflows/v2-persistence.yml`. These paths supersede the earlier nonexistent generic names and are the authoritative implementation paths for this plan.
+
 ---
 
 ### Task 1: Persist provider Session Observations and tool correlations
@@ -20,8 +22,8 @@
 **Files:**
 - Create: `v2/providers/session-observation-store.mjs`
 - Create: `v2/providers/operation-correlation-store.mjs`
-- Modify: `v2/persistence/sqlite/migrations.mjs`
-- Modify: `v2/persistence/sqlite/state.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state-core.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state.mjs`
 - Test: `tests/runtime/v2-codex-global-adapter.test.mjs`
 
 **Step 1 — RED:** Add tests proving:
@@ -244,7 +246,7 @@ git commit -m "feat(v2): add thin Codex global control plane shim"
 ### Task 7: Close V2-5 with portability and compatibility evidence
 
 **Files:**
-- Modify: `.github/workflows/orchestra-v2-persistence.yml`
+- Modify: `.github/workflows/v2-persistence.yml`
 - Update: PR body only after exact-head CI
 
 Add explicit Node 24 Ubuntu/Windows execution of:
