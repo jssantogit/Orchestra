@@ -4,8 +4,7 @@ on:
   pull_request:
     branches:
       - main
-      - feat/v2-domain-contracts
-      - feat/v2-project-registry
+      - feat/v2-*
 
 jobs:
   persistence:

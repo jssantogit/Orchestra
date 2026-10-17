@@ -5,8 +5,9 @@ function failure(reason, payload = {}) {
 }
 
 function requireState(state) {
-  if (!state?.work?.read || !state?.work?.current || !state?.operations?.begin || !state?.operations?.inspect) {
-    throw new TypeError("state with work/read/current and operations/begin/inspect is required");
+  if (!state?.work?.read || !state?.work?.current || !state?.operations?.begin
+    || !state?.operations?.inspect || !state?.operations?.terminalize) {
+    throw new TypeError("state with work/read/current and operations/begin/inspect/terminalize is required");
   }
   return state;
 }
@@ -43,6 +44,15 @@ export function fenceOperationsToActiveWork(state) {
       }
 
       return underlying.begin(command);
+    },
+    terminalize(command = {}) {
+      if (Object.prototype.hasOwnProperty.call(command, "expectedHeartbeatAt")) {
+        const current = underlying.inspect(command.operationId);
+        if (current && current.liveness !== "TERMINAL" && current.heartbeatAt !== command.expectedHeartbeatAt) {
+          return failure("OPERATION_CHANGED", { currentHeartbeatAt: current.heartbeatAt });
+        }
+      }
+      return underlying.terminalize(command);
     },
   });
 

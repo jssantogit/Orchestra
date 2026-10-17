@@ -5,6 +5,7 @@ import {
   globalRegistryStateExists,
   resolveOrchestraHome,
 } from "./project-registry.mjs";
+import { createGlobalOperationReconciler } from "./reconciliation.mjs";
 
 function cliError(code, message, fields = {}) {
   const error = new Error(message);
@@ -29,7 +30,7 @@ function parseArgs(argv) {
     }
 
     const name = token.slice(2);
-    if (!["home", "runtime-image", "instruction-epoch", "trust"].includes(name)) {
+    if (!["home", "runtime-image", "instruction-epoch", "trust", "command-id", "action"].includes(name)) {
       usage(`Unknown option: ${token}`);
     }
     const value = argv[index + 1];
@@ -55,6 +56,15 @@ function parseInstructionEpoch(value) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) usage("--instruction-epoch must be a safe integer");
   return parsed;
+}
+
+function parseDirtyAction(value) {
+  if (value === undefined) usage("--action is required");
+  const action = String(value).trim().toUpperCase();
+  if (!["PRESERVE", "DISCARD"].includes(action)) {
+    usage("--action must be preserve or discard");
+  }
+  return action;
 }
 
 function validateCommand({ positionals, options }) {
@@ -85,6 +95,33 @@ function validateCommand({ positionals, options }) {
     return Object.freeze({ kind: "PROJECT_STATUS", target: positionals[2] || null });
   }
 
+  if (command === "project" && positionals[1] === "recover") {
+    if (positionals.length !== 4) {
+      usage("Usage: orchestra project recover <projectId> <operationId> --command-id <id>");
+    }
+    if (!options["command-id"]) usage("--command-id is required");
+    return Object.freeze({
+      kind: "PROJECT_RECOVER",
+      projectId: positionals[2],
+      operationId: positionals[3],
+      commandId: options["command-id"],
+    });
+  }
+
+  if (command === "project" && positionals[1] === "resolve-dirty") {
+    if (positionals.length !== 4) {
+      usage("Usage: orchestra project resolve-dirty <projectId> <operationId> --action <preserve|discard> --command-id <id>");
+    }
+    if (!options["command-id"]) usage("--command-id is required");
+    return Object.freeze({
+      kind: "PROJECT_RESOLVE_DIRTY",
+      projectId: positionals[2],
+      operationId: positionals[3],
+      action: parseDirtyAction(options.action),
+      commandId: options["command-id"],
+    });
+  }
+
   if (command === "project" && positionals[1] === "rebind") {
     if (positionals.length !== 4) usage("Usage: orchestra project rebind <projectId> <newWorkspace>");
     return Object.freeze({
@@ -94,7 +131,7 @@ function validateCommand({ positionals, options }) {
     });
   }
 
-  usage("Usage: orchestra <home|register|project status|project rebind> ...");
+  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind> ...");
 }
 
 function notRegisteredResult() {
@@ -112,7 +149,8 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
     return { exitCode: 0, payload: { ok: true, home } };
   }
 
-  if (command.kind === "PROJECT_STATUS" && !(await globalRegistryStateExists({ home }))) {
+  if (["PROJECT_STATUS", "PROJECT_RECOVER", "PROJECT_RESOLVE_DIRTY"].includes(command.kind)
+    && !(await globalRegistryStateExists({ home }))) {
     return notRegisteredResult();
   }
 
@@ -134,7 +172,63 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
         ? registry.inspect(target)
         : await registry.resolveWorkspace(target);
       if (!project) return notRegisteredResult();
-      return { exitCode: 0, payload: { ok: true, registered: true, project } };
+
+      const reconciler = createGlobalOperationReconciler({
+        state: registry.state,
+        home,
+      });
+      const inspection = await reconciler.inspect({ projectId: project.projectId });
+      if (!inspection.ok) {
+        return {
+          exitCode: 1,
+          payload: {
+            ok: false,
+            reason: inspection.reason,
+            registered: true,
+            project,
+          },
+        };
+      }
+
+      return {
+        exitCode: 0,
+        payload: {
+          ok: true,
+          registered: true,
+          project,
+          reconciliation: {
+            work: inspection.work,
+            operations: inspection.operations,
+          },
+        },
+      };
+    }
+
+    if (command.kind === "PROJECT_RECOVER") {
+      const reconciler = createGlobalOperationReconciler({
+        state: registry.state,
+        home,
+      });
+      const result = await reconciler.recover({
+        projectId: command.projectId,
+        operationId: command.operationId,
+        commandId: command.commandId,
+      });
+      return { exitCode: result.ok ? 0 : 1, payload: result };
+    }
+
+    if (command.kind === "PROJECT_RESOLVE_DIRTY") {
+      const reconciler = createGlobalOperationReconciler({
+        state: registry.state,
+        home,
+      });
+      const result = await reconciler.resolveDirty({
+        projectId: command.projectId,
+        operationId: command.operationId,
+        action: command.action,
+        commandId: command.commandId,
+      });
+      return { exitCode: result.ok ? 0 : 1, payload: result };
     }
 
     const result = await registry.rebindWorkspace({

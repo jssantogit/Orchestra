@@ -209,12 +209,22 @@ const MIGRATIONS = Object.freeze([
 ]);
 
 function applyMigration(db, migration) {
+  migration.apply(db);
+  const now = new Date().toISOString();
+  db.prepare("INSERT INTO orchestra_migrations(version, name, applied_at) VALUES (?, ?, ?)")
+    .run(migration.version, migration.name, now);
+  db.exec(`PRAGMA user_version = ${migration.version}`);
+}
+
+function initializeSchema(db) {
+  db.exec("PRAGMA foreign_keys = ON");
   transaction(db, () => {
-    migration.apply(db);
-    const now = new Date().toISOString();
-    db.prepare("INSERT INTO orchestra_migrations(version, name, applied_at) VALUES (?, ?, ?)")
-      .run(migration.version, migration.name, now);
-    db.exec(`PRAGMA user_version = ${migration.version}`);
+    const row = db.prepare("PRAGMA user_version").get();
+    const version = Number(row?.user_version ?? 0);
+    if (version > CURRENT_SCHEMA_VERSION) throw schemaTooNewError(version);
+    for (const migration of MIGRATIONS) {
+      if (migration.version > version) applyMigration(db, migration);
+    }
   });
 }
 
@@ -674,13 +684,7 @@ export function createSqliteState({ dbPath, timeoutMs = 5_000 } = {}) {
 
   const db = new DatabaseSync(dbPath, { timeout: timeoutMs });
   try {
-    const row = db.prepare("PRAGMA user_version").get();
-    const version = Number(row?.user_version ?? 0);
-    if (version > CURRENT_SCHEMA_VERSION) throw schemaTooNewError(version);
-    db.exec("PRAGMA foreign_keys = ON");
-    for (const migration of MIGRATIONS) {
-      if (migration.version > version) applyMigration(db, migration);
-    }
+    initializeSchema(db);
   } catch (error) {
     db.close();
     throw error;
