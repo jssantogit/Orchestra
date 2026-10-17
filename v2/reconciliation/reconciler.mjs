@@ -2,6 +2,7 @@ import { validateLivenessAssessmentV2 } from "../liveness/contracts.mjs";
 
 const RECOVERY_WORKFLOW_STATE = "ABORTED";
 const RECOVERY_RESULT_REASON = "OWNER_TERMINATED_WITHOUT_TERMINALIZATION";
+const TERMINAL_CLEANUP_REASON = "RECOVERY_TERMINAL_PENDING_CLEANUP";
 const WORKSPACE_STATUSES = new Set(["ABSENT", "CLEAN", "DIRTY", "UNKNOWN"]);
 
 function failure(reason, fields = {}) {
@@ -11,6 +12,9 @@ function failure(reason, fields = {}) {
 function requireState(state) {
   if (!state?.projects?.inspect || !state?.operations?.inspect || !state?.operations?.terminalize) {
     throw new TypeError("state with projects and operations is required");
+  }
+  if (!state?.recoveries?.record || !state?.recoveries?.latest || !state?.recoveries?.byCommand) {
+    throw new TypeError("state with recovery journal is required");
   }
   return state;
 }
@@ -33,13 +37,13 @@ function recoveryResultRef(operationId) {
   return `recovery:${operationId}:${RECOVERY_RESULT_REASON}`;
 }
 
-function terminalReplay(operation) {
+function terminalReplay(operation, cleanupStatus = "NOT_REQUIRED") {
   return {
     ok: true,
     recovered: true,
     replayed: true,
     operation,
-    cleanup: { status: "NOT_REQUIRED" },
+    cleanup: { status: cleanupStatus },
   };
 }
 
@@ -51,10 +55,47 @@ function unknownResult(operationId, reason) {
   });
 }
 
+function workspaceResult(record) {
+  return {
+    workspaceRef: record.workspace.ref,
+    status: record.workspace.status,
+  };
+}
+
+function replayRecordedRecovery(record, operation) {
+  if (record.operationId !== operation.operationId) {
+    return failure("IDEMPOTENCY_CONFLICT");
+  }
+  if (record.outcome === "RECOVERED") {
+    return terminalReplay(operation, record.cleanup.status);
+  }
+  if (record.outcome === "STALE_DIRTY") {
+    return failure("STALE_DIRTY", {
+      operationId: operation.operationId,
+      livenessReason: record.assessment.reason,
+      workspace: workspaceResult(record),
+      preserved: true,
+      actionRequired: "RESOLVE_DIRTY_WORKSPACE",
+      replayed: true,
+    });
+  }
+  if (record.outcome === "CLEANUP_FAILED") {
+    return failure("RECOVERY_CLEANUP_FAILED", {
+      operationId: operation.operationId,
+      terminalized: record.terminal !== null,
+      operation,
+      cleanup: { status: "FAILED" },
+      replayed: true,
+    });
+  }
+  return failure("RECOVERY_JOURNAL_INVALID");
+}
+
 export function createOperationReconciler({
   state,
   operationLiveness,
   workspaceRecovery,
+  now = () => new Date().toISOString(),
 } = {}) {
   const store = requireState(state);
   const liveness = requireLiveness(operationLiveness);
@@ -97,6 +138,149 @@ export function createOperationReconciler({
     });
   }
 
+  function recoveryRecord({ operation, commandId, assessment, workspace, terminal, cleanupStatus, outcome }) {
+    return {
+      schema: "orchestra.operation-recovery.v2",
+      projectId: operation.projectId,
+      operationId: operation.operationId,
+      workId: operation.workId,
+      generation: operation.generation,
+      commandId,
+      assessment: {
+        liveness: assessment.liveness,
+        reason: assessment.reason,
+        observedAt: assessment.observedAt,
+      },
+      workspace: {
+        ref: operation.workspaceRef,
+        status: workspace.status,
+      },
+      terminal: terminal === null ? null : {
+        workflowState: terminal.workflowState,
+        resultRef: terminal.resultRef,
+      },
+      cleanup: { status: cleanupStatus },
+      outcome,
+      recordedAt: now(),
+    };
+  }
+
+  function writeRecovery(record) {
+    const written = store.recoveries.record(record);
+    if (!written.ok) {
+      return failure("RECOVERY_JOURNAL_FAILED", {
+        journalReason: written.reason,
+      });
+    }
+    return written;
+  }
+
+  function recoveredResult(operation, cleanupStatus, replayed = false) {
+    return {
+      ok: true,
+      recovered: true,
+      replayed,
+      operation,
+      cleanup: { status: cleanupStatus },
+    };
+  }
+
+  async function completeTerminalRecovery({ operation, commandId }) {
+    const latest = store.recoveries.latest({
+      projectId: operation.projectId,
+      operationId: operation.operationId,
+    });
+    if (latest?.outcome === "RECOVERED") {
+      return terminalReplay(operation, latest.cleanup.status);
+    }
+
+    const observedAt = now();
+    const assessment = {
+      liveness: "TERMINAL",
+      reason: TERMINAL_CLEANUP_REASON,
+      observedAt,
+    };
+    const workspace = await inspectWorkspace(operation);
+    if (workspace.status === "UNKNOWN") {
+      return failure("RECOVERY_WORKSPACE_UNKNOWN", {
+        operationId: operation.operationId,
+        workspace,
+        humanGate: true,
+      });
+    }
+    if (workspace.status === "DIRTY") {
+      const record = recoveryRecord({
+        operation,
+        commandId,
+        assessment,
+        workspace,
+        terminal: operation,
+        cleanupStatus: "PRESERVED",
+        outcome: "STALE_DIRTY",
+      });
+      const written = writeRecovery(record);
+      if (!written.ok) return written;
+      return failure("STALE_DIRTY", {
+        operationId: operation.operationId,
+        livenessReason: assessment.reason,
+        workspace,
+        preserved: true,
+        actionRequired: "RESOLVE_DIRTY_WORKSPACE",
+        replayed: Boolean(written.replayed),
+      });
+    }
+    if (workspace.status === "ABSENT") {
+      const record = recoveryRecord({
+        operation,
+        commandId,
+        assessment,
+        workspace,
+        terminal: operation,
+        cleanupStatus: "NOT_REQUIRED",
+        outcome: "RECOVERED",
+      });
+      const written = writeRecovery(record);
+      if (!written.ok) return written;
+      return recoveredResult(operation, "NOT_REQUIRED", Boolean(written.replayed));
+    }
+
+    try {
+      await workspaces.cleanup(operation.workspaceRef);
+    } catch {
+      const record = recoveryRecord({
+        operation,
+        commandId,
+        assessment,
+        workspace,
+        terminal: operation,
+        cleanupStatus: "FAILED",
+        outcome: "CLEANUP_FAILED",
+      });
+      const written = writeRecovery(record);
+      if (!written.ok) return written;
+      return failure("RECOVERY_CLEANUP_FAILED", {
+        operationId: operation.operationId,
+        terminalized: true,
+        operation,
+        cleanup: { status: "FAILED" },
+        replayed: Boolean(written.replayed),
+      });
+    }
+
+    const record = recoveryRecord({
+      operation,
+      commandId,
+      assessment,
+      workspace,
+      terminal: operation,
+      cleanupStatus: "CLEANED",
+      outcome: "RECOVERED",
+    });
+    const written = writeRecovery(record);
+    if (!written.ok) return written;
+    return recoveredResult(operation, "CLEANED", Boolean(written.replayed));
+  }
+
   return Object.freeze({
     async recover({ projectId, operationId, commandId } = {}) {
       if (typeof projectId !== "string" || projectId.length === 0
@@ -110,7 +294,16 @@ export function createOperationReconciler({
       if (!operation) return failure("OPERATION_NOT_FOUND");
       if (operation.projectId !== projectId) return failure("OPERATION_PROJECT_MISMATCH");
 
-      if (operation.liveness === "TERMINAL") return terminalReplay(operation);
+      const priorCommand = store.recoveries.byCommand({ projectId, commandId });
+      if (priorCommand) return replayRecordedRecovery(priorCommand, operation);
+
+      if (operation.liveness === "TERMINAL") {
+        if (operation.workflowState === RECOVERY_WORKFLOW_STATE
+          && operation.resultRef === recoveryResultRef(operation.operationId)) {
+          return completeTerminalRecovery({ operation, commandId });
+        }
+        return terminalReplay(operation);
+      }
 
       const assessment = await assess(operation);
       if (!assessment) return unknownResult(operationId, "ASSESSMENT_INVALID");
@@ -135,12 +328,24 @@ export function createOperationReconciler({
 
       const workspace = await inspectWorkspace(operation);
       if (workspace.status === "DIRTY") {
+        const record = recoveryRecord({
+          operation,
+          commandId,
+          assessment,
+          workspace,
+          terminal: null,
+          cleanupStatus: "PRESERVED",
+          outcome: "STALE_DIRTY",
+        });
+        const written = writeRecovery(record);
+        if (!written.ok) return written;
         return failure("STALE_DIRTY", {
           operationId,
           livenessReason: assessment.reason,
           workspace,
           preserved: true,
           actionRequired: "RESOLVE_DIRTY_WORKSPACE",
+          replayed: Boolean(written.replayed),
         });
       }
       if (workspace.status === "UNKNOWN") {
@@ -161,33 +366,55 @@ export function createOperationReconciler({
       }
 
       if (workspace.status === "ABSENT") {
-        return {
-          ok: true,
-          recovered: true,
-          replayed: Boolean(terminal.replayed),
-          operation: terminal.operation,
-          cleanup: { status: "NOT_REQUIRED" },
-        };
+        const record = recoveryRecord({
+          operation,
+          commandId,
+          assessment,
+          workspace,
+          terminal: terminal.operation,
+          cleanupStatus: "NOT_REQUIRED",
+          outcome: "RECOVERED",
+        });
+        const written = writeRecovery(record);
+        if (!written.ok) return written;
+        return recoveredResult(terminal.operation, "NOT_REQUIRED", Boolean(written.replayed));
       }
 
       try {
         await workspaces.cleanup(operation.workspaceRef);
       } catch {
+        const record = recoveryRecord({
+          operation,
+          commandId,
+          assessment,
+          workspace,
+          terminal: terminal.operation,
+          cleanupStatus: "FAILED",
+          outcome: "CLEANUP_FAILED",
+        });
+        const written = writeRecovery(record);
+        if (!written.ok) return written;
         return failure("RECOVERY_CLEANUP_FAILED", {
           operationId,
           terminalized: true,
           operation: terminal.operation,
           cleanup: { status: "FAILED" },
+          replayed: Boolean(written.replayed),
         });
       }
 
-      return {
-        ok: true,
-        recovered: true,
-        replayed: Boolean(terminal.replayed),
-        operation: terminal.operation,
-        cleanup: { status: "CLEANED" },
-      };
+      const record = recoveryRecord({
+        operation,
+        commandId,
+        assessment,
+        workspace,
+        terminal: terminal.operation,
+        cleanupStatus: "CLEANED",
+        outcome: "RECOVERED",
+      });
+      const written = writeRecovery(record);
+      if (!written.ok) return written;
+      return recoveredResult(terminal.operation, "CLEANED", Boolean(written.replayed));
     },
   });
 }
