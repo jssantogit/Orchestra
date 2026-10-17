@@ -11,7 +11,9 @@ import {
 } from "./project-registry.mjs";
 import { createGlobalOperationReconciler } from "./reconciliation.mjs";
 import { createCodexHookHandler } from "../providers/codex/hook-handler.mjs";
+import { normalizeCodexActor } from "../providers/codex/actor.mjs";
 import { createAntigravityHookHandler } from "../providers/antigravity/hook-handler.mjs";
+import { normalizeAntigravityActor } from "../providers/antigravity/actor.mjs";
 import { installCodexV2Shim } from "../providers/codex/shim-manager.mjs";
 import { createRuntimeImageManager } from "../runtime-images/manager.mjs";
 import { loadRuntimeImageSource } from "../runtime-images/source.mjs";
@@ -400,6 +402,48 @@ function isAntigravitySessionStart(payload) {
     || payload.eventType === "SessionStart";
 }
 
+function isAntigravityPreToolUse(payload) {
+  return payload.hook_event_name === "PreToolUse"
+    || payload.hookEventName === "PreToolUse"
+    || payload.eventType === "PreToolUse"
+    || payload.eventType === "BeforeTool";
+}
+
+async function staleProviderObservation({ registry, provider, payload, cwd, normalizeActor }) {
+  let project;
+  let actor;
+  try {
+    project = await registry.resolveWorkspace(
+      typeof payload.cwd === "string" && payload.cwd.trim().length > 0 ? payload.cwd : cwd,
+    );
+    actor = normalizeActor(payload);
+  } catch {
+    return null;
+  }
+  if (!project) return null;
+  const observation = registry.state.sessionObservations.get({
+    provider,
+    projectId: project.projectId,
+    actorIdHash: actor.actorIdHash,
+  });
+  if (!observation || observation.observedInstructionEpoch === project.runtime.instructionEpoch) return null;
+
+  const diagnostic = {
+    reason: "SESSION_RUNTIME_STALE",
+    projectId: project.projectId,
+    currentInstructionEpoch: project.runtime.instructionEpoch,
+  };
+  return {
+    ok: false,
+    ...diagnostic,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: JSON.stringify(diagnostic),
+    },
+  };
+}
+
 async function runCodexHook({ home, cwd, stdin }) {
   const decoded = await readHookPayload(stdin);
   if (!decoded.ok) return { exitCode: 1, payload: decoded };
@@ -423,6 +467,16 @@ async function runCodexHook({ home, cwd, stdin }) {
   }
   const registry = createGlobalProjectRegistry({ home });
   try {
+    if (decoded.payload.hook_event_name === "PreToolUse") {
+      const stale = await staleProviderObservation({
+        registry,
+        provider: "codex",
+        payload: decoded.payload,
+        cwd,
+        normalizeActor: normalizeCodexActor,
+      });
+      if (stale) return { exitCode: 1, payload: stale };
+    }
     const handler = createCodexHookHandler({ registry });
     const payload = await handler.handle(decoded.payload, { cwd });
     return { exitCode: payload.ok ? 0 : 1, payload };
@@ -446,6 +500,16 @@ async function runAntigravityHook({ home, cwd, stdin }) {
   }
   const registry = createGlobalProjectRegistry({ home });
   try {
+    if (isAntigravityPreToolUse(decoded.payload)) {
+      const stale = await staleProviderObservation({
+        registry,
+        provider: "antigravity",
+        payload: decoded.payload,
+        cwd,
+        normalizeActor: normalizeAntigravityActor,
+      });
+      if (stale) return { exitCode: 1, payload: stale };
+    }
     const handler = createAntigravityHookHandler({ registry });
     const payload = await handler.handle(decoded.payload, { cwd });
     return { exitCode: payload.ok ? 0 : 1, payload };
