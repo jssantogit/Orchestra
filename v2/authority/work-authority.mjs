@@ -7,7 +7,31 @@ function requireState(state) {
   return state;
 }
 
-export function createWorkAuthority({ state } = {}) {
+function isMutationCandidate(operation, workspaceRef) {
+  if (!Array.isArray(operation?.capabilities) || !operation.capabilities.includes("WORKSPACE_EDIT")) return false;
+  if (typeof workspaceRef !== "string" || workspaceRef.trim().length === 0) return true;
+  if (typeof operation.workspaceRef !== "string" || operation.workspaceRef.trim().length === 0) return true;
+  return operation.workspaceRef === workspaceRef;
+}
+
+function factualDenial(reason, operation, assessment = null) {
+  return {
+    allowed: false,
+    reason,
+    operation: operation?.operationId ?? null,
+    ...(assessment?.reason ? { livenessReason: assessment.reason } : {}),
+  };
+}
+
+function validAssessment(operation, assessment) {
+  return Boolean(assessment)
+    && assessment.schema === "orchestra.liveness-assessment.v2"
+    && assessment.operationId === operation.operationId
+    && new Set(["LIVE", "TERMINAL", "STALE_RECOVERABLE", "UNKNOWN"]).has(assessment.liveness)
+    && typeof assessment.reason === "string";
+}
+
+export function createWorkAuthority({ state, operationLiveness = null } = {}) {
   const store = requireState(state);
 
   function currentFacts(projectId) {
@@ -23,12 +47,12 @@ export function createWorkAuthority({ state } = {}) {
       throw error;
     }
     if (!work) return { project, error: { allowed: false, reason: "NO_ACTIVE_WORK" } };
-    const liveOperations = store.operations.listLive({
+    const candidateOperations = store.operations.listLive({
       projectId,
       workId: work.workId,
       generation: work.generation,
     });
-    return { project, work, liveOperations };
+    return { project, work, candidateOperations };
   }
 
   function freshnessDecision(facts, actor, observedInstructionEpoch) {
@@ -37,8 +61,54 @@ export function createWorkAuthority({ state } = {}) {
       work: facts.work,
       actor,
       observedInstructionEpoch,
-      liveOperations: facts.liveOperations,
+      liveOperations: facts.candidateOperations,
     });
+  }
+
+  async function factualMutationOperations(facts, workspaceRef) {
+    const candidates = facts.candidateOperations.filter((operation) => isMutationCandidate(operation, workspaceRef));
+    if (candidates.length === 0) return { liveOperations: [] };
+
+    if (typeof operationLiveness?.assess !== "function") {
+      return { denial: factualDenial("OPERATION_LIVENESS_UNAVAILABLE", candidates[0]) };
+    }
+
+    const assessed = await Promise.all(candidates.map(async (operation) => {
+      try {
+        const assessment = await operationLiveness.assess(operation);
+        if (!validAssessment(operation, assessment)) {
+          return { operation, assessment: null, error: "ASSESSMENT_INVALID" };
+        }
+        return { operation, assessment, error: null };
+      } catch {
+        return { operation, assessment: null, error: "ASSESSMENT_FAILED" };
+      }
+    }));
+
+    const live = assessed.filter((entry) => entry.assessment?.liveness === "LIVE").map((entry) => entry.operation);
+    if (live.length > 0) return { liveOperations: live };
+
+    const invalid = assessed.find((entry) => entry.error);
+    if (invalid) {
+      return {
+        denial: {
+          ...factualDenial("OPERATION_LIVENESS_UNKNOWN", invalid.operation),
+          livenessReason: invalid.error,
+        },
+      };
+    }
+
+    const unknown = assessed.find((entry) => entry.assessment.liveness === "UNKNOWN");
+    if (unknown) {
+      return { denial: factualDenial("OPERATION_LIVENESS_UNKNOWN", unknown.operation, unknown.assessment) };
+    }
+
+    const stale = assessed.find((entry) => entry.assessment.liveness === "STALE_RECOVERABLE");
+    if (stale) {
+      return { denial: factualDenial("STALE_OPERATION_RECOVERY_REQUIRED", stale.operation, stale.assessment) };
+    }
+
+    return { liveOperations: [] };
   }
 
   return Object.freeze({
@@ -72,7 +142,7 @@ export function createWorkAuthority({ state } = {}) {
       };
     },
 
-    authorize({
+    async authorize({
       projectId,
       expectedWorkId,
       actor,
@@ -92,6 +162,14 @@ export function createWorkAuthority({ state } = {}) {
       }
       const freshness = freshnessDecision(facts, actor, observedInstructionEpoch);
       if (!freshness.allowed) return freshness;
+
+      let liveOperations = facts.candidateOperations;
+      if (capability === "WORKSPACE_EDIT") {
+        const factual = await factualMutationOperations(facts, workspaceRef);
+        if (factual.denial) return factual.denial;
+        liveOperations = factual.liveOperations;
+      }
+
       return authorizeCapability({
         project: facts.project,
         work: facts.work,
@@ -99,7 +177,7 @@ export function createWorkAuthority({ state } = {}) {
         capability,
         workspaceRef,
         expectedGeneration,
-        liveOperations: facts.liveOperations,
+        liveOperations,
       });
     },
 
