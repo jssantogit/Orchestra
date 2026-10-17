@@ -25,6 +25,7 @@ import {
   rollbackProjectRuntime,
   updateProjectRuntime,
 } from "../../runtimes/antigravity/.agents/skills/orchestra/project-runtime-manager.mjs";
+import { installAntigravityV2Shim } from "../../v2/providers/antigravity/shim-manager.mjs";
 
 const orchestraRoot = fileURLToPath(new URL("../../", import.meta.url));
 const realSource = join(orchestraRoot, "runtimes", "antigravity");
@@ -455,5 +456,72 @@ test("project runtime CLI: version and doctor work from source wrapper", () => {
     assert.equal(parsedDoctor.healthy, true);
   } finally {
     rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity v2 shim installation requires an explicitly registered Project and preserves v1 files and hooks", {
+  skip: Number(process.versions.node.split(".")[0]) < 24,
+}, async () => {
+  const { createGlobalProjectRegistry } = await import("../../v2/global/project-registry.mjs");
+  const project = makeProject("orch-antigravity-v2-project-");
+  const launcherHome = makeProject("orch-antigravity-v2-global-");
+  let registry;
+  try {
+    execFileSync("git", ["init", "--quiet", project]);
+    const home = join(launcherHome, "orchestra-home");
+    registry = createGlobalProjectRegistry({ home });
+    const registered = await registry.registerWorkspace({
+      root: project,
+      runtimeImage: "2.0.0",
+      instructionEpoch: 7,
+      trustMode: "trusted",
+    });
+    assert.equal(registered.ok, true);
+
+    const hooksPath = join(project, ".agents", "hooks.json");
+    const v1ShimPath = join(project, ".agents", "orchestra-runtime.json");
+    mkdirSync(join(project, ".agents"), { recursive: true });
+    const originalHooks = {
+      "existing-user-hooks": { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "node user-hook.mjs" }] }] },
+      "legacy-v1-runtime": { Stop: [{ hooks: [{ type: "command", command: "node .agents/hooks/stop.mjs" }] }] },
+    };
+    writeFileSync(hooksPath, JSON.stringify(originalHooks, null, 2));
+    writeFileSync(v1ShimPath, "v1 marker\n");
+    const launcherPath = join(launcherHome, "orchestra.mjs");
+    writeFileSync(launcherPath, "process.stdin.pipe(process.stdout);\n");
+
+    const installed = await installAntigravityV2Shim({
+      registry,
+      projectId: registered.project.projectId,
+      targetDir: project,
+      launcherPath,
+      nodePath: process.execPath,
+    });
+    assert.equal(installed.ok, true);
+    assert.deepEqual([...installed.files].sort(), [".agents/hooks.json", ".agents/orchestra-v2-hook.mjs"]);
+    assert.equal(readFileSync(v1ShimPath, "utf8"), "v1 marker\n");
+    const installedHooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+    assert.deepEqual(installedHooks["existing-user-hooks"], originalHooks["existing-user-hooks"]);
+    assert.deepEqual(installedHooks["legacy-v1-runtime"], originalHooks["legacy-v1-runtime"]);
+    assert.ok(installedHooks["orchestra-v2-global"]);
+
+    const unregistered = makeProject("orch-antigravity-v2-unregistered-");
+    try {
+      execFileSync("git", ["init", "--quiet", unregistered]);
+      await assert.rejects(installAntigravityV2Shim({
+        registry,
+        projectId: registered.project.projectId,
+        targetDir: unregistered,
+        launcherPath,
+        nodePath: process.execPath,
+      }), (error) => error.code === "ANTIGRAVITY_V2_PROJECT_NOT_REGISTERED");
+      assert.equal(existsSync(join(unregistered, ".agents")), false);
+    } finally {
+      rmSync(unregistered, { recursive: true, force: true });
+    }
+  } finally {
+    registry?.close();
+    rmSync(project, { recursive: true, force: true });
+    rmSync(launcherHome, { recursive: true, force: true });
   }
 });

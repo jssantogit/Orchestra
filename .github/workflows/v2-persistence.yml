@@ -33,6 +33,9 @@ jobs:
       - name: Run Codex global adapter and provider-event tests
         run: node --test tests/runtime/v2-codex-global-adapter.test.mjs tests/runtime/v2-provider-event-liveness.test.mjs
 
+      - name: Run Antigravity global adapter and provider symmetry tests
+        run: node --test tests/runtime/v2-antigravity-global-adapter.test.mjs tests/runtime/v2-provider-symmetry.test.mjs
+
   v1-regression:
     name: V1 Compatibility Guard
     runs-on: ubuntu-latest

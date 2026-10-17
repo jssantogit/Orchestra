@@ -7,6 +7,7 @@ import {
 } from "./project-registry.mjs";
 import { createGlobalOperationReconciler } from "./reconciliation.mjs";
 import { createCodexHookHandler } from "../providers/codex/hook-handler.mjs";
+import { createAntigravityHookHandler } from "../providers/antigravity/hook-handler.mjs";
 import { installCodexV2Shim } from "../providers/codex/shim-manager.mjs";
 import { fileURLToPath } from "node:url";
 
@@ -139,13 +140,18 @@ function validateCommand({ positionals, options }) {
     return Object.freeze({ kind: "CODEX_HOOK" });
   }
 
+  if (command === "provider" && positionals[1] === "antigravity" && positionals[2] === "hook") {
+    if (positionals.length !== 3) usage("Usage: orchestra provider antigravity hook");
+    return Object.freeze({ kind: "ANTIGRAVITY_HOOK" });
+  }
+
   if (command === "provider" && positionals[1] === "codex" && positionals[2] === "shim"
     && positionals[3] === "install") {
     if (positionals.length !== 4) usage("Usage: orchestra provider codex shim install");
     return Object.freeze({ kind: "CODEX_SHIM_INSTALL" });
   }
 
-  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install> ...");
+  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install|provider antigravity hook> ...");
 }
 
 function notRegisteredResult() {
@@ -255,19 +261,25 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
   }
 }
 
-async function readHookPayload(stdin) {
+async function readHookPayload(stdin, invalidReason = "CODEX_HOOK_PAYLOAD_INVALID") {
   let input = "";
   for await (const chunk of stdin) input += chunk.toString();
-  if (!input.trim()) return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+  if (!input.trim()) return { ok: false, reason: invalidReason };
   try {
     const payload = JSON.parse(input);
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+      return { ok: false, reason: invalidReason };
     }
     return { ok: true, payload };
   } catch {
-    return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+    return { ok: false, reason: invalidReason };
   }
+}
+
+function isAntigravitySessionStart(payload) {
+  return payload.hook_event_name === "SessionStart"
+    || payload.hookEventName === "SessionStart"
+    || payload.eventType === "SessionStart";
 }
 
 async function runCodexHook({ home, cwd, stdin }) {
@@ -294,6 +306,29 @@ async function runCodexHook({ home, cwd, stdin }) {
   const registry = createGlobalProjectRegistry({ home });
   try {
     const handler = createCodexHookHandler({ registry });
+    const payload = await handler.handle(decoded.payload, { cwd });
+    return { exitCode: payload.ok ? 0 : 1, payload };
+  } finally {
+    registry.close();
+  }
+}
+
+async function runAntigravityHook({ home, cwd, stdin }) {
+  const decoded = await readHookPayload(stdin, "ANTIGRAVITY_HOOK_PAYLOAD_INVALID");
+  if (!decoded.ok) return { exitCode: 1, payload: decoded };
+  if (!(await globalRegistryStateExists({ home }))) {
+    const payload = { ok: false, reason: "PROJECT_NOT_REGISTERED", registered: false };
+    if (isAntigravitySessionStart(decoded.payload)) {
+      payload.hookSpecificOutput = {
+        hookEventName: "SessionStart",
+        additionalContext: "PROJECT_NOT_REGISTERED",
+      };
+    }
+    return { exitCode: 1, payload };
+  }
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    const handler = createAntigravityHookHandler({ registry });
     const payload = await handler.handle(decoded.payload, { cwd });
     return { exitCode: payload.ok ? 0 : 1, payload };
   } finally {
@@ -333,6 +368,8 @@ export async function runGlobalCli({
     const home = explicitHome(parsed.options, env);
     const result = command.kind === "CODEX_HOOK"
       ? await runCodexHook({ home, cwd, stdin })
+      : command.kind === "ANTIGRAVITY_HOOK"
+      ? await runAntigravityHook({ home, cwd, stdin })
       : command.kind === "CODEX_SHIM_INSTALL"
       ? await runCodexShimInstall({ home, cwd, launcherPath: fileURLToPath(new URL("./orchestra.mjs", import.meta.url)), nodePath: process.execPath })
         : await runRegistryCommand({ ...parsed, cwd, env });
