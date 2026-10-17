@@ -8,8 +8,10 @@ import {
   validateProjectV2,
   validateWorkUnitV2,
 } from "../../domain/contracts.mjs";
+import { createOperationCorrelationStore } from "../../providers/operation-correlation-store.mjs";
+import { createSessionObservationStore } from "../../providers/session-observation-store.mjs";
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 const WORK_IDENTITY_FIELDS = new Set(["workId", "projectId", "taskId", "generation"]);
 
 function ok(payload = {}) {
@@ -203,6 +205,44 @@ const MIGRATIONS = Object.freeze([
           PRIMARY KEY (project_id, command_id),
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT
         ) STRICT;
+      `);
+    },
+  }),
+  Object.freeze({
+    version: 4,
+    name: "v2_provider_observations_and_correlations",
+    apply(db) {
+      db.exec(`
+        CREATE TABLE provider_session_observations (
+          provider TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          actor_id_hash TEXT NOT NULL,
+          observed_instruction_epoch INTEGER NOT NULL CHECK (observed_instruction_epoch >= 0),
+          observed_work_id TEXT,
+          observed_generation INTEGER CHECK (observed_generation >= 0),
+          observed_at TEXT NOT NULL,
+          PRIMARY KEY (provider, project_id, actor_id_hash),
+          CHECK ((observed_work_id IS NULL) = (observed_generation IS NULL)),
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT,
+          FOREIGN KEY (observed_work_id, project_id) REFERENCES work_units(work_id, project_id) ON DELETE RESTRICT
+        ) STRICT;
+
+        CREATE TABLE provider_operation_correlations (
+          provider TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          correlation_hash TEXT NOT NULL,
+          operation_id TEXT NOT NULL,
+          work_id TEXT NOT NULL,
+          generation INTEGER NOT NULL CHECK (generation >= 0),
+          actor_id_hash TEXT NOT NULL,
+          PRIMARY KEY (provider, project_id, correlation_hash),
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT,
+          FOREIGN KEY (operation_id) REFERENCES operations(operation_id) ON DELETE RESTRICT,
+          FOREIGN KEY (work_id, project_id) REFERENCES work_units(work_id, project_id) ON DELETE RESTRICT
+        ) STRICT;
+
+        CREATE INDEX provider_correlations_operation_idx
+          ON provider_operation_correlations(operation_id);
       `);
     },
   }),
@@ -693,12 +733,16 @@ export function createSqliteState({ dbPath, timeoutMs = 5_000 } = {}) {
   const projects = createProjectRegistry(db);
   const work = createWorkStore(db);
   const operations = createOperationStore(db);
+  const sessionObservations = createSessionObservationStore(db);
+  const operationCorrelations = createOperationCorrelationStore(db);
   let closed = false;
 
   return Object.freeze({
     projects,
     work,
     operations,
+    sessionObservations,
+    operationCorrelations,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     close() {
       if (closed) return;
