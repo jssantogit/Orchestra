@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
-import { installCodexV2Shim } from "../providers/codex/shim-manager.mjs";
-import { installAntigravityV2Shim } from "../providers/antigravity/shim-manager.mjs";
+import { dirname, join } from "node:path";
 
 const RECEIPT_SCHEMA = "orchestra.migration-activation.v2";
 const ALLOWED_PROVIDERS = Object.freeze(["antigravity", "codex"]);
@@ -56,17 +53,6 @@ function validReceipt(receipt, projectId = null) {
   if (!/^sha256:[0-9a-f]{64}$/.test(receipt.inventoryDigest ?? "")) return false;
   if (!nonEmptyString(receipt.verifiedAt) || !Number.isFinite(Date.parse(receipt.verifiedAt))) return false;
   return true;
-}
-
-async function writeReceipt(path, receipt) {
-  const root = path.slice(0, path.lastIndexOf(join("a", "b").slice(1, 2)));
-  await mkdir(join(path, ".."), { recursive: true }).catch(async () => {
-    const { dirname } = await import("node:path");
-    await mkdir(dirname(path), { recursive: true });
-  });
-  const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temp, `${JSON.stringify(receipt)}\n`, { encoding: "utf8", flag: "wx" });
-  await rename(temp, path);
 }
 
 export async function readMigrationActivationReceipt({ home, projectId } = {}) {
@@ -138,8 +124,8 @@ export function createMigrationShimActivator({
   launcherPath,
   nodePath = process.execPath,
   verify,
-  codexInstaller = installCodexV2Shim,
-  antigravityInstaller = installAntigravityV2Shim,
+  codexInstaller,
+  antigravityInstaller,
   now = () => new Date().toISOString(),
 } = {}) {
   if (!registry || typeof registry.inspect !== "function") throw new TypeError("registry.inspect is required");
@@ -278,7 +264,6 @@ export function createMigrationShimActivator({
       };
       const path = receiptFile(home, projectId);
       try {
-        const { dirname } = await import("node:path");
         await mkdir(dirname(path), { recursive: true });
         const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
         await writeFile(temp, `${JSON.stringify(receipt)}\n`, { encoding: "utf8", flag: "wx" });
