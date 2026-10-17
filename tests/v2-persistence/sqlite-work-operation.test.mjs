@@ -73,7 +73,7 @@ async function withDb(fn) {
 
 function seed(state) {
   assert.equal(state.projects.register(project()).ok, true);
-  assert.equal(state.work.open(work()).ok, true);
+  assert.equal(state.work.startCurrent(work()).ok, true);
 }
 
 function runTransitionWorker({ dbPath, signal, command }) {
