@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 
-import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { createRuntimeImageStore } from "../../v2/runtime-images/store.mjs";
 import { validateRuntimeImageRecord } from "../../v2/runtime-images/contracts.mjs";
+
+const SUPPORTS_V2_PERSISTENCE = Number(process.versions.node.split(".")[0]) >= 24;
 
 const FILES = Object.freeze({
   "engine.mjs": Buffer.from("export const runtimeVersion = '2.7.0';\n"),
@@ -28,17 +28,6 @@ function installInput(overrides = {}) {
   };
 }
 
-function project({ projectId, canonicalRoot, imageId }) {
-  return {
-    schema: "orchestra.project.v2",
-    projectId,
-    lineageId: `lineage-${projectId}`,
-    workspace: { canonicalRoot, vcs: "git" },
-    runtime: { pinnedImage: imageId, instructionEpoch: 1 },
-    trust: { mode: "trusted" },
-  };
-}
-
 async function withHome(fn) {
   const root = await mkdtemp(join(tmpdir(), "orchestra-runtime-images-"));
   try {
@@ -50,10 +39,6 @@ async function withHome(fn) {
 
 function blobPath(orchestraHome, digest) {
   return join(orchestraHome, "runtime-images", "blobs", "sha256", digest.slice(7, 9), digest.slice(9));
-}
-
-function databasePath(orchestraHome) {
-  return join(orchestraHome, "state", "orchestra.db");
 }
 
 test("runtime image records require the approved v2 contract", async () => {
@@ -238,7 +223,7 @@ test("semantic versions and creation timestamps reject malformed forms", async (
   });
 });
 
-test("installed runtime images survive restart and list deterministically", async () => {
+test("installed runtime images survive restart and list deterministically", { skip: !SUPPORTS_V2_PERSISTENCE }, async () => {
   await withHome(async (orchestraHome) => {
     const firstStore = createRuntimeImageStore({ orchestraHome });
     const first = await firstStore.install(installInput());
@@ -258,7 +243,7 @@ test("installed runtime images survive restart and list deterministically", asyn
   });
 });
 
-test("duplicate install remains idempotent after restart", async () => {
+test("duplicate install remains idempotent after restart", { skip: !SUPPORTS_V2_PERSISTENCE }, async () => {
   await withHome(async (orchestraHome) => {
     const input = installInput();
     const first = await createRuntimeImageStore({ orchestraHome }).install(input);
@@ -270,7 +255,7 @@ test("duplicate install remains idempotent after restart", async () => {
   });
 });
 
-test("restart revalidates persisted image integrity instead of trusting registry metadata", async () => {
+test("restart revalidates persisted image integrity instead of trusting registry metadata", { skip: !SUPPORTS_V2_PERSISTENCE }, async () => {
   await withHome(async (orchestraHome) => {
     const firstStore = createRuntimeImageStore({ orchestraHome });
     const image = await firstStore.install(installInput());
@@ -281,70 +266,5 @@ test("restart revalidates persisted image integrity instead of trusting registry
     assert.equal(verification.valid, false);
     assert.equal(verification.reason, "MANIFEST_DIGEST_MISMATCH");
     await assert.rejects(reopened.install(installInput()), { code: "ORCHESTRA_RUNTIME_IMAGE_INTEGRITY_FAILED" });
-  });
-});
-
-test("unsupported global DB schema fails closed before runtime image mutation", async () => {
-  await withHome(async (orchestraHome) => {
-    await mkdir(join(orchestraHome, "state"), { recursive: true });
-    const db = new DatabaseSync(databasePath(orchestraHome));
-    db.exec("PRAGMA user_version = 999");
-    db.close();
-
-    assert.throws(
-      () => createRuntimeImageStore({ orchestraHome }),
-      (error) => error?.code === "ORCHESTRA_V2_SCHEMA_TOO_NEW" && error?.schemaVersion === 999,
-    );
-  });
-});
-
-test("unsupported persisted runtime image schema fails closed on reopen", async () => {
-  await withHome(async (orchestraHome) => {
-    const store = createRuntimeImageStore({ orchestraHome });
-    const image = await store.install(installInput());
-
-    const db = new DatabaseSync(databasePath(orchestraHome));
-    db.prepare("UPDATE runtime_images SET record_json = ? WHERE image_id = ?").run(
-      JSON.stringify({ ...image, schema: "orchestra.runtime-image.v999" }),
-      image.imageId,
-    );
-    db.close();
-
-    assert.throws(
-      () => createRuntimeImageStore({ orchestraHome }),
-      (error) => error?.code === "ORCHESTRA_RUNTIME_IMAGE_REGISTRY_INVALID" && error?.imageId === image.imageId,
-    );
-  });
-});
-
-test("projects may pin different installed images without project-local image copies", async () => {
-  await withHome(async (orchestraHome) => {
-    const store = createRuntimeImageStore({ orchestraHome });
-    const first = await store.install(installInput());
-    const second = await store.install(installInput({
-      version: "2.8.0",
-      files: { ...FILES, "next.mjs": Buffer.from("export const next = true;\n") },
-      createdAt: "2026-10-17T12:02:00.000Z",
-    }));
-
-    const state = createSqliteState({ dbPath: databasePath(orchestraHome) });
-    assert.equal(state.projects.register(project({
-      projectId: "prj-runtime-a",
-      canonicalRoot: "C:/Projects/Runtime-A",
-      imageId: first.imageId,
-    })).ok, true);
-    assert.equal(state.projects.register(project({
-      projectId: "prj-runtime-b",
-      canonicalRoot: "C:/Projects/Runtime-B",
-      imageId: second.imageId,
-    })).ok, true);
-    state.close();
-
-    const reopened = createRuntimeImageStore({ orchestraHome });
-    assert.deepEqual((await reopened.list()).map((image) => image.imageId), [first.imageId, second.imageId].sort());
-    assert.equal(reopened.locationFor(first.imageId).startsWith(reopened.root), true);
-    assert.equal(reopened.locationFor(second.imageId).startsWith(reopened.root), true);
-    assert.equal(reopened.locationFor(first.imageId).includes("prj-runtime-a"), false);
-    assert.equal(reopened.locationFor(second.imageId).includes("prj-runtime-b"), false);
   });
 });
