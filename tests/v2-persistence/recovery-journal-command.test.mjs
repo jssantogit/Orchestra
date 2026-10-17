@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { createReferenceState } from "../../v2/state/reference-state.mjs";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 
+const RECOVERY_RESULT_REF = "recovery:op-command-journal:OWNER_TERMINATED_WITHOUT_TERMINALIZATION";
+
 function project() {
   return {
     schema: "orchestra.project.v2",
@@ -74,7 +76,7 @@ function recovery() {
     workspace: { ref: null, status: "ABSENT" },
     terminal: {
       workflowState: "ABORTED",
-      resultRef: "recovery:op-command-journal:OWNER_TERMINATED_WITHOUT_TERMINALIZATION",
+      resultRef: RECOVERY_RESULT_REF,
     },
     cleanup: { status: "NOT_REQUIRED" },
     outcome: "RECOVERED",
@@ -86,6 +88,12 @@ function seed(state) {
   assert.equal(state.projects.register(project()).ok, true);
   assert.equal(state.work.startCurrent(work()).ok, true);
   assert.equal(state.operations.begin({ expectedGeneration: 0, operation: operation() }).ok, true);
+  const terminal = state.operations.terminalize({
+    operationId: "op-command-journal",
+    workflowState: "ABORTED",
+    resultRef: RECOVERY_RESULT_REF,
+  });
+  assert.equal(terminal.ok, true);
   return state;
 }
 
