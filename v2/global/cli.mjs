@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+import { access } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   createGlobalProjectRegistry,
   globalRegistryStateExists,
@@ -7,9 +11,19 @@ import {
 } from "./project-registry.mjs";
 import { createGlobalOperationReconciler } from "./reconciliation.mjs";
 import { createCodexHookHandler } from "../providers/codex/hook-handler.mjs";
+import { normalizeCodexActor } from "../providers/codex/actor.mjs";
 import { createAntigravityHookHandler } from "../providers/antigravity/hook-handler.mjs";
+import { normalizeAntigravityActor } from "../providers/antigravity/actor.mjs";
 import { installCodexV2Shim } from "../providers/codex/shim-manager.mjs";
-import { fileURLToPath } from "node:url";
+import { createRuntimeImageManager } from "../runtime-images/manager.mjs";
+import { loadRuntimeImageSource } from "../runtime-images/source.mjs";
+import { createRuntimeImageStore } from "../runtime-images/store.mjs";
+
+const V2_ENGINE_COMPATIBILITY_VERSION = "2.0.0";
+const V2_PROVIDER_ADAPTER_VERSIONS = Object.freeze({
+  codex: "2.0.0",
+  antigravity: "2.0.0",
+});
 
 function cliError(code, message, fields = {}) {
   const error = new Error(message);
@@ -79,6 +93,16 @@ function validateCommand({ positionals, options }) {
     return Object.freeze({ kind: "HOME" });
   }
 
+  if (command === "runtime" && positionals[1] === "list") {
+    if (positionals.length !== 2) usage("Usage: orchestra runtime list");
+    return Object.freeze({ kind: "RUNTIME_LIST" });
+  }
+
+  if (command === "runtime" && positionals[1] === "install") {
+    if (positionals.length !== 3) usage("Usage: orchestra runtime install <source>");
+    return Object.freeze({ kind: "RUNTIME_INSTALL", source: positionals[2] });
+  }
+
   if (command === "register") {
     if (positionals.length > 2) {
       usage("Usage: orchestra register [workspace] --runtime-image <version> --instruction-epoch <n> --trust <mode>");
@@ -97,6 +121,20 @@ function validateCommand({ positionals, options }) {
   if (command === "project" && positionals[1] === "status") {
     if (positionals.length > 3) usage("Usage: orchestra project status [workspace|projectId]");
     return Object.freeze({ kind: "PROJECT_STATUS", target: positionals[2] || null });
+  }
+
+  if (command === "project" && ["upgrade", "rollback"].includes(positionals[1])) {
+    if (positionals.length !== 3) {
+      usage(`Usage: orchestra project ${positionals[1]} <projectId> --runtime-image <imageId> --command-id <id>`);
+    }
+    if (!options["runtime-image"]) usage("--runtime-image is required");
+    if (!options["command-id"]) usage("--command-id is required");
+    return Object.freeze({
+      kind: positionals[1] === "upgrade" ? "PROJECT_UPGRADE" : "PROJECT_ROLLBACK",
+      projectId: positionals[2],
+      runtimeImage: options["runtime-image"],
+      commandId: options["command-id"],
+    });
   }
 
   if (command === "project" && positionals[1] === "recover") {
@@ -151,7 +189,7 @@ function validateCommand({ positionals, options }) {
     return Object.freeze({ kind: "CODEX_SHIM_INSTALL" });
   }
 
-  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install|provider antigravity hook> ...");
+  usage("Usage: orchestra <home|runtime install|runtime list|register|project status|project upgrade|project rollback|project recover|project resolve-dirty|project rebind|provider codex hook|provider codex shim install|provider antigravity hook> ...");
 }
 
 function notRegisteredResult() {
@@ -161,12 +199,94 @@ function notRegisteredResult() {
   };
 }
 
+async function runtimeImagesExist(home) {
+  try {
+    await access(join(home, "runtime-images"));
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function runRuntimeCommand({ command, home, cwd }) {
+  if (command.kind === "RUNTIME_LIST") {
+    if (!(await runtimeImagesExist(home))) {
+      return { exitCode: 0, payload: { ok: true, images: [] } };
+    }
+    const imageStore = createRuntimeImageStore({ orchestraHome: home });
+    return { exitCode: 0, payload: { ok: true, images: await imageStore.list() } };
+  }
+
+  const source = await loadRuntimeImageSource(resolve(cwd, command.source));
+  const imageStore = createRuntimeImageStore({ orchestraHome: home });
+  const image = await imageStore.install(source);
+  const verification = await imageStore.verify(image.imageId);
+  if (!verification.valid) {
+    throw cliError(
+      "ORCHESTRA_RUNTIME_IMAGE_INTEGRITY_FAILED",
+      `Installed runtime image failed verification: ${image.imageId}`,
+      { imageId: image.imageId },
+    );
+  }
+  return { exitCode: 0, payload: { ok: true, image, verification } };
+}
+
+async function runProjectRuntimeChange({ command, home }) {
+  if (!(await globalRegistryStateExists({ home }))) {
+    return { exitCode: 1, payload: { ok: false, reason: "PROJECT_NOT_FOUND" } };
+  }
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    const imageStore = createRuntimeImageStore({ orchestraHome: home });
+    const statusReconciler = createGlobalOperationReconciler({
+      state: registry.state,
+      home,
+    });
+    const manager = createRuntimeImageManager({
+      state: registry.state,
+      imageStore,
+      statusReconciler,
+      engineVersion: V2_ENGINE_COMPATIBILITY_VERSION,
+      providerAdapterVersions: V2_PROVIDER_ADAPTER_VERSIONS,
+    });
+    const input = {
+      projectId: command.projectId,
+      targetImageId: command.runtimeImage,
+      commandId: command.commandId,
+    };
+    const result = command.kind === "PROJECT_UPGRADE"
+      ? await manager.upgradeProject(input)
+      : await manager.rollbackProject(input);
+    if (!result.ok) return { exitCode: 1, payload: result };
+    return {
+      exitCode: 0,
+      payload: {
+        ...result,
+        oldPin: result.previousImageId,
+        newPin: result.targetImageId,
+        instructionEpoch: result.project.runtime.instructionEpoch,
+      },
+    };
+  } finally {
+    registry.close();
+  }
+}
+
 async function runRegistryCommand({ positionals, options, cwd, env }) {
   const home = explicitHome(options, env);
   const command = validateCommand({ positionals, options });
 
   if (command.kind === "HOME") {
     return { exitCode: 0, payload: { ok: true, home } };
+  }
+
+  if (["RUNTIME_LIST", "RUNTIME_INSTALL"].includes(command.kind)) {
+    return runRuntimeCommand({ command, home, cwd });
+  }
+
+  if (["PROJECT_UPGRADE", "PROJECT_ROLLBACK"].includes(command.kind)) {
+    return runProjectRuntimeChange({ command, home });
   }
 
   if (["PROJECT_STATUS", "PROJECT_RECOVER", "PROJECT_RESOLVE_DIRTY"].includes(command.kind)
@@ -282,6 +402,48 @@ function isAntigravitySessionStart(payload) {
     || payload.eventType === "SessionStart";
 }
 
+function isAntigravityPreToolUse(payload) {
+  return payload.hook_event_name === "PreToolUse"
+    || payload.hookEventName === "PreToolUse"
+    || payload.eventType === "PreToolUse"
+    || payload.eventType === "BeforeTool";
+}
+
+async function staleProviderObservation({ registry, provider, payload, cwd, normalizeActor }) {
+  let project;
+  let actor;
+  try {
+    project = await registry.resolveWorkspace(
+      typeof payload.cwd === "string" && payload.cwd.trim().length > 0 ? payload.cwd : cwd,
+    );
+    actor = normalizeActor(payload);
+  } catch {
+    return null;
+  }
+  if (!project) return null;
+  const observation = registry.state.sessionObservations.get({
+    provider,
+    projectId: project.projectId,
+    actorIdHash: actor.actorIdHash,
+  });
+  if (!observation || observation.observedInstructionEpoch === project.runtime.instructionEpoch) return null;
+
+  const diagnostic = {
+    reason: "SESSION_RUNTIME_STALE",
+    projectId: project.projectId,
+    currentInstructionEpoch: project.runtime.instructionEpoch,
+  };
+  return {
+    ok: false,
+    ...diagnostic,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: JSON.stringify(diagnostic),
+    },
+  };
+}
+
 async function runCodexHook({ home, cwd, stdin }) {
   const decoded = await readHookPayload(stdin);
   if (!decoded.ok) return { exitCode: 1, payload: decoded };
@@ -305,6 +467,16 @@ async function runCodexHook({ home, cwd, stdin }) {
   }
   const registry = createGlobalProjectRegistry({ home });
   try {
+    if (decoded.payload.hook_event_name === "PreToolUse") {
+      const stale = await staleProviderObservation({
+        registry,
+        provider: "codex",
+        payload: decoded.payload,
+        cwd,
+        normalizeActor: normalizeCodexActor,
+      });
+      if (stale) return { exitCode: 1, payload: stale };
+    }
     const handler = createCodexHookHandler({ registry });
     const payload = await handler.handle(decoded.payload, { cwd });
     return { exitCode: payload.ok ? 0 : 1, payload };
@@ -328,6 +500,16 @@ async function runAntigravityHook({ home, cwd, stdin }) {
   }
   const registry = createGlobalProjectRegistry({ home });
   try {
+    if (isAntigravityPreToolUse(decoded.payload)) {
+      const stale = await staleProviderObservation({
+        registry,
+        provider: "antigravity",
+        payload: decoded.payload,
+        cwd,
+        normalizeActor: normalizeAntigravityActor,
+      });
+      if (stale) return { exitCode: 1, payload: stale };
+    }
     const handler = createAntigravityHookHandler({ registry });
     const payload = await handler.handle(decoded.payload, { cwd });
     return { exitCode: payload.ok ? 0 : 1, payload };
