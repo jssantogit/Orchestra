@@ -267,8 +267,8 @@ export function createOperationReconciler({
     });
   }
 
-  function recoveryRecord({ operation, commandId, assessment, workspace, terminal, cleanupStatus, outcome }) {
-    return {
+  function recoveryRecord({ operation, commandId, assessment, workspace, terminal, cleanupStatus, outcome, resolutionAction = null }) {
+    const record = {
       schema: "orchestra.operation-recovery.v2",
       projectId: operation.projectId,
       operationId: operation.operationId,
@@ -292,6 +292,8 @@ export function createOperationReconciler({
       outcome,
       recordedAt: now(),
     };
+    if (resolutionAction !== null) record.resolutionAction = resolutionAction;
+    return record;
   }
 
   function writeRecovery(record) {
@@ -474,6 +476,7 @@ export function createOperationReconciler({
         terminal: operation,
         cleanupStatus: "PRESERVED",
         outcome: "STALE_DIRTY",
+        resolutionAction: action,
       });
       const written = writeRecovery(record);
       if (!written.ok) return written;
@@ -506,6 +509,7 @@ export function createOperationReconciler({
           terminal: operation,
           cleanupStatus: "PRESERVED",
           outcome: "STALE_DIRTY",
+          resolutionAction: action,
         });
         const written = writeRecovery(record);
         if (!written.ok) return written;
@@ -542,6 +546,7 @@ export function createOperationReconciler({
       terminal: operation,
       cleanupStatus: "NOT_REQUIRED",
       outcome: "RECOVERED",
+      resolutionAction: action,
     });
     const written = writeRecovery(record);
     if (!written.ok) return written;
