@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { createGlobalProjectRegistry } from "../../v2/global/project-registry.mjs";
@@ -17,6 +18,10 @@ import { createOperationLivenessService } from "../../v2/liveness/operation-live
 import { createHostProcessIdentityReader, createLocalProcessOwnerProbe } from "../../v2/liveness/local-process-probe.mjs";
 import { createAntigravityHookHandler } from "../../v2/providers/antigravity/hook-handler.mjs";
 import { createAntigravityProcessExecution } from "../../v2/providers/antigravity/process-execution.mjs";
+import {
+  buildAntigravityV2ShimArtifacts,
+  installAntigravityV2Shim,
+} from "../../v2/providers/antigravity/shim-manager.mjs";
 import { createAntigravityDelegationExecutor } from "../../providers/antigravity/delegation-executor.mjs";
 
 import { normalizeAntigravityActor } from "../../v2/providers/antigravity/actor.mjs";
@@ -1275,6 +1280,295 @@ test("Antigravity process fencing rejects an Operation before the child payload 
       command: "agy", args: [], cwd, timeoutMs: 2_000, maxOutputBytes: 1_024,
     }), (error) => error.code === "STALE_GENERATION");
     assert.equal(existsSync(payloadMarker), false);
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity v2 shim artifacts call only the stable global launcher on POSIX and Windows", () => {
+  const root = mkdtempSync(join(process.cwd(), ".orchestra antigravity shim's execution-"));
+  try {
+    const shimPath = join(root, "shim's path.mjs");
+    writeFileSync(shimPath, "process.stdout.write('quoted path ran');\n");
+    const posixShim = process.platform === "win32"
+      ? execFileSync(join(dirname("C:\\Program Files\\Git\\bin\\bash.exe"), "..", "usr", "bin", "cygpath.exe"), ["-m", shimPath], { encoding: "utf8" }).trim()
+      : shimPath;
+    const posixNode = process.platform === "win32"
+      ? execFileSync(join(dirname("C:\\Program Files\\Git\\bin\\bash.exe"), "..", "usr", "bin", "cygpath.exe"), ["-m", process.execPath], { encoding: "utf8" }).trim()
+      : process.execPath;
+    const posix = buildAntigravityV2ShimArtifacts({
+      launcherPath: "/opt/Orchestra Tools/orchestra.mjs",
+      nodePath: posixNode,
+      shimPath: posixShim,
+    });
+    const bashPath = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/bash";
+    const posixRun = spawnSync(bashPath, ["-lc", posix.command], {
+      encoding: "utf8",
+      env: process.platform === "win32" ? { ...process.env, MSYS_NO_PATHCONV: "1" } : process.env,
+    });
+    assert.equal(posixRun.status, 0, posixRun.stderr);
+    assert.equal(posixRun.stdout, "quoted path ran");
+
+    const windows = buildAntigravityV2ShimArtifacts({
+      launcherPath: "C:\\Program Files\\Orchestra\\orchestra.mjs",
+      nodePath: process.execPath,
+      shimPath,
+    });
+    assert.match(windows.commandWindows, /Program Files/);
+    assert.match(windows.commandWindows, /''/);
+    assert.match(windows.hooksJson, /commandWindows/);
+    if (process.platform === "win32") {
+      const windowsRun = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-Command", windows.commandWindows], {
+        encoding: "utf8",
+      });
+      assert.equal(windowsRun.status, 0, windowsRun.stderr);
+      assert.equal(windowsRun.stdout.trim(), "quoted path ran");
+    }
+
+    assert.ok(posix.command.includes("'\"'\"'"));
+    assert.match(posix.shimSource, /Orchestra Tools/);
+    assert.match(posix.shimSource, /provider.*antigravity.*hook/);
+    assert.doesNotMatch(posix.shimSource, /WorkLease|Work Lease|Dream|recovery|policy|copied global core/i);
+    assert.match(posix.shimSource, /from "node:child_process"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity v2 shim installs only registered-project transport files and forwards provider payload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-v2-shim-install-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    const launcherDir = join(root, "global");
+    await mkdir(launcherDir, { recursive: true });
+    const launcherPath = join(launcherDir, "orchestra.mjs");
+    await writeFile(launcherPath, `
+      const chunks = [];
+      for await (const chunk of process.stdin) chunks.push(chunk);
+      const input = Buffer.concat(chunks).toString();
+      if (process.argv.slice(2).join(" ") !== "provider antigravity hook") process.exit(9);
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        reason: null,
+        forwarded: input,
+        hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "fixture-context" },
+      }));
+    `);
+    const installed = await installAntigravityV2Shim({
+      registry,
+      projectId: project.projectId,
+      targetDir: cwd,
+      launcherPath,
+      nodePath: process.execPath,
+    });
+
+    assert.equal(installed.ok, true);
+    assert.deepEqual([...installed.files].sort(), [".agents/hooks.json", ".agents/orchestra-v2-hook.mjs"]);
+    assert.equal(existsSync(join(cwd, ".agents", "skills")), false);
+    assert.equal(existsSync(join(cwd, ".agents", "state")), false);
+    const shimPath = join(cwd, ".agents", "orchestra-v2-hook.mjs");
+    const shim = await readFile(shimPath, "utf8");
+    assert.match(shim, /provider.*antigravity.*hook/);
+    assert.doesNotMatch(shim, /WorkLease|Work Lease|Dream|recovery|policy|copied global core/i);
+    assert.match(shim, /from "node:child_process"/);
+
+    const input = JSON.stringify({ eventType: "SessionStart", conversationId: "factual-session" });
+    const forwarded = spawnSync(process.execPath, [shimPath], {
+      cwd,
+      input,
+      encoding: "utf8",
+    });
+    assert.equal(forwarded.status, 0, forwarded.stderr);
+    assert.deepEqual(JSON.parse(forwarded.stdout), {
+      ok: true,
+      reason: null,
+      forwarded: input,
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "fixture-context" },
+    });
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("installed Antigravity v2 shim routes SessionStart, intake, read, mutation, and terminal events through the real global launcher", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-v2-shim-e2e-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    const launcherPath = fileURLToPath(new URL("../../v2/global/orchestra.mjs", import.meta.url));
+    const install = await installAntigravityV2Shim({
+      registry,
+      projectId: project.projectId,
+      targetDir: cwd,
+      launcherPath,
+      nodePath: process.execPath,
+    });
+    assert.equal(install.ok, true);
+    const shimPath = join(cwd, ".agents", "orchestra-v2-hook.mjs");
+    const invoke = (payload) => {
+      const result = spawnSync(process.execPath, [shimPath], {
+        cwd,
+        env: { ...process.env, ORCHESTRA_HOME: home },
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, `shim failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      return JSON.parse(result.stdout);
+    };
+
+    const conversationId = "real-global-shim-conversation";
+    const attached = invoke({ hookEventName: "SessionStart", conversationId });
+    assert.equal(attached.ok, true);
+    assert.equal(attached.projectId, project.projectId);
+    assert.ok(attached.work.workId);
+    const context = JSON.parse(attached.hookSpecificOutput.additionalContext);
+    assert.equal(context.schema, "orchestra.antigravity-session-context.v2");
+    assert.equal(context.projectId, project.projectId);
+
+    const read = invoke({
+      hookEventName: "PreToolUse",
+      conversationId,
+      toolCall: { id: "real-global-read", name: "read_file" },
+    });
+    assert.equal(read.ok, true);
+    assert.equal(read.hookSpecificOutput.permissionDecision, "allow");
+
+    const started = invoke({
+      hookEventName: "PreToolUse",
+      conversationId,
+      toolCall: { id: "real-global-write", name: "write_file", args: { path: "src/main.mjs" } },
+    });
+    assert.equal(started.ok, true);
+    assert.equal(started.hookSpecificOutput.permissionDecision, "allow");
+    const operationId = started.operation.operationId;
+    const terminal = invoke({
+      hookEventName: "PostToolUse",
+      conversationId,
+      toolCall: { id: "real-global-write", name: "write_file" },
+      is_error: false,
+    });
+    assert.equal(terminal.ok, true);
+    assert.equal(terminal.operation.operationId, operationId);
+    assert.equal(registry.state.operations.inspect(operationId).workflowState, "SUCCEEDED");
+
+    const intakeRoot = join(root, "intake-project-root");
+    await mkdir(intakeRoot, { recursive: true });
+    const { cwd: intakeCwd, project: intakeProject } = await prepareProject({
+      root: intakeRoot,
+      home,
+      active: false,
+      workspaceName: "intake-workspace",
+    });
+    const intakeInstall = await installAntigravityV2Shim({
+      registry,
+      projectId: intakeProject.projectId,
+      targetDir: intakeCwd,
+      launcherPath,
+      nodePath: process.execPath,
+    });
+    assert.equal(intakeInstall.ok, true);
+    const intake = spawnSync(process.execPath, [join(intakeCwd, ".agents", "orchestra-v2-hook.mjs")], {
+      cwd: intakeCwd,
+      env: { ...process.env, ORCHESTRA_HOME: home },
+      input: JSON.stringify({ hookEventName: "SessionStart", conversationId: "real-global-intake" }),
+      encoding: "utf8",
+    });
+    assert.equal(intake.status, 0, intake.stderr);
+    const intakeResponse = JSON.parse(intake.stdout);
+    assert.equal(intakeResponse.reason, "ORCHESTRA_V2_INTAKE");
+    assert.equal(intakeResponse.work, null);
+    assert.equal(intakeResponse.generation, null);
+    assert.equal(JSON.parse(intakeResponse.hookSpecificOutput.additionalContext).mutationAuthority, "UNAVAILABLE_UNTIL_WORK_STARTS");
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity v2 shim validates response shape and fails closed actionably when global routing is invalid", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-v2-shim-failure-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    registry = createGlobalProjectRegistry({ home });
+    const launcherPath = join(root, "global", "orchestra.mjs");
+    await mkdir(join(root, "global"), { recursive: true });
+    await writeFile(launcherPath, "process.stdout.write('{}');\n");
+    await installAntigravityV2Shim({
+      registry,
+      projectId: project.projectId,
+      targetDir: cwd,
+      launcherPath,
+      nodePath: process.execPath,
+    });
+    const shimPath = join(cwd, ".agents", "orchestra-v2-hook.mjs");
+    const invalidResponses = [
+      {
+        payload: { hookEventName: "SessionStart", conversationId: "factual-session" },
+        response: { ok: true },
+      },
+      {
+        payload: { hook_event_name: "PreToolUse", conversationId: "factual-session" },
+        response: { ok: true },
+      },
+      {
+        payload: { hook_event_name: "PreToolUse", conversationId: "factual-session" },
+        response: { ok: false, reason: "DENIED", hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } },
+      },
+      {
+        payload: { hook_event_name: "PreToolUse", conversationId: "factual-session" },
+        response: { ok: true, reason: null, hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" } },
+      },
+      {
+        payload: { hook_event_name: "PreToolUse", conversationId: "factual-session" },
+        response: { ok: false, reason: "DENIED", hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" } },
+        exitCode: 0,
+      },
+      {
+        payload: { eventType: "ToolCall", conversationId: "factual-session", toolCall: { name: "write_file" } },
+        response: "not-json",
+      },
+      {
+        payload: { conversationId: "factual-session", toolCall: { name: "write_file" } },
+        response: "not-json",
+      },
+    ];
+    for (const { payload, response, exitCode = 0 } of invalidResponses) {
+      const serialized = typeof response === "string" ? response : JSON.stringify(response);
+      await writeFile(launcherPath, `process.stdout.write(${JSON.stringify(serialized)}); process.exitCode = ${exitCode};\n`);
+      const result = spawnSync(process.execPath, [shimPath], {
+        cwd,
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+      });
+      assert.notEqual(result.status, 0, `response should fail closed: ${serialized}`);
+      const decoded = JSON.parse(result.stdout);
+      assert.equal(decoded.ok, false);
+      assert.equal(decoded.reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
+      assert.match(decoded.message, /global Orchestra/i);
+      if (["PreToolUse", "ToolCall"].includes(payload.hook_event_name || payload.eventType)
+        || (payload.toolCall && !payload.eventType && !payload.hookEventName && !payload.hook_event_name)) {
+        assert.equal(decoded.hookSpecificOutput?.hookEventName, "PreToolUse");
+        assert.equal(decoded.hookSpecificOutput?.permissionDecision, "deny");
+      }
+    }
+
+    await rm(launcherPath);
+    const missingLauncher = spawnSync(process.execPath, [shimPath], {
+      cwd,
+      input: JSON.stringify({ hook_event_name: "PreToolUse", conversationId: "factual-session" }),
+      encoding: "utf8",
+    });
+    assert.notEqual(missingLauncher.status, 0);
+    assert.equal(JSON.parse(missingLauncher.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
   } finally {
     registry?.close();
     await rm(root, { recursive: true, force: true });

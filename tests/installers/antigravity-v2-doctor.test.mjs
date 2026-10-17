@@ -67,6 +67,22 @@ test("source-level Antigravity update keeps v2 metadata authoritative", () => {
   }
 });
 
+test("unmigrated Antigravity installation keeps its v1 hooks and does not gain the v2 shim", () => {
+  const project = makeProject();
+  try {
+    const install = runNode([installScript, project]);
+    assert.equal(install.status, 0, `install failed\nstdout:\n${install.stdout}\nstderr:\n${install.stderr}`);
+
+    const installedHooks = JSON.parse(readFileSync(join(project, ".agents", "hooks.json"), "utf8"));
+    const sourceHooks = JSON.parse(readFileSync(join(orchestraRoot, "runtimes", "antigravity", ".agents", "hooks.json"), "utf8"));
+    assert.deepEqual(installedHooks, sourceHooks);
+    assert.equal(existsSync(join(project, ".agents", "orchestra-v2-hook.mjs")), false);
+    assert.equal(existsSync(join(project, ".agents", "skills", "orchestra")), true);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
 test("source-level Antigravity update remains blocked while runtime state is active", () => {
   const project = makeProject();
   try {
