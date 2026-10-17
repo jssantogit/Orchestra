@@ -142,6 +142,11 @@ export function createSqliteRecoveryJournal({ dbPath, state, timeoutMs = 5_000 }
       }
     },
 
+    byCommand({ projectId, commandId } = {}) {
+      const row = getByCommand.get(projectId, commandId);
+      return row ? JSON.parse(row.record_json) : null;
+    },
+
     latest({ projectId, operationId } = {}) {
       const row = getLatest.get(projectId, operationId);
       return row ? JSON.parse(row.record_json) : null;
