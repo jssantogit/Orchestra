@@ -184,6 +184,17 @@ const MIGRATIONS = Object.freeze([
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT,
           FOREIGN KEY (work_id, project_id) REFERENCES work_units(work_id, project_id) ON DELETE RESTRICT
         ) STRICT;
+
+        CREATE TABLE work_head_commands (
+          project_id TEXT NOT NULL,
+          command_id TEXT NOT NULL,
+          request_json TEXT NOT NULL,
+          request_digest TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (project_id, command_id),
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT
+        ) STRICT;
       `);
     },
   }),
@@ -338,6 +349,17 @@ function createWorkStore(db) {
   const insertHead = db.prepare(`
     INSERT INTO project_work_heads(project_id, work_id, revision, created_at, updated_at)
     VALUES (?, ?, 0, ?, ?)
+  `);
+  const deleteHead = db.prepare("DELETE FROM project_work_heads WHERE project_id = ? AND work_id = ?");
+  const getHeadCommand = db.prepare("SELECT * FROM work_head_commands WHERE project_id = ? AND command_id = ?");
+  const insertHeadCommand = db.prepare(`
+    INSERT INTO work_head_commands(project_id, command_id, request_json, request_digest, result_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const findLiveOperation = db.prepare(`
+    SELECT operation_id FROM operations
+    WHERE project_id = ? AND work_id = ? AND generation = ? AND liveness = 'LIVE'
+    LIMIT 1
   `);
   const insertWork = db.prepare(`
     INSERT INTO work_units(
@@ -499,6 +521,69 @@ function createWorkStore(db) {
         }
 
         insertTransition.run(workId, transitionId, requestJson, digest, nextJson, now);
+        return ok({ work: next, replayed: false });
+      });
+    },
+
+    abandonCurrent({ projectId, expectedWorkId, expectedGeneration, commandId, reason } = {}) {
+      if (typeof projectId !== "string" || typeof expectedWorkId !== "string"
+        || !Number.isInteger(expectedGeneration) || expectedGeneration < 0
+        || typeof commandId !== "string" || commandId.length === 0
+        || typeof reason !== "string" || reason.trim().length === 0) {
+        return fail("WORK_ABANDON_INVALID");
+      }
+
+      const request = { projectId, expectedWorkId, expectedGeneration, commandId, reason };
+      const requestJson = canonicalJson(request);
+      const digest = requestDigest(request);
+
+      return transaction(db, () => {
+        const prior = getHeadCommand.get(projectId, commandId);
+        if (prior) {
+          if (prior.request_digest !== digest || prior.request_json !== requestJson) return fail("IDEMPOTENCY_CONFLICT");
+          return ok({ work: JSON.parse(prior.result_json), replayed: true });
+        }
+
+        const head = getHeadId.get(projectId);
+        if (!head) return fail("NO_ACTIVE_WORK");
+        if (head.work_id !== expectedWorkId) return fail("STALE_ACTIVE_WORK", { currentWorkId: head.work_id });
+
+        const currentRow = getById.get(head.work_id);
+        if (!currentRow || currentRow.project_id !== projectId) return fail("ACTIVE_WORK_CORRUPT");
+        const current = parseRecord(currentRow);
+        if (current.generation !== expectedGeneration) {
+          return fail("STALE_GENERATION", { currentGeneration: current.generation });
+        }
+
+        const live = findLiveOperation.get(projectId, current.workId, current.generation);
+        if (live) return fail("LIVE_OPERATION_EXISTS", { operationId: live.operation_id });
+
+        const next = { ...current, state: "ABANDONED", generation: current.generation + 1 };
+        if (!validateWorkUnitV2(next).valid) return fail("WORK_ABANDON_INVALID");
+        const nextJson = canonicalJson(next);
+        const now = new Date().toISOString();
+        const update = updateWork.run(
+          next.generation,
+          next.state,
+          nextJson,
+          now,
+          current.workId,
+          projectId,
+          expectedGeneration,
+        );
+        if (Number(update.changes) !== 1) {
+          const latest = getById.get(current.workId);
+          return fail("STALE_GENERATION", { currentGeneration: Number(latest?.generation ?? -1) });
+        }
+
+        const deleted = deleteHead.run(projectId, current.workId);
+        if (Number(deleted.changes) !== 1) {
+          const error = new Error("ORCHESTRA_ACTIVE_WORK_HEAD_CHANGED");
+          error.code = "ORCHESTRA_ACTIVE_WORK_HEAD_CHANGED";
+          throw error;
+        }
+
+        insertHeadCommand.run(projectId, commandId, requestJson, digest, nextJson, now);
         return ok({ work: next, replayed: false });
       });
     },
