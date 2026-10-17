@@ -55,3 +55,19 @@ test("invalid register options are rejected before creating global persistence",
     await assertMissing(home);
   });
 });
+
+test("project status by id does not initialize persistence when no registry exists", async () => {
+  await withSandbox(async (root) => {
+    const home = join(root, "home");
+    const result = runCli({ home, cwd: root, args: ["project", "status", "prj_missing"] });
+
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: false,
+      reason: "PROJECT_NOT_REGISTERED",
+      registered: false,
+    });
+    assert.equal(result.stderr, "");
+    await assertMissing(home);
+  });
+});
