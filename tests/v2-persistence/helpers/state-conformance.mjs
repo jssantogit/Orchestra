@@ -54,9 +54,9 @@ export function defineStateConformanceSuite(test, { name, create }) {
       assert.equal(registered.ok, true);
       assert.equal(state.projects.register(project()).replayed, true);
 
-      const opened = state.work.open(work());
+      const opened = state.work.startCurrent(work());
       assert.equal(opened.ok, true);
-      assert.equal(state.work.open(work()).replayed, true);
+      assert.equal(state.work.startCurrent(work()).replayed, true);
 
       const transition = {
         projectId: "prj-conformance",
