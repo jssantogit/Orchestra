@@ -55,5 +55,14 @@ jobs:
           npm run check:runtime-core
           git diff --check
 
+      - name: Verify v2 launcher fails structurally before SQLite on Node 20
+        run: >-
+          node -e "const {spawnSync}=require('node:child_process');
+          const r=spawnSync(process.execPath,['v2/global/orchestra.mjs','home'],{encoding:'utf8'});
+          let body=null; try { body=JSON.parse(r.stderr); } catch {}
+          if (r.status!==2 || r.stdout!=='' || body?.code!=='ORCHESTRA_V2_RUNTIME_UNSUPPORTED' || body?.minimumNodeMajor!==24) {
+            console.error(JSON.stringify({status:r.status,stdout:r.stdout,stderr:r.stderr})); process.exit(1);
+          }"
+
       - name: Run full v1 regression
         run: npm test
