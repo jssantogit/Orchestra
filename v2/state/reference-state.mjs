@@ -36,6 +36,10 @@ function rebindKey({ projectId, expectedRoot, newRoot }) {
   return JSON.stringify([projectId, expectedRoot, newRoot]);
 }
 
+function commandKey(projectId, commandId) {
+  return JSON.stringify([projectId, commandId]);
+}
+
 export function createReferenceState() {
   const projectsById = new Map();
   const projectIdByRoot = new Map();
@@ -45,6 +49,7 @@ export function createReferenceState() {
   const workOpenRequestsById = new Map();
   const transitionsByWork = new Map();
   const currentWorkIdByProject = new Map();
+  const workHeadCommands = new Map();
   const operationsById = new Map();
   const operationBeginRequestsById = new Map();
 
@@ -226,6 +231,47 @@ export function createReferenceState() {
 
       worksById.set(workId, next);
       transitionLog.set(transitionId, { request, work: clone(next) });
+      return success({ work: clone(next), replayed: false });
+    },
+
+    abandonCurrent({ projectId, expectedWorkId, expectedGeneration, commandId, reason } = {}) {
+      if (typeof projectId !== "string" || typeof expectedWorkId !== "string"
+        || !Number.isInteger(expectedGeneration) || expectedGeneration < 0
+        || typeof commandId !== "string" || commandId.length === 0
+        || typeof reason !== "string" || reason.trim().length === 0) {
+        return failure("WORK_ABANDON_INVALID");
+      }
+
+      const request = clone({ projectId, expectedWorkId, expectedGeneration, commandId, reason });
+      const key = commandKey(projectId, commandId);
+      const prior = workHeadCommands.get(key);
+      if (prior) {
+        if (!isDeepStrictEqual(prior.request, request)) return failure("IDEMPOTENCY_CONFLICT");
+        return success({ work: clone(prior.work), replayed: true });
+      }
+
+      const currentWorkId = currentWorkIdByProject.get(projectId);
+      if (!currentWorkId) return failure("NO_ACTIVE_WORK");
+      if (currentWorkId !== expectedWorkId) return failure("STALE_ACTIVE_WORK", { currentWorkId });
+
+      const current = worksById.get(currentWorkId);
+      if (!current || current.projectId !== projectId) return failure("ACTIVE_WORK_CORRUPT");
+      if (current.generation !== expectedGeneration) {
+        return failure("STALE_GENERATION", { currentGeneration: current.generation });
+      }
+
+      const live = [...operationsById.values()].find((operation) =>
+        operation.projectId === projectId
+        && operation.workId === current.workId
+        && operation.generation === current.generation
+        && operation.liveness === "LIVE");
+      if (live) return failure("LIVE_OPERATION_EXISTS", { operationId: live.operationId });
+
+      const next = { ...clone(current), state: "ABANDONED", generation: current.generation + 1 };
+      if (!validateWorkUnitV2(next).valid) return failure("WORK_ABANDON_INVALID");
+      worksById.set(current.workId, next);
+      currentWorkIdByProject.delete(projectId);
+      workHeadCommands.set(key, { request, work: clone(next) });
       return success({ work: clone(next), replayed: false });
     },
   };
