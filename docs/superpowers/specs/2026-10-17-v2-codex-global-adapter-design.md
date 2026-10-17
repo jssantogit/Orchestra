@@ -1,7 +1,7 @@
 # Orchestra V2-5 — Codex Global Adapter Design
 
 Date: 2026-10-17
-Status: approved architecture, implementation not started
+Status: design A approved; written specification awaiting user review
 Base: V2-4 / `feat/v2-reconciler-recovery` at `a3002edb1493cc86e8e9f713477db3add31d1799`
 
 ## 1. Goal
@@ -344,24 +344,43 @@ PostToolUse(tool_call_id=X)
 
 The adapter persists only a hashed/bounded provider correlation reference where appropriate.
 
-A missing `tool_call_id` for a mutation-capable action must not create an uncorrelatable long-lived mutation Operation. The adapter must either deny the mutation or classify the event through a separately proven provider correlation mechanism added explicitly under tests. V2-5 does not invent synthetic IDs.
+A missing `tool_call_id` for a mutation-capable action is denied with `CODEX_TOOL_CORRELATION_REQUIRED`. V2-5 does not invent synthetic IDs and does not add a fallback correlation heuristic.
 
-### 13.3 Runtime ownership class
+### 13.3 Neutral provider-event owner contract
 
-Provider-managed tool Operations are distinct from Orchestra-owned local child processes.
+V2-5 must extend the neutral liveness layer with a provider-managed owner class because Codex tool execution cannot factually use the existing local-process owner probe.
 
-They require a provider-event liveness/terminalization strategy rather than `local-process-probe` PID matching.
+The neutral contract records only provider-independent facts such as:
 
-Initial V2-5 rule:
+```yaml
+ownerKind: PROVIDER_EVENT
+ownerRef: provider-owner:...
+correlationRef: sha256:...
+startedAt: ...
+lastProviderEventAt: ...
+deadlineAt: ...
+```
 
-- while the matching provider tool lifecycle has begun but no factual terminal event has arrived, the Operation is persisted as in-flight;
-- it must have a bounded deadline appropriate to provider-hook semantics;
-- absence of a PostToolUse event does not become successful completion;
-- after the deadline, the Reconciler may classify the Operation only through an explicit provider-managed stale rule backed by persisted event/deadline facts;
-- uncertainty remains `UNKNOWN` unless the provider-managed liveness contract proves bounded staleness;
-- no synthetic success is generated.
+The Codex adapter supplies provider event observations to that neutral contract. The neutral liveness layer owns classification semantics.
 
-This may require extending the neutral liveness contract with a provider-event owner/probe type. That extension belongs in V2-5 only if it is necessary for Codex tool Operations and must remain provider-neutral at the contract level.
+Required classifications:
+
+- matching factual terminal event -> Operation may be terminalized by the tool-operation service;
+- no terminal event while the provider-event deadline remains open -> `LIVE` only when the neutral provider-event policy has current positive event/lease evidence sufficient to prove it; otherwise `UNKNOWN`;
+- deadline expired with no contradictory fresh provider evidence -> `STALE_RECOVERABLE` only under the explicit bounded provider-event stale rule;
+- contradictory/reordered/unverifiable evidence -> `UNKNOWN`.
+
+Timeout never means success. Missing PostToolUse never becomes a successful Candidate/Evidence fact.
+
+The provider-event owner contract must remain generic enough for a later Antigravity adapter; no Codex event names or tool identifiers enter the neutral liveness module.
+
+### 13.4 In-flight lifecycle
+
+While the matching provider tool lifecycle has begun but no factual terminal event has arrived, the Operation remains in flight and mutation exclusivity remains enforced.
+
+Every provider-managed Operation has a bounded deadline. If the provider terminal event is lost, the existing Reconciler consumes the neutral provider-event liveness assessment; it does not need a Codex-specific recovery algorithm.
+
+No daemon is required by V2-5. Reconciliation occurs on existing lifecycle/status/recovery entry points.
 
 ## 14. PostToolUse semantics
 
@@ -444,7 +463,9 @@ Conceptual placement:
       tool-correlations/    or equivalent provider-scoped indexes
 ```
 
-The physical representation may remain SQLite if consistent with the existing v2 persistence model. The architectural requirement is global ownership, project namespace isolation, integrity validation and restart-safe idempotency.
+The physical representation should use the existing v2 SQLite persistence model unless implementation evidence demonstrates a concrete incompatibility. Any deviation requires an explicit architecture review before implementation continues.
+
+The architectural requirements are global ownership, project namespace isolation, integrity validation and restart-safe idempotency.
 
 Raw provider payloads are not persisted wholesale by default.
 
@@ -463,7 +484,7 @@ The V2-5 shim installer/configuration must therefore be additive and scoped. It 
 1. Project resolution must use the global Project Registry; cwd alone is not authority.
 2. Cross-project Session Observation or tool correlation is rejected.
 3. Provider correlation IDs are never trusted as globally unique without project/provider scoping.
-4. Actor/session raw identifiers are not authority and should be hashed before durable storage.
+4. Actor/session raw identifiers are not authority and are hashed before durable storage.
 5. Unknown hook event types fail closed when they could create side effects.
 6. Project-local shim paths cannot redirect execution outside the expected global launcher through mutable project-controlled runtime copies.
 7. Global launcher failure never falls back silently to v1 authority for a v2-managed project.
@@ -497,10 +518,11 @@ The V2-5 shim installer/configuration must therefore be additive and scoped. It 
 - matching PostToolUse terminalizes exactly that Operation;
 - duplicate PostToolUse is idempotent;
 - mismatched actor/project/work/generation cannot terminalize another Operation;
-- missing correlation for mutation fails closed;
+- missing correlation for mutation fails `CODEX_TOOL_CORRELATION_REQUIRED`;
 - hook PID is never persisted as factual owner of the provider tool;
+- provider-event liveness is implemented through a neutral owner contract, not Codex-specific liveness logic;
 - missing PostToolUse cannot become success;
-- deadline/recovery semantics produce bounded stale or UNKNOWN according to the explicit provider-managed liveness contract;
+- bounded deadline/recovery semantics produce `STALE_RECOVERABLE` only under the explicit provider-event rule and otherwise remain `UNKNOWN`;
 - two concurrent mutation tool calls against the same workspace cannot both obtain mutation authority.
 
 ### Shim / global boundary
@@ -536,7 +558,7 @@ v2/global/
   orchestra.mjs
 
 v2/liveness/
-  provider-managed owner/liveness extension only if required by the tested Codex operation lifecycle
+  provider-event owner contract + assessment/probe support
 
 provider/shim installation code
 Codex v2 adapter tests
@@ -555,6 +577,8 @@ Exact filenames may change under implementation as long as these ownership bound
 > Mutation completion terminalizes a specific correlated Operation; there is no generic "release whichever writer is current" action.
 
 > Missing provider terminal events never become success by timeout alone.
+
+> Provider-event liveness is neutral core policy; Codex only supplies factual provider observations.
 
 > Project-local provider integration may be a shim, but governance remains global.
 
