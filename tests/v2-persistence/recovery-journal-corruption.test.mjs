@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { canonicalRecoveryJson, recoveryDigest } from "../../v2/reconciliation/recovery-journal.mjs";
 
+const RECOVERY_RESULT_REF = "recovery:op-recovery-corrupt:OWNER_TERMINATED_WITHOUT_TERMINALIZATION";
+
 function project() {
   return {
     schema: "orchestra.project.v2",
@@ -75,7 +77,7 @@ function recovery() {
     workspace: { ref: null, status: "ABSENT" },
     terminal: {
       workflowState: "ABORTED",
-      resultRef: "recovery:op-recovery-corrupt:OWNER_TERMINATED_WITHOUT_TERMINALIZATION",
+      resultRef: RECOVERY_RESULT_REF,
     },
     cleanup: { status: "NOT_REQUIRED" },
     outcome: "RECOVERED",
@@ -88,6 +90,11 @@ function seed(dbPath) {
   assert.equal(state.projects.register(project()).ok, true);
   assert.equal(state.work.startCurrent(work()).ok, true);
   assert.equal(state.operations.begin({ expectedGeneration: 0, operation: operation() }).ok, true);
+  assert.equal(state.operations.terminalize({
+    operationId: "op-recovery-corrupt",
+    workflowState: "ABORTED",
+    resultRef: RECOVERY_RESULT_REF,
+  }).ok, true);
   assert.equal(state.recoveries.record(recovery()).ok, true);
   state.close();
 }
