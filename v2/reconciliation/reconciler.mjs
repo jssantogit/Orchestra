@@ -139,7 +139,7 @@ export function createOperationReconciler({
     }
     let result;
     try {
-      result = await workspaces.inspect(operation.workspaceRef);
+      result = await workspaces.inspect(operation.workspaceRef, operation);
     } catch {
       return { workspaceRef: operation.workspaceRef, status: "UNKNOWN" };
     }
@@ -264,7 +264,7 @@ export function createOperationReconciler({
     }
 
     try {
-      await workspaces.cleanup(operation.workspaceRef);
+      await workspaces.cleanup(operation.workspaceRef, operation);
     } catch {
       const record = recoveryRecord({
         operation,
@@ -443,7 +443,7 @@ export function createOperationReconciler({
       }
 
       try {
-        await workspaces.cleanup(operation.workspaceRef);
+        await workspaces.cleanup(operation.workspaceRef, operation);
       } catch {
         const record = recoveryRecord({
           operation,
