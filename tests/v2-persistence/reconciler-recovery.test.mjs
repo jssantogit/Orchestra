@@ -240,6 +240,7 @@ test("dirty stale workspace becomes STALE_DIRTY and is preserved", async () => {
 
 test("cross-project recovery fails closed before liveness or workspace mutation", async () => {
   const fixture = seeded();
+  assert.equal(fixture.state.projects.register(project("prj-other")).ok, true);
   const workspace = workspacePort("CLEAN");
   let assessments = 0;
   const reconciler = createReconciler({
