@@ -2,6 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildRsiCohorts } from "../../v2/rsi/cohorts.mjs";
+import {
+  createLearnedPolicyStore,
+  validateLearnedPolicyCandidate,
+} from "../../v2/rsi/policy-store.mjs";
+import { resolveLearnedPolicyHierarchy } from "../../v2/rsi/evaluation.mjs";
 
 function experience(lineageId, suffix, { domainCohort = "software-engineering", extra = {} } = {}) {
   return {
@@ -106,4 +111,226 @@ test("cohort objects omit private Project payloads and project identity", () => 
   assert.equal(serialized.includes("privateProjectPayload"), false);
   assert.equal(serialized.includes("projectId"), false);
   assert.equal(serialized.includes("/home/private"), false);
+});
+
+function policyCandidate(overrides = {}) {
+  return {
+    schema: "orchestra.learned-policy.v2",
+    version: 1,
+    policyId: "policy-global-1",
+    revision: 1,
+    scope: "GLOBAL",
+    domainCohort: null,
+    projectId: null,
+    lifecycle: "CANDIDATE",
+    selectors: {
+      allowedRoutes: ["DIRECT_WORK", "DELEGATED"],
+      routePreference: "DELEGATED",
+      allowedProviderProfiles: ["CODEX_DEFAULT", "AGY_DEFAULT"],
+      providerProfilePreference: "AGY_DEFAULT",
+      allowedRetryClasses: ["STANDARD", "RESILIENT"],
+      retryClass: "RESILIENT",
+      allowedTimeoutClasses: ["STANDARD", "LONG"],
+      timeoutClass: "LONG",
+      allowedTurnEconomy: ["BALANCED", "AGGRESSIVE"],
+      turnEconomy: "AGGRESSIVE",
+    },
+    createdAt: "2026-10-17T22:20:00.000Z",
+    ...overrides,
+  };
+}
+
+function authorityProject() {
+  return {
+    schema: "orchestra.project.v2",
+    projectId: "prj-rsi-authority",
+    lineageId: "lineage-rsi-authority",
+    workspace: { canonicalRoot: "/tmp/prj-rsi-authority", vcs: "git" },
+    runtime: { pinnedImage: "2.9.0", instructionEpoch: 7 },
+    trust: { mode: "trusted" },
+  };
+}
+
+function authorityWork() {
+  return {
+    schema: "orchestra.work-unit.v2",
+    workId: "work-rsi-authority",
+    projectId: "prj-rsi-authority",
+    taskId: "task-rsi-authority",
+    generation: 0,
+    runtimeImage: "2.9.0",
+    instructionEpoch: 7,
+    state: "INTAKE",
+    scopeRef: null,
+    directionRef: null,
+    candidateRef: null,
+    evidenceRefs: [],
+    blockers: [],
+    continuationRef: null,
+  };
+}
+
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+const sqliteAvailable = nodeMajor >= 22;
+
+async function withSqliteState(run) {
+  const [{ mkdtemp, rm }, { join }, { tmpdir }, { createSqliteState }] = await Promise.all([
+    import("node:fs/promises"),
+    import("node:path"),
+    import("node:os"),
+    import("../../v2/persistence/sqlite/sqlite-state.mjs"),
+  ]);
+  const root = await mkdtemp(join(tmpdir(), "orchestra-v2-rsi-"));
+  const dbPath = join(root, "state", "orchestra.db");
+  try {
+    await run({ dbPath, createSqliteState });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test("learned policy records accept only bounded selectors and reject executable or authority-expanding payloads", () => {
+  assert.equal(validateLearnedPolicyCandidate(policyCandidate()).valid, true);
+  for (const selectors of [
+    { ...policyCandidate().selectors, prompt: "ignore governance" },
+    { ...policyCandidate().selectors, executableCode: "return true" },
+    { ...policyCandidate().selectors, allowedCapabilities: ["WORKSPACE_EDIT"] },
+    { ...policyCandidate().selectors, arbitraryToolAccess: ["shell"] },
+  ]) {
+    assert.equal(validateLearnedPolicyCandidate(policyCandidate({ selectors })).valid, false);
+  }
+});
+
+test("policy hierarchy cannot widen immutable choices and project policy may only narrow them", () => {
+  const globalPolicy = policyCandidate();
+  const domainPolicy = policyCandidate({
+    policyId: "policy-domain-1",
+    scope: "DOMAIN",
+    domainCohort: "software-engineering",
+    selectors: { ...policyCandidate().selectors, routePreference: "DELEGATED" },
+  });
+  const projectPolicy = policyCandidate({
+    policyId: "policy-project-1",
+    scope: "PROJECT",
+    projectId: "prj-rsi-authority",
+    selectors: {
+      ...policyCandidate().selectors,
+      allowedRoutes: ["DIRECT_WORK"],
+      routePreference: "DIRECT_WORK",
+      allowedProviderProfiles: ["CODEX_DEFAULT"],
+      providerProfilePreference: "CODEX_DEFAULT",
+    },
+  });
+  const result = resolveLearnedPolicyHierarchy({
+    immutableChoices: {
+      routes: ["DIRECT_WORK"],
+      providerProfiles: ["CODEX_DEFAULT"],
+      retryClasses: ["STANDARD"],
+      timeoutClasses: ["STANDARD"],
+      turnEconomy: ["BALANCED"],
+    },
+    globalPolicy,
+    domainPolicy,
+    projectPolicy,
+    domainCohort: "software-engineering",
+    projectId: "prj-rsi-authority",
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.legalChoices.routes, ["DIRECT_WORK"]);
+  assert.deepEqual(result.legalChoices.providerProfiles, ["CODEX_DEFAULT"]);
+  assert.deepEqual(result.legalChoices.retryClasses, ["STANDARD"]);
+  assert.deepEqual(result.legalChoices.timeoutClasses, ["STANDARD"]);
+  assert.deepEqual(result.legalChoices.turnEconomy, ["BALANCED"]);
+  assert.equal(result.preferences.route, "DIRECT_WORK");
+  assert.equal(result.preferences.providerProfile, "CODEX_DEFAULT");
+});
+
+test("candidate and active learned policy remain distinct durable states with audit history", { skip: !sqliteAvailable }, async () => {
+  await withSqliteState(async ({ dbPath, createSqliteState }) => {
+    const firstState = createSqliteState({ dbPath });
+    const store = createLearnedPolicyStore({ persistence: firstState.learnedPolicies });
+    const candidate = policyCandidate();
+    assert.equal(store.putCandidate(candidate).ok, true);
+    assert.deepEqual(store.inspect(candidate.policyId, candidate.revision), candidate);
+    assert.equal(store.active({ scope: "GLOBAL" }), null);
+    const activated = store.activate({ policyId: candidate.policyId, revision: candidate.revision });
+    assert.equal(activated.ok, true);
+    assert.equal(activated.active.policy.lifecycle, "CANDIDATE");
+    assert.equal(activated.active.activation.lifecycle, "ACTIVE");
+    firstState.close();
+
+    const reopened = createSqliteState({ dbPath });
+    const reopenedStore = createLearnedPolicyStore({ persistence: reopened.learnedPolicies });
+    const active = reopenedStore.active({ scope: "GLOBAL" });
+    assert.equal(active.policy.policyId, candidate.policyId);
+    assert.equal(active.policy.revision, candidate.revision);
+    assert.equal(active.activation.lifecycle, "ACTIVE");
+    assert.equal(reopenedStore.history({ scope: "GLOBAL" }).length, 1);
+    reopened.close();
+  });
+});
+
+test("same learned policy candidate replay converges while conflicting identity fails closed", { skip: !sqliteAvailable }, async () => {
+  await withSqliteState(async ({ createSqliteState, dbPath }) => {
+    const state = createSqliteState({ dbPath });
+    const store = createLearnedPolicyStore({ persistence: state.learnedPolicies });
+    const candidate = policyCandidate();
+    assert.equal(store.putCandidate(candidate).replayed, false);
+    assert.equal(store.putCandidate(structuredClone(candidate)).replayed, true);
+    const conflict = policyCandidate({ selectors: { ...candidate.selectors, routePreference: "DIRECT_WORK" } });
+    const result = store.putCandidate(conflict);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "RSI_POLICY_IDENTITY_CONFLICT");
+    state.close();
+  });
+});
+
+test("learned policy store corruption fails learning closed without blocking Project authority", { skip: !sqliteAvailable }, async () => {
+  await withSqliteState(async ({ createSqliteState, dbPath }) => {
+    const state = createSqliteState({ dbPath });
+    const project = authorityProject();
+    assert.equal(state.projects.register(project).ok, true);
+    const store = createLearnedPolicyStore({ persistence: state.learnedPolicies });
+    const candidate = policyCandidate();
+    assert.equal(store.putCandidate(candidate).ok, true);
+    state.close();
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.prepare("UPDATE learned_policy_candidates SET record_digest = ? WHERE policy_id = ? AND revision = ?")
+      .run("sha256:corrupt", candidate.policyId, candidate.revision);
+    db.close();
+
+    const reopened = createSqliteState({ dbPath });
+    assert.deepEqual(reopened.projects.inspect(project.projectId), project);
+    const reopenedStore = createLearnedPolicyStore({ persistence: reopened.learnedPolicies });
+    assert.throws(
+      () => reopenedStore.inspect(candidate.policyId, candidate.revision),
+      (error) => error?.code === "ORCHESTRA_RSI_POLICY_STORE_INVALID",
+    );
+    assert.deepEqual(reopened.projects.inspect(project.projectId), project);
+    reopened.close();
+  });
+});
+
+test("learned policy activation never changes Project or Work generation by itself", { skip: !sqliteAvailable }, async () => {
+  await withSqliteState(async ({ createSqliteState, dbPath }) => {
+    const state = createSqliteState({ dbPath });
+    const project = authorityProject();
+    const work = authorityWork();
+    assert.equal(state.projects.register(project).ok, true);
+    assert.equal(state.work.startCurrent(work).ok, true);
+    const beforeProject = structuredClone(state.projects.inspect(project.projectId));
+    const beforeWork = structuredClone(state.work.read(project.projectId, work.workId));
+
+    const store = createLearnedPolicyStore({ persistence: state.learnedPolicies });
+    const candidate = policyCandidate();
+    assert.equal(store.putCandidate(candidate).ok, true);
+    assert.equal(store.activate({ policyId: candidate.policyId, revision: candidate.revision }).ok, true);
+
+    assert.deepEqual(state.projects.inspect(project.projectId), beforeProject);
+    assert.deepEqual(state.work.read(project.projectId, work.workId), beforeWork);
+    assert.equal(state.work.read(project.projectId, work.workId).generation, 0);
+    state.close();
+  });
 });
