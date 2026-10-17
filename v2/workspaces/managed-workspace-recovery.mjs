@@ -28,6 +28,16 @@ function pathInside(parent, child) {
   return rel.length > 0 && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel);
 }
 
+function directChildOf(parent, child) {
+  const rel = relative(parent, child);
+  return rel.length > 0
+    && rel !== "."
+    && rel !== ".."
+    && !rel.includes("/")
+    && !rel.includes("\\")
+    && !isAbsolute(rel);
+}
+
 function comparable(path) {
   const normalized = resolve(path);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -91,6 +101,7 @@ export function createManagedWorkspaceRecovery({ home, state, store = null } = {
       const instancesCanonical = await realpath(paths.instancesRoot);
       const rootCanonical = await realpath(record.root);
       if (!pathInside(instancesCanonical, rootCanonical)) return status(workspaceRef, "UNKNOWN");
+      if (!directChildOf(instancesCanonical, rootCanonical)) return status(workspaceRef, "UNKNOWN");
 
       const projectCanonical = await canonicalOrResolved(project.workspace.canonicalRoot);
       if (comparable(rootCanonical) === comparable(projectCanonical)) return status(workspaceRef, "UNKNOWN");
@@ -117,7 +128,7 @@ export function createManagedWorkspaceRecovery({ home, state, store = null } = {
       throw cleanupError("ORCHESTRA_MANAGED_WORKSPACE_UNSAFE", workspaceRef);
     }
 
-    // inspect() immediately re-proved containment, binding, Git root identity, and cleanliness.
+    // inspect() immediately re-proved direct-child containment, binding, Git root identity, and cleanliness.
     // Never derive a filesystem path from workspaceRef itself.
     await rm(record.root, { recursive: true, force: true });
     return { workspaceRef, cleaned: true };
