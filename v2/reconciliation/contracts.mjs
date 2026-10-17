@@ -6,6 +6,7 @@ const OUTCOME = new Set(["RECOVERED", "STALE_DIRTY", "CLEANUP_FAILED"]);
 const RESOLUTION_ACTIONS = new Set(["PRESERVE", "DISCARD"]);
 const RECOVERY_WORKFLOW_STATE = "ABORTED";
 const RECOVERY_RESULT_REASON = "OWNER_TERMINATED_WITHOUT_TERMINALIZATION";
+const EXPLICIT_DISCARD_REASON = "STALE_DIRTY_EXPLICIT_DISCARD";
 
 function valid() {
   return { valid: true, errors: [] };
@@ -43,15 +44,32 @@ function validateResolutionAction(value) {
   if (value.terminal === null) {
     return invalid("dirty resolution action requires factual terminalization", "/terminal");
   }
-  if (value.resolutionAction === "PRESERVE"
-    && (value.outcome !== "STALE_DIRTY" || value.cleanup.status !== "PRESERVED")) {
-    return invalid("preserve resolution must retain a stale-dirty preserved workspace", "/resolutionAction");
+  if (value.resolutionAction === "PRESERVE") {
+    if (value.outcome !== "STALE_DIRTY"
+      || value.workspace.status !== "DIRTY"
+      || value.cleanup.status !== "PRESERVED") {
+      return invalid("preserve resolution must retain a stale-dirty preserved workspace", "/resolutionAction");
+    }
+    return null;
   }
-  if (value.resolutionAction === "DISCARD"
-    && !new Set(["STALE_DIRTY", "RECOVERED"]).has(value.outcome)) {
-    return invalid("discard resolution must either remain stale-dirty or recover", "/resolutionAction");
+
+  if (value.outcome === "STALE_DIRTY") {
+    if (value.workspace.status !== "DIRTY" || value.cleanup.status !== "PRESERVED") {
+      return invalid("failed discard must preserve a factual dirty workspace", "/resolutionAction");
+    }
+    return null;
   }
-  return null;
+
+  if (value.outcome === "RECOVERED") {
+    if (value.workspace.status !== "ABSENT"
+      || value.cleanup.status !== "NOT_REQUIRED"
+      || value.assessment.reason !== EXPLICIT_DISCARD_REASON) {
+      return invalid("successful discard requires factual workspace absence", "/resolutionAction");
+    }
+    return null;
+  }
+
+  return invalid("discard resolution must either remain stale-dirty or recover", "/resolutionAction");
 }
 
 function validateRecoverySemantics(value) {
