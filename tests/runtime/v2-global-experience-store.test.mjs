@@ -8,6 +8,7 @@ import {
 } from "../../v2/experience/contracts.mjs";
 import { projectExperience } from "../../v2/experience/projector.mjs";
 import { createExperienceQuery } from "../../v2/experience/query.mjs";
+import { createExperienceRecorders } from "../../v2/experience/recorders.mjs";
 
 const baseInput = {
   category: "DIAGNOSTIC",
@@ -58,6 +59,52 @@ function fakeQueryPersistence(records) {
       return selected.slice(0, limit + 1).map(structuredClone);
     },
   });
+}
+
+function capturePersistence({ fail = false } = {}) {
+  const records = new Map();
+  return {
+    records,
+    persistence: {
+      put(record) {
+        if (fail) throw new Error("experience unavailable");
+        const existing = records.get(record.experienceId);
+        if (existing) return { ok: true, experience: existing, replayed: true, digest: "sha256:replay" };
+        const clone = structuredClone(record);
+        records.set(record.experienceId, clone);
+        return { ok: true, experience: clone, replayed: false, digest: "sha256:new" };
+      },
+      inspect(experienceId) {
+        return records.get(experienceId) ?? null;
+      },
+      list() {
+        return [...records.values()].map(structuredClone);
+      },
+    },
+  };
+}
+
+function recorderProject() {
+  return {
+    schema: "orchestra.project.v2",
+    projectId: "prj-tsuzuki",
+    lineageId: "lineage-tsuzuki",
+    workspace: { canonicalRoot: "C:/Projects/Tsuzuki", vcs: "git" },
+    runtime: { pinnedImage: "image-current", instructionEpoch: 27 },
+    trust: { mode: "trusted" },
+  };
+}
+
+function recorderOperation(overrides = {}) {
+  return {
+    operationId: "op-f7-1",
+    projectId: "prj-tsuzuki",
+    workId: "work-f7",
+    kind: "DIRECT_MUTATION",
+    workflowState: "SUCCEEDED",
+    liveness: "TERMINAL",
+    ...overrides,
+  };
 }
 
 test("Experience v1 closes the category set to exactly five approved classes", () => {
@@ -271,4 +318,107 @@ test("unknown Experience query filter fails closed before persistence execution"
     (error) => error?.code === "ORCHESTRA_EXPERIENCE_QUERY_INVALID",
   );
   assert.equal(called, false);
+});
+
+test("stale recovery records only diagnostic classes and internal provenance", async () => {
+  const captured = capturePersistence();
+  const recorders = createExperienceRecorders({ persistence: captured.persistence });
+  const result = await recorders.recordRecovery({
+    project: recorderProject(),
+    operation: recorderOperation({ workflowState: "ABORTED" }),
+    cleanupStatus: "CLEANED",
+    recoveryClass: "RECONCILED",
+    failureClass: "OWNER_TERMINATED",
+    rawWorkspacePath: "C:/Users/private/project/.orchestra/worktree",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(captured.records.size, 1);
+  const [record] = captured.records.values();
+  assert.equal(record.category, "DIAGNOSTIC");
+  assert.equal(record.facts.failureClass, "OWNER_TERMINATED");
+  assert.equal(record.facts.recoveryClass, "RECONCILED");
+  assert.equal(record.outcome.terminalOutcome, "RECOVERED");
+  assert.equal(JSON.stringify(record).includes("C:/Users/private"), false);
+});
+
+test("provider capability and terminal recorders emit sanitized facts without raw provider payloads", async () => {
+  const captured = capturePersistence();
+  const recorders = createExperienceRecorders({ persistence: captured.persistence });
+  const project = recorderProject();
+  const operation = recorderOperation();
+
+  const capability = await recorders.recordProviderCapability({
+    project,
+    workId: operation.workId,
+    operationId: operation.operationId,
+    providerFamily: "codex",
+    capabilityClass: "WORKSPACE_EDIT",
+    toolClass: "MUTATION",
+    rawProviderPayload: { session_id: "private-session", prompt: "secret" },
+  });
+  const terminal = await recorders.recordProviderTerminal({
+    project,
+    operation,
+    providerFamily: "codex",
+    workflowState: "SUCCEEDED",
+    rawProviderPayload: { tool_response: "private source output" },
+  });
+
+  assert.equal(capability.ok, true);
+  assert.equal(terminal.ok, true);
+  assert.deepEqual(
+    [...captured.records.values()].map((record) => record.category).sort(),
+    ["EXECUTION", "PERFORMANCE", "PROVIDER_TOOL_FACT"],
+  );
+  const serialized = JSON.stringify([...captured.records.values()]);
+  assert.equal(serialized.includes("private-session"), false);
+  assert.equal(serialized.includes("private source output"), false);
+});
+
+test("runtime rollback and runtime failure record only bounded counterexample/diagnostic classes", async () => {
+  const captured = capturePersistence();
+  const recorders = createExperienceRecorders({ persistence: captured.persistence });
+  const project = recorderProject();
+
+  assert.equal((await recorders.recordRuntimeChange({ project, action: "ROLLBACK" })).ok, true);
+  assert.equal((await recorders.recordRuntimeFailure({ project, failureClass: "RUNTIME_IMAGE_INCOMPATIBLE" })).ok, true);
+
+  const records = [...captured.records.values()];
+  assert.equal(records.some((record) => record.category === "COUNTEREXAMPLE"), true);
+  assert.equal(records.some((record) => record.category === "DIAGNOSTIC"), true);
+  assert.equal(records.every((record) => record.source.workId === null && record.source.operationId === null), true);
+});
+
+test("duplicate terminal events converge to the same Experience identities", async () => {
+  const captured = capturePersistence();
+  const recorders = createExperienceRecorders({ persistence: captured.persistence });
+  const command = {
+    project: recorderProject(),
+    operation: recorderOperation(),
+    providerFamily: "antigravity",
+    workflowState: "FAILED",
+  };
+
+  const first = await recorders.recordProviderTerminal(command);
+  const second = await recorders.recordProviderTerminal(command);
+
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  assert.equal(captured.records.size, 2);
+  assert.deepEqual(first.experienceIds, second.experienceIds);
+});
+
+test("Experience recorder failure is non-authoritative and returns a bounded learning failure", async () => {
+  const captured = capturePersistence({ fail: true });
+  const recorders = createExperienceRecorders({ persistence: captured.persistence });
+
+  const result = await recorders.recordProviderTerminal({
+    project: recorderProject(),
+    operation: recorderOperation(),
+    providerFamily: "codex",
+    workflowState: "SUCCEEDED",
+  });
+
+  assert.deepEqual(result, { ok: false, reason: "EXPERIENCE_RECORDING_FAILED" });
 });
