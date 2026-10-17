@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -1087,7 +1087,7 @@ test("Antigravity process execution fails closed when host start identity is una
     assert.equal(registry.state.operations.listLive({ projectId: project.projectId }).length, 0);
     assert.ok(child);
     await childClosed;
-    assert.notEqual(child.exitCode, null);
+    assert.ok(child.exitCode !== null || child.signalCode !== null);
   } finally {
     registry?.close();
     await rm(root, { recursive: true, force: true });
@@ -1315,7 +1315,7 @@ test("Antigravity v2 shim artifacts call only the stable global launcher on POSI
       nodePath: process.execPath,
       shimPath,
     });
-    assert.match(windows.commandWindows, /Program Files/);
+    assert.ok(windows.commandWindows.includes(`'${process.execPath.replaceAll("'", "''")}'`));
     assert.match(windows.commandWindows, /''/);
     assert.match(windows.hooksJson, /commandWindows/);
     if (process.platform === "win32") {
@@ -1389,6 +1389,73 @@ test("Antigravity v2 shim installs only registered-project transport files and f
       forwarded: input,
       hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "fixture-context" },
     });
+  } finally {
+    registry?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity v2 shim canonicalizes equivalent registered roots and keeps project-local paths fenced", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-v2-shim-canonical-root-"));
+  let registry;
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const nestedDir = join(cwd, "nested");
+    await mkdir(nestedDir, { recursive: true });
+    registry = createGlobalProjectRegistry({ home });
+    const launcherDir = join(root, "global");
+    await mkdir(launcherDir, { recursive: true });
+    const launcherPath = join(launcherDir, "orchestra.mjs");
+    await writeFile(launcherPath, "process.exit(0);\n");
+    const localLauncherPath = join(cwd, "local-launcher.mjs");
+    const localNodePath = join(cwd, "local-node.mjs");
+    await writeFile(localLauncherPath, "process.exit(0);\n");
+    await writeFile(localNodePath, "process.exit(0);\n");
+    const localLauncherAlias = `${cwd}${sep}.${sep}local-launcher.mjs`;
+    const localNodeAlias = `${cwd}${sep}.${sep}local-node.mjs`;
+    const equivalentRegistry = {
+      paths: registry.paths,
+      resolveWorkspace: async (workspaceRoot) => {
+        const resolved = await registry.resolveWorkspace(workspaceRoot);
+        return resolved && {
+          ...resolved,
+          workspace: { ...resolved.workspace, canonicalRoot: `${resolved.workspace.canonicalRoot}${sep}` },
+        };
+      },
+    };
+
+    const installed = await installAntigravityV2Shim({
+      registry: equivalentRegistry,
+      projectId: project.projectId,
+      targetDir: cwd,
+      launcherPath,
+      nodePath: process.execPath,
+    });
+    assert.equal(installed.ok, true);
+
+    await assert.rejects(installAntigravityV2Shim({
+      registry,
+      projectId: project.projectId,
+      targetDir: nestedDir,
+      launcherPath,
+      nodePath: process.execPath,
+    }), (error) => error.code === "ANTIGRAVITY_V2_PROJECT_NOT_REGISTERED");
+
+    await assert.rejects(installAntigravityV2Shim({
+      registry,
+      projectId: project.projectId,
+      targetDir: cwd,
+      launcherPath: localLauncherAlias,
+      nodePath: process.execPath,
+    }), (error) => error.code === "ANTIGRAVITY_V2_GLOBAL_LAUNCHER_PROJECT_LOCAL");
+    await assert.rejects(installAntigravityV2Shim({
+      registry,
+      projectId: project.projectId,
+      targetDir: cwd,
+      launcherPath,
+      nodePath: localNodeAlias,
+    }), (error) => error.code === "ANTIGRAVITY_V2_GLOBAL_LAUNCHER_PROJECT_LOCAL");
   } finally {
     registry?.close();
     await rm(root, { recursive: true, force: true });

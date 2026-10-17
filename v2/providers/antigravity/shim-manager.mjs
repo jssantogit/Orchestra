@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { renderAntigravityV2Shim } from "./shim-template.mjs";
@@ -29,10 +30,10 @@ function isWithin(root, candidate) {
     && !isAbsolute(pathFromRoot));
 }
 
-function resolveGlobalFile(path, label, projectRoot) {
+async function resolveGlobalFile(path, label, projectRoot) {
   let canonical;
   try {
-    canonical = realpathSync(path);
+    canonical = await realpath(path);
   } catch {
     throw shimError("ANTIGRAVITY_V2_GLOBAL_LAUNCHER_INVALID", `${label} must resolve to an existing global file.`);
   }
@@ -135,17 +136,25 @@ export async function installAntigravityV2Shim({
 
   let canonicalRoot;
   try {
-    canonicalRoot = realpathSync(resolve(targetDir));
+    canonicalRoot = await realpath(resolve(targetDir));
   } catch {
     throw new TypeError("targetDir must exist before installing the Antigravity v2 shim");
   }
   const project = await registry.resolveWorkspace(canonicalRoot);
-  if (!project || project.projectId !== projectId || project.workspace?.canonicalRoot !== canonicalRoot) {
+  let registeredRoot = null;
+  try {
+    if (typeof project?.workspace?.canonicalRoot === "string") {
+      registeredRoot = await realpath(project.workspace.canonicalRoot);
+    }
+  } catch {
+    // A malformed or unavailable registry root is handled as an unregistered Project below.
+  }
+  if (!project || project.projectId !== projectId || registeredRoot !== canonicalRoot) {
     throw shimError("ANTIGRAVITY_V2_PROJECT_NOT_REGISTERED", "Antigravity v2 shim installation requires the exact globally registered Project root and ID.");
   }
 
-  const globalLauncherPath = resolveGlobalFile(launcherPath, "launcherPath", canonicalRoot);
-  const globalNodePath = resolveGlobalFile(nodePath, "nodePath", canonicalRoot);
+  const globalLauncherPath = await resolveGlobalFile(launcherPath, "launcherPath", canonicalRoot);
+  const globalNodePath = await resolveGlobalFile(nodePath, "nodePath", canonicalRoot);
   const hooksPath = join(canonicalRoot, HOOKS_RELATIVE_PATH);
   const shimPath = join(canonicalRoot, SHIM_RELATIVE_PATH);
   const artifacts = buildAntigravityV2ShimArtifacts({
