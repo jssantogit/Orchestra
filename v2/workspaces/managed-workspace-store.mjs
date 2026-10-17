@@ -86,6 +86,16 @@ function pathInside(parent, child) {
   return rel.length > 0 && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel);
 }
 
+function directChildOf(parent, child) {
+  const rel = relative(parent, child);
+  return rel.length > 0
+    && rel !== "."
+    && rel !== ".."
+    && !rel.includes("/")
+    && !rel.includes("\\")
+    && !isAbsolute(rel);
+}
+
 function recordPath(recordsRoot, workspaceRef) {
   const key = createHash("sha256").update(workspaceRef, "utf8").digest("hex");
   return {
@@ -150,6 +160,9 @@ async function managedRootStatus(workspace, instancesRoot) {
     const rootCanonical = await realpath(workspace.root);
     if (!pathInside(instancesCanonical, rootCanonical)) {
       return failure("MANAGED_WORKSPACE_ROOT_OUTSIDE_HOME");
+    }
+    if (!directChildOf(instancesCanonical, rootCanonical)) {
+      return failure("MANAGED_WORKSPACE_ROOT_NOT_DIRECT_CHILD");
     }
     return success({ rootCanonical });
   } catch (error) {
