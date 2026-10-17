@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { createReferenceState } from "../../v2/state/reference-state.mjs";
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 
+const RECOVERY_RESULT_REF = "recovery:op-recovery-journal:OWNER_TERMINATED_WITHOUT_TERMINALIZATION";
+
 function project() {
   return {
     schema: "orchestra.project.v2",
@@ -63,7 +65,7 @@ function record({
   outcome = "RECOVERED",
   workspaceStatus = "CLEAN",
   cleanupStatus = "CLEANED",
-  resultRef = "recovery:op-recovery-journal:OWNER_TERMINATED_WITHOUT_TERMINALIZATION",
+  resultRef = RECOVERY_RESULT_REF,
   recordedAt = "2026-10-17T07:00:00.000Z",
 } = {}) {
   return {
@@ -96,6 +98,16 @@ function seed(state) {
   assert.equal(state.projects.register(project()).ok, true);
   assert.equal(state.work.startCurrent(work()).ok, true);
   assert.equal(state.operations.begin({ expectedGeneration: 0, operation: operation() }).ok, true);
+  return state;
+}
+
+function terminalizeForRecovery(state) {
+  const terminal = state.operations.terminalize({
+    operationId: "op-recovery-journal",
+    workflowState: "ABORTED",
+    resultRef: RECOVERY_RESULT_REF,
+  });
+  assert.equal(terminal.ok, true);
   return state;
 }
 
@@ -140,8 +152,16 @@ function assertJournalContract(state) {
   }), secondRecord);
 }
 
-test("reference Recovery Journal is durable-contract compatible and idempotent", () => {
+test("Recovery Journal rejects a terminal fact while the Operation is still live", () => {
   const state = seed(createReferenceState());
+  assert.deepEqual(state.recoveries.record(record()), {
+    ok: false,
+    reason: "RECOVERY_TERMINAL_STATE_MISMATCH",
+  });
+});
+
+test("reference Recovery Journal is durable-contract compatible and idempotent", () => {
+  const state = terminalizeForRecovery(seed(createReferenceState()));
   assertJournalContract(state);
 });
 
@@ -149,7 +169,7 @@ test("SQLite Recovery Journal survives close/reopen and preserves latest factual
   const root = await mkdtemp(join(tmpdir(), "orchestra-v2-recovery-journal-"));
   const dbPath = join(root, "orchestra.db");
   try {
-    const first = seed(createSqliteState({ dbPath }));
+    const first = terminalizeForRecovery(seed(createSqliteState({ dbPath })));
     assertJournalContract(first);
     first.close();
 
@@ -168,7 +188,7 @@ test("SQLite Recovery Journal survives close/reopen and preserves latest factual
 });
 
 test("Recovery Journal rejects cross-project and mismatched operation identity", () => {
-  const state = seed(createReferenceState());
+  const state = terminalizeForRecovery(seed(createReferenceState()));
   assert.equal(state.projects.register({
     ...project(),
     projectId: "prj-other",
