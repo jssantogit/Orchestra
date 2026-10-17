@@ -2,6 +2,7 @@ import { createInMemoryRecoveryJournal } from "../../reconciliation/recovery-jou
 import { fenceOperationsToActiveWork } from "../../state/active-work-operation-fence.mjs";
 import { trackOperationListing } from "../../state/operation-listing.mjs";
 import { createSqliteExperiencePersistence } from "./sqlite-experience.mjs";
+import { createSqliteLearnedPolicyPersistence } from "./sqlite-learned-policies.mjs";
 import { fenceSqliteOperationTerminalization } from "./sqlite-operation-terminalization-fence.mjs";
 import { withSqliteProjectRuntimeUpdates } from "./sqlite-project-runtime.mjs";
 import { createSqliteRecoveryJournal } from "./sqlite-recovery-journal.mjs";
@@ -22,6 +23,24 @@ function createUnavailableExperiencePersistence(cause) {
     inspect: unavailable,
     list: unavailable,
     query: unavailable,
+    close() {},
+  });
+}
+
+function createUnavailableLearnedPolicyPersistence(cause) {
+  function unavailable() {
+    const error = new Error("ORCHESTRA_RSI_POLICY_STORE_UNAVAILABLE");
+    error.code = "ORCHESTRA_RSI_POLICY_STORE_UNAVAILABLE";
+    error.cause = cause;
+    throw error;
+  }
+
+  return Object.freeze({
+    putCandidate: unavailable,
+    inspect: unavailable,
+    activate: unavailable,
+    active: unavailable,
+    history: unavailable,
     close() {},
   });
 }
@@ -62,13 +81,25 @@ export function createSqliteState(options = {}) {
     experience = createUnavailableExperiencePersistence(error);
   }
 
+  let learnedPolicies;
+  try {
+    learnedPolicies = createSqliteLearnedPolicyPersistence({
+      dbPath: options.dbPath,
+      timeoutMs: options.timeoutMs,
+    });
+  } catch (error) {
+    learnedPolicies = createUnavailableLearnedPolicyPersistence(error);
+  }
+
   let closed = false;
   return Object.freeze({
     ...core,
     recoveries,
     experience,
+    learnedPolicies,
     close() {
       if (closed) return;
+      learnedPolicies.close?.();
       experience.close?.();
       recoveries.close?.();
       core.close();

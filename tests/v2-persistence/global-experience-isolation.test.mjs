@@ -26,7 +26,7 @@ test("missing Experience table fails learning closed without blocking Project au
 
     const db = new DatabaseSync(dbPath);
     db.exec("DROP TABLE experience_records");
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 5);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 6);
     db.close();
 
     const reopened = createSqliteState({ dbPath });
