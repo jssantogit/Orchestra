@@ -1,11 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { Readable } from "node:stream";
 import { Worker } from "node:worker_threads";
 
 import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
+import { normalizeCodexActor } from "../../v2/providers/codex/actor.mjs";
+import { normalizeCodexToolEvent } from "../../v2/providers/codex/tool-event.mjs";
+import { runGlobalCli } from "../../v2/global/cli.mjs";
+import { createGlobalProjectRegistry } from "../../v2/global/project-registry.mjs";
 
 const actorA = `sha256:${"a".repeat(64)}`;
 const actorB = `sha256:${"b".repeat(64)}`;
@@ -359,4 +366,223 @@ test("concurrent identical provider correlations converge across SQLite connecti
       await Promise.all(workers.map((worker) => worker.terminate()));
     }
   });
+});
+
+function hash(value) {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+test("Codex actor provenance hashes factual root and child identities and rejects missing payload identity", () => {
+  assert.deepEqual(normalizeCodexActor({ session_id: "root-1" }), {
+    provider: "codex",
+    actorIdHash: hash("root-1"),
+    actorKind: "ROOT",
+    isRoot: true,
+  });
+  assert.equal(normalizeCodexActor({ session_id: " root-1 " }).actorIdHash, hash(" root-1 "));
+  assert.deepEqual(normalizeCodexActor({ session_id: "root-1", agent_id: "agent-2" }), {
+    provider: "codex",
+    actorIdHash: hash("agent-2"),
+    actorKind: "CHILD",
+    parentActorIdHash: hash("root-1"),
+    isRoot: false,
+  });
+  assert.throws(() => normalizeCodexActor({}, { CODEX_SESSION_ID: "environment-only" }), {
+    code: "CODEX_PROVIDER_IDENTITY_INVALID",
+  });
+  for (const agent_id of ["", "  ", 7, null]) {
+    assert.throws(() => normalizeCodexActor({ session_id: "root-1", agent_id }), {
+      code: "CODEX_PROVIDER_IDENTITY_INVALID",
+    });
+  }
+  assert.deepEqual(normalizeCodexToolEvent({
+    hook_event_name: "PreToolUse",
+    session_id: "root-1",
+    tool_name: "read_file",
+  }), {
+    eventType: "TOOL_REQUEST",
+    operation: "READ",
+    sideEffectClass: "READ_ONLY",
+    factualIds: { actorIdHash: hash("root-1") },
+  });
+  const longToolCallId = `call-${"x".repeat(500)}`;
+  assert.equal(normalizeCodexToolEvent({
+    hook_event_name: "PreToolUse",
+    session_id: "root-1",
+    tool_name: "write_file",
+    tool_call_id: longToolCallId,
+  }).factualIds.toolCallId, longToolCallId);
+});
+
+async function makeWorkspace(root) {
+  const workspace = join(root, "workspace");
+  await mkdir(workspace, { recursive: true });
+  execFileSync("git", ["init", "--quiet", workspace]);
+  return workspace;
+}
+
+async function invokeHook({ home, cwd, payload, rawInput, env = {} }) {
+  let stdout = "";
+  let stderr = "";
+  const code = await runGlobalCli({
+    argv: ["provider", "codex", "hook"],
+    cwd,
+    env: { ...env, ORCHESTRA_HOME: home },
+    stdin: Readable.from([rawInput ?? JSON.stringify(payload)]),
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { write: (chunk) => { stderr += chunk; } },
+  });
+  return { code, payload: JSON.parse(stdout || stderr) };
+}
+
+async function prepareRegisteredWorkspace({ root, home, active = true }) {
+  const cwd = await makeWorkspace(root);
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    const registered = await registry.registerWorkspace({
+      root: cwd,
+      runtimeImage: "2.0.0",
+      instructionEpoch: 7,
+      trustMode: "trusted",
+    });
+    assert.equal(registered.ok, true);
+    if (active) assert.equal(registry.state.work.startCurrent(work("work-hook", registered.project.projectId)).ok, true);
+    return { cwd, project: registered.project };
+  } finally {
+    registry.close();
+  }
+}
+
+test("global SessionStart attaches active Work, persists observation, and allows another fresh session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-active-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home });
+    const first = await invokeHook({
+      home, cwd,
+      payload: { hook_event_name: "SessionStart", session_id: "fresh-1" },
+    });
+    const second = await invokeHook({
+      home, cwd,
+      payload: { hook_event_name: "SessionStart", session_id: "fresh-2" },
+    });
+    assert.equal(first.code, 0);
+    assert.equal(first.payload.ok, true);
+    assert.equal(first.payload.work.workId, "work-hook");
+    assert.equal(second.code, 0);
+    assert.equal(second.payload.work.workId, "work-hook");
+    assert.equal(first.payload.hookSpecificOutput.hookEventName, "SessionStart");
+    const context = JSON.parse(first.payload.hookSpecificOutput.additionalContext);
+    assert.equal(context.projectId, registered.projectId);
+    assert.equal(context.work.workId, "work-hook");
+    assert.equal(context.generation, 3);
+    assert.equal(context.instructionEpoch, 7);
+
+    const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    try {
+      for (const sessionId of ["fresh-1", "fresh-2"]) {
+        const observation = state.sessionObservations.get({
+          provider: "codex",
+          projectId: registered.projectId,
+          actorIdHash: hash(sessionId),
+        });
+        assert.equal(observation.observedInstructionEpoch, 7);
+        assert.equal(observation.observedWorkId, "work-hook");
+        assert.equal(observation.observedGeneration, 3);
+        assert.equal(typeof observation.observedAt, "string");
+      }
+    } finally {
+      state.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("SessionStart returns successful intake without active work and does not self-register", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-intake-"));
+  const home = join(root, "home");
+  try {
+    const { cwd } = await prepareRegisteredWorkspace({ root, home, active: false });
+    const intake = await invokeHook({
+      home, cwd,
+      payload: { hook_event_name: "SessionStart", session_id: "intake-1" },
+    });
+    assert.equal(intake.code, 0);
+    assert.equal(intake.payload.reason, "ORCHESTRA_V2_INTAKE");
+    assert.equal(intake.payload.work, null);
+    assert.equal(intake.payload.generation, null);
+    assert.equal(intake.payload.hookSpecificOutput.hookEventName, "SessionStart");
+    const context = JSON.parse(intake.payload.hookSpecificOutput.additionalContext);
+    assert.equal(context.activeWork, null);
+    assert.equal(context.generation, null);
+    assert.equal(context.mutationAuthority, "UNAVAILABLE_UNTIL_WORK_STARTS");
+
+    const intakeRegistry = createGlobalProjectRegistry({ home });
+    try {
+      const project = await intakeRegistry.resolveWorkspace(cwd);
+      const observation = intakeRegistry.state.sessionObservations.get({
+        provider: "codex",
+        projectId: project.projectId,
+        actorIdHash: hash("intake-1"),
+      });
+      assert.equal(observation.observedWorkId, null);
+      assert.equal(observation.observedGeneration, null);
+      assert.equal(observation.observedInstructionEpoch, 7);
+    } finally {
+      intakeRegistry.close();
+    }
+
+    const unregisteredRoot = join(root, "other");
+    await mkdir(unregisteredRoot);
+    const unregistered = await makeWorkspace(unregisteredRoot);
+    const denied = await invokeHook({
+      home, cwd: unregistered,
+      payload: { hook_event_name: "SessionStart", session_id: "unregistered-1" },
+    });
+    assert.equal(denied.code, 1);
+    assert.equal(denied.payload.reason, "PROJECT_NOT_REGISTERED");
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(await registry.resolveWorkspace(unregistered), null);
+    } finally {
+      registry.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("provider CLI emits structured invalid-payload and identity errors without raw identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-hook-invalid-"));
+  const home = join(root, "empty-home");
+  try {
+    const malformed = await invokeHook({ home, cwd: root, rawInput: "{" });
+    assert.equal(malformed.code, 1);
+    assert.equal(malformed.payload.reason, "CODEX_HOOK_PAYLOAD_INVALID");
+
+    const registeredHome = join(root, "registered-home");
+    const { cwd } = await prepareRegisteredWorkspace({ root, home: registeredHome });
+    const invalidIdentity = await invokeHook({
+      home: registeredHome,
+      cwd,
+      env: { CODEX_SESSION_ID: "environment-session" },
+      payload: { hook_event_name: "SessionStart" },
+    });
+    assert.equal(invalidIdentity.code, 1);
+    assert.equal(invalidIdentity.payload.reason, "CODEX_PROVIDER_IDENTITY_INVALID");
+    assert.equal(JSON.stringify(invalidIdentity.payload).includes("environment-session"), false);
+
+    const noProject = await invokeHook({
+      home,
+      cwd: root,
+      payload: { hook_event_name: "SessionStart", session_id: "secret-session" },
+    });
+    assert.equal(noProject.code, 1);
+    assert.equal(noProject.payload.reason, "PROJECT_NOT_REGISTERED");
+    assert.equal(JSON.stringify(noProject.payload).includes("secret-session"), false);
+    await assert.rejects(access(home), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

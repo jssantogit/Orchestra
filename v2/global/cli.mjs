@@ -6,6 +6,7 @@ import {
   resolveOrchestraHome,
 } from "./project-registry.mjs";
 import { createGlobalOperationReconciler } from "./reconciliation.mjs";
+import { createCodexHookHandler } from "../providers/codex/hook-handler.mjs";
 
 function cliError(code, message, fields = {}) {
   const error = new Error(message);
@@ -131,7 +132,12 @@ function validateCommand({ positionals, options }) {
     });
   }
 
-  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind> ...");
+  if (command === "provider" && positionals[1] === "codex" && positionals[2] === "hook") {
+    if (positionals.length !== 3) usage("Usage: orchestra provider codex hook");
+    return Object.freeze({ kind: "CODEX_HOOK" });
+  }
+
+  usage("Usage: orchestra <home|register|project status|project recover|project resolve-dirty|project rebind|provider codex hook> ...");
 }
 
 function notRegisteredResult() {
@@ -241,16 +247,51 @@ async function runRegistryCommand({ positionals, options, cwd, env }) {
   }
 }
 
+async function readHookPayload(stdin) {
+  let input = "";
+  for await (const chunk of stdin) input += chunk.toString();
+  if (!input.trim()) return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+  try {
+    const payload = JSON.parse(input);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+    }
+    return { ok: true, payload };
+  } catch {
+    return { ok: false, reason: "CODEX_HOOK_PAYLOAD_INVALID" };
+  }
+}
+
+async function runCodexHook({ home, cwd, stdin }) {
+  const decoded = await readHookPayload(stdin);
+  if (!decoded.ok) return { exitCode: 1, payload: decoded };
+  if (!(await globalRegistryStateExists({ home }))) {
+    return { exitCode: 1, payload: { ok: false, reason: "PROJECT_NOT_REGISTERED", registered: false } };
+  }
+  const registry = createGlobalProjectRegistry({ home });
+  try {
+    const handler = createCodexHookHandler({ registry });
+    const payload = await handler.handle(decoded.payload, { cwd });
+    return { exitCode: payload.ok ? 0 : 1, payload };
+  } finally {
+    registry.close();
+  }
+}
+
 export async function runGlobalCli({
   argv = process.argv.slice(2),
   cwd = process.cwd(),
   env = process.env,
+  stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
 } = {}) {
   try {
     const parsed = parseArgs(argv);
-    const result = await runRegistryCommand({ ...parsed, cwd, env });
+    const command = validateCommand(parsed);
+    const result = command.kind === "CODEX_HOOK"
+      ? await runCodexHook({ home: explicitHome(parsed.options, env), cwd, stdin })
+      : await runRegistryCommand({ ...parsed, cwd, env });
     writeJson(stdout, result.payload);
     return result.exitCode;
   } catch (error) {
