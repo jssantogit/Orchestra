@@ -1,3 +1,7 @@
+import {
+  EXPERIENCE_CATEGORIES,
+  EXPERIENCE_DOMAIN_COHORTS,
+} from "../experience/contracts.mjs";
 import { validateLearnedPolicyCandidate } from "./policy-store.mjs";
 
 const DIMENSIONS = Object.freeze([
@@ -8,13 +12,23 @@ const DIMENSIONS = Object.freeze([
   Object.freeze({ choices: "turnEconomy", allowed: "allowedTurnEconomy", preference: "turnEconomy", output: "turnEconomy" }),
 ]);
 
-const EXPERIENCE_CATEGORIES = new Set([
-  "DIAGNOSTIC",
-  "EXECUTION",
-  "PROVIDER_TOOL_FACT",
-  "PERFORMANCE",
-  "COUNTEREXAMPLE",
+const EXPERIENCE_CATEGORIES_SET = new Set(EXPERIENCE_CATEGORIES);
+const EXPERIENCE_DOMAIN_COHORT_SET = new Set(EXPERIENCE_DOMAIN_COHORTS);
+const EXPERIENCE_KEYS = new Set([
+  "schema", "version", "experienceId", "category", "source", "domainCohort",
+  "facts", "outcome", "generalization", "privacy",
 ]);
+const FACT_KEYS = new Set([
+  "failureClass", "recoveryClass", "providerFamily", "osFamily", "runtimeVersion",
+  "providerAdapterVersion", "operationClass", "routeClass", "capabilityClass", "toolClass",
+  "resultClass", "evidenceClass", "confidenceClass", "latencyBucket", "turnCount", "retryCount",
+  "durationMs", "changedPathClass", "changedPathCount",
+]);
+const OUTCOME_KEYS = new Set([
+  "terminalOutcome", "success", "failureClass", "recoveryClass", "resultClass",
+]);
+const GENERALIZATION_KEYS = new Set(["scope", "projectLineageCount"]);
+const PRIVACY_KEYS = new Set(["projectionVersion", "containsRawProjectContent"]);
 const GENERALIZATION_SCOPES = new Set(["PROJECT", "DOMAIN", "GLOBAL_CANDIDATE"]);
 const PROMOTION_GATE_KEYS = new Set(["minTrainLineages", "requireSuccess", "metrics"]);
 const PROMOTION_METRICS = new Set(["retryCount", "durationMs"]);
@@ -60,24 +74,30 @@ function validPromotionGate(gate) {
 
 function validCrossProjectExperience(record, gate) {
   if (!isRecord(record)
+    || !onlyKeys(record, EXPERIENCE_KEYS)
     || record.schema !== "orchestra.experience.v2"
     || record.version !== 1
     || typeof record.experienceId !== "string"
     || !/^exp-[0-9a-f]{24}$/.test(record.experienceId)
-    || !EXPERIENCE_CATEGORIES.has(record.category)
+    || !EXPERIENCE_CATEGORIES_SET.has(record.category)
     || !isRecord(record.source)
     || Object.keys(record.source).length !== 1
     || typeof record.source.lineageId !== "string"
     || record.source.lineageId.length === 0
-    || typeof record.domainCohort !== "string"
-    || record.domainCohort.length === 0
+    || !EXPERIENCE_DOMAIN_COHORT_SET.has(record.domainCohort)
     || !isRecord(record.facts)
+    || !onlyKeys(record.facts, FACT_KEYS)
     || !isRecord(record.outcome)
+    || !onlyKeys(record.outcome, OUTCOME_KEYS)
     || !isRecord(record.generalization)
+    || !onlyKeys(record.generalization, GENERALIZATION_KEYS)
     || !GENERALIZATION_SCOPES.has(record.generalization.scope)
     || !Number.isInteger(record.generalization.projectLineageCount)
     || record.generalization.projectLineageCount < 1
     || !isRecord(record.privacy)
+    || !onlyKeys(record.privacy, PRIVACY_KEYS)
+    || typeof record.privacy.projectionVersion !== "string"
+    || record.privacy.projectionVersion.length === 0
     || record.privacy.containsRawProjectContent !== false) {
     return false;
   }

@@ -34,7 +34,7 @@ jobs:
         run: node --test tests/runtime/v2-global-experience-store.test.mjs
 
       - name: Run cross-project RSI tests
-        run: node --test tests/runtime/v2-cross-project-rsi.test.mjs tests/runtime/v2-rsi-replay.test.mjs tests/runtime/v2-rsi-execution-policy.test.mjs
+        run: node --test tests/runtime/v2-cross-project-rsi.test.mjs tests/runtime/v2-rsi-replay.test.mjs tests/runtime/v2-rsi-execution-policy.test.mjs tests/runtime/v2-rsi-adversarial.test.mjs
 
       - name: Run runtime image lifecycle tests
         run: node --test tests/runtime/v2-runtime-images.test.mjs tests/runtime/v2-runtime-upgrade.test.mjs

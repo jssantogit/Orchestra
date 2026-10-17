@@ -1,7 +1,25 @@
 import { createHash } from "node:crypto";
+import {
+  EXPERIENCE_CATEGORIES,
+  EXPERIENCE_DOMAIN_COHORTS,
+} from "../experience/contracts.mjs";
 
 const MIN_DISTINCT_LINEAGES = 4;
 const TRAIN_LINEAGES = 2;
+const CATEGORY_SET = new Set(EXPERIENCE_CATEGORIES);
+const DOMAIN_COHORT_SET = new Set(EXPERIENCE_DOMAIN_COHORTS);
+const FACT_KEYS = new Set([
+  "failureClass", "recoveryClass", "providerFamily", "osFamily", "runtimeVersion",
+  "providerAdapterVersion", "operationClass", "routeClass", "capabilityClass", "toolClass",
+  "resultClass", "evidenceClass", "confidenceClass", "latencyBucket", "turnCount", "retryCount",
+  "durationMs", "changedPathClass", "changedPathCount",
+]);
+const OUTCOME_KEYS = new Set([
+  "terminalOutcome", "success", "failureClass", "recoveryClass", "resultClass",
+]);
+const GENERALIZATION_KEYS = new Set(["scope", "projectLineageCount"]);
+const GENERALIZATION_SCOPES = new Set(["PROJECT", "DOMAIN", "GLOBAL_CANDIDATE"]);
+const PRIVACY_KEYS = new Set(["projectionVersion", "containsRawProjectContent"]);
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -9,6 +27,10 @@ function isRecord(value) {
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function onlyKeys(value, allowed) {
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function clone(value) {
@@ -20,14 +42,22 @@ function projectSanitizedExperience(record) {
     || record.schema !== "orchestra.experience.v2"
     || record.version !== 1
     || !nonEmptyString(record.experienceId)
-    || !nonEmptyString(record.category)
+    || !CATEGORY_SET.has(record.category)
     || !isRecord(record.source)
     || !nonEmptyString(record.source.lineageId)
-    || !nonEmptyString(record.domainCohort)
+    || !DOMAIN_COHORT_SET.has(record.domainCohort)
     || !isRecord(record.facts)
+    || !onlyKeys(record.facts, FACT_KEYS)
     || !isRecord(record.outcome)
+    || !onlyKeys(record.outcome, OUTCOME_KEYS)
     || !isRecord(record.generalization)
+    || !onlyKeys(record.generalization, GENERALIZATION_KEYS)
+    || !GENERALIZATION_SCOPES.has(record.generalization.scope)
+    || !Number.isInteger(record.generalization.projectLineageCount)
+    || record.generalization.projectLineageCount < 1
     || !isRecord(record.privacy)
+    || !onlyKeys(record.privacy, PRIVACY_KEYS)
+    || !nonEmptyString(record.privacy.projectionVersion)
     || record.privacy.containsRawProjectContent !== false) {
     return null;
   }
@@ -84,7 +114,7 @@ function failure(code, distinctLineageCount) {
 
 export function buildRsiCohorts({ experiences, seed = "orchestra-rsi-v1", domainCohort = null } = {}) {
   if (!Array.isArray(experiences) || !nonEmptyString(seed)
-    || (domainCohort !== null && !nonEmptyString(domainCohort))) {
+    || (domainCohort !== null && !DOMAIN_COHORT_SET.has(domainCohort))) {
     return failure("RSI_COHORT_INPUT_INVALID", 0);
   }
 
