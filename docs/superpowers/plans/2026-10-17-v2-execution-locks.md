@@ -66,6 +66,41 @@ The v1 executor modification is limited to an explicit bridge/export used by the
 
 The required behavior is that runtime activation calls the global reconciler/status/recovery boundary; recovery itself remains independent of the pinned image. If the existing reconciliation public API cannot support this, return `BLOCKED_BY_SPEC_GAP`.
 
+## V2-8
+
+The exact reviewed predecessor is V2-7 head `29e0ebd0af8b886ba1ce309dbc4b4fae55e24eac`.
+
+### Task 1 exact projector path
+
+- Create: `v2/experience/contracts.mjs`
+- Modify: `v2/experience/projector.mjs`
+- Test: `tests/runtime/v2-global-experience-store.test.mjs`
+
+The predecessor contains `projector.mjs`, not `project.mjs`. Do not create `project.mjs` as an alias.
+
+### Task 2 exact SQLite paths
+
+- Create: `v2/experience/store.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state-core.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state.mjs`
+
+`sqlite-state-core.mjs` remains the owner of SQLite schema versioning/migrations. `sqlite-state.mjs` remains the composition/public-state boundary. Do not create generic `migrations.mjs` or `state.mjs` aliases.
+
+### Task 6 exact workflow path
+
+- Modify: `.github/workflows/v2-persistence.yml`
+
+Do not create `.github/workflows/orchestra-v2-persistence.yml` as an alias.
+
+### V2-8 final invariant paths
+
+Use:
+- `tests/runtime/v2-domain-foundation.test.mjs`
+- `tests/runtime/v2-reference-state.test.mjs`
+- `tests/runtime/v2-continuation-boundary.test.mjs`
+
+Do not substitute the nonexistent `v2-domain-invariants.test.mjs` or `v2-continuation-capsule.test.mjs` names.
+
 ## V2-9
 
 ### Task 6 exact integration boundary
