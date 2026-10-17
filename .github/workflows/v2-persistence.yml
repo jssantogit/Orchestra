@@ -81,3 +81,6 @@ jobs:
 
       - name: Run full v1 regression
         run: npm test
+
+      - name: Verify contamination boundary
+        run: npm run check:contamination
