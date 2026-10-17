@@ -103,6 +103,18 @@ Do not substitute the nonexistent `v2-domain-invariants.test.mjs` or `v2-continu
 
 ## V2-9
 
+The exact reviewed predecessor is V2-8 head `5b99311daadf9d89d0378bbf1626ffc70493de3d`.
+
+### Task 2 exact SQLite paths
+
+- Create: `v2/rsi/policy-store.mjs`
+- Create: `v2/rsi/evaluation.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state-core.mjs`
+- Modify: `v2/persistence/sqlite/sqlite-state.mjs`
+- Test: `tests/runtime/v2-cross-project-rsi.test.mjs`
+
+The predecessor still has no generic `migrations.mjs` or `state.mjs`. `sqlite-state-core.mjs` remains the authoritative owner of schema versioning/migrations, and `sqlite-state.mjs` remains the public composition boundary. Do not create generic aliases.
+
 ### Task 6 exact integration boundary
 
 Create:
@@ -115,6 +127,15 @@ Test:
 `execution-policy.mjs` is the neutral bounded-choice API. It accepts only already-legal candidate choices plus immutable limits and returns a selected legal choice or the deterministic baseline. It may expose route/provider-profile/retry/timeout/turn-economy selectors defined in the approved spec.
 
 Do not modify immutable authorization modules in this task. Do not patch provider handlers merely to demonstrate activation. V2-11 cutover tests consume the public execution-policy service and prove the activated learned policy affects bounded choices without widening governance.
+
+### Task 7 exact workflow and invariant paths
+
+- Modify: `.github/workflows/v2-persistence.yml`
+- Verify: `tests/runtime/v2-domain-foundation.test.mjs`
+- Verify: `tests/runtime/v2-reference-state.test.mjs`
+- Verify: `tests/runtime/v2-continuation-boundary.test.mjs`
+
+Do not create `.github/workflows/orchestra-v2-persistence.yml` or substitute the nonexistent `v2-domain-invariants.test.mjs` / `v2-continuation-capsule.test.mjs` names.
 
 ## V2-10
 
