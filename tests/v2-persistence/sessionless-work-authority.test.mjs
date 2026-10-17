@@ -154,11 +154,25 @@ for (const store of stores) {
     }
   });
 
-  test(`${store.name}: capability authorization is work-and-generation fenced without session binding`, async () => {
+  test(`${store.name}: capability authorization is work-generation-and-epoch fenced without session binding`, async () => {
     const fixture = await store.create();
     try {
       seed(fixture.state);
       const authority = createWorkAuthority({ state: fixture.state });
+
+      const staleEpoch = authority.authorize({
+        projectId: "prj-sessionless",
+        expectedWorkId: "work-sessionless",
+        actor: actor("sha256:stale-epoch"),
+        observedInstructionEpoch: 6,
+        capability: "WORKSPACE_EDIT",
+        workspaceRef: "workspace:canonical",
+        expectedGeneration: 0,
+      });
+      assert.equal(staleEpoch.allowed, false);
+      assert.equal(staleEpoch.reason, "SESSION_RUNTIME_STALE");
+      assert.equal(staleEpoch.currentInstructionEpoch, 7);
+
       const transitioned = fixture.state.work.transition({
         projectId: "prj-sessionless",
         workId: "work-sessionless",
@@ -168,16 +182,17 @@ for (const store of stores) {
       });
       assert.equal(transitioned.ok, true);
 
-      const stale = authority.authorize({
+      const staleGeneration = authority.authorize({
         projectId: "prj-sessionless",
         expectedWorkId: "work-sessionless",
         actor: actor("sha256:any"),
+        observedInstructionEpoch: 7,
         capability: "WORKSPACE_EDIT",
         workspaceRef: "workspace:canonical",
         expectedGeneration: 0,
       });
-      assert.equal(stale.allowed, false);
-      assert.equal(stale.reason, "STALE_GENERATION");
+      assert.equal(staleGeneration.allowed, false);
+      assert.equal(staleGeneration.reason, "STALE_GENERATION");
     } finally {
       await fixture.cleanup();
     }
@@ -207,6 +222,7 @@ for (const store of stores) {
         projectId: "prj-sessionless",
         expectedWorkId: "work-sessionless",
         actor: actor("sha256:old-session"),
+        observedInstructionEpoch: 7,
         capability: "WORKSPACE_EDIT",
         workspaceRef: "workspace:canonical",
         expectedGeneration: 0,
@@ -219,6 +235,7 @@ for (const store of stores) {
         projectId: "prj-sessionless",
         expectedWorkId: "work-next",
         actor: actor("sha256:fresh-session"),
+        observedInstructionEpoch: 7,
         capability: "WORKSPACE_EDIT",
         workspaceRef: "workspace:canonical",
         expectedGeneration: 0,
