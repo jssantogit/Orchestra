@@ -30,11 +30,17 @@ jobs:
       - name: Run v2 persistence tests
         run: node --test tests/v2-persistence/*.test.mjs
 
+      - name: Run runtime image lifecycle tests
+        run: node --test tests/runtime/v2-runtime-images.test.mjs tests/runtime/v2-runtime-upgrade.test.mjs
+
       - name: Run Codex global adapter and provider-event tests
         run: node --test tests/runtime/v2-codex-global-adapter.test.mjs tests/runtime/v2-provider-event-liveness.test.mjs
 
       - name: Run Antigravity global adapter and provider symmetry tests
         run: node --test tests/runtime/v2-antigravity-global-adapter.test.mjs tests/runtime/v2-provider-symmetry.test.mjs
+
+      - name: Run v2 domain, reference state and continuation tests
+        run: node --test tests/runtime/v2-domain-invariants.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-capsule.test.mjs
 
   v1-regression:
     name: V1 Compatibility Guard
