@@ -62,6 +62,7 @@ export function createWorkAuthority({ state } = {}) {
 
     authorize({
       projectId,
+      expectedWorkId,
       actor,
       capability,
       workspaceRef = null,
@@ -69,6 +70,13 @@ export function createWorkAuthority({ state } = {}) {
     } = {}) {
       const facts = currentFacts(projectId);
       if (facts.error) return facts.error;
+      if (expectedWorkId !== facts.work.workId) {
+        return {
+          allowed: false,
+          reason: "STALE_ACTIVE_WORK",
+          currentWorkId: facts.work.workId,
+        };
+      }
       return authorizeCapability({
         project: facts.project,
         work: facts.work,
