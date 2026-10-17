@@ -102,11 +102,7 @@ function recorderOperation(overrides = {}) {
 
 test("Experience v1 closes the category set to exactly five approved classes", () => {
   assert.deepEqual([...EXPERIENCE_CATEGORIES], [
-    "DIAGNOSTIC",
-    "EXECUTION",
-    "PROVIDER_TOOL_FACT",
-    "PERFORMANCE",
-    "COUNTEREXAMPLE",
+    "DIAGNOSTIC", "EXECUTION", "PROVIDER_TOOL_FACT", "PERFORMANCE", "COUNTEREXAMPLE",
   ]);
   const valid = projectExperience(baseInput);
   assert.equal(valid.valid, true, JSON.stringify(valid.errors));
@@ -332,4 +328,36 @@ test("Experience recorder failure is a bounded non-authoritative learning failur
     providerFamily: "codex",
     workflowState: "SUCCEEDED",
   }), { ok: false, reason: "EXPERIENCE_RECORDING_FAILED" });
+});
+
+test("anti-reidentification rejects private paths, source text, secrets, provider IDs and business-specific cohorts before persistence", () => {
+  const adversarial = [
+    { facts: { ...baseInput.facts, changedPathClass: "C:\\Users\\Alice\\secret.ts" } },
+    { facts: { ...baseInput.facts, changedPathClass: "/home/alice/private/secret.ts" } },
+    { facts: { ...baseInput.facts, errorText: "TypeError near const secretClientRule = true" } },
+    { facts: { ...baseInput.facts, promptText: "Please implement the private customer requirement" } },
+    { facts: { ...baseInput.facts, rawDiff: "@@ -1 +1 @@\n-secret\n+customerCode" } },
+    { facts: { ...baseInput.facts, apiToken: "sk-live-private-token" } },
+    { facts: { ...baseInput.facts, providerSessionId: "session-user-12345" } },
+    { facts: { ...baseInput.facts, fileName: "customer-pricing.ts" } },
+    { facts: { ...baseInput.facts, businessTerm: "Tsuzuki" } },
+    { domainCohort: "tsuzuki" },
+  ];
+  for (const override of adversarial) {
+    const result = projectExperience({ ...baseInput, ...override });
+    assert.equal(result.valid, false, `unexpectedly accepted ${JSON.stringify(override)}`);
+  }
+});
+
+test("cross-project query cannot reveal another Project private provenance", () => {
+  const a = projected({ sourceProjectId: "prj-a", sourceLineageId: "lineage-a", workId: "work-a", operationId: "op-a" });
+  const b = projected({ sourceProjectId: "prj-b", sourceLineageId: "lineage-b", workId: "work-b", operationId: "op-b" });
+  const query = createExperienceQuery({ persistence: fakeQueryPersistence([a, b]) });
+  const crossProject = query.crossProject({});
+  assert.equal(crossProject.items.length, 2);
+  for (const record of crossProject.items) {
+    assert.equal(record.source.projectId, undefined);
+    assert.equal(record.source.workId, undefined);
+    assert.equal(record.source.operationId, undefined);
+  }
 });
