@@ -66,6 +66,18 @@ function storeInvalid(message, details = {}) {
   return error;
 }
 
+function scopeForCandidate(candidate) {
+  if (candidate.scope === "GLOBAL") return Object.freeze({ scope: "GLOBAL" });
+  if (candidate.scope === "DOMAIN") {
+    return Object.freeze({ scope: "DOMAIN", domainCohort: candidate.domainCohort });
+  }
+  return Object.freeze({ scope: "PROJECT", projectId: candidate.projectId });
+}
+
+function samePolicy(active, policyId, revision) {
+  return active?.policy?.policyId === policyId && active?.policy?.revision === revision;
+}
+
 export function validateLearnedPolicyCandidate(value) {
   if (!isRecord(value) || !onlyKeys(value, RECORD_KEYS)) return fail("invalid policy record");
   if (value.schema !== "orchestra.learned-policy.v2" || value.version !== 1) {
@@ -177,6 +189,45 @@ export function createLearnedPolicyStore({ persistence } = {}) {
       const entries = persistence.history({ ...scope, scopeKey });
       if (!Array.isArray(entries)) throw storeInvalid("invalid activation history");
       return entries.map((entry) => validateActivation(entry));
+    },
+
+    rollback({ policyId, revision } = {}) {
+      const candidate = this.inspect(policyId, revision);
+      if (!candidate) return { ok: false, reason: "RSI_POLICY_NOT_FOUND" };
+      const scope = scopeForCandidate(candidate);
+      const history = this.history(scope);
+      const targetActivation = [...history].reverse().find((entry) => samePolicy(entry, policyId, revision));
+      if (!targetActivation) return { ok: false, reason: "RSI_POLICY_NOT_ACTIVATED" };
+
+      const predecessorPolicyId = targetActivation.activation.predecessorPolicyId;
+      const predecessorRevision = targetActivation.activation.predecessorRevision;
+      if (!identity(predecessorPolicyId) || !Number.isInteger(predecessorRevision) || predecessorRevision < 1) {
+        return { ok: false, reason: "RSI_POLICY_PREDECESSOR_NOT_FOUND" };
+      }
+
+      const current = this.active(scope);
+      const rolledBack = Object.freeze({ policyId, revision });
+      if (samePolicy(current, predecessorPolicyId, predecessorRevision)) {
+        return { ok: true, replayed: true, active: current, rolledBack };
+      }
+      if (!samePolicy(current, policyId, revision)) {
+        return {
+          ok: false,
+          reason: "RSI_POLICY_ROLLBACK_STALE",
+          active: current,
+          rolledBack,
+        };
+      }
+
+      const result = this.activate({ policyId: predecessorPolicyId, revision: predecessorRevision });
+      if (!result?.ok) return result;
+      return {
+        ok: true,
+        replayed: false,
+        active: result.active,
+        rolledBack,
+        rollbackActivation: result.active.activation,
+      };
     },
   });
 }

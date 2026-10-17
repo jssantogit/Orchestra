@@ -244,3 +244,36 @@ export function evaluateHoldoutReplay({ candidate, promotionEvidence, holdout, g
     }),
   });
 }
+
+export function evaluateCounterexampleDemotion({ candidate, counterexample } = {}) {
+  const candidateValidation = validateLearnedPolicyCandidate(candidate);
+  if (!candidateValidation.valid) {
+    return Object.freeze({ ok: false, qualifies: false, code: "RSI_POLICY_INVALID" });
+  }
+  if (!validCrossProjectExperience(counterexample)) {
+    return Object.freeze({ ok: false, qualifies: false, code: "RSI_COUNTEREXAMPLE_INVALID" });
+  }
+  if (counterexample.category !== "COUNTEREXAMPLE" || counterexample.outcome.success !== false) {
+    return Object.freeze({ ok: true, qualifies: false, code: "RSI_COUNTEREXAMPLE_NOT_QUALIFYING" });
+  }
+  if (candidate.scope === "PROJECT" || !inCandidateScope(counterexample, candidate)) {
+    return Object.freeze({ ok: true, qualifies: false, code: "RSI_COUNTEREXAMPLE_OUT_OF_SCOPE" });
+  }
+  return Object.freeze({
+    ok: true,
+    qualifies: true,
+    code: "RSI_COUNTEREXAMPLE_DEMOTION_REQUIRED",
+    evidence: Object.freeze({
+      schema: "orchestra.rsi-counterexample-response.v2",
+      version: 1,
+      policy: Object.freeze({
+        policyId: candidate.policyId,
+        revision: candidate.revision,
+        scope: candidate.scope,
+      }),
+      experienceId: counterexample.experienceId,
+      lineageId: counterexample.source.lineageId,
+      domainCohort: counterexample.domainCohort,
+    }),
+  });
+}
