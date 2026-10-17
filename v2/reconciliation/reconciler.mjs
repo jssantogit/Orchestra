@@ -149,6 +149,65 @@ export function createOperationReconciler({
     return result;
   }
 
+  async function inspectRecoveryReadiness(operation, assessment) {
+    if (assessment.liveness === "LIVE") {
+      return {
+        workspace: null,
+        blocksMutation: true,
+        recoveryAvailable: false,
+        humanGateRequired: false,
+        actionRequired: "WAIT_FOR_LIVE_OPERATION",
+      };
+    }
+
+    if (assessment.liveness === "UNKNOWN") {
+      return {
+        workspace: null,
+        blocksMutation: true,
+        recoveryAvailable: false,
+        humanGateRequired: true,
+        actionRequired: "RESOLVE_LIVENESS",
+      };
+    }
+
+    if (assessment.liveness !== "STALE_RECOVERABLE") {
+      return {
+        workspace: null,
+        blocksMutation: true,
+        recoveryAvailable: false,
+        humanGateRequired: true,
+        actionRequired: "RESOLVE_LIVENESS",
+      };
+    }
+
+    const workspace = await inspectWorkspace(operation);
+    if (workspace.status === "CLEAN" || workspace.status === "ABSENT") {
+      return {
+        workspace,
+        blocksMutation: false,
+        recoveryAvailable: true,
+        humanGateRequired: false,
+        actionRequired: "RUN_RECOVERY",
+      };
+    }
+    if (workspace.status === "DIRTY") {
+      return {
+        workspace,
+        blocksMutation: false,
+        recoveryAvailable: false,
+        humanGateRequired: false,
+        actionRequired: "RESOLVE_DIRTY_WORKSPACE",
+      };
+    }
+    return {
+      workspace,
+      blocksMutation: false,
+      recoveryAvailable: false,
+      humanGateRequired: true,
+      actionRequired: "PROVE_WORKSPACE_IDENTITY",
+    };
+  }
+
   function terminalize(operation) {
     return store.operations.terminalize({
       operationId: operation.operationId,
@@ -314,12 +373,12 @@ export function createOperationReconciler({
       for (const operation of candidates) {
         const assessment = await assess(operation) ?? unknownAssessment(operation.operationId);
         const recovery = store.recoveries.latest({ projectId, operationId: operation.operationId });
+        const readiness = await inspectRecoveryReadiness(operation, assessment);
         operations.push({
           operation,
           assessment,
           recovery,
-          blocksMutation: assessment.liveness === "LIVE" || assessment.liveness === "UNKNOWN",
-          recoveryAvailable: assessment.liveness === "STALE_RECOVERABLE",
+          ...readiness,
         });
       }
       return {
