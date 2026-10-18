@@ -1,5 +1,15 @@
 # Orchestra Dream Layer Foundation
 
+## V2 default topology
+
+Orchestra v2 moves recursive policy improvement into the user-level **global control plane** under Orchestra Home. The v2 Dream/RSI path consumes only sanitized global Experience projections and evaluates learned policy across independent Project lineages without copying raw Project-private history into a shared model context.
+
+Learned policy has zero independent authority: it may select only among immutable legal execution choices already allowed by governance. It cannot grant capabilities, widen scope, create acceptance authority, override factual liveness, or turn missing/failed evidence into success. TRAIN, EVALUATE and HOLDOUT remain separated by Project lineage, and replay/promotion fails closed when provenance, privacy or integrity is invalid.
+
+Raw prompts, transcripts, provider session IDs, source snippets, diffs, secrets, hidden reasoning and arbitrary Project artifacts do not cross the Project boundary by default. A cut-over Project keeps only a **thin provider shim** to the global engine. The provider-local `.agents/dream/**` / `.agents/dream-data/**` architecture described below is Orchestra 1.x **project-local compatibility/migration** history and remains useful for rollback, migration and preserved experimentation; normal v2 does not install that full Dream/governance brain per Project.
+
+---
+
 The Orchestra Dream Layer is an offline, deterministic recursive policy improvement foundation for autonomous coding agents. Grounded in the principles of **Dream-RSI: Recursive Self-Improvement through Evolving Worlds** ([Zheng et al., arXiv:2609.14858, 2026](https://arxiv.org/html/2609.14858)), the Dream Layer explores, evaluates, and optimizes operational delegation policies over factual historical trajectories without modifying foundation model weights, prompts, tool hooks, or safety rules.
 
 ---
@@ -724,4 +734,3 @@ npm run dream:explore-full -- stop --repo /path/to/project --reason "human stop"
 ```
 
 Milestones I-K add no authority to the model itself: factual evidence, isolation, capability checks, static ceilings, and explicit human gates remain runtime-owned.
-
