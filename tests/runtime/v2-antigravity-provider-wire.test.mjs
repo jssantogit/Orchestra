@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { renderAntigravityV2Shim } from "../../v2/providers/antigravity/shim-template.mjs";
+import { buildAntigravityV2ShimArtifacts } from "../../v2/providers/antigravity/shim-manager.mjs";
 
 for (const eventName of ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"]) {
   for (const ok of [true, false]) {
@@ -74,5 +75,23 @@ test("Antigravity configured native hook slot rejects contradictory payload even
     });
     assert.equal(result.status, 0);
     assert.deepEqual(JSON.parse(result.stdout), { decision: "deny", reason: "ORCHESTRA_V2_GLOBAL_UNAVAILABLE" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Antigravity native hook command executes through the host shell with spaced paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra agy native command "));
+  try {
+    const launcherPath = join(root, "launcher.mjs");
+    const shimPath = join(root, "shim.mjs");
+    await writeFile(launcherPath, 'process.stdout.write(JSON.stringify({ok:true,reason:null,hookSpecificOutput:{hookEventName:"PreInvocation",additionalContext:"internal"}}));');
+    const artifacts = buildAntigravityV2ShimArtifacts({ launcherPath, shimPath });
+    await writeFile(shimPath, artifacts.shimSource);
+    const handler = JSON.parse(artifacts.hooksJson)["orchestra-v2-global"].PreInvocation[0];
+    const result = spawnSync(handler.command, {
+      shell: process.platform === "win32" ? process.env.ComSpec : "/bin/sh",
+      input: JSON.stringify({ conversationId: "native-command-actor", invocationNum: 0 }), encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { injectSteps: [] });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
