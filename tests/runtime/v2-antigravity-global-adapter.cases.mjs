@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -1500,11 +1500,12 @@ test("Antigravity v2 shim installs only registered-project transport files and f
     assert.equal(reinstalledHooks["orchestra-v2-global"].PreToolUse.length, 1);
     assert.equal(reinstalledHooks["orchestra-v2-global"].PostToolUse.length, 1);
     const legacyHooks = structuredClone(reinstalledHooks);
+    const canonicalNode = await realpath(process.execPath);
     for (const eventName of ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"]) {
       for (const entry of legacyHooks["orchestra-v2-global"][eventName]) {
         for (const handler of entry.hooks ?? [entry]) {
           if (handler.command?.includes("orchestra-v2-hook.mjs")) {
-            handler.command = `'${process.execPath.replaceAll("'", "'\"'\"'")}' '${join(cwd, ".agents", "orchestra-v2-hook.mjs").replaceAll("'", "'\"'\"'")}'`;
+            handler.command = `'${canonicalNode.replaceAll("'", "'\"'\"'")}' '${join(project.workspace.canonicalRoot, ".agents", "orchestra-v2-hook.mjs").replaceAll("'", "'\"'\"'")}'`;
             handler.commandWindows = handler.commandWindows.replace(` --event ${eventName}`, "");
           }
         }
