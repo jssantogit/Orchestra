@@ -57,25 +57,58 @@ function addMilliseconds(value, milliseconds) {
   return new Date(Date.parse(value) + milliseconds).toISOString();
 }
 
-function classifyToolResult(payload) {
-  const hasSnakeErrorFlag = Object.hasOwn(payload, "is_error");
-  const hasCamelErrorFlag = Object.hasOwn(payload, "isError");
-  const hasErrorFlag = hasSnakeErrorFlag || hasCamelErrorFlag;
-  const errorFlag = hasSnakeErrorFlag ? payload.is_error : payload.isError;
-  const hasSnakeExitCode = Object.hasOwn(payload, "exit_code");
-  const hasCamelExitCode = Object.hasOwn(payload, "exitCode");
-  const hasExitCode = hasSnakeExitCode || hasCamelExitCode;
-  const exitCode = hasSnakeExitCode ? payload.exit_code : payload.exitCode;
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
 
-  if (hasErrorFlag && typeof errorFlag !== "boolean") return null;
-  if (hasExitCode && (!Number.isSafeInteger(exitCode) || exitCode < 0)) return null;
-  if (hasSnakeErrorFlag && hasCamelErrorFlag && payload.is_error !== payload.isError) return null;
-  if (hasSnakeExitCode && hasCamelExitCode && payload.exit_code !== payload.exitCode) return null;
-  if (hasErrorFlag && hasExitCode && errorFlag === false && exitCode !== 0) return null;
-  if (hasErrorFlag && hasExitCode && errorFlag === true && exitCode === 0) return null;
-  if (errorFlag === true || (hasExitCode && exitCode > 0)) return "FAILED";
-  if (errorFlag === false || (hasExitCode && exitCode === 0)) return "SUCCEEDED";
-  return null;
+function explicitToolResult(payload) {
+  const response = record(payload.tool_response);
+  const sources = [payload, response];
+  const errorFlags = [];
+  const exitCodes = [];
+
+  for (const source of sources) {
+    if (Object.hasOwn(source, "is_error")) errorFlags.push(source.is_error);
+    if (Object.hasOwn(source, "isError")) errorFlags.push(source.isError);
+    if (Object.hasOwn(source, "exit_code")) exitCodes.push(source.exit_code);
+    if (Object.hasOwn(source, "exitCode")) exitCodes.push(source.exitCode);
+  }
+
+  if (errorFlags.some((flag) => typeof flag !== "boolean")) return { present: true, outcome: null };
+  if (exitCodes.some((code) => !Number.isSafeInteger(code) || code < 0)) return { present: true, outcome: null };
+  if (errorFlags.some((flag) => flag !== errorFlags[0])) return { present: true, outcome: null };
+  if (exitCodes.some((code) => code !== exitCodes[0])) return { present: true, outcome: null };
+
+  const hasErrorFlag = errorFlags.length > 0;
+  const hasExitCode = exitCodes.length > 0;
+  if (!hasErrorFlag && !hasExitCode) return { present: false, outcome: null };
+
+  const errorFlag = errorFlags[0];
+  const exitCode = exitCodes[0];
+  if (hasErrorFlag && hasExitCode && errorFlag === false && exitCode !== 0) return { present: true, outcome: null };
+  if (hasErrorFlag && hasExitCode && errorFlag === true && exitCode === 0) return { present: true, outcome: null };
+  if (errorFlag === true || (hasExitCode && exitCode > 0)) return { present: true, outcome: "FAILED" };
+  if (errorFlag === false || (hasExitCode && exitCode === 0)) return { present: true, outcome: "SUCCEEDED" };
+  return { present: true, outcome: null };
+}
+
+function classifyToolResult(payload, event) {
+  const explicit = explicitToolResult(payload);
+  if (explicit.present) return explicit.outcome;
+
+  const hasNativeResponse = Object.hasOwn(payload, "tool_response");
+  if (!hasNativeResponse) return null;
+
+  const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim().toLowerCase() : "";
+  if (event?.eventType === "TOOL_RESULT" && event.operation === "WRITE" && toolName === "apply_patch") {
+    // Codex 0.159.x only emits apply_patch PostToolUse after the verified patch handler returns
+    // ApplyPatchToolOutput. Error paths return before PostToolUse, so the native event is factual success.
+    return "SUCCEEDED";
+  }
+
+  // Native Codex Bash/exec PostToolUse does not expose the internal exit code. Terminalize
+  // conservatively so a provider event cannot leave a phantom LIVE operation or invent success.
+  return "UNKNOWN";
 }
 
 export function createCodexHookHandler({
@@ -368,7 +401,7 @@ export function createCodexHookHandler({
       return result(false, "CODEX_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });
     }
 
-    const workflowState = classifyToolResult(payload);
+    const workflowState = classifyToolResult(payload, event);
     if (!workflowState) return result(false, "CODEX_TOOL_RESULT_INVALID", { projectId: project.projectId });
     const resultRef = `provider-result:${workflowState.toLowerCase()}:${correlationHash}`;
     const terminal = registry.state.operations.terminalize({
