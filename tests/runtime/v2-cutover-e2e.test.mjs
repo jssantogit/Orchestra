@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,7 +101,7 @@ function staleOperation(project, currentWork, runtimeOwnerId) {
     heartbeatAt: STALE_STARTED_AT,
     deadlineAt: STALE_DEADLINE_AT,
     runtimeOwnerRef: runtimeOwnerId,
-    workspaceRef: null,
+    workspaceRef: 'workspace:cutover-owner-loss',
     resultRef: null,
   };
 }
@@ -157,7 +157,7 @@ if (NODE_MAJOR < 24) {
     assert.ok(NODE_MAJOR < 24);
   });
 } else {
-  test('dead factual owner recovers before explicit upgrade and rollback without rewriting project source', async () => {
+  test('dead factual owner preserves dirty mutation workspace before explicit upgrade and rollback without rewriting project source', async () => {
     const [
       registryModule,
       reconciliationModule,
@@ -165,6 +165,7 @@ if (NODE_MAJOR < 24) {
       runtimeStoreModule,
       runtimeManagerModule,
       workAuthorityModule,
+      workspaceStoreModule,
     ] = await Promise.all([
       import('../../v2/global/project-registry.mjs'),
       import('../../v2/global/reconciliation.mjs'),
@@ -172,6 +173,7 @@ if (NODE_MAJOR < 24) {
       import('../../v2/runtime-images/store.mjs'),
       import('../../v2/runtime-images/manager.mjs'),
       import('../../v2/authority/work-authority.mjs'),
+      import('../../v2/workspaces/managed-workspace-store.mjs'),
     ]);
 
     const projectRoot = makeGitProject('crash-rollback');
@@ -196,10 +198,30 @@ if (NODE_MAJOR < 24) {
 
       const runtimeOwnerId = 'owner-cutover-dead-process';
       const operation = staleOperation(project, initialWork, runtimeOwnerId);
-      assert.equal(registry.state.operations.begin({
+      const begun = registry.state.operations.begin({
         expectedGeneration: initialWork.generation,
         operation,
-      }).ok, true);
+      });
+      assert.equal(begun.ok, true, begun.reason ?? 'operation begin');
+
+      const workspacePaths = workspaceStoreModule.resolveManagedWorkspacePaths({ home });
+      const managedRoot = join(workspacePaths.instancesRoot, operation.operationId);
+      mkdirSync(managedRoot, { recursive: true });
+      git(managedRoot, 'init');
+      writeFileSync(join(managedRoot, 'preserve-me.txt'), 'dirty mutation bytes\n', 'utf8');
+      const workspaceStore = workspaceStoreModule.createManagedWorkspaceStore({ home });
+      const workspaceRegistered = await workspaceStore.register({
+        schema: 'orchestra.managed-workspace.v2',
+        workspaceRef: operation.workspaceRef,
+        operationId: operation.operationId,
+        projectId: operation.projectId,
+        workId: operation.workId,
+        generation: operation.generation,
+        kind: 'TRANSIENT_GIT_CLONE',
+        root: realpathSync(managedRoot),
+        registeredAt: STALE_STARTED_AT,
+      });
+      assert.equal(workspaceRegistered.ok, true);
 
       const ownerStore = ownerStoreModule.createRuntimeOwnerStore({ rootDir: join(home, 'runtime-owners') });
       const ownerRegistered = await ownerStore.register({
@@ -236,16 +258,29 @@ if (NODE_MAJOR < 24) {
       assert.equal(status.ok, true);
       assert.equal(status.operations.length, 1);
       assert.equal(status.operations[0].assessment.liveness, 'STALE_RECOVERABLE');
-      assert.equal(status.operations[0].actionRequired, 'RUN_RECOVERY');
+      assert.equal(status.operations[0].workspace.status, 'DIRTY');
+      assert.equal(status.operations[0].actionRequired, 'RESOLVE_DIRTY_WORKSPACE');
 
-      const recovered = await reconciler.recover({
+      const recoveryAttempt = await reconciler.recover({
         projectId: project.projectId,
         operationId: operation.operationId,
         commandId: 'cutover-recover-dead-owner',
       });
-      assert.equal(recovered.ok, true);
-      assert.equal(recovered.recovered, true);
+      assert.equal(recoveryAttempt.ok, false);
+      assert.equal(recoveryAttempt.reason, 'STALE_DIRTY');
+      assert.equal(recoveryAttempt.preserved, true);
+
+      const resolved = await reconciler.resolveDirty({
+        projectId: project.projectId,
+        operationId: operation.operationId,
+        commandId: 'cutover-preserve-dirty-owner-loss',
+        action: 'PRESERVE',
+      });
+      assert.equal(resolved.ok, true);
+      assert.equal(resolved.resolved, true);
+      assert.equal(resolved.action, 'PRESERVE');
       assert.notEqual(registry.state.operations.inspect(operation.operationId).workflowState, 'RUNNING');
+      assert.equal(readFileSync(join(managedRoot, 'preserve-me.txt'), 'utf8'), 'dirty mutation bytes\n');
 
       const authority = workAuthorityModule.createWorkAuthority({ state: registry.state });
       const abandoned = authority.abandon({
@@ -309,6 +344,7 @@ if (NODE_MAJOR < 24) {
       assert.equal(rolledBack.project.runtime.instructionEpoch, 2);
 
       assert.deepEqual(sourceFingerprint(projectRoot), before);
+      assert.equal(readFileSync(join(managedRoot, 'preserve-me.txt'), 'utf8'), 'dirty mutation bytes\n');
     } finally {
       registry.close();
       rmSync(projectRoot, { recursive: true, force: true });
