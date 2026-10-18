@@ -41,6 +41,20 @@ Freeze the exact candidate head and collect the V2-11 readiness record. Do not c
 
 `FAILED`, `UNKNOWN`, missing, stale-head, stale-runtime, or mismatched-lineage evidence means **not ready**.
 
+## Canonical readiness collection
+
+Use `v2/cutover/readiness-evidence.mjs` as the canonical V2-11 collection boundary.
+
+- `collectCutoverReadinessFragment(...)` executes factual probe functions and emits only records bound to the exact candidate `headSha` and Runtime Image ID supplied to the collector.
+- A probe result is promoted to `VERIFIED` only when it reports `ok: true`, the exact head/runtime identity, structured facts, and one or more sanitized evidence references. Caller-supplied booleans or prebuilt records are not probes and are not promoted.
+- Windows and POSIX runs may emit separate fragments. Independent Project runs may also emit separate fragments. `mergeCutoverReadinessEvidence(...)` combines only exact-identity fragments and fails closed on stale identity, invalid evidence refs, conflicting records, or fragment errors.
+- The `providers` readiness group is never accepted from a readiness fragment. It is derived only by the canonical six-scenario `evaluateProviderFieldEvidence(...)` evaluator for both Codex and Antigravity on the same exact head and Runtime Image.
+- The merged `evidence` object is then passed to the existing `evaluateCutoverReadiness(...)` authority. The collector may make readiness stricter when collection errors exist; it does not override or weaken the evaluator.
+
+Do not hand-author `VERIFIED` readiness objects to bypass the collector. CI fixtures, mocks, direct adapter calls, operator attestations, historical provider records, or a previously green candidate are not substitutes for current factual probes.
+
+A software change changes the candidate head. When the head changes, provider field evidence and readiness fragments from the previous head become historical immediately and must not be merged into the new candidate.
+
 ## Cutover procedure
 
 1. **Record the candidate identity.** Record exact branch/head, Runtime Image ID, canonical CI run IDs, provider field-evidence references, two independent Project lineage IDs, and self-host result.
