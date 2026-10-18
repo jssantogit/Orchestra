@@ -168,6 +168,8 @@ Do not create `.github/workflows/orchestra-v2-persistence.yml` or substitute the
 
 ## V2-11
 
+The exact reviewed predecessor is V2-10 head `7396998008e1c9811428fb0e886a37870acb27dc`.
+
 ### Task 7 exact documentation files
 
 Modify:
@@ -191,6 +193,18 @@ Modify:
 - `tests/release/prepare-readiness-order.test.mjs`
 
 Preserve the rest of `tests/release/` unchanged unless one of these exact tests imports a helper whose signature must change; such a helper edit is implementation-local and must be reported by Luna.
+
+### Task 8 exact workflow paths
+
+The V2-10 predecessor uses split canonical workflows rather than the stale names in the earlier V2-11 plan.
+
+Modify:
+- `.github/workflows/v2-persistence.yml`
+- `.github/workflows/prepare-release.yml`
+
+Preserve `.github/workflows/publish-release.yml` unless an exact existing release guard contract must change to consume the readiness record. Publication already requires an operator-authorized release PR merge plus successful canonical CI on the exact `main` SHA; green CI alone must remain insufficient.
+
+Do not create `.github/workflows/orchestra-v2-persistence.yml` or `.github/workflows/orchestra-release.yml` aliases.
 
 ## Evidence rule
 
