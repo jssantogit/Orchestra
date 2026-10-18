@@ -106,9 +106,13 @@ function classifyToolResult(payload, event) {
     return "SUCCEEDED";
   }
 
-  // Native Codex Bash/exec PostToolUse does not expose the internal exit code. Terminalize
-  // conservatively so a provider event cannot leave a phantom LIVE operation or invent success.
-  return "UNKNOWN";
+  if (event?.eventType === "TOOL_RESULT" && event.operation === "COMMAND") {
+    // Native Codex Bash/exec PostToolUse does not expose the internal exit code. Terminalize
+    // conservatively so a provider event cannot leave a phantom LIVE operation or invent success.
+    return "UNKNOWN";
+  }
+
+  return null;
 }
 
 export function createCodexHookHandler({
