@@ -2,11 +2,6 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { createWorkAuthority } from '../authority/work-authority.mjs';
-import { createGlobalProjectRegistry } from '../global/project-registry.mjs';
-import { createGlobalStatusReconciler } from '../global/reconciliation.mjs';
-import { installCodexV2Shim } from '../providers/codex/shim-manager.mjs';
-
 function failure(code, fields = {}) {
   return Object.freeze({ ok: false, code, ...fields });
 }
@@ -52,6 +47,19 @@ function operationDeadline(nowIso) {
   return new Date(Date.parse(nowIso) + 60_000).toISOString();
 }
 
+async function loadGlobalControlPlane() {
+  const [registryModule, authorityModule, reconciliationModule] = await Promise.all([
+    import('../global/project-registry.mjs'),
+    import('../authority/work-authority.mjs'),
+    import('../global/reconciliation.mjs'),
+  ]);
+  return {
+    createGlobalProjectRegistry: registryModule.createGlobalProjectRegistry,
+    createWorkAuthority: authorityModule.createWorkAuthority,
+    createGlobalStatusReconciler: reconciliationModule.createGlobalStatusReconciler,
+  };
+}
+
 export async function verifyOrchestraSelfHost({
   projectRoot,
   home,
@@ -61,6 +69,7 @@ export async function verifyOrchestraSelfHost({
   instructionEpoch,
   trustMode = 'trusted',
   actor,
+  installThinShim,
   now = () => new Date().toISOString(),
 } = {}) {
   if (!nonEmptyString(projectRoot) || !nonEmptyString(home) || !nonEmptyString(launcherPath)) {
@@ -71,12 +80,19 @@ export async function verifyOrchestraSelfHost({
     throw new TypeError('instructionEpoch must be a non-negative integer');
   }
   if (!actor || typeof actor !== 'object') throw new TypeError('actor is required');
+  if (typeof installThinShim !== 'function') throw new TypeError('installThinShim is required');
   if (typeof now !== 'function') throw new TypeError('now must be a function');
 
   const root = resolve(projectRoot);
   if (!readOrchestraIdentity(root)) {
     return failure('CUTOVER_SELF_HOST_NOT_ORCHESTRA');
   }
+
+  const {
+    createGlobalProjectRegistry,
+    createWorkAuthority,
+    createGlobalStatusReconciler,
+  } = await loadGlobalControlPlane();
 
   const registry = createGlobalProjectRegistry({ home });
   try {
@@ -91,7 +107,7 @@ export async function verifyOrchestraSelfHost({
     }
     const project = registered.project;
 
-    const shim = installCodexV2Shim({
+    const shim = installThinShim({
       targetDir: root,
       launcherPath,
       nodePath,
