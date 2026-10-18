@@ -646,7 +646,7 @@ test("Antigravity host mutation requires factual tool-call correlation", async (
 });
 
 test("Antigravity normalizes factual step indices and rejects invalid present values", () => {
-  for (const stepIdx of ["2", 2.5, -1, Number.NaN, Number.POSITIVE_INFINITY, {}, null, undefined]) {
+  for (const stepIdx of ["2", 2.5, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, {}, null, undefined]) {
     assert.throws(() => normalizeAntigravityToolEvent({
       conversationId: "step-index-invalid",
       eventType: "PreToolUse",
@@ -662,6 +662,35 @@ test("Antigravity normalizes factual step indices and rejects invalid present va
   });
   assert.equal(normalized.stepIdx, 0);
   assert.equal(normalized.factualIds.toolCallId, "legacy-id");
+});
+
+test("Antigravity rejects invalid present stepIdx before a valid legacy ID can create an Operation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-invalid-step-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const invalidValues = ["2", 2.5, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, {}, null];
+    for (let index = 0; index < invalidValues.length; index += 1) {
+      const conversationId = `invalid-step-actor-${index}`;
+      const toolCallId = `invalid-step-call-${index}`;
+      const attached = await invokeAntigravityHook({ home, cwd, payload: {
+        hookEventName: "SessionStart", conversationId,
+      } });
+      assert.equal(attached.code, 0, JSON.stringify(attached.payload));
+      const denied = await invokeAntigravityHook({ home, cwd, payload: {
+        hookEventName: "PreToolUse", conversationId, stepIdx: invalidValues[index],
+        toolCall: { id: toolCallId, name: "write_to_file", args: { TargetFile: "invalid-step.txt" } },
+      } });
+      assert.equal(denied.payload.hookSpecificOutput.permissionDecision, "deny", JSON.stringify(denied.payload));
+      const registry = createGlobalProjectRegistry({ home });
+      try {
+        assert.equal(registry.state.operations.listLive({ projectId: project.projectId }).length, 0);
+        assert.equal(registry.state.operationCorrelations.get({
+          provider: "antigravity", projectId: project.projectId, correlationHash: hashId(toolCallId),
+        }), null);
+      } finally { registry.close(); }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("native Antigravity mutation correlates by actor and step ahead of call IDs", async () => {
@@ -683,6 +712,12 @@ test("native Antigravity mutation correlates by actor and step ahead of call IDs
     } });
     assert.equal(native.payload.ok, true, JSON.stringify(native.payload));
     assert.equal(native.payload.replayed, false);
+    const nativeTerminal = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PostToolUse", conversationId, stepIdx: 11, error: "",
+    } });
+    assert.equal(nativeTerminal.payload.operation.operationId, native.payload.operation.operationId);
+    assert.equal(nativeTerminal.payload.operation.workflowState, "SUCCEEDED");
+    assert.equal(nativeTerminal.payload.operation.liveness, "TERMINAL");
 
     const first = await invokeAntigravityHook({ home, cwd, payload: {
       hookEventName: "PreToolUse",
@@ -855,6 +890,11 @@ test("native Antigravity terminal signals classify errors and reject missing or 
     ["non-empty native error fails", { error: "provider failure" }, "FAILED"],
     ["whitespace native error fails", { error: " " }, "FAILED"],
     ["error and legacy flag agree", { error: "", isError: false }, "SUCCEEDED"],
+    ["snake legacy flag and native error agree", { error: "failure", is_error: true }, "FAILED"],
+    ["snake legacy flag and native error conflict", { error: "failure", is_error: false }, null],
+    ["native and legacy exit code agree", { error: "failure", exit_code: 1 }, "FAILED"],
+    ["native and legacy exit code conflict", { error: "", exit_code: 1 }, null],
+    ["native and camel exit code agree", { error: "", exitCode: 0 }, "SUCCEEDED"],
     ["error and legacy flag conflict", { error: "", isError: true }, null],
     ["error and exit code conflict", { error: "provider failure", exitCode: 0 }, null],
     ["non-string error is invalid", { error: 1 }, null],
@@ -875,6 +915,14 @@ test("native Antigravity terminal signals classify errors and reject missing or 
           toolCall: { id: toolCallId, name: "write_file" },
           ...signals,
         } });
+        if (typeof signals.error === "string" && signals.error.trim().length > 0) {
+          const verify = createGlobalProjectRegistry({ home });
+          try {
+            const operation = verify.state.operations.inspect(started.payload.operation.operationId);
+            assert.equal(JSON.stringify(operation).includes(signals.error), false);
+            assert.equal(JSON.stringify(verify.state.experience.list()).includes(signals.error), false);
+          } finally { verify.close(); }
+        }
         if (expected === null) {
           assert.equal(terminal.payload.reason, "ANTIGRAVITY_TOOL_RESULT_INVALID");
           const verify = createGlobalProjectRegistry({ home });
@@ -885,6 +933,12 @@ test("native Antigravity terminal signals classify errors and reject missing or 
           assert.equal(terminal.payload.operation.workflowState, expected);
           assert.equal(terminal.payload.operation.liveness, "TERMINAL");
           assert.equal(JSON.stringify(terminal.payload).includes("provider failure"), false);
+          const verify = createGlobalProjectRegistry({ home });
+          try {
+            const operation = verify.state.operations.inspect(started.payload.operation.operationId);
+            assert.equal(operation.workflowState, expected);
+            assert.equal(operation.liveness, "TERMINAL");
+          } finally { verify.close(); }
         }
       } finally { await rm(root, { recursive: true, force: true }); }
     });
@@ -899,7 +953,8 @@ test("native Antigravity terminal replay can omit toolCall without touching anot
     const firstActor = "native-terminal-first";
     const secondActor = "native-terminal-second";
     const firstStarted = await startAntigravityMutation({ home, cwd, conversationId: firstActor, toolCallId: "legacy-first" });
-    const secondStarted = await startAntigravityMutation({ home, cwd, conversationId: secondActor, toolCallId: "legacy-second" });
+    const secondProject = await prepareProject({ root, home, workspaceName: "other-workspace", workId: "work-antigravity-other" });
+    const secondStarted = await startAntigravityMutation({ home, cwd: secondProject.cwd, conversationId: secondActor, toolCallId: "legacy-second" });
     assert.equal(firstStarted.started.payload.ok, true);
     assert.equal(secondStarted.started.payload.ok, true);
     const registry = createGlobalProjectRegistry({ home });
@@ -917,13 +972,15 @@ test("native Antigravity terminal replay can omit toolCall without touching anot
     const replay = await invokeAntigravityHook({ home, cwd, payload: {
       hookEventName: "PostToolUse", conversationId: firstActor, stepIdx: 3, error: "",
     } });
+    assert.equal(first.payload.reason, null, JSON.stringify(first.payload));
     assert.equal(first.payload.operation.operationId, firstStarted.started.payload.operation.operationId);
     assert.equal(first.payload.replayed, false);
     assert.equal(replay.payload.operation.operationId, firstStarted.started.payload.operation.operationId);
     assert.equal(replay.payload.replayed, true);
     const reopened = createGlobalProjectRegistry({ home });
     try {
-      assert.equal(reopened.state.operations.inspect(secondStarted.started.payload.operation.operationId).workflowState, "RUNNING");
+        assert.equal(reopened.state.operations.inspect(secondStarted.started.payload.operation.operationId).workflowState, "RUNNING");
+        assert.notEqual(firstStarted.started.payload.projectId, secondStarted.started.payload.projectId);
     } finally { reopened.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
