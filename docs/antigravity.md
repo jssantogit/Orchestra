@@ -1,5 +1,15 @@
 # Antigravity (AGY) Runtime Guide
 
+## V2 default integration
+
+In normal Orchestra v2 operation, Antigravity reaches the user-level **global control plane** under Orchestra Home through a **thin provider shim**. The Project-local Antigravity surface is transport/configuration only; it does not contain a copied full v2 governance brain. Current Project-scoped Work, generation and instruction epoch are authoritative, not an Antigravity conversation or Work Lease.
+
+The Project-local `.agents/**` runtime, Work Lease lifecycle and handoff paths described later in this guide are Orchestra 1.x **compatibility/migration topology**. They remain available for migration, rollback and historical compatibility. V2 factual status/recovery and Runtime Image install, upgrade and rollback are global operations. A stale pre-upgrade provider observation is denied by the global epoch/generation fences.
+
+For cutover, keep only the approved thin AGY shim pointing at the global engine. Do not install or materialize a complete v2 runtime per Project. See `docs/release/v2-field-test-runbook.md`, `docs/release/v2-cutover-runbook.md`, and `docs/release/v2-rollback-runbook.md`.
+
+---
+
 The Antigravity runtime provides a 100% **ALL-GEMINI** local multi-agent architecture integrated directly with the Antigravity CLI and IDE engine. Optional cross-provider delegation is executed outside that provider-native tree through Orchestra's neutral delegation runtime, so the AGY control plane itself remains provider-pure.
 
 ---
