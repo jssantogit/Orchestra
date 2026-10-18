@@ -736,15 +736,21 @@ test("native Antigravity step correlation separates actors and remains project s
         await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "SessionStart", conversationId } });
       }
     }
-    const invokeNative = (cwd, conversationId) => invokeAntigravityHook({ home, cwd, payload: {
+    const invokeNative = (cwd, conversationId, toolCallId) => invokeAntigravityHook({ home, cwd, payload: {
       hookEventName: "PreToolUse", conversationId, stepIdx: 4,
-      toolCall: { name: "write_to_file", args: { TargetFile: "same-step.txt" } },
+      toolCall: { ...(toolCallId ? { id: toolCallId } : {}), name: "write_to_file", args: { TargetFile: "same-step.txt" } },
     } });
 
-    const firstActor = await invokeNative(firstProject.cwd, "native-actor-one");
+    const firstActor = await invokeNative(firstProject.cwd, "native-actor-one", "native-actor-one-call");
+    assert.equal(firstActor.payload.ok, true, JSON.stringify(firstActor.payload));
+    const firstTerminal = await invokeAntigravityHook({ home, cwd: firstProject.cwd, payload: {
+      hookEventName: "PostToolUse", conversationId: "native-actor-one", stepIdx: 4,
+      toolCall: { id: "native-actor-one-call", name: "write_to_file" }, is_error: false,
+    } });
+    assert.equal(firstTerminal.payload.operation.workflowState, "SUCCEEDED", JSON.stringify(firstTerminal.payload));
+
     const secondActor = await invokeNative(firstProject.cwd, "native-actor-two");
     const otherProject = await invokeNative(secondProject.cwd, "native-actor-one");
-    assert.equal(firstActor.payload.ok, true, JSON.stringify(firstActor.payload));
     assert.equal(secondActor.payload.ok, true, JSON.stringify(secondActor.payload));
     assert.equal(otherProject.payload.ok, true, JSON.stringify(otherProject.payload));
     assert.notEqual(firstActor.payload.operation.operationId, secondActor.payload.operation.operationId);
@@ -752,13 +758,20 @@ test("native Antigravity step correlation separates actors and remains project s
 
     const reopened = createGlobalProjectRegistry({ home });
     try {
-      assert.equal(reopened.state.operations.listLive({ projectId: firstProject.project.projectId }).length, 2);
+      assert.equal(reopened.state.operations.listLive({ projectId: firstProject.project.projectId }).length, 1);
       assert.equal(reopened.state.operations.listLive({ projectId: secondProject.project.projectId }).length, 1);
       const firstHash = hashId(`antigravity-step-v1:${actorHash("native-actor-one")}:4`);
+      const secondHash = hashId(`antigravity-step-v1:${actorHash("native-actor-two")}:4`);
       const correlation = reopened.state.operationCorrelations.get({
         provider: "antigravity", projectId: firstProject.project.projectId, correlationHash: firstHash,
       });
       assert.equal(correlation.operationId, firstActor.payload.operation.operationId);
+      assert.equal(reopened.state.operationCorrelations.get({
+        provider: "antigravity", projectId: firstProject.project.projectId, correlationHash: secondHash,
+      }).operationId, secondActor.payload.operation.operationId);
+      assert.equal(reopened.state.operationCorrelations.get({
+        provider: "antigravity", projectId: secondProject.project.projectId, correlationHash: firstHash,
+      }).operationId, otherProject.payload.operation.operationId);
       assert.equal(reopened.state.operationCorrelations.put({
         ...correlation, provider: "codex",
       }).ok, true);
@@ -858,7 +871,7 @@ test("native Antigravity terminal signals classify errors and reject missing or 
         const { started } = await startAntigravityMutation({ home, cwd, conversationId, toolCallId });
         assert.equal(started.payload.ok, true);
         const terminal = await invokeAntigravityHook({ home, cwd, payload: {
-          hookEventName: "PostToolUse", conversationId, stepIdx: 8,
+          hookEventName: "PostToolUse", conversationId,
           toolCall: { id: toolCallId, name: "write_file" },
           ...signals,
         } });
