@@ -1,5 +1,15 @@
 # Orchestra Architecture
 
+## V2 default topology
+
+Orchestra v2 uses a user-level **global control plane** under Orchestra Home. A registered Project reaches that global engine through a **thin provider shim**; the Project does not receive a copied full v2 governance runtime. Durable Project/Work/Operation state, Runtime Images, factual recovery, sanitized Experience and learned-policy state live under the global control plane and remain Project-scoped where authority requires it.
+
+Normal v2 authority is the current Project-scoped Work Unit plus generation and instruction epoch. Provider session/conversation identity is factual actor provenance only. Work Lease and explicit session-handoff machinery described later in this document are Orchestra 1.x **project-local compatibility/migration topology**, not the normal v2 authority plane.
+
+Runtime install/pin/upgrade/rollback and stale-owner recovery are global operations. A cutover rollback restores either a supported previous v2 Runtime Image/integration or an explicit v1 compatibility state while preserving auditable artifacts/evidence. V1 source/runtime remains supported compatibility history until a separately approved release gate says otherwise. See `docs/release/v2-cutover-runbook.md` and `docs/release/v2-rollback-runbook.md`.
+
+---
+
 Orchestra is a local multi-agent orchestration framework designed for coding agents. It structures complex software development workflows through deterministic routing, strict separation of duties, progressive verification, and runtime isolation.
 
 ---
