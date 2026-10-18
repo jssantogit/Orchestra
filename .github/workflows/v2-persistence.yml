@@ -55,6 +55,7 @@ jobs:
         run: |
           npm run test:firewall
           npm run test:installers
+          npm run build:runtimes
           npm run check:runtimes
           npm run check:runtime-core
           npm run check:contamination
