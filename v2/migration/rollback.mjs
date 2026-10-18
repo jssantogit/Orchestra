@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { restoreMigrationIntegration } from "./shim-activation.mjs";
+
 const MANIFEST_SCHEMA = "orchestra.migration-manifest.v2";
 
 function nonEmptyString(value) {
@@ -48,7 +50,7 @@ function commandRequest(kind, fields) {
 async function readManifest(path) {
   try {
     const parsed = JSON.parse(await readFile(path, "utf8"));
-    if (parsed?.schema !== MANIFEST_SCHEMA || !nonEmptyString(parsed.projectId)) {
+    if (parsed?.schema !== MANIFEST_SCHEMA || !nonEmptyString(parsed.projectId) || !Array.isArray(parsed.commands)) {
       return { ok: false, code: "MIGRATION_MANIFEST_CORRUPT" };
     }
     return { ok: true, manifest: parsed };
@@ -85,6 +87,29 @@ function serializeImport(importResult) {
       size: item.size,
       private: item.private === true,
     })),
+  };
+}
+
+async function restoreRollbackIntegration({ home, projectId, manifest, replayed }) {
+  const restored = await restoreMigrationIntegration({
+    home,
+    projectId,
+    workspace: manifest.workspace,
+  });
+  if (!restored.ok) {
+    return {
+      ok: false,
+      code: "MIGRATION_ROLLBACK_INTEGRATION_RESTORE_FAILED",
+      reason: restored.code,
+      manifest,
+      replayed,
+    };
+  }
+  return {
+    ok: true,
+    manifest,
+    replayed,
+    integrationRestore: restored,
   };
 }
 
@@ -184,6 +209,10 @@ export function createMigrationLifecycleStore({ home, state = null, now = () => 
           complete: current.manifest.cleanup.state === "COMPLETE",
         };
       }
+      if (current.manifest.cleanup !== undefined && current.manifest.cleanup !== null
+        && !["PREPARED", "COMPLETE"].includes(current.manifest.cleanup.state)) {
+        return { ok: false, code: "MIGRATION_MANIFEST_CORRUPT" };
+      }
       if (current.manifest.cleanup?.state === "PREPARED") {
         return { ok: false, code: "MIGRATION_CLEANUP_IN_PROGRESS" };
       }
@@ -267,7 +296,12 @@ export function createMigrationLifecycleStore({ home, state = null, now = () => 
         if (replay.kind !== "ROLLBACK" || replay.requestDigest !== requestDigest) {
           return { ok: false, code: "IDEMPOTENCY_CONFLICT" };
         }
-        return { ok: true, manifest: current.manifest, replayed: true };
+        return restoreRollbackIntegration({
+          home,
+          projectId,
+          manifest: current.manifest,
+          replayed: true,
+        });
       }
 
       const recoveryWorkId = current.manifest.import?.recoveryWorkId ?? null;
@@ -303,7 +337,12 @@ export function createMigrationLifecycleStore({ home, state = null, now = () => 
       };
       current.manifest.commands.push({ kind: "ROLLBACK", commandId, requestDigest, at });
       await writeManifest(root, path, current.manifest);
-      return { ok: true, manifest: current.manifest, replayed: false };
+      return restoreRollbackIntegration({
+        home,
+        projectId,
+        manifest: current.manifest,
+        replayed: false,
+      });
     },
   });
 }
