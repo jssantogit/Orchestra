@@ -237,6 +237,18 @@ function actorHash(conversationId) {
   return hashId(conversationId);
 }
 
+function bindAntigravityStepCorrelation(state, { projectId, conversationId, stepIdx, operationId, workId = "work-antigravity", generation = 3 }) {
+  return state.operationCorrelations.put({
+    provider: "antigravity",
+    projectId,
+    correlationHash: hashId(`antigravity-step-v1:${actorHash(conversationId)}:${stepIdx}`),
+    operationId,
+    workId,
+    generation,
+    actorIdHash: actorHash(conversationId),
+  });
+}
+
 for (const active of [true, false]) {
   test(`PreInvocation attaches and refreshes the factual actor with ${active ? "current Work" : "INTAKE"}`, async () => {
     const root = await mkdtemp(join(tmpdir(), "orchestra-agy-invocation-"));
@@ -631,6 +643,276 @@ test("Antigravity host mutation requires factual tool-call correlation", async (
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Antigravity normalizes factual step indices and rejects invalid present values", () => {
+  for (const stepIdx of ["2", 2.5, -1, Number.NaN, Number.POSITIVE_INFINITY, {}, null, undefined]) {
+    assert.throws(() => normalizeAntigravityToolEvent({
+      conversationId: "step-index-invalid",
+      eventType: "PreToolUse",
+      stepIdx,
+      toolCall: { id: "legacy-id", name: "write_file" },
+    }));
+  }
+  const normalized = normalizeAntigravityToolEvent({
+    conversationId: "step-index-valid",
+    eventType: "PreToolUse",
+    stepIdx: 0,
+    toolCall: { id: "legacy-id", name: "write_file" },
+  });
+  assert.equal(normalized.stepIdx, 0);
+  assert.equal(normalized.factualIds.toolCallId, "legacy-id");
+});
+
+test("native Antigravity mutation correlates by actor and step ahead of call IDs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-native-step-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const conversationId = "native-step-actor";
+    assert.equal((await invokeAntigravityHook({
+      home, cwd,
+      payload: { hookEventName: "SessionStart", conversationId },
+    })).code, 0);
+
+    const native = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PreToolUse",
+      conversationId,
+      stepIdx: 11,
+      toolCall: { name: "write_to_file", args: { TargetFile: "native-no-id.txt" } },
+    } });
+    assert.equal(native.payload.ok, true, JSON.stringify(native.payload));
+    assert.equal(native.payload.replayed, false);
+
+    const first = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PreToolUse",
+      conversationId,
+      stepIdx: 12,
+      toolCall: { id: "pre-call-id", name: "write_to_file", args: { TargetFile: "native.txt" } },
+    } });
+    assert.equal(first.payload.ok, true, JSON.stringify(first.payload));
+    assert.equal(first.payload.replayed, false);
+    const operationId = first.payload.operation.operationId;
+
+    const replay = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PreToolUse",
+      conversationId,
+      stepIdx: 12,
+      toolCall: { id: "different-replay-call-id", name: "write_to_file", args: { TargetFile: "native.txt" } },
+    } });
+    assert.equal(replay.payload.ok, true, JSON.stringify(replay.payload));
+    assert.equal(replay.payload.operation.operationId, operationId);
+    assert.equal(replay.payload.replayed, true);
+
+    const terminal = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PostToolUse",
+      conversationId,
+      stepIdx: 12,
+      error: "",
+    } });
+    assert.equal(terminal.payload.ok, true, JSON.stringify(terminal.payload));
+    assert.equal(terminal.payload.operation.operationId, operationId);
+    assert.equal(terminal.payload.operation.workflowState, "SUCCEEDED");
+    assert.equal(terminal.payload.operation.liveness, "TERMINAL");
+
+    const reopened = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(reopened.state.operations.listLive({ projectId: project.projectId }).length, 0);
+      assert.equal(reopened.state.operations.inspect(operationId).workflowState, "SUCCEEDED");
+    } finally { reopened.close(); }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native Antigravity step correlation separates actors and remains project scoped", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-native-isolation-"));
+  try {
+    const home = join(root, "home");
+    const firstProject = await prepareProject({ root, home, workspaceName: "first" });
+    const secondProject = await prepareProject({ root, home, workspaceName: "second", workId: "work-antigravity-second" });
+    for (const { cwd } of [firstProject, secondProject]) {
+      for (const conversationId of ["native-actor-one", "native-actor-two"]) {
+        await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "SessionStart", conversationId } });
+      }
+    }
+    const invokeNative = (cwd, conversationId) => invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PreToolUse", conversationId, stepIdx: 4,
+      toolCall: { name: "write_to_file", args: { TargetFile: "same-step.txt" } },
+    } });
+
+    const firstActor = await invokeNative(firstProject.cwd, "native-actor-one");
+    const secondActor = await invokeNative(firstProject.cwd, "native-actor-two");
+    const otherProject = await invokeNative(secondProject.cwd, "native-actor-one");
+    assert.equal(firstActor.payload.ok, true, JSON.stringify(firstActor.payload));
+    assert.equal(secondActor.payload.ok, true, JSON.stringify(secondActor.payload));
+    assert.equal(otherProject.payload.ok, true, JSON.stringify(otherProject.payload));
+    assert.notEqual(firstActor.payload.operation.operationId, secondActor.payload.operation.operationId);
+    assert.notEqual(firstActor.payload.operation.operationId, otherProject.payload.operation.operationId);
+
+    const reopened = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(reopened.state.operations.listLive({ projectId: firstProject.project.projectId }).length, 2);
+      assert.equal(reopened.state.operations.listLive({ projectId: secondProject.project.projectId }).length, 1);
+      const firstHash = hashId(`antigravity-step-v1:${actorHash("native-actor-one")}:4`);
+      const correlation = reopened.state.operationCorrelations.get({
+        provider: "antigravity", projectId: firstProject.project.projectId, correlationHash: firstHash,
+      });
+      assert.equal(correlation.operationId, firstActor.payload.operation.operationId);
+      assert.equal(reopened.state.operationCorrelations.put({
+        ...correlation, provider: "codex",
+      }).ok, true);
+      assert.equal(reopened.state.operationCorrelations.get({
+        provider: "codex", projectId: firstProject.project.projectId, correlationHash: firstHash,
+      }).provider, "codex");
+      assert.equal(reopened.state.operationCorrelations.get({
+        provider: "antigravity", projectId: firstProject.project.projectId, correlationHash: firstHash,
+      }).provider, "antigravity");
+    } finally { reopened.close(); }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("native Antigravity rejects stale Work, generation, and epoch before creating an operation", async (t) => {
+  const cases = [
+    ["work", "STALE_ACTIVE_WORK", { observedWorkId: "previous-work" }],
+    ["generation", "STALE_GENERATION", { observedGeneration: 2 }],
+    ["epoch", "SESSION_RUNTIME_STALE", { observedInstructionEpoch: 6 }],
+  ];
+  for (const [name, reason, updates] of cases) {
+    await t.test(name, async () => {
+      const root = await mkdtemp(join(tmpdir(), `orchestra-antigravity-native-stale-${name}-`));
+      try {
+        const home = join(root, "home");
+        const { cwd, project } = await prepareProject({ root, home });
+        const conversationId = `native-stale-${name}`;
+        await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "SessionStart", conversationId } });
+        const registry = createGlobalProjectRegistry({ home });
+        try {
+          if (name === "work") assert.equal(registry.state.work.open(v2Work("previous-work", project.projectId)).ok, true);
+          assert.equal(mutateObservation(registry.state, { projectId: project.projectId, conversationId, ...updates }).ok, true);
+        } finally { registry.close(); }
+        const denied = await invokeAntigravityHook({ home, cwd, payload: {
+          hookEventName: "PreToolUse", conversationId, stepIdx: 5,
+          toolCall: { name: "write_to_file", args: { TargetFile: "blocked.txt" } },
+        } });
+        assert.equal(denied.payload.reason, reason);
+        const verify = createGlobalProjectRegistry({ home });
+        try { assert.equal(verify.state.operations.listLive({ projectId: project.projectId }).length, 0); }
+        finally { verify.close(); }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+  }
+});
+
+test("native Antigravity reads stay operation-free while unknown tools remain protected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-native-read-unknown-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const conversationId = "native-read-and-unknown";
+    const attached = await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "SessionStart", conversationId } });
+    assert.equal(attached.code, 0, JSON.stringify(attached.payload));
+    const read = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PreToolUse", conversationId, stepIdx: 1,
+      toolCall: { name: "read_file", args: { path: "read-only.txt" } },
+    } });
+    assert.equal(read.payload.hookSpecificOutput.permissionDecision, "allow", `read hook response: ${JSON.stringify(read.payload)}`);
+    const afterRead = createGlobalProjectRegistry({ home });
+    try { assert.equal(afterRead.state.operations.listLive({ projectId: project.projectId }).length, 0); }
+    finally { afterRead.close(); }
+    const unknown = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PreToolUse", conversationId, stepIdx: 2,
+      toolCall: { name: "unknown_mutation", args: {} },
+    } });
+    assert.equal(unknown.payload.hookSpecificOutput.permissionDecision, "allow");
+    assert.ok(unknown.payload.operation?.operationId);
+    const reopened = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(reopened.state.operations.listLive({ projectId: project.projectId }).length, 1);
+      assert.equal(reopened.state.operations.listLive({ projectId: project.projectId })[0].operationId, unknown.payload.operation.operationId);
+    } finally { reopened.close(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("native Antigravity terminal signals classify errors and reject missing or contradictory results", async (t) => {
+  const cases = [
+    ["empty native error succeeds", { error: "" }, "SUCCEEDED"],
+    ["non-empty native error fails", { error: "provider failure" }, "FAILED"],
+    ["whitespace native error fails", { error: " " }, "FAILED"],
+    ["error and legacy flag agree", { error: "", isError: false }, "SUCCEEDED"],
+    ["error and legacy flag conflict", { error: "", isError: true }, null],
+    ["error and exit code conflict", { error: "provider failure", exitCode: 0 }, null],
+    ["non-string error is invalid", { error: 1 }, null],
+    ["missing result signal is invalid", {}, null],
+  ];
+  for (const [name, signals, expected] of cases) {
+    await t.test(name, async () => {
+      const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-native-result-"));
+      try {
+        const home = join(root, "home");
+        const { cwd } = await prepareProject({ root, home });
+        const conversationId = "native-terminal-classifier";
+        const toolCallId = "legacy-call-for-classifier";
+        const { started } = await startAntigravityMutation({ home, cwd, conversationId, toolCallId });
+        assert.equal(started.payload.ok, true);
+        const terminal = await invokeAntigravityHook({ home, cwd, payload: {
+          hookEventName: "PostToolUse", conversationId, stepIdx: 8,
+          toolCall: { id: toolCallId, name: "write_file" },
+          ...signals,
+        } });
+        if (expected === null) {
+          assert.equal(terminal.payload.reason, "ANTIGRAVITY_TOOL_RESULT_INVALID");
+          const verify = createGlobalProjectRegistry({ home });
+          try { assert.equal(verify.state.operations.inspect(started.payload.operation.operationId).workflowState, "RUNNING"); }
+          finally { verify.close(); }
+        } else {
+          assert.equal(terminal.payload.reason, null, JSON.stringify(terminal.payload));
+          assert.equal(terminal.payload.operation.workflowState, expected);
+          assert.equal(terminal.payload.operation.liveness, "TERMINAL");
+          assert.equal(JSON.stringify(terminal.payload).includes("provider failure"), false);
+        }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+  }
+});
+
+test("native Antigravity terminal replay can omit toolCall without touching another operation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-native-terminal-replay-"));
+  try {
+    const home = join(root, "home");
+    const { cwd } = await prepareProject({ root, home });
+    const firstActor = "native-terminal-first";
+    const secondActor = "native-terminal-second";
+    const firstStarted = await startAntigravityMutation({ home, cwd, conversationId: firstActor, toolCallId: "legacy-first" });
+    const secondStarted = await startAntigravityMutation({ home, cwd, conversationId: secondActor, toolCallId: "legacy-second" });
+    assert.equal(firstStarted.started.payload.ok, true);
+    assert.equal(secondStarted.started.payload.ok, true);
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(bindAntigravityStepCorrelation(registry.state, {
+        projectId: firstStarted.started.payload.projectId,
+        conversationId: firstActor,
+        stepIdx: 3,
+        operationId: firstStarted.started.payload.operation.operationId,
+      }).ok, true);
+    } finally { registry.close(); }
+    const first = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PostToolUse", conversationId: firstActor, stepIdx: 3, toolCall: null, error: "",
+    } });
+    const replay = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PostToolUse", conversationId: firstActor, stepIdx: 3, error: "",
+    } });
+    assert.equal(first.payload.operation.operationId, firstStarted.started.payload.operation.operationId);
+    assert.equal(first.payload.replayed, false);
+    assert.equal(replay.payload.operation.operationId, firstStarted.started.payload.operation.operationId);
+    assert.equal(replay.payload.replayed, true);
+    const reopened = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(reopened.state.operations.inspect(secondStarted.started.payload.operation.operationId).workflowState, "RUNNING");
+    } finally { reopened.close(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("Antigravity host mutation uses provider-event ownership without process identity", async () => {
