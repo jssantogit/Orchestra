@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 
 import { runGlobalCli } from "../../v2/global/cli.mjs";
 import { createGlobalProjectRegistry } from "../../v2/global/project-registry.mjs";
+import { normalizeCodexActor } from "../../v2/providers/codex/actor.mjs";
 import { normalizeCodexToolEvent } from "../../v2/providers/codex/tool-event.mjs";
 
 function work(workId, project) {
@@ -181,5 +182,76 @@ test("native Codex Bash result without factual exit status closes UNKNOWN instea
     assert.equal(after.payload.ok, true);
     assert.equal(after.payload.operation.workflowState, "UNKNOWN");
     assert.equal(after.payload.operation.liveness, "TERMINAL");
+  });
+});
+
+test("native Codex stale epoch denial exits zero through CLI and installed shim", async () => {
+  await withActiveWorkspace(async ({ home, cwd, project }) => {
+    const session_id = "native-stale-epoch-session";
+    const tool_use_id = "native-stale-epoch-call";
+    const actor = normalizeCodexActor({ session_id });
+    let registry = createGlobalProjectRegistry({ home });
+    try {
+      const observed = registry.state.sessionObservations.put({
+        provider: "codex",
+        projectId: project.projectId,
+        actorIdHash: actor.actorIdHash,
+        observedInstructionEpoch: project.runtime.instructionEpoch - 1,
+        observedWorkId: "work-native-hook",
+        observedGeneration: 1,
+        observedAt: "2026-10-18T02:00:00.000Z",
+      });
+      assert.equal(observed.ok, true);
+    } finally {
+      registry.close();
+    }
+
+    const payload = {
+      hook_event_name: "PreToolUse",
+      session_id,
+      tool_name: "apply_patch",
+      tool_use_id,
+      tool_input: { command: "*** Begin Patch\n*** Add File: forbidden.txt\n+forbidden\n*** End Patch" },
+    };
+    const direct = await invokeHook({ home, cwd, payload });
+    assert.equal(direct.code, 0);
+    assert.equal(direct.payload.ok, false);
+    assert.equal(direct.payload.reason, "SESSION_RUNTIME_STALE");
+    assert.equal(direct.payload.hookSpecificOutput.hookEventName, "PreToolUse");
+    assert.equal(direct.payload.hookSpecificOutput.permissionDecision, "deny");
+
+    let installOutput = "";
+    const installCode = await runGlobalCli({
+      argv: ["provider", "codex", "shim", "install", "--home", home],
+      cwd,
+      env: {},
+      stdin: Readable.from([]),
+      stdout: { write: (chunk) => { installOutput += chunk; } },
+      stderr: { write: () => {} },
+    });
+    assert.equal(installCode, 0);
+    assert.equal(JSON.parse(installOutput).ok, true);
+
+    const shimPath = join(cwd, ".codex/orchestra-v2-hook.mjs");
+    const shimEnv = { ...process.env };
+    delete shimEnv.ORCHESTRA_HOME;
+    const forwarded = spawnSync(process.execPath, [shimPath], {
+      cwd,
+      env: shimEnv,
+      input: JSON.stringify({ ...payload, cwd }),
+      encoding: "utf8",
+    });
+    assert.equal(forwarded.status, 0);
+    assert.equal(forwarded.stderr, "");
+    const response = JSON.parse(forwarded.stdout);
+    assert.equal(response.reason, "SESSION_RUNTIME_STALE");
+    assert.equal(response.hookSpecificOutput.permissionDecision, "deny");
+
+    registry = createGlobalProjectRegistry({ home });
+    try {
+      assert.deepEqual(registry.state.operations.listLive({ projectId: project.projectId }), []);
+    } finally {
+      registry.close();
+    }
   });
 });
