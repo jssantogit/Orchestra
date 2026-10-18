@@ -301,6 +301,47 @@ test("PreInvocation refreshes after official Work replacement without bypassing 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("PreInvocation refreshes an officially upgraded epoch while old observations remain fenced", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-agy-epoch-refresh-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const invoke = async (argv) => {
+      let output = "";
+      const code = await runGlobalCli({ argv, cwd, env: { ORCHESTRA_HOME: home }, stdout: { write: (chunk) => { output += chunk; } }, stderr: { write: (chunk) => { output += chunk; } } });
+      assert.equal(code, 0, output);
+      return JSON.parse(output);
+    };
+    for (const conversationId of ["refresh-epoch", "remain-stale"]) {
+      assert.equal((await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "PreInvocation", conversationId } })).code, 0);
+    }
+    const sourcePath = join(root, "runtime.json");
+    await writeFile(sourcePath, JSON.stringify({ schema: "orchestra.runtime-image-source.v2", version: "2.1.0", engineCompatibility: { min: "2.0.0", max: "2.x" }, providerAdapterCompatibility: { codex: { min: "2.0.0", max: "2.x" }, antigravity: { min: "2.0.0", max: "2.x" } }, files: [{ path: "runtime/instructions.txt", contentBase64: Buffer.from("epoch refresh test").toString("base64") }] }));
+    const installed = await invoke(["runtime", "install", sourcePath]);
+    const beforeUpgrade = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(createWorkAuthority({ state: beforeUpgrade.state }).abandon({ projectId: project.projectId, expectedWorkId: "work-antigravity", expectedGeneration: 3, commandId: "quiesce-for-epoch-upgrade", reason: "official upgrade precondition" }).ok, true);
+    } finally { beforeUpgrade.close(); }
+    const upgraded = await invoke(["project", "upgrade", project.projectId, "--runtime-image", installed.image.imageId, "--command-id", "agy-official-epoch-upgrade"]);
+    assert.equal(upgraded.instructionEpoch, 8);
+    const afterUpgrade = createGlobalProjectRegistry({ home });
+    try {
+      assert.equal(createWorkAuthority({ state: afterUpgrade.state }).start({ ...v2Work("upgraded-work", project.projectId, 8), runtimeImage: installed.image.imageId }).ok, true);
+    } finally { afterUpgrade.close(); }
+    for (const conversationId of ["refresh-epoch", "remain-stale"]) {
+      const denied = await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "PreToolUse", conversationId, toolCall: { id: `stale-${conversationId}`, name: "write_file" } } });
+      assert.equal(denied.payload.reason, "SESSION_RUNTIME_STALE");
+    }
+    assert.equal((await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "PreInvocation", conversationId: "refresh-epoch", invocationNum: 12 } })).code, 0);
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      for (const [conversationId, expectedEpoch] of [["refresh-epoch", 8], ["remain-stale", 7]]) {
+        assert.equal(registry.state.sessionObservations.get({ provider: "antigravity", projectId: project.projectId, actorIdHash: actorHash(conversationId) }).observedInstructionEpoch, expectedEpoch);
+      }
+    } finally { registry.close(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 async function startAntigravityMutation({ home, cwd, conversationId, toolCallId }) {
   const attached = await invokeAntigravityHook({
     home, cwd,
@@ -1457,6 +1498,20 @@ test("Antigravity v2 shim installs only registered-project transport files and f
     assert.equal(reinstalledHooks["orchestra-v2-global"].PreInvocation.length, 1);
     assert.equal(reinstalledHooks["orchestra-v2-global"].PreToolUse.length, 1);
     assert.equal(reinstalledHooks["orchestra-v2-global"].PostToolUse.length, 1);
+    const legacyHooks = structuredClone(reinstalledHooks);
+    for (const eventName of ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"]) {
+      for (const entry of legacyHooks["orchestra-v2-global"][eventName]) {
+        for (const handler of entry.hooks ?? [entry]) {
+          if (handler.command?.includes("orchestra-v2-hook.mjs")) {
+            handler.command = handler.command.replace(` --event ${eventName}`, "");
+            handler.commandWindows = handler.commandWindows.replace(` --event ${eventName}`, "");
+          }
+        }
+      }
+    }
+    await writeFile(hooksPath, JSON.stringify(legacyHooks));
+    await installAntigravityV2Shim({ registry, projectId: project.projectId, targetDir: cwd, launcherPath, nodePath: process.execPath });
+    assert.deepEqual(JSON.parse(await readFile(hooksPath, "utf8")), reinstalledHooks);
     assert.equal(existsSync(join(cwd, ".agents", "skills")), false);
     assert.equal(existsSync(join(cwd, ".agents", "state")), false);
     const shimPath = join(cwd, ".agents", "orchestra-v2-hook.mjs");
@@ -1576,6 +1631,12 @@ test("installed Antigravity v2 shim routes SessionStart, intake, read, mutation,
     };
 
     const conversationId = "real-global-shim-conversation";
+    const nativeInvocation = spawnSync(process.execPath, [shimPath, "--event", "PreInvocation"], {
+      cwd, input: JSON.stringify({ conversationId, workspacePaths: [cwd], invocationNum: 0, initialNumSteps: 0 }), encoding: "utf8",
+    });
+    assert.equal(nativeInvocation.status, 0, nativeInvocation.stderr);
+    assert.deepEqual(JSON.parse(nativeInvocation.stdout), { injectSteps: [] });
+    assert.ok(registry.state.sessionObservations.get({ provider: "antigravity", projectId: project.projectId, actorIdHash: actorHash(conversationId) }));
     const attached = invoke({ hookEventName: "SessionStart", conversationId });
     assert.deepEqual(attached, { injectSteps: [] });
     const observation = registry.state.sessionObservations.get({ provider: "antigravity", projectId: project.projectId, actorIdHash: actorHash(conversationId) });

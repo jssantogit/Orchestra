@@ -16,11 +16,11 @@ function result(ok, reason, fields = {}) {
   return { ok, reason, ...fields };
 }
 
-function sessionStartResponse(response, context) {
+function lifecycleResponse(response, context, hookEventName) {
   return {
     ...response,
     hookSpecificOutput: {
-      hookEventName: "SessionStart",
+      hookEventName,
       additionalContext: JSON.stringify(context),
     },
   };
@@ -77,12 +77,13 @@ function authorityActor(actor, observedAt) {
   };
 }
 
-function isSessionStart(payload) {
+function isAttachLifecycle(payload) {
   const aliases = ["hook_event_name", "hookEventName", "eventType"]
     .filter((key) => Object.hasOwn(payload, key))
     .map((key) => payload[key]);
   return aliases.length > 0
-    && aliases.every((value) => value === "SessionStart");
+    && ["SessionStart", "PreInvocation"].includes(aliases[0])
+    && aliases.every((value) => value === aliases[0]);
 }
 
 function eventName(payload) {
@@ -424,7 +425,7 @@ export function createAntigravityHookHandler({
       }
       if (event.eventType === "TOOL_REQUEST") return preToolUse(payload, actor, cwd);
       if (event.eventType === "TOOL_RESULT") return postToolUse(payload, actor, cwd);
-      if (!isSessionStart(payload)) return result(false, "ANTIGRAVITY_HOOK_EVENT_UNSUPPORTED");
+      if (!isAttachLifecycle(payload)) return result(false, "ANTIGRAVITY_HOOK_EVENT_UNSUPPORTED");
 
       const project = await resolveProject(payload, cwd);
       if (!project) return result(false, "PROJECT_NOT_REGISTERED", { registered: false });
@@ -461,7 +462,7 @@ export function createAntigravityHookHandler({
         instructionEpoch: project.runtime.instructionEpoch,
       };
       if (!attachment.allowed) {
-        return sessionStartResponse(result(true, "ORCHESTRA_V2_INTAKE", {
+        return lifecycleResponse(result(true, "ORCHESTRA_V2_INTAKE", {
           projectId: project.projectId,
           activeWork: null,
           work: null,
@@ -473,7 +474,7 @@ export function createAntigravityHookHandler({
           work: null,
           generation: null,
           mutationAuthority: "UNAVAILABLE_UNTIL_WORK_STARTS",
-        });
+        }, hookEvent);
       }
 
       const work = {
@@ -481,7 +482,7 @@ export function createAntigravityHookHandler({
         taskId: attachment.taskId,
         continuationRef: attachment.continuationRef,
       };
-      return sessionStartResponse(result(true, null, {
+      return lifecycleResponse(result(true, null, {
         projectId: project.projectId,
         work,
         generation: attachment.generation,
@@ -489,7 +490,7 @@ export function createAntigravityHookHandler({
         ...contextBase,
         work,
         generation: attachment.generation,
-      });
+      }, hookEvent);
     },
   });
 }

@@ -61,3 +61,18 @@ for (const invalid of [null, {}, { ok: true }, { ok: false, reason: "DENIED", ho
     }
   });
 }
+
+test("Antigravity configured native hook slot rejects contradictory payload events before global handoff", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-agy-slot-"));
+  try {
+    const launcherPath = join(root, "launcher.mjs");
+    await writeFile(launcherPath, 'process.stdout.write(JSON.stringify({ok:true,reason:null,hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"allow"}}));');
+    const shimPath = join(root, "shim.mjs");
+    await writeFile(shimPath, renderAntigravityV2Shim({ launcherPath }));
+    const result = spawnSync(process.execPath, [shimPath, "--event", "PreToolUse"], {
+      input: JSON.stringify({ hookEventName: "PostToolUse", conversationId: "factual-actor" }), encoding: "utf8",
+    });
+    assert.equal(result.status, 0);
+    assert.deepEqual(JSON.parse(result.stdout), { decision: "deny", reason: "ORCHESTRA_V2_GLOBAL_UNAVAILABLE" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

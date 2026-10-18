@@ -7,7 +7,7 @@ import { renderAntigravityV2Shim } from "./shim-template.mjs";
 const SHIM_RELATIVE_PATH = ".agents/orchestra-v2-hook.mjs";
 const HOOKS_RELATIVE_PATH = ".agents/hooks.json";
 const HOOK_GROUP = "orchestra-v2-global";
-const HOOK_EVENTS = ["SessionStart", "PreToolUse", "PostToolUse"];
+const HOOK_EVENTS = ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"];
 
 function shimError(code, message) {
   const error = new Error(message);
@@ -49,11 +49,11 @@ async function resolveGlobalFile(path, label, projectRoot) {
 function makeHookEntry(eventName, command, commandWindows) {
   const hook = {
     type: "command",
-    command,
-    commandWindows,
+    command: `${command} --event ${eventName}`,
+    commandWindows: `${commandWindows} --event ${eventName}`,
     timeout: 10,
   };
-  if (eventName === "SessionStart") return hook;
+  if (eventName === "SessionStart" || eventName === "PreInvocation") return hook;
   return {
     matcher: "*",
     hooks: [hook],
@@ -63,7 +63,7 @@ function makeHookEntry(eventName, command, commandWindows) {
 function hasHook(entries, eventName, command, commandWindows) {
   const matches = (hook) => hook?.type === "command"
     && hook.command === command && hook.commandWindows === commandWindows;
-  return entries.some((entry) => eventName === "SessionStart"
+  return entries.some((entry) => eventName === "SessionStart" || eventName === "PreInvocation"
     ? matches(entry)
     : entry?.matcher === "*" && Array.isArray(entry.hooks) && entry.hooks.some(matches));
 }
@@ -175,11 +175,20 @@ export async function installAntigravityV2Shim({
   }
   const generatedHooks = JSON.parse(artifacts.hooksJson)[HOOK_GROUP];
   for (const [eventName, generatedEntries] of Object.entries(generatedHooks)) {
-    const entries = group[eventName] ?? [];
+    let entries = group[eventName] ?? [];
     if (!Array.isArray(entries)) {
       throw shimError("ANTIGRAVITY_V2_HOOKS_CONFIG_INVALID", `Existing Antigravity ${eventName} hooks must be an array.`);
     }
-    if (!hasHook(entries, eventName, artifacts.command, artifacts.commandWindows)) {
+    entries = entries.map((entry) => {
+      if (hasHook([entry], eventName, artifacts.command, artifacts.commandWindows)) {
+        if (eventName === "SessionStart" || eventName === "PreInvocation") return generatedEntries[0];
+        return { ...entry, hooks: entry.hooks.map((hook) => hook.type === "command"
+          && hook.command === artifacts.command && hook.commandWindows === artifacts.commandWindows
+          ? generatedEntries[0].hooks[0] : hook) };
+      }
+      return entry;
+    });
+    if (!hasHook(entries, eventName, `${artifacts.command} --event ${eventName}`, `${artifacts.commandWindows} --event ${eventName}`)) {
       group[eventName] = [...entries, ...generatedEntries];
     } else {
       group[eventName] = entries;

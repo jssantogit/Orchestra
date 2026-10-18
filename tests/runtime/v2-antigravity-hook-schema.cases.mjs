@@ -13,19 +13,19 @@ test("Antigravity SessionStart uses the provider lifecycle handler shape while t
 
   assert.deepEqual(group.SessionStart, [{
     type: "command",
-    command: artifacts.command,
-    commandWindows: artifacts.commandWindows,
+    command: `${artifacts.command} --event SessionStart`,
+    commandWindows: `${artifacts.commandWindows} --event SessionStart`,
     timeout: 10,
   }]);
-  assert.deepEqual(group.PreInvocation, group.SessionStart);
+  assert.deepEqual(group.PreInvocation, [{ type: "command", command: `${artifacts.command} --event PreInvocation`, commandWindows: `${artifacts.commandWindows} --event PreInvocation`, timeout: 10 }]);
 
   for (const eventName of ["PreToolUse", "PostToolUse"]) {
     assert.deepEqual(group[eventName], [{
       matcher: "*",
       hooks: [{
         type: "command",
-        command: artifacts.command,
-        commandWindows: artifacts.commandWindows,
+        command: `${artifacts.command} --event ${eventName}`,
+        commandWindows: `${artifacts.commandWindows} --event ${eventName}`,
         timeout: 10,
       }],
     }]);

@@ -8,6 +8,10 @@ The Project-local `.agents/**` runtime, Work Lease lifecycle and handoff paths d
 
 For cutover, keep only the approved thin AGY shim pointing at the global engine. Do not install or materialize a complete v2 runtime per Project. See `docs/release/v2-field-test-runbook.md`, `docs/release/v2-cutover-runbook.md`, and `docs/release/v2-rollback-runbook.md`.
 
+AGY CLI 1.4.2 uses `PreInvocation` to attach or refresh its factual Session Observation on every model invocation, including continuation/resume. The invocation counter is not a session-lifetime fence. `SessionStart` remains supported for providers that emit it; both lifecycle events converge on the same attach path without transferring Work authority. The installed hook command identifies its lifecycle/tool event explicitly because native payloads need not contain an event discriminator.
+
+The global CLI retains internal factual results. The AGY thin shim projects only native provider output: lifecycle `{ "injectSteps": [] }`, pre-tool `{ "decision": "allow" }` or `{ "decision": "deny", "reason": "<semantic reason>" }`, and post-tool `{}`. Lifecycle output does not inject internal Project/Work metadata into the conversation. An unavailable or invalid global response produces a native pre-tool denial rather than an internal envelope.
+
 ---
 
 The Antigravity runtime provides a 100% **ALL-GEMINI** local multi-agent architecture integrated directly with the Antigravity CLI and IDE engine. Optional cross-provider delegation is executed outside that provider-native tree through Orchestra's neutral delegation runtime, so the AGY control plane itself remains provider-pure.
