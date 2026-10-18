@@ -39,6 +39,34 @@ function makeProbeRepo(options = {}) {
   return { root, headSha: git(root, 'rev-parse', 'HEAD') };
 }
 
+function makeDependencyProbeRepo() {
+  const root = mkdtempSync(join(tmpdir(), 'orchestra-readiness-probe-dependency-'));
+  git(root, 'init');
+  git(root, 'config', 'user.email', 'orchestra-tests@example.invalid');
+  git(root, 'config', 'user.name', 'Orchestra Tests');
+  writeFileSync(join(root, 'helper.mjs'), `export const restartVerified = true;\n`, 'utf8');
+  writeFileSync(join(root, 'probe.mjs'), [
+    `import { restartVerified } from './helper.mjs';`,
+    `export const readinessProbeManifest = Object.freeze({`,
+    `  schema: 'orchestra.cutover-readiness-probe-module.v2',`,
+    `  version: 1,`,
+    `  probes: Object.freeze({ registryPersistence: 'registryPersistence' }),`,
+    `});`,
+    `export async function registryPersistence({ expectedHeadSha, expectedRuntimeImageId }) {`,
+    `  return {`,
+    `    ok: restartVerified,`,
+    `    headSha: expectedHeadSha,`,
+    `    runtimeImageId: expectedRuntimeImageId,`,
+    `    facts: { restartVerified },`,
+    `    evidenceRefs: ['sha256:${'3'.repeat(64)}'],`,
+    `  };`,
+    `}`,
+  ].join('\n'), 'utf8');
+  git(root, 'add', 'probe.mjs', 'helper.mjs');
+  git(root, 'commit', '-m', 'test: readiness probe dependency');
+  return { root, headSha: git(root, 'rev-parse', 'HEAD') };
+}
+
 function descriptor(args = {}) {
   return {
     modulePath: 'probe.mjs',
@@ -104,6 +132,24 @@ test('canonical collector fails closed when the source-controlled probe module i
 
     assert.equal(fragment.evidence.registryPersistence, undefined);
     assert.ok(fragment.errors.includes('registryPersistence:source-dirty'));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('canonical collector fails closed when a tracked imported probe dependency is dirty', async () => {
+  const fixture = makeDependencyProbeRepo();
+  try {
+    writeFileSync(join(fixture.root, 'helper.mjs'), `export const restartVerified = false;\n`, 'utf8');
+    const fragment = await collectCanonicalCutoverReadinessFragment({
+      repoRoot: fixture.root,
+      expectedHeadSha: fixture.headSha,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+      probes: { registryPersistence: descriptor() },
+    });
+
+    assert.equal(fragment.evidence.registryPersistence, undefined);
+    assert.ok(fragment.errors.includes('registryPersistence:source-repo-dirty'));
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
