@@ -51,6 +51,14 @@ jobs:
       - name: Run v2 domain, reference state and continuation tests
         run: node --test tests/runtime/v2-domain-foundation.test.mjs tests/runtime/v2-reference-state.test.mjs tests/runtime/v2-continuation-boundary.test.mjs
 
+      - name: Run V2-10 portability closure gates
+        run: |
+          npm run test:firewall
+          npm run test:installers
+          npm run check:runtimes
+          npm run check:runtime-core
+          npm run check:contamination
+
   v1-regression:
     name: V1 Compatibility Guard
     runs-on: ubuntu-latest
