@@ -6,6 +6,17 @@ import { inventoryLegacyProject } from "./inventory.mjs";
 import { readMigrationActivationReceipt } from "./shim-activation.mjs";
 
 const MANAGED_RUNTIME_CATEGORY = "MANAGED_RUNTIME";
+const MANAGED_RUNTIME_FILES = new Set([
+  ".agents/orchestra-runtime.json",
+  ".agents/hooks.json",
+]);
+const MANAGED_RUNTIME_ROOTS = Object.freeze([
+  ".codex/astra-orchestra",
+  ".agents/hooks",
+  ".agents/runtime-management",
+  ".agents/semantic",
+  ".agents/skills",
+]);
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
@@ -42,6 +53,12 @@ function cleanRelativePath(path) {
   const segments = path.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return null;
   return segments;
+}
+
+function approvedManagedRuntimePath(path) {
+  if (!cleanRelativePath(path)) return false;
+  if (MANAGED_RUNTIME_FILES.has(path)) return true;
+  return MANAGED_RUNTIME_ROOTS.some((root) => path.startsWith(`${root}/`));
 }
 
 function inside(root, candidate) {
@@ -85,7 +102,9 @@ function originalManagedEntries(manifest) {
   if (!Array.isArray(manifest.inventory)) return null;
   const entries = manifest.inventory.filter((entry) => entry?.category === MANAGED_RUNTIME_CATEGORY);
   for (const entry of entries) {
-    if (entry.private === true || !cleanRelativePath(entry.path) || !/^sha256:[0-9a-f]{64}$/.test(entry.digest ?? "")) {
+    if (entry.private === true
+      || !approvedManagedRuntimePath(entry.path)
+      || !/^sha256:[0-9a-f]{64}$/.test(entry.digest ?? "")) {
       return null;
     }
   }
