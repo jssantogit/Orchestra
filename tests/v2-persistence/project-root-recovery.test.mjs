@@ -105,7 +105,7 @@ function staleAssessment() {
         liveness: "STALE_RECOVERABLE",
         reason: "PROVIDER_EVENT_DEADLINE_EXPIRED",
         evidence: {
-          ownerStatus: "EXPIRED",
+          ownerStatus: "ABSENT",
           heartbeatFresh: false,
           deadlineExpired: true,
         },
