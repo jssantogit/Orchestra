@@ -12,6 +12,11 @@ import {
 } from '../../v2/cutover/readiness.mjs';
 import { verifyOrchestraSelfHost } from '../../v2/cutover/self-host.mjs';
 import { verifyMultiProjectIsolation } from '../../v2/cutover/multi-project.mjs';
+import {
+  FIELD_TEST_SCENARIOS,
+  validateFieldEvidenceRecord,
+  evaluateProviderFieldEvidence,
+} from '../../v2/cutover/field-evidence.mjs';
 
 const HEAD = 'a'.repeat(40);
 const RUNTIME_IMAGE = 'sha256:' + 'b'.repeat(64);
@@ -119,6 +124,30 @@ function factualActor(provider = 'codex', fill = 'c') {
   };
 }
 
+function fieldEvidenceRecords(provider = 'codex') {
+  return FIELD_TEST_SCENARIOS.map((scenarioId, index) => ({
+    schema: 'orchestra.cutover-field-evidence.v2',
+    version: 1,
+    provider: { family: provider, version: provider === 'codex' ? '0.162.0' : '3.8.0' },
+    project: { lineageId: `lineage-field-${provider}` },
+    runtimeImageId: RUNTIME_IMAGE,
+    headSha: HEAD,
+    scenarioId,
+    factualResult: {
+      ok: true,
+      code: `FACT_${index + 1}`,
+      factRef: `evidence:${provider}:${scenarioId.toLowerCase()}`,
+    },
+    terminalStatus: 'VERIFIED',
+    observedAt: FIXED_NOW,
+    evidenceRefs: [`sha256:${String(index + 1).padStart(64, '0')}`],
+    operatorAttestation: {
+      subjectHash: `sha256:${'e'.repeat(64)}`,
+      attestedAt: FIXED_NOW,
+    },
+  }));
+}
+
 test('cutover readiness requires every factual v2 evidence family on the exact head', () => {
   const result = evaluateCutoverReadiness({
     expectedHeadSha: HEAD,
@@ -224,6 +253,86 @@ test('project-local full governance runtime blocks cutover readiness', () => {
 
   assert.equal(result.ready, false);
   assert.ok(result.invalid.includes('projects:no-full-local-governance-runtime'));
+});
+
+test('provider field evidence requires all six factual scenarios on the exact head and runtime', () => {
+  const records = fieldEvidenceRecords('codex');
+  for (const record of records) {
+    assert.equal(validateFieldEvidenceRecord(record, {
+      expectedProvider: 'codex',
+      expectedHeadSha: HEAD,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+    }).valid, true);
+  }
+
+  const result = evaluateProviderFieldEvidence({
+    provider: 'codex',
+    expectedHeadSha: HEAD,
+    expectedRuntimeImageId: RUNTIME_IMAGE,
+    records,
+  });
+  assert.equal(result.verified, true);
+  assert.deepEqual(result.missingScenarios, []);
+  assert.deepEqual(result.invalidRecords, []);
+});
+
+test('provider field evidence rejects missing scenarios, stale head/runtime and attestation-only success', () => {
+  const records = fieldEvidenceRecords('antigravity');
+  const missing = evaluateProviderFieldEvidence({
+    provider: 'antigravity',
+    expectedHeadSha: HEAD,
+    expectedRuntimeImageId: RUNTIME_IMAGE,
+    records: records.slice(1),
+  });
+  assert.equal(missing.verified, false);
+  assert.deepEqual(missing.missingScenarios, [FIELD_TEST_SCENARIOS[0]]);
+
+  const staleHead = validateFieldEvidenceRecord({ ...records[0], headSha: 'f'.repeat(40) }, {
+    expectedProvider: 'antigravity',
+    expectedHeadSha: HEAD,
+    expectedRuntimeImageId: RUNTIME_IMAGE,
+  });
+  assert.equal(staleHead.valid, false);
+  assert.ok(staleHead.errors.includes('headSha'));
+
+  const staleRuntime = validateFieldEvidenceRecord({ ...records[0], runtimeImageId: RUNTIME_IMAGE_B }, {
+    expectedProvider: 'antigravity',
+    expectedHeadSha: HEAD,
+    expectedRuntimeImageId: RUNTIME_IMAGE,
+  });
+  assert.equal(staleRuntime.valid, false);
+  assert.ok(staleRuntime.errors.includes('runtimeImageId'));
+
+  const attestationOnly = evaluateProviderFieldEvidence({
+    provider: 'antigravity',
+    expectedHeadSha: HEAD,
+    expectedRuntimeImageId: RUNTIME_IMAGE,
+    records: records.map((record, index) => index === 2 ? {
+      ...record,
+      factualResult: { ...record.factualResult, ok: false, code: 'FACT_FAILED' },
+      terminalStatus: 'FAILED',
+      operatorAttestation: { ...record.operatorAttestation },
+    } : record),
+  });
+  assert.equal(attestationOnly.verified, false);
+  assert.ok(attestationOnly.invalidRecords.includes(FIELD_TEST_SCENARIOS[2]));
+});
+
+test('field evidence accepts refs, never raw provider logs/prompts/transcripts', () => {
+  const record = fieldEvidenceRecords('codex')[0];
+  for (const payload of [
+    { ...record, rawLog: 'private provider log' },
+    { ...record, prompt: 'private prompt' },
+    { ...record, transcript: 'private transcript' },
+    { ...record, providerSessionId: 'session-raw-123' },
+  ]) {
+    const validation = validateFieldEvidenceRecord(payload, {
+      expectedProvider: 'codex',
+      expectedHeadSha: HEAD,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+    });
+    assert.equal(validation.valid, false);
+  }
 });
 
 if (CURRENT_NODE_MAJOR >= 24) {
