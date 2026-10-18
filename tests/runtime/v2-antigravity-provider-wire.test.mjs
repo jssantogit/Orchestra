@@ -93,6 +93,11 @@ test("Antigravity native hook command executes through the host shell with space
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { injectSteps: [] });
+    const nativeArguments = spawnSync(process.platform === "win32" ? process.env.ComSpec : "/bin/sh", [process.platform === "win32" ? "/c" : "-c", handler.command], {
+      input: JSON.stringify({ conversationId: "native-command-actor", invocationNum: 1 }), encoding: "utf8",
+    });
+    assert.equal(nativeArguments.status, 0, nativeArguments.stderr);
+    assert.deepEqual(JSON.parse(nativeArguments.stdout), { injectSteps: [] });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
