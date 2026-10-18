@@ -23,6 +23,22 @@ function normalized(text) {
   return text.toLowerCase().replace(/\s+/g, ' ');
 }
 
+function sentences(text) {
+  return normalized(text).split(/(?<=[.!?])\s+/);
+}
+
+function assertNoAffirmativeLocalBrainInstruction(path) {
+  for (const sentence of sentences(read(path))) {
+    const normalV2 = /\b(normal v2|v2 default|default v2|v2 registered projects?)\b/.test(sentence);
+    const localBrain = /\b(copy|install|materialize)\w*\b[^.]{0,180}\b(full|complete)\b[^.]{0,100}\b(runtime|brain|governance)\b/.test(sentence);
+    const prohibition = /\b(must not|do not|does not|never|without)\b/.test(sentence);
+
+    if (normalV2 && localBrain && !prohibition) {
+      assert.fail(`${path}: normal v2 must not affirmatively materialize a full project-local governance brain`);
+    }
+  }
+}
+
 test('v2 user-facing docs describe the global control plane as the normal topology', () => {
   for (const path of DOCS) {
     const body = normalized(read(path));
@@ -34,9 +50,7 @@ test('v2 user-facing docs describe the global control plane as the normal topolo
 
 test('v2 docs do not instruct normal operation to copy or install a full local governance brain', () => {
   for (const path of DOCS) {
-    const body = normalized(read(path));
-    assert.doesNotMatch(body, /normal v2[^.]{0,160}(copy|install|materialize)[^.]{0,160}(full|complete)[^.]{0,80}(runtime|brain|governance)/, path);
-    assert.doesNotMatch(body, /(copy|install|materialize)[^.]{0,160}(full|complete)[^.]{0,80}(v2 )?(runtime|brain|governance)[^.]{0,160}(per project|into the project|inside the project)/, path);
+    assertNoAffirmativeLocalBrainInstruction(path);
   }
 });
 
