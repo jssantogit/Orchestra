@@ -95,3 +95,7 @@ test("Antigravity native hook command executes through the host shell with space
     assert.deepEqual(JSON.parse(result.stdout), { injectSteps: [] });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("Antigravity Windows command serialization rejects environment expansion in executable paths", () => {
+  assert.throws(() => buildAntigravityV2ShimArtifacts({ launcherPath: "/global/launcher.mjs", nodePath: "C:\\%PRIVATE%\\node.exe", platform: "win32" }), /command expansion/);
+});

@@ -12,6 +12,8 @@ AGY CLI 1.4.2 uses `PreInvocation` to attach or refresh its factual Session Obse
 
 The global CLI retains internal factual results. The AGY thin shim projects only native provider output: lifecycle `{ "injectSteps": [] }`, pre-tool `{ "decision": "allow" }` or `{ "decision": "deny", "reason": "<semantic reason>" }`, and post-tool `{}`. Lifecycle output does not inject internal Project/Work metadata into the conversation. An unavailable or invalid global response produces a native pre-tool denial rather than an internal envelope.
 
+The primary `command` is generated for the installation host: Windows requires `cmd.exe`-compatible double-quoted executable/argument paths, not POSIX single quotes. Do not rely on `commandWindows` to override the native CLI's primary command. Reinstallation replaces only exact known Orchestra command signatures, preserving unrelated handlers.
+
 ---
 
 The Antigravity runtime provides a 100% **ALL-GEMINI** local multi-agent architecture integrated directly with the Antigravity CLI and IDE engine. Optional cross-provider delegation is executed outside that provider-native tree through Orchestra's neutral delegation runtime, so the AGY control plane itself remains provider-pure.

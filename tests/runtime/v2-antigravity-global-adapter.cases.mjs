@@ -1407,6 +1407,7 @@ test("Antigravity v2 shim artifacts call only the stable global launcher on POSI
       launcherPath: "/opt/Orchestra Tools/orchestra.mjs",
       nodePath: posixNode,
       shimPath: posixShim,
+      platform: "linux",
     });
     const bashPath = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "/bin/bash";
     const posixRun = spawnSync(bashPath, ["-lc", posix.command], {
@@ -1503,7 +1504,7 @@ test("Antigravity v2 shim installs only registered-project transport files and f
       for (const entry of legacyHooks["orchestra-v2-global"][eventName]) {
         for (const handler of entry.hooks ?? [entry]) {
           if (handler.command?.includes("orchestra-v2-hook.mjs")) {
-            handler.command = handler.command.replace(` --event ${eventName}`, "");
+            handler.command = `'${process.execPath.replaceAll("'", "'\"'\"'")}' '${join(cwd, ".agents", "orchestra-v2-hook.mjs").replaceAll("'", "'\"'\"'")}'`;
             handler.commandWindows = handler.commandWindows.replace(` --event ${eventName}`, "");
           }
         }
