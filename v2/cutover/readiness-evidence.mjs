@@ -1,8 +1,16 @@
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 import { evaluateProviderFieldEvidence, FIELD_TEST_SCENARIOS } from './field-evidence.mjs';
 import { CUTOVER_EVIDENCE_STATUS, evaluateCutoverReadiness } from './readiness.mjs';
 
 export const CUTOVER_READINESS_FRAGMENT_SCHEMA = 'orchestra.cutover-readiness-fragment.v2';
 export const CUTOVER_READINESS_FRAGMENT_VERSION = 1;
+export const CUTOVER_READINESS_PROBE_MODULE_SCHEMA = 'orchestra.cutover-readiness-probe-module.v2';
+export const CUTOVER_READINESS_COLLECTION_MODE = 'CANONICAL_GIT_PROBES';
 
 const SCALAR_FAMILIES = Object.freeze([
   'registryPersistence',
@@ -15,8 +23,20 @@ const SCALAR_FAMILIES = Object.freeze([
 ]);
 const PLATFORM_FAMILIES = Object.freeze(['windows', 'posix']);
 const RECORD_KEYS = new Set(['status', 'headSha', 'runtimeImageId', 'facts', 'evidenceRefs']);
-const FRAGMENT_KEYS = new Set(['schema', 'version', 'headSha', 'runtimeImageId', 'evidence', 'evidenceRefs', 'errors']);
+const FRAGMENT_KEYS = new Set([
+  'schema',
+  'version',
+  'headSha',
+  'runtimeImageId',
+  'evidence',
+  'evidenceRefs',
+  'errors',
+  'collectionMode',
+  'probeSources',
+]);
 const EVIDENCE_KEYS = new Set([...SCALAR_FAMILIES, 'platforms', 'projects']);
+const PROBE_DESCRIPTOR_KEYS = new Set(['modulePath', 'args']);
+const PROBE_MANIFEST_KEYS = new Set(['schema', 'version', 'probes']);
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -44,6 +64,24 @@ function isEvidenceRef(value) {
     || /^evidence:[a-z0-9][a-z0-9:._/-]{0,255}$/i.test(value)
     || /^github-actions:\d+$/.test(value)
   );
+}
+
+function isJsonValue(value, seen = new Set()) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    const valid = value.every((item) => isJsonValue(item, seen));
+    seen.delete(value);
+    return valid;
+  }
+  if (!isObject(value)) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  const valid = Object.values(value).every((item) => isJsonValue(item, seen));
+  seen.delete(value);
+  return valid;
 }
 
 function identity({ expectedHeadSha, expectedRuntimeImageId }) {
@@ -194,6 +232,225 @@ export async function collectCutoverReadinessFragment({
     runtimeImageId: expectedRuntimeImageId,
     evidence: Object.freeze(evidence),
     evidenceRefs: Object.freeze(collectRefs(evidence)),
+    errors: Object.freeze(errors),
+  });
+}
+
+function git(repoRoot, args) {
+  try {
+    return {
+      ok: true,
+      stdout: execFileSync('git', ['-C', repoRoot, ...args], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      }).trim(),
+    };
+  } catch {
+    return { ok: false, stdout: '' };
+  }
+}
+
+function probeFamilyPath(path) {
+  return path.startsWith('projects[') ? 'projects' : path;
+}
+
+function resolveTrackedProbePath(repoRoot, modulePath) {
+  if (typeof modulePath !== 'string' || modulePath.trim().length === 0 || isAbsolute(modulePath)) return null;
+  const root = resolve(repoRoot);
+  const absolute = resolve(root, modulePath);
+  const fromRoot = relative(root, absolute);
+  if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) return null;
+  return { root, absolute, modulePath: fromRoot.split(sep).join('/') };
+}
+
+function sourceDigest(path) {
+  return `sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`;
+}
+
+async function canonicalProbeExecutor({
+  path,
+  descriptor,
+  repoRoot,
+  expected,
+  errors,
+  sources,
+}) {
+  if (!hasOnlyKeys(descriptor, PROBE_DESCRIPTOR_KEYS)
+    || typeof descriptor.modulePath !== 'string'
+    || (descriptor.args !== undefined && !isJsonValue(descriptor.args))) {
+    addUnique(errors, `${path}:probe-descriptor`);
+    return null;
+  }
+
+  const resolvedPath = resolveTrackedProbePath(repoRoot, descriptor.modulePath);
+  if (!resolvedPath) {
+    addUnique(errors, `${path}:probe-descriptor`);
+    return null;
+  }
+
+  const head = git(resolvedPath.root, ['rev-parse', 'HEAD']);
+  if (!head.ok || head.stdout !== expected.expectedHeadSha) {
+    addUnique(errors, `${path}:source-head`);
+    return null;
+  }
+
+  const tracked = git(resolvedPath.root, ['ls-files', '--error-unmatch', '--', resolvedPath.modulePath]);
+  if (!tracked.ok) {
+    addUnique(errors, `${path}:source-untracked`);
+    return null;
+  }
+
+  const dirty = git(resolvedPath.root, ['status', '--porcelain', '--untracked-files=all', '--', resolvedPath.modulePath]);
+  if (!dirty.ok || dirty.stdout.length > 0) {
+    addUnique(errors, `${path}:source-dirty`);
+    return null;
+  }
+
+  let digest;
+  let module;
+  try {
+    digest = sourceDigest(resolvedPath.absolute);
+    module = await import(`${pathToFileURL(resolvedPath.absolute).href}?orchestra_probe=${digest.slice('sha256:'.length)}`);
+  } catch {
+    addUnique(errors, `${path}:probe-module`);
+    return null;
+  }
+
+  const manifest = module.readinessProbeManifest;
+  const familyPath = probeFamilyPath(path);
+  if (!hasOnlyKeys(manifest, PROBE_MANIFEST_KEYS)
+    || manifest.schema !== CUTOVER_READINESS_PROBE_MODULE_SCHEMA
+    || manifest.version !== 1
+    || !isObject(manifest.probes)
+    || typeof manifest.probes[familyPath] !== 'string'
+    || manifest.probes[familyPath].trim().length === 0) {
+    addUnique(errors, `${path}:probe-manifest`);
+    return null;
+  }
+
+  const exportName = manifest.probes[familyPath];
+  const executor = module[exportName];
+  if (typeof executor !== 'function') {
+    addUnique(errors, `${path}:probe-manifest`);
+    return null;
+  }
+
+  sources[path] = Object.freeze({
+    modulePath: resolvedPath.modulePath,
+    exportName,
+    sourceDigest: digest,
+  });
+
+  const args = descriptor.args === undefined ? {} : clone(descriptor.args);
+  return async () => {
+    const result = await executor(Object.freeze({
+      expectedHeadSha: expected.expectedHeadSha,
+      expectedRuntimeImageId: expected.expectedRuntimeImageId,
+      args,
+      probeSource: sources[path],
+    }));
+    if (!isObject(result)) return result;
+    const refs = Array.isArray(result.evidenceRefs) ? [...result.evidenceRefs] : result.evidenceRefs;
+    if (Array.isArray(refs) && !refs.includes(digest)) refs.push(digest);
+    return { ...result, evidenceRefs: refs };
+  };
+}
+
+async function resolveCanonicalProbes({ probes, repoRoot, expected, errors, sources }) {
+  const resolvedProbes = {};
+
+  for (const family of SCALAR_FAMILIES) {
+    if (!Object.hasOwn(probes, family)) continue;
+    const executor = await canonicalProbeExecutor({
+      path: family,
+      descriptor: probes[family],
+      repoRoot,
+      expected,
+      errors,
+      sources,
+    });
+    if (executor) resolvedProbes[family] = executor;
+  }
+
+  if (Object.hasOwn(probes, 'platforms')) {
+    if (!isObject(probes.platforms)) {
+      addUnique(errors, 'platforms:probe-descriptor');
+    } else {
+      const platforms = {};
+      for (const platform of PLATFORM_FAMILIES) {
+        if (!Object.hasOwn(probes.platforms, platform)) continue;
+        const executor = await canonicalProbeExecutor({
+          path: `platforms.${platform}`,
+          descriptor: probes.platforms[platform],
+          repoRoot,
+          expected,
+          errors,
+          sources,
+        });
+        if (executor) platforms[platform] = executor;
+      }
+      if (Object.keys(platforms).length > 0) resolvedProbes.platforms = platforms;
+    }
+  }
+
+  if (Object.hasOwn(probes, 'projects')) {
+    if (!Array.isArray(probes.projects)) {
+      addUnique(errors, 'projects:probe-descriptor');
+    } else {
+      const projects = [];
+      for (let index = 0; index < probes.projects.length; index += 1) {
+        const path = `projects[${index}]`;
+        const executor = await canonicalProbeExecutor({
+          path,
+          descriptor: probes.projects[index],
+          repoRoot,
+          expected,
+          errors,
+          sources,
+        });
+        if (executor) projects.push(executor);
+      }
+      if (projects.length > 0) resolvedProbes.projects = projects;
+    }
+  }
+
+  return resolvedProbes;
+}
+
+export async function collectCanonicalCutoverReadinessFragment({
+  repoRoot,
+  expectedHeadSha,
+  expectedRuntimeImageId,
+  probes = {},
+} = {}) {
+  const expected = identity({ expectedHeadSha, expectedRuntimeImageId });
+  if (typeof repoRoot !== 'string' || repoRoot.trim().length === 0) {
+    throw new TypeError('repoRoot is required');
+  }
+  if (!isObject(probes)) throw new TypeError('probes must be an object');
+
+  const canonicalErrors = [];
+  const probeSources = {};
+  const resolvedProbes = await resolveCanonicalProbes({
+    probes,
+    repoRoot,
+    expected,
+    errors: canonicalErrors,
+    sources: probeSources,
+  });
+  const fragment = await collectCutoverReadinessFragment({
+    expectedHeadSha,
+    expectedRuntimeImageId,
+    probes: resolvedProbes,
+  });
+  const errors = [...fragment.errors];
+  for (const error of canonicalErrors) addUnique(errors, error);
+
+  return Object.freeze({
+    ...fragment,
+    collectionMode: CUTOVER_READINESS_COLLECTION_MODE,
+    probeSources: Object.freeze(clone(probeSources)),
     errors: Object.freeze(errors),
   });
 }
@@ -400,6 +657,44 @@ export function mergeCutoverReadinessEvidence({
     evidence: Object.freeze(clone(evidence)),
     readiness,
     providers: Object.freeze(providers),
+    errors: Object.freeze(errors),
+  });
+}
+
+export function mergeCanonicalCutoverReadinessEvidence({
+  expectedHeadSha,
+  expectedRuntimeImageId,
+  fragments = [],
+  providerFieldEvidence = {},
+} = {}) {
+  identity({ expectedHeadSha, expectedRuntimeImageId });
+  if (!Array.isArray(fragments)) throw new TypeError('fragments must be an array');
+
+  const canonicalErrors = [];
+  const canonicalFragments = [];
+  for (let index = 0; index < fragments.length; index += 1) {
+    const fragment = fragments[index];
+    if (!isObject(fragment) || fragment.collectionMode !== CUTOVER_READINESS_COLLECTION_MODE
+      || !isObject(fragment.probeSources)) {
+      addUnique(canonicalErrors, `fragment[${index}]:collectionMode`);
+      continue;
+    }
+    canonicalFragments.push(fragment);
+  }
+
+  const merged = mergeCutoverReadinessEvidence({
+    expectedHeadSha,
+    expectedRuntimeImageId,
+    fragments: canonicalFragments,
+    providerFieldEvidence,
+  });
+  if (canonicalErrors.length === 0) return merged;
+
+  const errors = [...merged.errors];
+  for (const error of canonicalErrors) addUnique(errors, error);
+  return Object.freeze({
+    ...merged,
+    readiness: withCollectorErrors(merged.readiness, canonicalErrors),
     errors: Object.freeze(errors),
   });
 }
