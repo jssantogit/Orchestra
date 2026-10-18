@@ -31,7 +31,7 @@ jobs:
         run: node --test tests/v2-persistence/*.test.mjs
 
       - name: Run V2-11 cutover tests
-        run: node --test tests/runtime/v2-cutover.test.mjs tests/runtime/v2-cutover-e2e.test.mjs tests/runtime/v2-cutover-rsi.test.mjs
+        run: node --test tests/runtime/v2-cutover*.test.mjs
 
       - name: Run migration tests
         run: node --test tests/runtime/v2-migration.test.mjs tests/runtime/v2-migration-import.test.mjs tests/runtime/v2-tsuzuki-f7-migration.test.mjs
