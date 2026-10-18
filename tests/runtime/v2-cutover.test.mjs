@@ -1,13 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   evaluateCutoverReadiness,
   CUTOVER_EVIDENCE_STATUS,
 } from '../../v2/cutover/readiness.mjs';
+import { verifyOrchestraSelfHost } from '../../v2/cutover/self-host.mjs';
 
 const HEAD = 'a'.repeat(40);
 const RUNTIME_IMAGE = 'sha256:' + 'b'.repeat(64);
+const FIXED_NOW = '2026-10-17T23:30:00.000Z';
+const GLOBAL_LAUNCHER = fileURLToPath(new URL('../../v2/global/orchestra.mjs', import.meta.url));
 
 function verified(headSha = HEAD, facts = {}) {
   return {
@@ -67,6 +75,32 @@ function completeEvidence() {
       noFullLocalGovernanceRuntime: true,
     }),
     v1Compatibility: verified(),
+  };
+}
+
+function makeOrchestraProjectCopy() {
+  const root = mkdtempSync(join(tmpdir(), 'orchestra-v2-self-host-'));
+  mkdirSync(join(root, 'v2', 'global'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'orchestra', type: 'module' }, null, 2));
+  writeFileSync(
+    join(root, 'v2', 'global', 'orchestra.mjs'),
+    readFileSync(GLOBAL_LAUNCHER, 'utf8'),
+  );
+  execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'orchestra-v2-tests@example.invalid'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 'Orchestra V2 Tests'], { cwd: root });
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['commit', '-m', 'fixture: Orchestra self-host copy'], { cwd: root, stdio: 'ignore' });
+  return root;
+}
+
+function factualActor(provider = 'codex') {
+  return {
+    schema: 'orchestra.actor-provenance.v2',
+    provider,
+    subjectHash: `sha256:${'c'.repeat(64)}`,
+    source: 'PROVIDER_FACT',
+    observedAt: FIXED_NOW,
   };
 }
 
@@ -175,4 +209,56 @@ test('project-local full governance runtime blocks cutover readiness', () => {
 
   assert.equal(result.ready, false);
   assert.ok(result.invalid.includes('projects:no-full-local-governance-runtime'));
+});
+
+test('Orchestra self-hosts through the global registry, current Work and thin Codex shim', async () => {
+  const projectRoot = makeOrchestraProjectCopy();
+  const home = mkdtempSync(join(tmpdir(), 'orchestra-v2-home-'));
+
+  const result = await verifyOrchestraSelfHost({
+    projectRoot,
+    home,
+    launcherPath: GLOBAL_LAUNCHER,
+    runtimeImage: RUNTIME_IMAGE,
+    instructionEpoch: 7,
+    actor: factualActor(),
+    now: () => FIXED_NOW,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.project.runtime.pinnedImage, RUNTIME_IMAGE);
+  assert.equal(result.project.runtime.instructionEpoch, 7);
+  assert.equal(result.attach.allowed, true);
+  assert.equal(result.attach.workId, result.work.workId);
+  assert.equal(result.mutationAuthorization.allowed, true);
+  assert.equal(result.operationBegin.ok, true);
+  assert.equal(result.operationTerminalization.ok, true);
+  assert.equal(result.status.ok, true);
+  assert.equal(result.staleEpoch.allowed, false);
+  assert.equal(result.staleEpoch.reason, 'SESSION_RUNTIME_STALE');
+  assert.equal(result.staleGeneration.allowed, false);
+  assert.equal(result.staleGeneration.reason, 'STALE_GENERATION');
+  assert.deepEqual(result.shim.files, ['.codex/hooks.json', '.codex/orchestra-v2-hook.mjs']);
+  assert.equal(result.noFullLocalGovernanceRuntime, true);
+  assert.equal(result.globalStateOutsideProject, true);
+});
+
+test('self-host verification rejects a non-Orchestra repository before registration', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'not-orchestra-'));
+  writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ name: 'other-project' }));
+  execFileSync('git', ['init'], { cwd: projectRoot, stdio: 'ignore' });
+  const home = mkdtempSync(join(tmpdir(), 'orchestra-v2-home-'));
+
+  const result = await verifyOrchestraSelfHost({
+    projectRoot,
+    home,
+    launcherPath: GLOBAL_LAUNCHER,
+    runtimeImage: RUNTIME_IMAGE,
+    instructionEpoch: 1,
+    actor: factualActor(),
+    now: () => FIXED_NOW,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'CUTOVER_SELF_HOST_NOT_ORCHESTRA');
 });
