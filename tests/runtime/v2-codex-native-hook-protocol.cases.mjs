@@ -185,7 +185,7 @@ test("native Codex Bash result without factual exit status closes UNKNOWN instea
   });
 });
 
-test("native Codex stale epoch denial is translated to exit zero by installed shim", async () => {
+test("native Codex stale epoch denial is projected to the closed provider wire schema", async () => {
   await withActiveWorkspace(async ({ home, cwd, project }) => {
     const session_id = "native-stale-epoch-session";
     const tool_use_id = "native-stale-epoch-call";
@@ -244,8 +244,16 @@ test("native Codex stale epoch denial is translated to exit zero by installed sh
     assert.equal(forwarded.status, 0);
     assert.equal(forwarded.stderr, "");
     const response = JSON.parse(forwarded.stdout);
-    assert.equal(response.reason, "SESSION_RUNTIME_STALE");
+    assert.deepEqual(Object.keys(response), ["hookSpecificOutput"]);
+    assert.deepEqual(Object.keys(response.hookSpecificOutput).sort(), [
+      "hookEventName",
+      "permissionDecision",
+      "permissionDecisionReason",
+    ]);
+    assert.equal(response.hookSpecificOutput.hookEventName, "PreToolUse");
     assert.equal(response.hookSpecificOutput.permissionDecision, "deny");
+    const denial = JSON.parse(response.hookSpecificOutput.permissionDecisionReason);
+    assert.equal(denial.reason, "SESSION_RUNTIME_STALE");
 
     registry = createGlobalProjectRegistry({ home });
     try {
