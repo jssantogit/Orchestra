@@ -1,0 +1,72 @@
+# Orchestra v2 Cutover Runbook
+
+Status: operator-gated procedure for switching the default operating topology to Orchestra v2.
+
+This runbook defines a **default-topology switch**, not a release authorization and not history erasure. A green CI run or a complete readiness record is necessary evidence, but neither is permission to merge, tag, publish, migrate additional real Projects, or remove v1 compatibility support.
+
+## Target topology
+
+Normal v2 operation is:
+
+```text
+registered Project
+  -> thin provider shim
+  -> global Orchestra launcher / control plane under Orchestra Home
+  -> Project-scoped Work Unit + Operation authority
+  -> globally installed Runtime Image pinned by Project ID
+```
+
+The global engine owns durable registry, Work/Operation state, runtime images, factual liveness/recovery, sanitized Experience, and learned-policy state. A registered Project retains its source tree and only the provider integration/configuration surface required to reach the global engine.
+
+Project-local v1/runtime material is **compatibility or migration-only** after a Project is cut over. Normal v2 must not copy, install, or materialize a full local v2 governance runtime/brain inside each Project.
+
+A provider session/conversation supplies factual actor provenance. **Work Lease/session handoff is not normal v2 authority**: the current Project-scoped Work Unit and its generation/runtime epoch are authoritative. No chat permanently owns a Project.
+
+## Preconditions
+
+Freeze the exact candidate head and collect the V2-11 readiness record. Do not continue unless all required fields are factual and current:
+
+- exact candidate Git head;
+- exact Runtime Image ID(s);
+- global registry persistence/restart evidence;
+- two independent Project lineages under one Orchestra Home;
+- Orchestra self-host evidence;
+- Codex and Antigravity field-evidence sets for the exact head/runtime;
+- Windows plus POSIX evidence;
+- migration/Tsuzuki F7 evidence;
+- stale-owner recovery and dirty-preservation evidence;
+- runtime upgrade + rollback evidence;
+- Experience privacy + four-lineage RSI TRAIN/EVALUATE/HOLDOUT replay evidence;
+- v1 compatibility evidence.
+
+`FAILED`, `UNKNOWN`, missing, stale-head, stale-runtime, or mismatched-lineage evidence means **not ready**.
+
+## Cutover procedure
+
+1. **Record the candidate identity.** Record exact branch/head, Runtime Image ID, canonical CI run IDs, provider field-evidence references, two independent Project lineage IDs, and self-host result.
+2. **Verify global status.** Use the global Orchestra status/reconciliation commands for each registered Project. Persisted `RUNNING` is not liveness proof; unresolved liveness or dirty state blocks the cutover.
+3. **Verify runtime pins.** Every target Project must reference an installed compatible Runtime Image and current instruction epoch. Runtime images are global; Projects store pins, not copied runtime brains.
+4. **Verify thin shims.** Codex and Antigravity Project integrations must contain only their approved thin transport/configuration shims and point at the global launcher/control plane.
+5. **Verify current Work authority.** A fresh provider session must attach to the factual current Work. A Project with no active Work enters the v2 INTAKE boundary; it does not inherit authority from another conversation.
+6. **Verify stale fencing.** A provider observation from before an epoch change must be denied through the official stale-runtime fence.
+7. **Verify recovery commands.** Recovery, dirty resolution, runtime upgrade and rollback are global control-plane operations. Do not repair authority by editing Project-local state files.
+8. **Verify learning remains bounded.** An activated RSI policy may choose only among immutable legal execution choices and never grant capabilities, acceptance authority, or side-effect authority.
+9. **Freeze evidence.** Store only sanitized evidence references/digests permitted by repository policy. Do not commit raw prompts, transcripts, provider session IDs, private source, secrets, machine-specific absolute paths, or hidden reasoning.
+10. **Stop at the operator gate.** Present the exact readiness evidence for explicit operator approval.
+
+## Operator gate
+
+Explicit operator approval is required before any of the following:
+
+- merging the v2 stacked PRs into the release line;
+- changing the production/default cutover state for additional real Projects;
+- creating a release tag or GitHub release;
+- declaring v1 compatibility removed or unsupported.
+
+CI success alone must never trigger these actions.
+
+## Compatibility boundary
+
+Do **not** delete or remove v1 source/runtime support as part of this cutover. V1 remains an explicit compatibility/migration state until a separately approved release gate says otherwise. Historical migration artifacts and preserved evidence remain auditable.
+
+If the operator rejects or pauses cutover, follow `docs/release/v2-rollback-runbook.md` rather than modifying durable state by hand.
