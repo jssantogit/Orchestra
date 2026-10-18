@@ -209,7 +209,8 @@ test("Codex v2 shim returns structured unavailable failure for malformed or miss
         input: JSON.stringify({ hook_event_name: hookEventName }),
         encoding: "utf8",
       });
-      assert.notEqual(result.status, 0);
+      if (hookEventName === "PreToolUse") assert.equal(result.status, 0);
+      else assert.notEqual(result.status, 0);
       assert.equal(JSON.parse(result.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
       assert.equal(JSON.parse(result.stdout).hookSpecificOutput.hookEventName, hookEventName);
       if (hookEventName === "PreToolUse") assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, "deny");
@@ -220,8 +221,9 @@ test("Codex v2 shim returns structured unavailable failure for malformed or miss
       input: JSON.stringify({ hook_event_name: "PreToolUse" }),
       encoding: "utf8",
     });
-    assert.notEqual(unavailable.status, 0);
+    assert.equal(unavailable.status, 0);
     assert.equal(JSON.parse(unavailable.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
+    assert.equal(JSON.parse(unavailable.stdout).hookSpecificOutput.permissionDecision, "deny");
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(global, { recursive: true, force: true });
