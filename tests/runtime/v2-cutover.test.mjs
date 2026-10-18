@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,9 +11,11 @@ import {
   CUTOVER_EVIDENCE_STATUS,
 } from '../../v2/cutover/readiness.mjs';
 import { verifyOrchestraSelfHost } from '../../v2/cutover/self-host.mjs';
+import { verifyMultiProjectIsolation } from '../../v2/cutover/multi-project.mjs';
 
 const HEAD = 'a'.repeat(40);
 const RUNTIME_IMAGE = 'sha256:' + 'b'.repeat(64);
+const RUNTIME_IMAGE_B = 'sha256:' + 'd'.repeat(64);
 const FIXED_NOW = '2026-10-17T23:30:00.000Z';
 const GLOBAL_LAUNCHER = fileURLToPath(new URL('../../v2/global/orchestra.mjs', import.meta.url));
 const CURRENT_NODE_MAJOR = Number(process.versions.node.split('.')[0]);
@@ -95,11 +97,23 @@ function makeOrchestraProjectCopy() {
   return root;
 }
 
-function factualActor(provider = 'codex') {
+function makeGitProject(name) {
+  const root = mkdtempSync(join(tmpdir(), `orchestra-v2-${name}-`));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name, private: true }, null, 2));
+  writeFileSync(join(root, 'README.md'), `${name}\n`, 'utf8');
+  execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'orchestra-v2-tests@example.invalid'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 'Orchestra V2 Tests'], { cwd: root });
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['commit', '-m', `fixture: ${name}`], { cwd: root, stdio: 'ignore' });
+  return root;
+}
+
+function factualActor(provider = 'codex', fill = 'c') {
   return {
     schema: 'orchestra.actor-provenance.v2',
     provider,
-    subjectHash: `sha256:${'c'.repeat(64)}`,
+    subjectHash: `sha256:${fill.repeat(64)}`,
     source: 'PROVIDER_FACT',
     observedAt: FIXED_NOW,
   };
@@ -269,8 +283,63 @@ if (CURRENT_NODE_MAJOR >= 24) {
     assert.equal(result.ok, false);
     assert.equal(result.code, 'CUTOVER_SELF_HOST_NOT_ORCHESTRA');
   });
+
+  test('two independent Projects stay isolated under one global Orchestra Home', async () => {
+    const { installCodexV2Shim } = await import('../../v2/providers/codex/shim-manager.mjs');
+    const home = mkdtempSync(join(tmpdir(), 'orchestra-v2-multi-project-home-'));
+    const rootA = makeGitProject('cutover-alpha');
+    const rootB = makeGitProject('cutover-beta');
+
+    const result = await verifyMultiProjectIsolation({
+      home,
+      launcherPath: GLOBAL_LAUNCHER,
+      installThinShim: installCodexV2Shim,
+      removeThinShim({ targetDir, files }) {
+        for (const relativePath of files) rmSync(join(targetDir, relativePath), { force: true });
+        return { ok: true };
+      },
+      projects: [
+        {
+          root: rootA,
+          runtimeImage: RUNTIME_IMAGE,
+          instructionEpoch: 2,
+          actor: factualActor('codex', 'a'),
+          evidenceRef: 'evidence:alpha-private',
+        },
+        {
+          root: rootB,
+          runtimeImage: RUNTIME_IMAGE_B,
+          instructionEpoch: 9,
+          actor: factualActor('codex', 'b'),
+          evidenceRef: 'evidence:beta-private',
+        },
+      ],
+      now: () => FIXED_NOW,
+    });
+
+    assert.equal(result.ok, true);
+    assert.notEqual(result.projects[0].projectId, result.projects[1].projectId);
+    assert.notEqual(result.projects[0].lineageId, result.projects[1].lineageId);
+    assert.equal(result.projects[0].runtime.pinnedImage, RUNTIME_IMAGE);
+    assert.equal(result.projects[1].runtime.pinnedImage, RUNTIME_IMAGE_B);
+    assert.notEqual(result.works[0].workId, result.works[1].workId);
+    assert.deepEqual(result.works[0].evidenceRefs, ['evidence:alpha-private']);
+    assert.deepEqual(result.works[1].evidenceRefs, ['evidence:beta-private']);
+    assert.equal(result.operations[0].projectId, result.projects[0].projectId);
+    assert.equal(result.operations[1].projectId, result.projects[1].projectId);
+    assert.equal(result.dirtyIsolation.projectAAction, 'RESOLVE_DIRTY_WORKSPACE');
+    assert.equal(result.dirtyIsolation.projectBMutationAllowed, true);
+    assert.equal(result.providerIsolation.sessionCrossProjectRejected, true);
+    assert.equal(result.providerIsolation.correlationCrossProjectRejected, true);
+    assert.equal(result.experience.crossProjectCount, 2);
+    assert.equal(result.experience.crossProjectPrivateIdsAbsent, true);
+    assert.equal(result.experience.projectPrivateIsolation, true);
+    assert.equal(result.shimIsolation.projectARemoved, true);
+    assert.equal(result.shimIsolation.projectBStateIntact, true);
+  });
 } else {
-  test('V2-11 self-host harness remains import-safe on the Node 20 v1 baseline', () => {
+  test('V2-11 cutover harnesses remain import-safe on the Node 20 v1 baseline', () => {
     assert.equal(typeof verifyOrchestraSelfHost, 'function');
+    assert.equal(typeof verifyMultiProjectIsolation, 'function');
   });
 }
