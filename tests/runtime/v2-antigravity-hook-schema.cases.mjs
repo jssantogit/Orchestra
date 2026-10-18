@@ -17,6 +17,7 @@ test("Antigravity SessionStart uses the provider lifecycle handler shape while t
     commandWindows: artifacts.commandWindows,
     timeout: 10,
   }]);
+  assert.deepEqual(group.PreInvocation, group.SessionStart);
 
   for (const eventName of ["PreToolUse", "PostToolUse"]) {
     assert.deepEqual(group[eventName], [{

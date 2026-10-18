@@ -29,4 +29,5 @@ if (currentNodeMajor < MINIMUM_NODE_MAJOR) {
 } else {
   await import("./v2-antigravity-hook-schema.cases.mjs");
   await import("./v2-antigravity-global-adapter.cases.mjs");
+  await import("./v2-antigravity-provider-wire.test.mjs");
 }

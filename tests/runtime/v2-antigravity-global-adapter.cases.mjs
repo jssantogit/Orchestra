@@ -17,6 +17,7 @@ import { createProviderEventProbe } from "../../v2/liveness/provider-event-liven
 import { createOperationLivenessService } from "../../v2/liveness/operation-liveness-service.mjs";
 import { createHostProcessIdentityReader, createLocalProcessOwnerProbe } from "../../v2/liveness/local-process-probe.mjs";
 import { createAntigravityHookHandler } from "../../v2/providers/antigravity/hook-handler.mjs";
+import { createWorkAuthority } from "../../v2/authority/work-authority.mjs";
 import { createAntigravityProcessExecution } from "../../v2/providers/antigravity/process-execution.mjs";
 import {
   buildAntigravityV2ShimArtifacts,
@@ -235,6 +236,70 @@ async function invokeAntigravityHook({ home, cwd, payload }) {
 function actorHash(conversationId) {
   return hashId(conversationId);
 }
+
+for (const active of [true, false]) {
+  test(`PreInvocation attaches and refreshes the factual actor with ${active ? "current Work" : "INTAKE"}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "orchestra-agy-invocation-"));
+    try {
+      const home = join(root, "home");
+      const { cwd, project } = await prepareProject({ root, home, active });
+      const conversationId = "factual-invocation-conversation";
+      let previous = null;
+      for (const invocationNum of [0, 1, 17]) {
+        const attached = await invokeAntigravityHook({ home, cwd, payload: {
+          hookEventName: "PreInvocation", conversationId, workspacePaths: [cwd], invocationNum, initialNumSteps: 0,
+        } });
+        assert.equal(attached.code, 0, JSON.stringify(attached.payload));
+        assert.equal(attached.payload.hookSpecificOutput.hookEventName, "PreInvocation");
+        const registry = createGlobalProjectRegistry({ home });
+        try {
+          const observation = registry.state.sessionObservations.get({ provider: "antigravity", projectId: project.projectId, actorIdHash: actorHash(conversationId) });
+          assert.equal(observation.observedWorkId, active ? "work-antigravity" : null);
+          assert.equal(observation.observedGeneration, active ? 3 : null);
+          assert.equal(observation.observedInstructionEpoch, 7);
+          assert.equal(registry.state.operations.listLive({ projectId: project.projectId }).length, 0);
+          if (previous) assert.ok(observation.observedAt >= previous.observedAt);
+          previous = observation;
+        } finally { registry.close(); }
+      }
+      const other = await prepareProject({ root, home, workspaceName: "other", active: false });
+      const denied = await invokeAntigravityHook({ home, cwd: other.cwd, payload: {
+        hookEventName: "PreToolUse", conversationId, toolCall: { id: "cross-project-write", name: "write_file" },
+      } });
+      assert.equal(denied.payload.ok, false);
+      assert.equal(denied.payload.hookSpecificOutput.permissionDecision, "deny");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+test("PreInvocation refreshes after official Work replacement without bypassing stale Work fencing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-agy-refresh-"));
+  try {
+    const home = join(root, "home");
+    const { cwd, project } = await prepareProject({ root, home });
+    const conversationId = "refresh-current-work";
+    const attach = (hookEventName) => invokeAntigravityHook({ home, cwd, payload: { hookEventName, conversationId, invocationNum: 9 } });
+    assert.equal((await attach("PreInvocation")).code, 0);
+    const registry = createGlobalProjectRegistry({ home });
+    try {
+      const authority = createWorkAuthority({ state: registry.state });
+      assert.equal(authority.abandon({ projectId: project.projectId, expectedWorkId: "work-antigravity", expectedGeneration: 3, commandId: "replace-current-work", reason: "test official replacement" }).ok, true);
+      assert.equal(authority.start(v2Work("replacement-work", project.projectId)).ok, true);
+    } finally { registry.close(); }
+    const denied = await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "PreToolUse", conversationId, toolCall: { id: "old-work-write", name: "write_file" } } });
+    assert.equal(denied.payload.ok, false);
+    assert.equal(denied.payload.reason, "STALE_ACTIVE_WORK");
+    assert.equal((await attach("PreInvocation")).code, 0);
+    assert.equal((await attach("SessionStart")).code, 0);
+    const reopened = createGlobalProjectRegistry({ home });
+    try {
+      const observation = reopened.state.sessionObservations.get({ provider: "antigravity", projectId: project.projectId, actorIdHash: actorHash(conversationId) });
+      assert.equal(observation.observedWorkId, "replacement-work");
+      assert.equal(observation.observedGeneration, 3);
+      assert.equal(reopened.state.operations.listLive({ projectId: project.projectId }).length, 0);
+    } finally { reopened.close(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 async function startAntigravityMutation({ home, cwd, conversationId, toolCallId }) {
   const attached = await invokeAntigravityHook({
@@ -1347,9 +1412,11 @@ test("Antigravity v2 shim installs only registered-project transport files and f
     await mkdir(launcherDir, { recursive: true });
     const launcherPath = join(launcherDir, "orchestra.mjs");
     await writeFile(launcherPath, `
+      import { writeFileSync } from "node:fs";
       const chunks = [];
       for await (const chunk of process.stdin) chunks.push(chunk);
       const input = Buffer.concat(chunks).toString();
+      writeFileSync(${JSON.stringify(join(root, "forwarded.json"))}, input);
       if (process.argv.slice(2).join(" ") !== "provider antigravity hook") process.exit(9);
       process.stdout.write(JSON.stringify({
         ok: true,
@@ -1387,6 +1454,7 @@ test("Antigravity v2 shim installs only registered-project transport files and f
     assert.deepEqual(reinstalledHooks["user-hooks"], userGroup);
     assert.deepEqual(reinstalledHooks["orchestra-v2-global"].SessionStart[0], userHandler);
     assert.equal(reinstalledHooks["orchestra-v2-global"].SessionStart.length, 2);
+    assert.equal(reinstalledHooks["orchestra-v2-global"].PreInvocation.length, 1);
     assert.equal(reinstalledHooks["orchestra-v2-global"].PreToolUse.length, 1);
     assert.equal(reinstalledHooks["orchestra-v2-global"].PostToolUse.length, 1);
     assert.equal(existsSync(join(cwd, ".agents", "skills")), false);
@@ -1404,12 +1472,8 @@ test("Antigravity v2 shim installs only registered-project transport files and f
       encoding: "utf8",
     });
     assert.equal(forwarded.status, 0, forwarded.stderr);
-    assert.deepEqual(JSON.parse(forwarded.stdout), {
-      ok: true,
-      reason: null,
-      forwarded: input,
-      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "fixture-context" },
-    });
+    assert.deepEqual(JSON.parse(forwarded.stdout), { injectSteps: [] });
+    assert.equal(await readFile(join(root, "forwarded.json"), "utf8"), input);
   } finally {
     registry?.close();
     await rm(root, { recursive: true, force: true });
@@ -1513,37 +1577,36 @@ test("installed Antigravity v2 shim routes SessionStart, intake, read, mutation,
 
     const conversationId = "real-global-shim-conversation";
     const attached = invoke({ hookEventName: "SessionStart", conversationId });
-    assert.equal(attached.ok, true);
-    assert.equal(attached.projectId, project.projectId);
-    assert.ok(attached.work.workId);
-    const context = JSON.parse(attached.hookSpecificOutput.additionalContext);
-    assert.equal(context.schema, "orchestra.antigravity-session-context.v2");
-    assert.equal(context.projectId, project.projectId);
+    assert.deepEqual(attached, { injectSteps: [] });
+    const observation = registry.state.sessionObservations.get({ provider: "antigravity", projectId: project.projectId, actorIdHash: actorHash(conversationId) });
+    assert.equal(observation.observedWorkId, "work-antigravity");
+    assert.equal(observation.observedGeneration, 3);
+    assert.equal(observation.observedInstructionEpoch, 7);
 
     const read = invoke({
       hookEventName: "PreToolUse",
       conversationId,
       toolCall: { id: "real-global-read", name: "read_file" },
     });
-    assert.equal(read.ok, true);
-    assert.equal(read.hookSpecificOutput.permissionDecision, "allow");
+    assert.deepEqual(read, { decision: "allow" });
 
     const started = invoke({
       hookEventName: "PreToolUse",
       conversationId,
       toolCall: { id: "real-global-write", name: "write_file", args: { path: "src/main.mjs" } },
     });
-    assert.equal(started.ok, true);
-    assert.equal(started.hookSpecificOutput.permissionDecision, "allow");
-    const operationId = started.operation.operationId;
+    assert.deepEqual(started, { decision: "allow" });
+    const operations = registry.state.operations.listLive({ projectId: project.projectId });
+    assert.equal(operations.length, 1);
+    const operationId = operations[0].operationId;
+    assert.equal(operations[0].workflowState, "RUNNING");
     const terminal = invoke({
       hookEventName: "PostToolUse",
       conversationId,
       toolCall: { id: "real-global-write", name: "write_file" },
       is_error: false,
     });
-    assert.equal(terminal.ok, true);
-    assert.equal(terminal.operation.operationId, operationId);
+    assert.deepEqual(terminal, {});
     assert.equal(registry.state.operations.inspect(operationId).workflowState, "SUCCEEDED");
 
     const intakeRoot = join(root, "intake-project-root");
@@ -1570,10 +1633,10 @@ test("installed Antigravity v2 shim routes SessionStart, intake, read, mutation,
     });
     assert.equal(intake.status, 0, intake.stderr);
     const intakeResponse = JSON.parse(intake.stdout);
-    assert.equal(intakeResponse.reason, "ORCHESTRA_V2_INTAKE");
-    assert.equal(intakeResponse.work, null);
-    assert.equal(intakeResponse.generation, null);
-    assert.equal(JSON.parse(intakeResponse.hookSpecificOutput.additionalContext).mutationAuthority, "UNAVAILABLE_UNTIL_WORK_STARTS");
+    assert.deepEqual(intakeResponse, { injectSteps: [] });
+    const intakeObservation = registry.state.sessionObservations.get({ provider: "antigravity", projectId: intakeProject.projectId, actorIdHash: actorHash("real-global-intake") });
+    assert.equal(intakeObservation.observedWorkId, null);
+    assert.equal(intakeObservation.observedGeneration, null);
   } finally {
     registry?.close();
     await rm(root, { recursive: true, force: true });
@@ -1637,16 +1700,16 @@ test("Antigravity v2 shim validates response shape and fails closed actionably w
         input: JSON.stringify(payload),
         encoding: "utf8",
       });
-      assert.notEqual(result.status, 0, `response should fail closed: ${serialized}`);
       const decoded = JSON.parse(result.stdout);
-      assert.equal(decoded.ok, false);
-      assert.equal(decoded.reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
-      assert.match(decoded.message, /global Orchestra/i);
       if (["PreToolUse", "ToolCall"].includes(payload.hook_event_name || payload.eventType)
         || (payload.toolCall && !payload.eventType && !payload.hookEventName && !payload.hook_event_name)) {
-        assert.equal(decoded.hookSpecificOutput?.hookEventName, "PreToolUse");
-        assert.equal(decoded.hookSpecificOutput?.permissionDecision, "deny");
+        assert.equal(result.status, 0);
+        assert.deepEqual(decoded, { decision: "deny", reason: "ORCHESTRA_V2_GLOBAL_UNAVAILABLE" });
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(decoded, { injectSteps: [] });
       }
+      assert.match(result.stderr, /global Orchestra/i);
     }
 
     await rm(launcherPath);
@@ -1655,7 +1718,7 @@ test("Antigravity v2 shim validates response shape and fails closed actionably w
       input: JSON.stringify({ hook_event_name: "PreToolUse", conversationId: "factual-session" }),
       encoding: "utf8",
     });
-    assert.notEqual(missingLauncher.status, 0);
+    assert.equal(missingLauncher.status, 0);
     assert.equal(JSON.parse(missingLauncher.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
   } finally {
     registry?.close();
