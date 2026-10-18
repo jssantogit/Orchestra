@@ -185,7 +185,7 @@ test("native Codex Bash result without factual exit status closes UNKNOWN instea
   });
 });
 
-test("native Codex stale epoch denial exits zero through CLI and installed shim", async () => {
+test("native Codex stale epoch denial is translated to exit zero by installed shim", async () => {
   await withActiveWorkspace(async ({ home, cwd, project }) => {
     const session_id = "native-stale-epoch-session";
     const tool_use_id = "native-stale-epoch-call";
@@ -214,7 +214,7 @@ test("native Codex stale epoch denial exits zero through CLI and installed shim"
       tool_input: { command: "*** Begin Patch\n*** Add File: forbidden.txt\n+forbidden\n*** End Patch" },
     };
     const direct = await invokeHook({ home, cwd, payload });
-    assert.equal(direct.code, 0);
+    assert.equal(direct.code, 1);
     assert.equal(direct.payload.ok, false);
     assert.equal(direct.payload.reason, "SESSION_RUNTIME_STALE");
     assert.equal(direct.payload.hookSpecificOutput.hookEventName, "PreToolUse");
