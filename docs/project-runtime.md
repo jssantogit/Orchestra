@@ -1,5 +1,15 @@
 # Orchestra Project Runtime Management
 
+## V2 default topology
+
+Orchestra v2 runs from a user-level **global control plane** under Orchestra Home. A registered Project reaches that global engine through a **thin provider shim**; the Project stores its Project identity, current Work/Operation facts and Runtime Image pin in the global state instead of receiving a copied full v2 governance brain.
+
+Runtime Images are installed once under Orchestra Home and Projects pin them independently. Runtime install, compatibility checks, Project upgrade/rollback, factual status and recovery are global operations. Current Project-scoped Work, generation and instruction epoch are authoritative; Work Lease/session handoff is legacy compatibility/recovery behavior, not normal v2 authority.
+
+The project-local runtime lifecycle described in the remainder of this document is the Orchestra 1.x **compatibility/migration topology**. It remains supported for migration, rollback and historical compatibility, but normal v2 must not copy, install or materialize a full governance runtime per Project. See `docs/release/v2-cutover-runbook.md` and `docs/release/v2-rollback-runbook.md` for the operator-gated topology switch.
+
+---
+
 Orchestra uses one manifest-driven project-runtime contract for the active provider runtimes. Official installers build a deterministic provider payload, install only manifest-owned paths, preserve project-owned state, and record canonical runtime metadata under `.orchestra/state`.
 
 ## Canonical metadata and runtime-management state
