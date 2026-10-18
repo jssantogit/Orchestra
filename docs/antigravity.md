@@ -12,7 +12,7 @@ AGY CLI 1.4.2 uses `PreInvocation` to attach or refresh its factual Session Obse
 
 The global CLI retains internal factual results. The AGY thin shim projects only native provider output: lifecycle `{ "injectSteps": [] }`, pre-tool `{ "decision": "allow" }` or `{ "decision": "deny", "reason": "<semantic reason>" }`, and post-tool `{}`. Lifecycle output does not inject internal Project/Work metadata into the conversation. An unavailable or invalid global response produces a native pre-tool denial rather than an internal envelope.
 
-The primary `command` is generated for the installation host: Windows requires `cmd.exe`-compatible double-quoted executable/argument paths, not POSIX single quotes. Do not rely on `commandWindows` to override the native CLI's primary command. Reinstallation replaces only exact known Orchestra command signatures, preserving unrelated handlers.
+The primary `command` is generated for the installation host. On Windows it uses a PowerShell `-EncodedCommand` transport invocation so native command-argument forwarding cannot reinterpret quoted executable/argument paths. It invokes the exact configured Node executable and shim, forwards stdin/stdout, and propagates the child status; no extra Project wrapper is installed. Do not rely on `commandWindows` to override the native CLI's primary command. Reinstallation replaces only exact known Orchestra command signatures, preserving unrelated handlers.
 
 ---
 

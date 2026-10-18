@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
 import { renderAntigravityV2Shim } from "./shim-template.mjs";
 
@@ -26,6 +26,12 @@ function shellQuotePowerShell(value) {
 function shellQuoteCmd(value) {
   if (/["%\r\n]/.test(value)) throw new TypeError("Antigravity Windows hook paths cannot contain command expansion characters");
   return `"${value}"`;
+}
+
+function windowsInterpreter() {
+  const path = win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  if (!win32.isAbsolute(path) || /[\s"%&|<>^!()]/.test(path)) throw new TypeError("Antigravity Windows interpreter must be an absolute command-safe system path");
+  return path;
 }
 
 function isWithin(root, candidate) {
@@ -54,8 +60,8 @@ async function resolveGlobalFile(path, label, projectRoot) {
 function makeHookEntry(eventName, command, commandWindows) {
   const hook = {
     type: "command",
-    command: `${command} --event ${eventName}`,
-    commandWindows: `${commandWindows} --event ${eventName}`,
+    command,
+    commandWindows,
     timeout: 10,
   };
   if (eventName === "SessionStart" || eventName === "PreInvocation") return hook;
@@ -113,15 +119,22 @@ export function buildAntigravityV2ShimArtifacts({
     ? `${shellQuoteCmd(nodePath)} ${shellQuoteCmd(shimPath)}`
     : `${shellQuotePosix(nodePath)} ${shellQuotePosix(shimPath)}`;
   const commandWindows = `& ${shellQuotePowerShell(nodePath)} ${shellQuotePowerShell(shimPath)}`;
+  const commands = Object.fromEntries(HOOK_EVENTS.map((eventName) => {
+    const script = `${commandWindows} --event ${eventName}; exit $LASTEXITCODE`;
+    return [eventName, platform === "win32"
+      ? `${windowsInterpreter()} -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`
+      : `${command} --event ${eventName}`];
+  }));
   const hooks = Object.fromEntries(HOOK_EVENTS.map((eventName) => [
     eventName,
-    [makeHookEntry(eventName, command, commandWindows)],
+    [makeHookEntry(eventName, commands[eventName], `${commandWindows} --event ${eventName}`)],
   ]));
   return Object.freeze({
     shimSource: renderAntigravityV2Shim({ launcherPath, nodePath, orchestraHome }),
     hooksJson: `${JSON.stringify({ [HOOK_GROUP]: hooks }, null, 2)}\n`,
     command,
     commandWindows,
+    commands: Object.freeze(commands),
   });
 }
 
@@ -167,6 +180,7 @@ export async function installAntigravityV2Shim({
 
   const globalLauncherPath = await resolveGlobalFile(launcherPath, "launcherPath", canonicalRoot);
   const globalNodePath = await resolveGlobalFile(nodePath, "nodePath", canonicalRoot);
+  if (process.platform === "win32") await resolveGlobalFile(windowsInterpreter(), "PowerShell", canonicalRoot);
   const hooksPath = join(canonicalRoot, HOOKS_RELATIVE_PATH);
   const shimPath = join(canonicalRoot, SHIM_RELATIVE_PATH);
   const artifacts = buildAntigravityV2ShimArtifacts({
@@ -191,6 +205,7 @@ export async function installAntigravityV2Shim({
     const priorCommands = [
       [artifacts.command, artifacts.commandWindows],
       [priorCommand, artifacts.commandWindows],
+      [`${artifacts.command} --event ${eventName}`, `${artifacts.commandWindows} --event ${eventName}`],
       [`${priorCommand} --event ${eventName}`, `${artifacts.commandWindows} --event ${eventName}`],
     ];
     entries = entries.map((entry) => {
@@ -202,7 +217,7 @@ export async function installAntigravityV2Shim({
       }
       return entry;
     });
-    if (!hasHook(entries, eventName, `${artifacts.command} --event ${eventName}`, `${artifacts.commandWindows} --event ${eventName}`)) {
+    if (!hasHook(entries, eventName, artifacts.commands[eventName], `${artifacts.commandWindows} --event ${eventName}`)) {
       group[eventName] = [...entries, ...generatedEntries];
     } else {
       group[eventName] = entries;

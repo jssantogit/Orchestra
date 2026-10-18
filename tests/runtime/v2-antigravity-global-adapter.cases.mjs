@@ -1504,7 +1504,7 @@ test("Antigravity v2 shim installs only registered-project transport files and f
     for (const eventName of ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"]) {
       for (const entry of legacyHooks["orchestra-v2-global"][eventName]) {
         for (const handler of entry.hooks ?? [entry]) {
-          if (handler.command?.includes("orchestra-v2-hook.mjs")) {
+          if (handler.commandWindows?.includes("orchestra-v2-hook.mjs")) {
             handler.command = `'${canonicalNode.replaceAll("'", "'\"'\"'")}' '${join(project.workspace.canonicalRoot, ".agents", "orchestra-v2-hook.mjs").replaceAll("'", "'\"'\"'")}'`;
             handler.commandWindows = handler.commandWindows.replace(` --event ${eventName}`, "");
           }

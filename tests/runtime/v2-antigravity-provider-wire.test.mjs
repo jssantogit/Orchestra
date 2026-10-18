@@ -83,18 +83,18 @@ test("Antigravity native hook command executes through the host shell with space
   try {
     const launcherPath = join(root, "launcher.mjs");
     const shimPath = join(root, "shim.mjs");
-    await writeFile(launcherPath, 'process.stdout.write(JSON.stringify({ok:true,reason:null,hookSpecificOutput:{hookEventName:"PreInvocation",additionalContext:"internal"}}));');
+    await writeFile(launcherPath, 'let input="";for await(const chunk of process.stdin)input+=chunk.toString();if(JSON.parse(input).conversationId!=="native-açãо")process.exit(9);process.stdout.write(JSON.stringify({ok:true,reason:null,hookSpecificOutput:{hookEventName:"PreInvocation",additionalContext:"internal"}}));');
     const artifacts = buildAntigravityV2ShimArtifacts({ launcherPath, shimPath });
     await writeFile(shimPath, artifacts.shimSource);
     const handler = JSON.parse(artifacts.hooksJson)["orchestra-v2-global"].PreInvocation[0];
     const result = spawnSync(handler.command, {
       shell: process.platform === "win32" ? process.env.ComSpec : "/bin/sh",
-      input: JSON.stringify({ conversationId: "native-command-actor", invocationNum: 0 }), encoding: "utf8",
+      input: JSON.stringify({ conversationId: "native-açãо", invocationNum: 0 }), encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { injectSteps: [] });
     const nativeArguments = spawnSync(process.platform === "win32" ? process.env.ComSpec : "/bin/sh", [process.platform === "win32" ? "/c" : "-c", handler.command], {
-      input: JSON.stringify({ conversationId: "native-command-actor", invocationNum: 1 }), encoding: "utf8",
+      input: JSON.stringify({ conversationId: "native-açãо", invocationNum: 1 }), encoding: "utf8",
     });
     assert.equal(nativeArguments.status, 0, nativeArguments.stderr);
     assert.deepEqual(JSON.parse(nativeArguments.stdout), { injectSteps: [] });
@@ -103,4 +103,9 @@ test("Antigravity native hook command executes through the host shell with space
 
 test("Antigravity Windows command serialization rejects environment expansion in executable paths", () => {
   assert.throws(() => buildAntigravityV2ShimArtifacts({ launcherPath: "/global/launcher.mjs", nodePath: "C:\\%PRIVATE%\\node.exe", platform: "win32" }), /command expansion/);
+});
+
+test("Antigravity Windows transport resolves its interpreter outside Project-local executable lookup", () => {
+  const artifacts = buildAntigravityV2ShimArtifacts({ launcherPath: "/global/launcher.mjs", platform: "win32" });
+  assert.match(artifacts.commands.PreInvocation, /^[A-Z]:\\[^\s]+powershell\.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand [A-Za-z0-9+/=]+$/i);
 });
