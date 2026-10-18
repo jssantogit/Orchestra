@@ -16,6 +16,7 @@ const HEAD = 'a'.repeat(40);
 const RUNTIME_IMAGE = 'sha256:' + 'b'.repeat(64);
 const FIXED_NOW = '2026-10-17T23:30:00.000Z';
 const GLOBAL_LAUNCHER = fileURLToPath(new URL('../../v2/global/orchestra.mjs', import.meta.url));
+const CURRENT_NODE_MAJOR = Number(process.versions.node.split('.')[0]);
 
 function verified(headSha = HEAD, facts = {}) {
   return {
@@ -211,54 +212,65 @@ test('project-local full governance runtime blocks cutover readiness', () => {
   assert.ok(result.invalid.includes('projects:no-full-local-governance-runtime'));
 });
 
-test('Orchestra self-hosts through the global registry, current Work and thin Codex shim', async () => {
-  const projectRoot = makeOrchestraProjectCopy();
-  const home = mkdtempSync(join(tmpdir(), 'orchestra-v2-home-'));
+if (CURRENT_NODE_MAJOR >= 24) {
+  test('Orchestra self-hosts through the global registry, current Work and thin Codex shim', async () => {
+    const { installCodexV2Shim } = await import('../../v2/providers/codex/shim-manager.mjs');
+    const projectRoot = makeOrchestraProjectCopy();
+    const home = mkdtempSync(join(tmpdir(), 'orchestra-v2-home-'));
 
-  const result = await verifyOrchestraSelfHost({
-    projectRoot,
-    home,
-    launcherPath: GLOBAL_LAUNCHER,
-    runtimeImage: RUNTIME_IMAGE,
-    instructionEpoch: 7,
-    actor: factualActor(),
-    now: () => FIXED_NOW,
+    const result = await verifyOrchestraSelfHost({
+      projectRoot,
+      home,
+      launcherPath: GLOBAL_LAUNCHER,
+      runtimeImage: RUNTIME_IMAGE,
+      instructionEpoch: 7,
+      actor: factualActor(),
+      installThinShim: installCodexV2Shim,
+      now: () => FIXED_NOW,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.project.runtime.pinnedImage, RUNTIME_IMAGE);
+    assert.equal(result.project.runtime.instructionEpoch, 7);
+    assert.equal(result.attach.allowed, true);
+    assert.equal(result.attach.workId, result.work.workId);
+    assert.equal(result.mutationAuthorization.allowed, true);
+    assert.equal(result.operationBegin.ok, true);
+    assert.equal(result.operationTerminalization.ok, true);
+    assert.equal(result.status.ok, true);
+    assert.equal(result.staleEpoch.allowed, false);
+    assert.equal(result.staleEpoch.reason, 'SESSION_RUNTIME_STALE');
+    assert.equal(result.staleGeneration.allowed, false);
+    assert.equal(result.staleGeneration.reason, 'STALE_GENERATION');
+    assert.equal(result.staleWork.allowed, false);
+    assert.deepEqual(result.shim.files, ['.codex/hooks.json', '.codex/orchestra-v2-hook.mjs']);
+    assert.equal(result.noFullLocalGovernanceRuntime, true);
+    assert.equal(result.globalStateOutsideProject, true);
   });
 
-  assert.equal(result.ok, true);
-  assert.equal(result.project.runtime.pinnedImage, RUNTIME_IMAGE);
-  assert.equal(result.project.runtime.instructionEpoch, 7);
-  assert.equal(result.attach.allowed, true);
-  assert.equal(result.attach.workId, result.work.workId);
-  assert.equal(result.mutationAuthorization.allowed, true);
-  assert.equal(result.operationBegin.ok, true);
-  assert.equal(result.operationTerminalization.ok, true);
-  assert.equal(result.status.ok, true);
-  assert.equal(result.staleEpoch.allowed, false);
-  assert.equal(result.staleEpoch.reason, 'SESSION_RUNTIME_STALE');
-  assert.equal(result.staleGeneration.allowed, false);
-  assert.equal(result.staleGeneration.reason, 'STALE_GENERATION');
-  assert.deepEqual(result.shim.files, ['.codex/hooks.json', '.codex/orchestra-v2-hook.mjs']);
-  assert.equal(result.noFullLocalGovernanceRuntime, true);
-  assert.equal(result.globalStateOutsideProject, true);
-});
+  test('self-host verification rejects a non-Orchestra repository before registration', async () => {
+    const { installCodexV2Shim } = await import('../../v2/providers/codex/shim-manager.mjs');
+    const projectRoot = mkdtempSync(join(tmpdir(), 'not-orchestra-'));
+    writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ name: 'other-project' }));
+    execFileSync('git', ['init'], { cwd: projectRoot, stdio: 'ignore' });
+    const home = mkdtempSync(join(tmpdir(), 'orchestra-v2-home-'));
 
-test('self-host verification rejects a non-Orchestra repository before registration', async () => {
-  const projectRoot = mkdtempSync(join(tmpdir(), 'not-orchestra-'));
-  writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ name: 'other-project' }));
-  execFileSync('git', ['init'], { cwd: projectRoot, stdio: 'ignore' });
-  const home = mkdtempSync(join(tmpdir(), 'orchestra-v2-home-'));
+    const result = await verifyOrchestraSelfHost({
+      projectRoot,
+      home,
+      launcherPath: GLOBAL_LAUNCHER,
+      runtimeImage: RUNTIME_IMAGE,
+      instructionEpoch: 1,
+      actor: factualActor(),
+      installThinShim: installCodexV2Shim,
+      now: () => FIXED_NOW,
+    });
 
-  const result = await verifyOrchestraSelfHost({
-    projectRoot,
-    home,
-    launcherPath: GLOBAL_LAUNCHER,
-    runtimeImage: RUNTIME_IMAGE,
-    instructionEpoch: 1,
-    actor: factualActor(),
-    now: () => FIXED_NOW,
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'CUTOVER_SELF_HOST_NOT_ORCHESTRA');
   });
-
-  assert.equal(result.ok, false);
-  assert.equal(result.code, 'CUTOVER_SELF_HOST_NOT_ORCHESTRA');
-});
+} else {
+  test('V2-11 self-host harness remains import-safe on the Node 20 v1 baseline', () => {
+    assert.equal(typeof verifyOrchestraSelfHost, 'function');
+  });
+}
