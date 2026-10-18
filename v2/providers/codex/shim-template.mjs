@@ -19,33 +19,33 @@ const NODE_EXECUTABLE = ${JSON.stringify(nodePath)};
 const GLOBAL_ORCHESTRA_HOME = ${JSON.stringify(orchestraHome)};
 const GLOBAL_UNAVAILABLE = ${JSON.stringify(GLOBAL_UNAVAILABLE)};
 
-function failClosed(input) {
-  let hookEventName = null;
+function hookEventFromInput(input) {
   try {
-    const request = JSON.parse(input);
-    if (["SessionStart", "PreToolUse", "PostToolUse"].includes(request?.hook_event_name)) {
-      hookEventName = request.hook_event_name;
-    }
+    const hookEventName = JSON.parse(input)?.hook_event_name ?? null;
+    return ["SessionStart", "PreToolUse", "PostToolUse"].includes(hookEventName)
+      ? hookEventName
+      : null;
   } catch {
-    // Preserve the transport boundary: an unparseable request cannot select a hook response shape.
+    return null;
   }
-  const payload = {
-    ok: false,
-    reason: GLOBAL_UNAVAILABLE,
+}
+
+function denyWire(reason) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
   };
-  if (hookEventName) {
-    payload.hookSpecificOutput = { hookEventName };
-    if (hookEventName === "PreToolUse") {
-      payload.hookSpecificOutput.permissionDecision = "deny";
-      payload.hookSpecificOutput.permissionDecisionReason = GLOBAL_UNAVAILABLE;
-    }
-    if (hookEventName === "SessionStart") {
-      payload.hookSpecificOutput.additionalContext = GLOBAL_UNAVAILABLE;
-    }
-  }
+}
+
+function failClosed(input) {
+  const hookEventName = hookEventFromInput(input);
+  const payload = hookEventName === "PreToolUse" ? denyWire(GLOBAL_UNAVAILABLE) : {};
   process.stdout.write(JSON.stringify(payload) + "\\n");
-  // Codex consumes a semantic PreToolUse deny only from a successfully completed hook.
-  // Other hook/transport failures remain non-zero diagnostics.
+  // Codex 0.159.x consumes a semantic PreToolUse deny only from a successful hook.
+  // Other transport failures remain non-zero diagnostics and expose no Orchestra-internal fields.
   process.exitCode = hookEventName === "PreToolUse" ? 0 : 1;
 }
 
@@ -64,8 +64,11 @@ function parseProtocolResponse(value, hookEventName) {
     if (output !== undefined) {
       if (!output || typeof output !== "object" || Array.isArray(output)) return false;
       if (output.hookEventName !== hookEventName) return false;
-      if (hookEventName === "PreToolUse"
-        && output.permissionDecision !== (decoded.ok ? "allow" : "deny")) return false;
+      if (hookEventName === "PreToolUse") {
+        if (output.permissionDecision !== (decoded.ok ? "allow" : "deny")) return false;
+        if (!decoded.ok
+          && (typeof output.permissionDecisionReason !== "string" || !output.permissionDecisionReason.trim())) return false;
+      }
       if (hookEventName === "SessionStart" && decoded.ok && typeof output.additionalContext !== "string") return false;
     } else if (hookEventName === "PreToolUse" || (hookEventName === "SessionStart" && decoded.ok)) {
       return false;
@@ -74,6 +77,33 @@ function parseProtocolResponse(value, hookEventName) {
   } catch {
     return false;
   }
+}
+
+function projectProviderWire(value, hookEventName) {
+  const decoded = JSON.parse(value);
+  const output = decoded.hookSpecificOutput;
+
+  if (hookEventName === "PreToolUse") {
+    if (output.permissionDecision === "deny") {
+      return denyWire(output.permissionDecisionReason);
+    }
+    // Codex 0.159.x does not support an explicit "allow" decision without updatedInput.
+    // A valid empty PreToolUse decision means continue with the original tool input.
+    return { hookSpecificOutput: { hookEventName: "PreToolUse" } };
+  }
+
+  if (hookEventName === "SessionStart" && output) {
+    return {
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: output.additionalContext,
+      },
+    };
+  }
+
+  // PostToolUse currently has no provider-facing control effect. Internal operation facts
+  // remain in the global control plane and must not leak into Codex's closed wire schema.
+  return {};
 }
 
 function providerExitCode(value, hookEventName, launcherCode) {
@@ -112,16 +142,11 @@ function invokeGlobalLauncher(input) {
 let input = "";
 for await (const chunk of process.stdin) input += chunk.toString();
 const result = await invokeGlobalLauncher(input);
-let hookEventName = null;
-try {
-  hookEventName = JSON.parse(input)?.hook_event_name ?? null;
-} catch {
-  // The global handler remains the authority for invalid provider payloads.
-}
+const hookEventName = hookEventFromInput(input);
 if (result.launchError || result.code === null || !parseProtocolResponse(result.stdout, hookEventName)) {
   failClosed(input);
 } else {
-  process.stdout.write(result.stdout);
+  process.stdout.write(JSON.stringify(projectProviderWire(result.stdout, hookEventName)) + "\\n");
   process.exitCode = providerExitCode(result.stdout, hookEventName, result.code);
 }
 `;
