@@ -45,15 +45,17 @@ Freeze the exact candidate head and collect the V2-11 readiness record. Do not c
 
 Use `v2/cutover/readiness-evidence.mjs` as the canonical V2-11 collection boundary.
 
-- `collectCutoverReadinessFragment(...)` executes factual probe functions and emits only records bound to the exact candidate `headSha` and Runtime Image ID supplied to the collector.
-- A probe result is promoted to `VERIFIED` only when it reports `ok: true`, the exact head/runtime identity, structured facts, and one or more sanitized evidence references. Caller-supplied booleans or prebuilt records are not probes and are not promoted.
-- Windows and POSIX runs may emit separate fragments. Independent Project runs may also emit separate fragments. `mergeCutoverReadinessEvidence(...)` combines only exact-identity fragments and fails closed on stale identity, invalid evidence refs, conflicting records, or fragment errors.
+- The release-facing collector is `collectCanonicalCutoverReadinessFragment(...)`. It accepts probe **descriptors**, not caller callbacks. Each descriptor points to a probe module that must be tracked and clean in Git at the exact candidate `headSha`.
+- A canonical probe module declares `orchestra.cutover-readiness-probe-module.v2`, registers the readiness family it can prove, and receives only the exact head/runtime identity plus JSON-safe target/configuration arguments. Its source SHA-256 is included in the sanitized evidence refs.
+- A probe result is promoted to `VERIFIED` only when it reports `ok: true`, the exact head/runtime identity, structured facts, and one or more sanitized evidence references. Arbitrary runtime functions, caller-supplied booleans, prebuilt records, untracked modules, dirty modules, and modules from another Git head are rejected.
+- Windows and POSIX runs may emit separate canonical fragments. Independent Project runs may also emit separate fragments. `mergeCanonicalCutoverReadinessEvidence(...)` accepts only canonical Git-bound fragments, combines only exact-identity evidence, and fails closed on stale identity, invalid evidence refs, conflicting records, probe errors, or noncanonical fragments.
+- `collectCutoverReadinessFragment(...)` and `mergeCutoverReadinessEvidence(...)` are low-level composition/test primitives. Their output alone is **not** sufficient provenance for release readiness and must not be used as a substitute for the canonical Git-bound path.
 - The `providers` readiness group is never accepted from a readiness fragment. It is derived only by the canonical six-scenario `evaluateProviderFieldEvidence(...)` evaluator for both Codex and Antigravity on the same exact head and Runtime Image.
-- The merged `evidence` object is then passed to the existing `evaluateCutoverReadiness(...)` authority. The collector may make readiness stricter when collection errors exist; it does not override or weaken the evaluator.
+- The merged `evidence` object is then passed to the existing `evaluateCutoverReadiness(...)` authority. Collection may make readiness stricter when collection/provenance errors exist; it does not override or weaken the evaluator.
 
-Do not hand-author `VERIFIED` readiness objects to bypass the collector. CI fixtures, mocks, direct adapter calls, operator attestations, historical provider records, or a previously green candidate are not substitutes for current factual probes.
+Do not hand-author `VERIFIED` readiness objects or ad-hoc probe callbacks to bypass the collector. CI fixtures, mocks, direct adapter calls, operator attestations, historical provider records, or a previously green candidate are not substitutes for current factual probes.
 
-A software change changes the candidate head. When the head changes, provider field evidence and readiness fragments from the previous head become historical immediately and must not be merged into the new candidate.
+A software or canonical-probe-module change changes the candidate head. When the head changes, provider field evidence and readiness fragments from the previous head become historical immediately and must not be merged into the new candidate.
 
 ## Cutover procedure
 
