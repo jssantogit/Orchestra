@@ -116,6 +116,37 @@ function projectMatchesRuntime(projectRecord, expectedRuntimeImageId) {
   return projectRecord?.runtime?.pinnedImage === expectedRuntimeImageId;
 }
 
+function inspectRegistryInFreshProcess(home, projectId) {
+  const registryModuleUrl = new URL('../global/project-registry.mjs', import.meta.url).href;
+  const script = [
+    'const module = await import(process.argv[1]);',
+    'const registry = module.createGlobalProjectRegistry({ home: process.argv[2] });',
+    'try {',
+    '  const project = registry.inspect(process.argv[3]);',
+    '  process.stdout.write(JSON.stringify(project));',
+    '} finally {',
+    '  registry.close();',
+    '}',
+  ].join('\n');
+  try {
+    const stdout = execFileSync(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      script,
+      registryModuleUrl,
+      home,
+      projectId,
+    ], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    return JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+}
+
 export async function registryPersistence({ expectedHeadSha, expectedRuntimeImageId, args } = {}) {
   const input = requireArgs(args, new Set(['home', 'projectId']), ['home', 'projectId']);
   let first;
@@ -134,19 +165,25 @@ export async function registryPersistence({ expectedHeadSha, expectedRuntimeImag
     reopened.close();
   }
 
-  const same = first !== null && second !== null && JSON.stringify(first) === JSON.stringify(second);
-  const ok = same && projectMatchesRuntime(second, expectedRuntimeImageId);
+  const sameAfterReopen = first !== null && second !== null && JSON.stringify(first) === JSON.stringify(second);
+  const freshProcess = inspectRegistryInFreshProcess(input.home, input.projectId);
+  const freshProcessVerified = first !== null
+    && freshProcess !== null
+    && JSON.stringify(first) === JSON.stringify(freshProcess);
+  const restartVerified = sameAfterReopen && freshProcessVerified;
+  const ok = restartVerified && projectMatchesRuntime(freshProcess, expectedRuntimeImageId);
   return result({
     ok,
     expectedHeadSha,
     expectedRuntimeImageId,
     kind: 'registry-persistence',
-    facts: { restartVerified: ok },
+    facts: { restartVerified, freshProcessVerified },
     snapshot: {
-      projectId: second?.projectId ?? null,
-      lineageId: second?.lineageId ?? null,
-      runtimeImageId: second?.runtime?.pinnedImage ?? null,
-      sameAfterReopen: same,
+      projectId: freshProcess?.projectId ?? null,
+      lineageId: freshProcess?.lineageId ?? null,
+      runtimeImageId: freshProcess?.runtime?.pinnedImage ?? null,
+      sameAfterReopen,
+      freshProcessVerified,
     },
   });
 }
