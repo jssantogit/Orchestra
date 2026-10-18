@@ -98,6 +98,7 @@ if (NODE_MAJOR < 24) {
       assert.deepEqual(fragment.errors, []);
       assert.equal(fragment.evidence.registryPersistence.status, 'VERIFIED');
       assert.equal(fragment.evidence.registryPersistence.facts.restartVerified, true);
+      assert.equal(fragment.evidence.registryPersistence.facts.freshProcessVerified, true);
       assert.equal(fragment.evidence.platforms[platformKey].facts.nativeVerified, true);
       assert.equal(fragment.evidence.projects[0].facts.projectId, fixture.project.projectId);
       assert.equal(fragment.evidence.projects[0].facts.lineageId, fixture.project.lineageId);
