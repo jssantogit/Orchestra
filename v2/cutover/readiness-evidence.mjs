@@ -307,6 +307,12 @@ async function canonicalProbeExecutor({
     return null;
   }
 
+  const repositoryDirty = git(resolvedPath.root, ['status', '--porcelain', '--untracked-files=all']);
+  if (!repositoryDirty.ok || repositoryDirty.stdout.length > 0) {
+    addUnique(errors, `${path}:source-repo-dirty`);
+    return null;
+  }
+
   let digest;
   let module;
   try {
