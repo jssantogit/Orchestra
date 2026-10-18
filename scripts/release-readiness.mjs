@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { validateCutoverReleaseEvidence } from "../v2/cutover/release-evidence.mjs";
+
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RUNTIMES = Object.freeze(["core", "codex", "antigravity"]);
 const REQUIRED_SCRIPTS = Object.freeze([
@@ -50,7 +52,14 @@ function packageGate(root, script) {
   };
 }
 
-export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion } = {}) {
+export function checkReleaseReadiness({
+  repoRoot = moduleRoot,
+  expectedVersion,
+  requireV2Cutover = false,
+  cutoverEvidence = null,
+  expectedHeadSha = null,
+  expectedRuntimeImageId = null,
+} = {}) {
   const root = resolve(repoRoot);
   const checks = [];
   let packageJson = null;
@@ -137,6 +146,28 @@ export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion }
     checks.push(check("docs:release-checklist", hasOperatorGate, hasOperatorGate ? "technical/operator gates separated" : "operator-gated stable release boundary missing"));
   }
 
+  if (requireV2Cutover) {
+    if (!cutoverEvidence) {
+      checks.push(check("v2:cutover-evidence", false, "required cutover evidence was not supplied"));
+    } else {
+      try {
+        const validation = validateCutoverReleaseEvidence(cutoverEvidence, {
+          expectedHeadSha,
+          expectedRuntimeImageId,
+        });
+        checks.push(check(
+          "v2:cutover-evidence",
+          validation.valid,
+          validation.valid ? "exact-head/runtime cutover evidence verified" : `invalid: ${validation.errors.join(", ")}`,
+        ));
+      } catch (error) {
+        checks.push(check("v2:cutover-evidence", false, error.message));
+      }
+    }
+  } else {
+    checks.push(check("v2:cutover-evidence", true, "not required by this readiness invocation"));
+  }
+
   const failures = checks.filter((item) => !item.ok);
   return {
     expectedVersion,
@@ -146,16 +177,46 @@ export function checkReleaseReadiness({ repoRoot = moduleRoot, expectedVersion }
   };
 }
 
-function versionArg(argv) {
-  const inline = argv.find((value) => value.startsWith("--expected-version=") || value.startsWith("--version="));
+function valueArg(argv, names) {
+  const inline = argv.find((value) => names.some((name) => value.startsWith(`${name}=`)));
   if (inline) return inline.slice(inline.indexOf("=") + 1);
-  const index = argv.findIndex((value) => value === "--version" || value === "--expected-version");
+  const index = argv.findIndex((value) => names.includes(value));
   return index >= 0 ? argv[index + 1] : null;
 }
 
+function versionArg(argv) {
+  return valueArg(argv, ["--expected-version", "--version"]);
+}
+
 function main() {
-  const expectedVersion = versionArg(process.argv.slice(2)) || readJson(join(moduleRoot, "package.json")).version;
-  const report = checkReleaseReadiness({ expectedVersion });
+  const argv = process.argv.slice(2);
+  const expectedVersion = versionArg(argv) || readJson(join(moduleRoot, "package.json")).version;
+  const requireV2Cutover = argv.includes("--require-v2-cutover") || process.env.ORCHESTRA_V2_REQUIRE_CUTOVER === "1";
+  const cutoverEvidencePath = valueArg(argv, ["--cutover-evidence"])
+    || process.env.ORCHESTRA_V2_CUTOVER_EVIDENCE
+    || null;
+  const expectedHeadSha = valueArg(argv, ["--expected-head"])
+    || process.env.ORCHESTRA_V2_EXPECTED_HEAD
+    || null;
+  const expectedRuntimeImageId = valueArg(argv, ["--expected-runtime-image"])
+    || process.env.ORCHESTRA_V2_EXPECTED_RUNTIME_IMAGE
+    || null;
+  let cutoverEvidence = null;
+  if (cutoverEvidencePath) {
+    try {
+      cutoverEvidence = readJson(resolve(cutoverEvidencePath));
+    } catch (error) {
+      cutoverEvidence = Object.freeze({ __readError: error.message });
+    }
+  }
+
+  const report = checkReleaseReadiness({
+    expectedVersion,
+    requireV2Cutover,
+    cutoverEvidence,
+    expectedHeadSha,
+    expectedRuntimeImageId,
+  });
   for (const item of report.checks) {
     console.log(`${item.ok ? "PASS" : "FAIL"} ${item.id}${item.detail ? ` — ${item.detail}` : ""}`);
   }
