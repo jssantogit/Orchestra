@@ -44,7 +44,9 @@ function failClosed(input) {
     }
   }
   process.stdout.write(JSON.stringify(payload) + "\\n");
-  process.exitCode = 1;
+  // Codex consumes a semantic PreToolUse deny only from a successfully completed hook.
+  // Other hook/transport failures remain non-zero diagnostics.
+  process.exitCode = hookEventName === "PreToolUse" ? 0 : 1;
 }
 
 function parseProtocolResponse(value, hookEventName) {
@@ -72,6 +74,17 @@ function parseProtocolResponse(value, hookEventName) {
   } catch {
     return false;
   }
+}
+
+function providerExitCode(value, hookEventName, launcherCode) {
+  if (hookEventName !== "PreToolUse") return launcherCode;
+  try {
+    const decision = JSON.parse(value)?.hookSpecificOutput?.permissionDecision;
+    if (decision === "allow" || decision === "deny") return 0;
+  } catch {
+    // parseProtocolResponse already guards this path; retain launcher status defensively.
+  }
+  return launcherCode;
 }
 
 function invokeGlobalLauncher(input) {
@@ -109,7 +122,7 @@ if (result.launchError || result.code === null || !parseProtocolResponse(result.
   failClosed(input);
 } else {
   process.stdout.write(result.stdout);
-  process.exitCode = result.code;
+  process.exitCode = providerExitCode(result.stdout, hookEventName, result.code);
 }
 `;
 }
