@@ -53,15 +53,19 @@ function makeHookEntry(eventName, command, commandWindows) {
     commandWindows,
     timeout: 10,
   };
+  if (eventName === "SessionStart") return hook;
   return {
-    ...(eventName === "PreToolUse" || eventName === "PostToolUse" ? { matcher: "*" } : {}),
+    matcher: "*",
     hooks: [hook],
   };
 }
 
-function hasHook(entries, command, commandWindows) {
-  return entries.some((entry) => Array.isArray(entry?.hooks)
-    && entry.hooks.some((hook) => hook?.command === command && hook?.commandWindows === commandWindows));
+function hasHook(entries, eventName, command, commandWindows) {
+  const matches = (hook) => hook?.type === "command"
+    && hook.command === command && hook.commandWindows === commandWindows;
+  return entries.some((entry) => eventName === "SessionStart"
+    ? matches(entry)
+    : entry?.matcher === "*" && Array.isArray(entry.hooks) && entry.hooks.some(matches));
 }
 
 function readHooksConfig(path) {
@@ -175,7 +179,7 @@ export async function installAntigravityV2Shim({
     if (!Array.isArray(entries)) {
       throw shimError("ANTIGRAVITY_V2_HOOKS_CONFIG_INVALID", `Existing Antigravity ${eventName} hooks must be an array.`);
     }
-    if (!hasHook(entries, artifacts.command, artifacts.commandWindows)) {
+    if (!hasHook(entries, eventName, artifacts.command, artifacts.commandWindows)) {
       group[eventName] = [...entries, ...generatedEntries];
     } else {
       group[eventName] = entries;

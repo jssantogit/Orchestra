@@ -1368,6 +1368,27 @@ test("Antigravity v2 shim installs only registered-project transport files and f
 
     assert.equal(installed.ok, true);
     assert.deepEqual([...installed.files].sort(), [".agents/hooks.json", ".agents/orchestra-v2-hook.mjs"]);
+    const hooksPath = join(cwd, ".agents", "hooks.json");
+    const hooks = JSON.parse(await readFile(hooksPath, "utf8"));
+    const userGroup = { SessionStart: [{ type: "command", command: "user-start", timeout: 5 }] };
+    const userHandler = { type: "command", command: "project-start", timeout: 5 };
+    hooks["user-hooks"] = userGroup;
+    hooks["orchestra-v2-global"].SessionStart.unshift(userHandler);
+    await writeFile(hooksPath, JSON.stringify(hooks));
+    await installAntigravityV2Shim({
+      registry,
+      projectId: project.projectId,
+      targetDir: cwd,
+      launcherPath,
+      nodePath: process.execPath,
+    });
+    const reinstalledHooks = JSON.parse(await readFile(hooksPath, "utf8"));
+    assert.deepEqual(reinstalledHooks, hooks);
+    assert.deepEqual(reinstalledHooks["user-hooks"], userGroup);
+    assert.deepEqual(reinstalledHooks["orchestra-v2-global"].SessionStart[0], userHandler);
+    assert.equal(reinstalledHooks["orchestra-v2-global"].SessionStart.length, 2);
+    assert.equal(reinstalledHooks["orchestra-v2-global"].PreToolUse.length, 1);
+    assert.equal(reinstalledHooks["orchestra-v2-global"].PostToolUse.length, 1);
     assert.equal(existsSync(join(cwd, ".agents", "skills")), false);
     assert.equal(existsSync(join(cwd, ".agents", "state")), false);
     const shimPath = join(cwd, ".agents", "orchestra-v2-hook.mjs");
