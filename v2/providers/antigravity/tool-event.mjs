@@ -63,6 +63,12 @@ export function normalizeAntigravityToolEvent(providerPayload = {}) {
     record(providerPayload.tool_call),
   ];
   const toolCallId = toolCorrelationId(providerPayload, calls);
+  const hasStepIdx = Object.hasOwn(providerPayload, "stepIdx");
+  if (hasStepIdx && (!Number.isSafeInteger(providerPayload.stepIdx) || providerPayload.stepIdx < 0)) {
+    const error = new TypeError("Antigravity stepIdx must be a non-negative safe integer");
+    error.code = "ANTIGRAVITY_TOOL_STEP_INDEX_INVALID";
+    throw error;
+  }
   const eventType = eventTypeFor(providerPayload);
   const toolName = toolNameFor(providerPayload, calls);
 
@@ -76,6 +82,7 @@ export function normalizeAntigravityToolEvent(providerPayload = {}) {
 
   return Object.freeze({
     eventType,
+    ...(hasStepIdx ? { stepIdx: providerPayload.stepIdx } : {}),
     operation,
     sideEffectClass,
     factualIds: Object.freeze({

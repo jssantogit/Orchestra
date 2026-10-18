@@ -42,6 +42,13 @@ function hash(value) {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
+function correlationHashForEvent(event) {
+  if (event.stepIdx !== undefined) {
+    return hash(`antigravity-step-v1:${event.factualIds.actorIdHash}:${event.stepIdx}`);
+  }
+  return event.factualIds.toolCallId ? hash(event.factualIds.toolCallId) : null;
+}
+
 function addMilliseconds(value, milliseconds) {
   return new Date(Date.parse(value) + milliseconds).toISOString();
 }
@@ -55,16 +62,19 @@ function classifyToolResult(payload) {
   const hasCamelExitCode = Object.hasOwn(payload, "exitCode");
   const hasExitCode = hasSnakeExitCode || hasCamelExitCode;
   const exitCode = hasSnakeExitCode ? payload.exit_code : payload.exitCode;
+  const outcomes = [];
 
+  if (Object.hasOwn(payload, "error")) {
+    if (typeof payload.error !== "string") return null;
+    outcomes.push(payload.error.length === 0 ? "SUCCEEDED" : "FAILED");
+  }
   if (hasErrorFlag && typeof errorFlag !== "boolean") return null;
   if (hasExitCode && (!Number.isSafeInteger(exitCode) || exitCode < 0)) return null;
   if (hasSnakeErrorFlag && hasCamelErrorFlag && payload.is_error !== payload.isError) return null;
   if (hasSnakeExitCode && hasCamelExitCode && payload.exit_code !== payload.exitCode) return null;
-  if (hasErrorFlag && hasExitCode && errorFlag === false && exitCode !== 0) return null;
-  if (hasErrorFlag && hasExitCode && errorFlag === true && exitCode === 0) return null;
-  if (errorFlag === true || (hasExitCode && exitCode > 0)) return "FAILED";
-  if (errorFlag === false || (hasExitCode && exitCode === 0)) return "SUCCEEDED";
-  return null;
+  if (hasErrorFlag) outcomes.push(errorFlag ? "FAILED" : "SUCCEEDED");
+  if (hasExitCode) outcomes.push(exitCode === 0 ? "SUCCEEDED" : "FAILED");
+  return outcomes.length > 0 && outcomes.every((outcome) => outcome === outcomes[0]) ? outcomes[0] : null;
 }
 
 function authorityActor(actor, observedAt) {
@@ -183,7 +193,8 @@ export function createAntigravityHookHandler({
     }
 
     const isReadOnly = event.sideEffectClass === "READ_ONLY";
-    if (!isReadOnly && !event.factualIds.toolCallId) {
+    const correlationHash = correlationHashForEvent(event);
+    if (!isReadOnly && !correlationHash) {
       return preToolUseResponse(false, "ANTIGRAVITY_TOOL_CORRELATION_REQUIRED", { projectId: project.projectId });
     }
 
@@ -209,7 +220,6 @@ export function createAntigravityHookHandler({
       return preToolUseResponse(true, null, { projectId: project.projectId });
     }
 
-    const correlationHash = hash(event.factualIds.toolCallId);
     const existingCorrelation = registry.state.operationCorrelations.get({
       provider: "antigravity",
       projectId: project.projectId,
@@ -332,19 +342,26 @@ export function createAntigravityHookHandler({
       return result(false, error.code || "ANTIGRAVITY_HOOK_PAYLOAD_INVALID");
     }
     if (event.eventType !== "TOOL_RESULT") return result(false, "ANTIGRAVITY_HOOK_EVENT_UNSUPPORTED");
-    if (event.sideEffectClass === "READ_ONLY") return result(true, null, { readOnly: true });
-    if (!event.factualIds.toolCallId) return result(false, "ANTIGRAVITY_TOOL_OPERATION_NOT_FOUND");
+    const correlationHash = correlationHashForEvent(event);
+    if (!correlationHash) {
+      return event.sideEffectClass === "READ_ONLY"
+        ? result(true, null, { readOnly: true })
+        : result(false, "ANTIGRAVITY_TOOL_OPERATION_NOT_FOUND");
+    }
 
     const project = await resolveProject(payload, cwd);
     if (!project) return result(false, "PROJECT_NOT_REGISTERED", { registered: false });
 
-    const correlationHash = hash(event.factualIds.toolCallId);
     const correlation = registry.state.operationCorrelations.get({
       provider: "antigravity",
       projectId: project.projectId,
       correlationHash,
     });
-    if (!correlation) return result(false, "ANTIGRAVITY_TOOL_OPERATION_NOT_FOUND", { projectId: project.projectId });
+    if (!correlation) {
+      return event.sideEffectClass === "READ_ONLY"
+        ? result(true, null, { readOnly: true })
+        : result(false, "ANTIGRAVITY_TOOL_OPERATION_NOT_FOUND", { projectId: project.projectId });
+    }
     if (correlation.provider !== "antigravity" || correlation.projectId !== project.projectId
       || correlation.correlationHash !== correlationHash || correlation.actorIdHash !== actor.actorIdHash) {
       return result(false, "ANTIGRAVITY_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });

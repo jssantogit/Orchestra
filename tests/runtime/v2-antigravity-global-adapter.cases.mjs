@@ -760,6 +760,33 @@ test("native Antigravity mutation correlates by actor and step ahead of call IDs
   }
 });
 
+test("native Antigravity PostToolUse correlates mutation by step even when tool name looks read-only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-native-post-read-name-"));
+  try {
+    const home = join(root, "home");
+    const { cwd } = await prepareProject({ root, home });
+    const conversationId = "native-post-read-name-actor";
+    await invokeAntigravityHook({ home, cwd, payload: { hookEventName: "SessionStart", conversationId } });
+
+    const started = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PreToolUse", conversationId, stepIdx: 19,
+      toolCall: { name: "write_to_file", args: { TargetFile: "step-read-name.txt" } },
+    } });
+    assert.equal(started.payload.ok, true, JSON.stringify(started.payload));
+
+    const terminal = await invokeAntigravityHook({ home, cwd, payload: {
+      hookEventName: "PostToolUse", conversationId, stepIdx: 19, error: "",
+      toolCall: { name: "read_file", args: { path: "step-read-name.txt" } },
+    } });
+    assert.equal(terminal.payload.ok, true, JSON.stringify(terminal.payload));
+    assert.equal(terminal.payload.operation.operationId, started.payload.operation.operationId);
+    assert.equal(terminal.payload.operation.workflowState, "SUCCEEDED");
+    assert.equal(terminal.payload.operation.liveness, "TERMINAL");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("native Antigravity step correlation separates actors and remains project scoped", async () => {
   const root = await mkdtemp(join(tmpdir(), "orchestra-antigravity-native-isolation-"));
   try {
