@@ -58,6 +58,20 @@ Do not hand-author `VERIFIED` readiness objects or ad-hoc probe callbacks to byp
 
 A software or canonical-probe-module change changes the candidate head. When the head changes, provider field evidence and readiness fragments from the previous head become historical immediately and must not be merged into the new candidate.
 
+## Native RSI replay (PR #71 candidate)
+
+The RSI group is now fail-closed on **Home-persisted native receipts**, not arbitrary policy JSON. The canonical `rsiReplay` descriptor accepts only `{home, policyId, revision}` and derives TRAIN/EVALUATE/HOLDOUT from trusted registered Project lineages with a fixed source-controlled cohort seed and gate. The expected Runtime Image is passed by the canonical collector, never by a descriptor claim.
+
+Eligible observations come from real Codex/Antigravity mutation hooks. The pre-hook captures actual bounded legal choices, Work generation, Runtime Image, Operation and provider correlation; the terminal hook only records outcomes the official Work/Operation authority has terminalized. UNKNOWN terminal states, re-used receipt refs, missing provenance and historical PROJECT Experience without decision context cannot become learned policies.
+
+A separate, explicit command may persist a derived candidate **without activating it**:
+
+`node v2/rsi/native-train-cli.mjs --home <OrchestraHome> --runtime-image <exactImage> --policy-id <id> --revision <n>`
+
+The native TRAIN derivation and receipt must exist **before** collecting the `rsiReplay` fragment. The cutover probe is strictly read-only; it recomputes source digests and holds out independently observed Project lineages. Passing regression tests is not proof of actual native training.
+
+**Nontrivial-choice gate:** The current native provider mutation hooks expose only `DIRECT_WORK`. A one-route choice is not a learned optimization; training explicitly refuses `RSI_TRAIN_CHOICE_SPACE_INSUFFICIENT`. No one may declare RSI VERIFIED until an actual authoritative executor supports and observes at least two simultaneously legal choices, with the selected one correlated to factual outcome. Do not label `DELEGATED` legal unless it is truly available under immutable governance. After any new software commit, old HEAD-bound Runtime Image/provider/field evidence is historical.
+
 ## Cutover procedure
 
 1. **Record the candidate identity.** Record exact branch/head, Runtime Image ID, canonical CI run IDs, provider field-evidence references, two independent Project lineage IDs, and self-host result.

@@ -183,6 +183,50 @@ function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
+// GitHub job-step metadata can lag behind artifact upload for a few seconds.
+// Poll the exact workflow attempt; never accept missing, duplicate, failed,
+// finished, or differently associated job evidence as a successful proof.
+export async function waitForCanonicalPosixJob({
+  readJobs,
+  pause = delay,
+  attempts = 8,
+} = {}) {
+  if (typeof readJobs !== "function" || typeof pause !== "function"
+    || !Number.isInteger(attempts) || attempts < 1 || attempts > 10) {
+    throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "Invalid POSIX job verification request");
+  }
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const jobs = await readJobs();
+    if (!Array.isArray(jobs)) {
+      throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "GitHub returned invalid job metadata");
+    }
+    const matching = jobs.filter((job) => job.name === JOB_NAME);
+    if (matching.length > 1) {
+      throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "GitHub reported ambiguous POSIX jobs");
+    }
+    if (matching.length === 1) {
+      const job = matching[0];
+      if (job.workflow_name !== WORKFLOW_NAME || !["queued", "in_progress"].includes(job.status)) {
+        throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "The POSIX job belongs to the wrong workflow or has already finished");
+      }
+      const steps = Array.isArray(job.steps) ? job.steps : [];
+      if (steps.some((step) => step.conclusion && step.conclusion !== "success" && step.conclusion !== "skipped")) {
+        throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "POSIX evidence step failed");
+      }
+      if (job.status === "in_progress") {
+        try {
+          validatePosixJobObservation(job);
+          return job;
+        } catch (error) {
+          if (error.code !== "ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH") throw error;
+        }
+      }
+    }
+    if (attempt < attempts - 1) await pause(1_000);
+  }
+  throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "The exact POSIX job did not show successful evidence steps");
+}
+
 async function waitForArtifact(repoApi, runId, uploadId, artifactName, token) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const response = await githubJson(`${repoApi}/actions/runs/${runId}/artifacts?per_page=100`, token);
@@ -261,11 +305,12 @@ export async function verifyPosixReadinessArtifact({ repoRoot, expectedHeadSha, 
       pullRequestNumber: workflowIdentity.pullRequestNumber,
     },
   });
-  const jobsResponse = await githubJson(`${repoApi}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, token);
-  const jobs = Array.isArray(jobsResponse.jobs) ? jobsResponse.jobs : [];
-  const matchingJobs = jobs.filter((job) => job.name === JOB_NAME);
-  if (matchingJobs.length !== 1) throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "GitHub did not report exactly one canonical POSIX job");
-  validatePosixJobObservation(matchingJobs[0]);
+  const observedJob = await waitForCanonicalPosixJob({
+    readJobs: async () => {
+      const response = await githubJson(`${repoApi}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, token);
+      return response.jobs;
+    },
+  });
 
   const artifactName = `posix-readiness-${expectedHeadSha}-${runId}-${runAttempt}`;
   if (uploadName !== artifactName) {
@@ -312,7 +357,7 @@ export async function verifyPosixReadinessArtifact({ repoRoot, expectedHeadSha, 
       path: run.path,
       workflow_ref: workflowRef,
       job_id: workflowIdentity.jobId,
-      job_name: matchingJobs[0].name,
+      job_name: observedJob.name,
       pull_request_number: workflowIdentity.pullRequestNumber,
     };
     const expectedUpload = { id: uploadId, name: uploadName, digest: uploadDigest };
@@ -335,7 +380,7 @@ export async function verifyPosixReadinessArtifact({ repoRoot, expectedHeadSha, 
         attempt: String(run.run_attempt),
         event: run.event,
         path: run.path,
-        job: matchingJobs[0].name,
+        job: observedJob.name,
         status: run.status,
       },
       artifact: {

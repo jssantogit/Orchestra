@@ -149,6 +149,15 @@ export function createCodexHookHandler({
     }
   }
 
+  // Evidence-only journal; mutation authority is unchanged if telemetry is absent.
+  async function safeNative(method, args) {
+    try {
+      return registry.state.nativeRsi?.[method]?.(args) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async function resolveProject(payload, cwd) {
     try {
       return await registry.resolveWorkspace(
@@ -340,6 +349,11 @@ export function createCodexHookHandler({
     });
     if (!correlation.ok) return preToolUseResponse(false, correlation.reason, { projectId: project.projectId });
 
+    await safeNative("recordDecision", {
+      operationId,
+      providerFamily: "codex",
+      correlationHash,
+    });
     await safeRecord("recordProviderCapability", {
       project,
       workId: observation.observedWorkId,
@@ -421,6 +435,7 @@ export function createCodexHookHandler({
       return result(false, "CODEX_PROVIDER_EVENT_MISMATCH", { projectId: project.projectId });
     }
 
+    await safeNative("recordTerminal", { operationId: terminal.operation.operationId });
     await safeRecord("recordProviderTerminal", {
       project,
       operation: terminal.operation,

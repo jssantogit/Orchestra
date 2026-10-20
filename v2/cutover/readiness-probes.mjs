@@ -422,97 +422,57 @@ function validLineageList(value, minimum = 1) {
 }
 
 export async function rsiReplay({ expectedHeadSha, expectedRuntimeImageId, args } = {}) {
+  // Native RSI evidence is derived exclusively from the durable Home journal.
+  // Callers may locate a candidate, but may not supply TRAIN/EVALUATE/HOLDOUT,
+  // promotion thresholds, lineage counts or positive readiness facts.
   const input = requireArgs(
     args,
-    new Set([
-      'home', 'policyId', 'revision', 'trainLineageIds', 'evaluateLineageIds', 'holdoutLineageIds', 'gate',
-    ]),
+    new Set(['home', 'policyId', 'revision']),
     ['home', 'policyId'],
   );
-  if (!Number.isInteger(input.revision) || input.revision < 1
-    || !validLineageList(input.trainLineageIds, 2)
-    || !validLineageList(input.evaluateLineageIds)
-    || !validLineageList(input.holdoutLineageIds)
-    || !isObject(input.gate)) {
-    throw new TypeError('rsi replay args are invalid');
-  }
-  const declared = [
-    ...input.trainLineageIds,
-    ...input.evaluateLineageIds,
-    ...input.holdoutLineageIds,
-  ];
-  if (new Set(declared).size !== declared.length || new Set(declared).size < 4) {
-    throw new TypeError('rsi replay requires four independent lineages across phases');
+  if (!Number.isInteger(input.revision) || input.revision < 1) {
+    throw new TypeError('rsi replay revision is invalid');
   }
 
   const registry = await openRegistry(input.home);
-  let records;
-  let candidate;
+  let native;
   try {
-    records = await crossProjectExperience(registry);
     const { createLearnedPolicyStore } = await import('../rsi/policy-store.mjs');
+    const { verifyNativeRsiReplay } = await import('../rsi/native-pipeline.mjs');
     const policyStore = createLearnedPolicyStore({ persistence: registry.state.learnedPolicies });
-    candidate = policyStore.inspect(input.policyId, input.revision);
+    native = verifyNativeRsiReplay({
+      policyId: input.policyId,
+      revision: input.revision,
+      nativeStore: registry.state.nativeRsi,
+      policyStore,
+      runtimeImageId: expectedRuntimeImageId,
+    });
   } finally {
     registry.close();
   }
 
-  if (!candidate) {
-    return result({
-      ok: false,
-      expectedHeadSha,
-      expectedRuntimeImageId,
-      kind: 'rsi-replay',
-      facts: { trainVerified: false, evaluateVerified: false, holdoutVerified: false, lineageCount: 0 },
-      snapshot: { candidateFound: false },
-    });
-  }
-
-  const cohorts = {
-    train: cohort(records, input.trainLineageIds),
-    evaluate: cohort(records, input.evaluateLineageIds),
-    holdout: cohort(records, input.holdoutLineageIds),
-  };
-  const [{ evaluatePolicyCandidate }, { evaluateHoldoutReplay }] = await Promise.all([
-    import('../rsi/evaluation.mjs'),
-    import('../rsi/replay.mjs'),
-  ]);
-  const evaluated = evaluatePolicyCandidate({ candidate, cohorts, gate: input.gate });
-  const replay = evaluated.ok
-    ? evaluateHoldoutReplay({
-      candidate,
-      promotionEvidence: evaluated.evidence,
-      holdout: cohorts.holdout,
-      gate: input.gate,
-    })
-    : null;
-  const trainVerified = evaluated?.ok === true && evaluated?.passed === true;
-  const evaluateVerified = trainVerified;
-  const holdoutVerified = replay?.ok === true && replay?.passed === true;
-  const observedLineages = new Set([
-    ...cohorts.train.lineageIds,
-    ...cohorts.evaluate.lineageIds,
-    ...cohorts.holdout.lineageIds,
-  ]);
-  const ok = trainVerified && evaluateVerified && holdoutVerified && observedLineages.size >= 4;
-
+  const verified = native?.ok === true
+    && native?.trainVerified === true
+    && native?.evaluateVerified === true
+    && native?.holdoutVerified === true
+    && native?.lineageCount >= 4;
   return result({
-    ok,
+    ok: verified,
     expectedHeadSha,
     expectedRuntimeImageId,
     kind: 'rsi-replay',
     facts: {
-      trainVerified,
-      evaluateVerified,
-      holdoutVerified,
-      lineageCount: observedLineages.size,
+      trainVerified: verified,
+      evaluateVerified: verified,
+      holdoutVerified: verified,
+      lineageCount: verified ? native.lineageCount : 0,
     },
     snapshot: {
-      policyId: candidate.policyId,
-      revision: candidate.revision,
-      evaluationCode: evaluated?.code ?? null,
-      replayCode: replay?.code ?? null,
-      lineageCount: observedLineages.size,
+      policyId: input.policyId,
+      revision: input.revision,
+      evaluationCode: native?.code ?? 'RSI_NATIVE_UNAVAILABLE',
+      replayCode: verified ? 'RSI_NATIVE_REPLAY_PASSED' : null,
+      sourceDigest: native?.sourceDigest ?? null,
     },
   });
 }

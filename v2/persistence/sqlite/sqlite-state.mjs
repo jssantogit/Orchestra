@@ -3,6 +3,7 @@ import { fenceOperationsToActiveWork } from "../../state/active-work-operation-f
 import { trackOperationListing } from "../../state/operation-listing.mjs";
 import { createSqliteExperiencePersistence } from "./sqlite-experience.mjs";
 import { createSqliteLearnedPolicyPersistence } from "./sqlite-learned-policies.mjs";
+import { createNativeRsiObservationStore } from "./sqlite-rsi-native.mjs";
 import { fenceSqliteOperationTerminalization } from "./sqlite-operation-terminalization-fence.mjs";
 import { withSqliteProjectRuntimeUpdates } from "./sqlite-project-runtime.mjs";
 import { createSqliteRecoveryJournal } from "./sqlite-recovery-journal.mjs";
@@ -91,14 +92,28 @@ export function createSqliteState(options = {}) {
     learnedPolicies = createUnavailableLearnedPolicyPersistence(error);
   }
 
+  // Non-authoritative learning telemetry never blocks Work/Operation authority.
+  // A missing store means no RSI evidence, not an implied positive outcome.
+  let nativeRsi = null;
+  try {
+    nativeRsi = createNativeRsiObservationStore({
+      dbPath: options.dbPath,
+      state: core,
+    });
+  } catch {
+    nativeRsi = null;
+  }
+
   let closed = false;
   return Object.freeze({
     ...core,
     recoveries,
     experience,
     learnedPolicies,
+    nativeRsi,
     close() {
       if (closed) return;
+      nativeRsi?.close();
       learnedPolicies.close?.();
       experience.close?.();
       recoveries.close?.();
