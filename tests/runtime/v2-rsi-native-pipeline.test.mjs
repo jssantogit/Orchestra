@@ -164,3 +164,34 @@ test("EVALUATE/HOLDOUT must preserve a real alternative, not a forced singleton 
   assert.equal(result.ok, false);
   assert.equal(result.code, "RSI_NATIVE_EVALUATION_CHOICE_SPACE_INVALID");
 });
+
+test("pure RSI pipeline can consume a source-verified delegated route without claiming an executor exists", () => {
+  // This is an isolated reducer fixture; the Home journal still cannot emit
+  // DELEGATED until an actual governance-fenced delegated executor is wired.
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage, { route: "DELEGATED" }));
+  const x = backing(entries);
+  const result = trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.candidate.selectors.routePreference, "DELEGATED");
+  const verified = verifyNativeRsiReplay({
+    policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(verified.ok, true, JSON.stringify(verified));
+});
+
+test("pure RSI pipeline rejects unknown synthetic route classes even when caller marks them legal", () => {
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage, { route: "MAGIC_ROUTE" }));
+  for (const item of entries) {
+    item.decision.immutableRoutes.push("MAGIC_ROUTE");
+    item.decision.legalRoutes.push("MAGIC_ROUTE");
+  }
+  const x = backing(entries);
+  const result = trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_NATIVE_OBSERVATIONS_INVALID");
+});
