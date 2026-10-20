@@ -92,10 +92,18 @@ controlled worker fixture on the CI platforms. Their worker fixture is a
 - Integrate this bridge at an actual authenticated V2 provider/control-plane
   route-selection boundary. The current function is an internal service, not a
   published end-user command or a verified production orchestration workflow.
-- Record `DELEGATED` decision and terminal outcome in a **trusted global native
-  RSI journal** with the real worker's process evidence, artifact digest and
-  exact Operation. Today `nativeRsi.listObserved()` still only emits
-  `DIRECT_WORK`, correctly. Do not fabricate `legalRoutes` or replay results.
+- The Home-owned RSI journal now supports an **internal** delegated decision
+  receipt before execution and a terminal receipt afterward, linked to the
+  exact global Operation and a content-addressed artifact. On reopening Home,
+  `nativeRsi.listObserved()` rechecks the terminal Operation, immutable Work
+  identity, artifact bytes/digest and sanitized selected route; tampered blobs
+  cannot count toward training. Direct-only provider hooks still report only
+  `DIRECT_WORK`. This is integration capability, **not field provider evidence**.
+- Connect real authenticated provider/control-plane route selection to the
+  internal delegated service. Record factual executor readiness and verify
+  process provenance from actual native Codex/AGY operation, not a controlled
+  test fixture. `DELEGATED` must not be inferred merely from a requested route,
+  a fake executor or manually assembled Home contents.
 - Implement restart-safe owner liveness and recovery of interrupted delegated
   Operations/candidate uploads, with bounded terminal states and cleanup proof.
 - Supply source-bound, nontrivial TRAIN/EVALUATE/HOLDOUT across genuine Project
