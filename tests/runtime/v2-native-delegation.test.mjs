@@ -137,3 +137,34 @@ test("stale global session and forbidden mutation both fail closed", { skip: !su
   assert.equal(readFileSync(join(ctx.repoRoot, "tracked.txt"), "utf8"), "canonical\n");
   assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
 });
+
+test("revoked provider session after the Operation begins cannot execute the worker", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let ran = false;
+  const original = ctx.state.operations;
+  const state = {
+    ...ctx.state,
+    operations: {
+      ...original,
+      begin(input) {
+        const begun = original.begin(input);
+        if (begun.ok) {
+          const denied = ctx.state.sessionObservations.put({
+            provider: "codex", projectId: ctx.projectId, actorIdHash: ACTOR,
+            observedInstructionEpoch: 0, observedWorkId: null, observedGeneration: null,
+            observedAt: "2026-10-20T12:00:01.000Z",
+          });
+          assert.equal(denied.ok, true);
+        }
+        return begun;
+      },
+    },
+  };
+  const denied = await command(ctx, executor(async () => { ran = true; }), {
+    registry: { ...ctx.registry, state },
+  });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.code, "NATIVE_DELEGATION_OPERATION_STALE");
+  assert.equal(ran, false);
+  assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
+});
