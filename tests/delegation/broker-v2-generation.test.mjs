@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
-import { createDelegationBroker } from "../../runtime/delegation/broker.mjs";
+import { createDelegationBroker } from '../helpers/resource-governor.mjs';
 
 function git(cwd, ...args) {
   return execFileSync("git", args, {

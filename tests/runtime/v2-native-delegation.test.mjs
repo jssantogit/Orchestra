@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
 import { createBlobStore } from "../../v2/persistence/blob-store.mjs";
 import { executeNativeDelegatedWork } from "../../runtime/delegation/v2-native-execution.mjs";
+import { testResourceGovernor } from '../helpers/resource-governor.mjs';
 
 const supported = Number(process.versions.node.split(".")[0]) >= 22;
 const ACTOR = "sha256:" + "a".repeat(64);
@@ -99,9 +100,21 @@ function command(ctx, worker, overrides = {}) {
     registry: ctx.registry, projectId: ctx.projectId, workId: ctx.workId,
     generation: ctx.generation, actor: { provider: "codex", actorIdHash: ACTOR },
     request: ctx.request, executor: worker,
+    resourceGovernor: testResourceGovernor(),
     now, ...overrides,
   });
 }
+
+test('native resource admission denies before discovery, clone or mutable Operation', { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let discovered = false;
+  const worker = executor(() => assert.fail('worker must not start'));
+  worker.discover = async () => { discovered = true; throw new Error('unexpected discovery'); };
+  const result = await command(ctx, worker, { resourceGovernor: { reserve: () => ({ ok: false, reason: 'RESOURCE_BUDGET_UNAVAILABLE' }) } });
+  assert.equal(result.reason, 'RESOURCE_BUDGET_UNAVAILABLE');
+  assert.equal(discovered, false);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
 
 test("delegated V2 executes in isolated clone and binds sealed mutation bytes to Home/global Operation", { skip: !supported }, async (t) => {
   const ctx = await setup(t);

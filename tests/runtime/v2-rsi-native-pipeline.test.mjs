@@ -57,6 +57,14 @@ test("native trainer derives and persists only from TRAIN and replays on disjoin
   assert.equal(verified.lineageCount, 4);
 });
 
+test('oversized native campaigns fail closed instead of silently sampling or training', () => {
+  const data = Array.from({ length: 4097 }, (_, index) => row(`lineage-${index}`));
+  const x = backing(data);
+  const result = trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(result.code, 'RSI_NATIVE_OBSERVATION_LIMIT');
+  assert.equal(x.candidates.size, 0);
+});
+
 test("manual candidate without a native TRAIN receipt never passes the replay gate", () => {
   const x = backing(["a","b","c","d"].map(lineage => row(lineage)));
   x.policyStore.putCandidate({

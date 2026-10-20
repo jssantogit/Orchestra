@@ -69,6 +69,21 @@ function capture() {
   };
 }
 
+test('CLI preserves bounded resource deferral instead of reporting generic execution failure', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'orchestra-resource-cli-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, 'request.json');
+  writeFileSync(path, JSON.stringify(request()));
+  const stdout = capture(), stderr = capture();
+  const code = await runDelegationCli({ argv: ['--request', path, '--repo-root', root, '--generation', '7'], stdout, stderr,
+    createExecutor: () => ({ provider: 'antigravity' }),
+    createBroker: () => ({ executeDelegation: async () => ({ ok: false, status: 'DEFERRED', reason: 'RESOURCE_BUDGET_UNAVAILABLE' }) }),
+  });
+  assert.equal(code, 2);
+  assert.equal(stderr.value(), 'RESOURCE_BUDGET_UNAVAILABLE\n');
+  assert.equal(stdout.value(), '');
+});
+
 test("source CLI reads one canonical request file, supplies bounded CONTROL context, and emits exactly one result JSON", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "orchestra-delegation-cli-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

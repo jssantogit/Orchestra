@@ -502,23 +502,33 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
         if (updated.changes !== 1) return fail("RSI_NATIVE_TERMINAL_RACE");
         return { ok: true, replayed: false, outcomeRef: ref };
       },
-      listObserved({ runtimeImageId = null } = {}) {
+      listObserved({ runtimeImageId = null, maxRecords = 4096 } = {}) {
         assertOpen();
+        if (!Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > 4096) throw new TypeError('native RSI scan limit invalid');
         if (runtimeImageId !== null && (typeof runtimeImageId !== "string" || !runtimeImageId)) {
           throw new TypeError("native RSI runtime image filter invalid");
         }
         const observations = [];
-        for (const row of all.all()) {
+        let scanned = 0;
+        for (const row of all.iterate()) {
+          if (++scanned > 65536) throw new Error('RSI_NATIVE_SCAN_LIMIT');
           const receipt = read(row);
           if (runtimeImageId !== null && receipt?.decision.runtimeImageId !== runtimeImageId) continue;
           const item = verified(row);
-          if (item) observations.push(item);
+          if (item) {
+            if (observations.length >= maxRecords) throw new Error('RSI_NATIVE_OBSERVATION_LIMIT');
+            observations.push(item);
+          }
         }
-        for (const row of delegatedAll.all()) {
+        for (const row of delegatedAll.iterate()) {
+          if (++scanned > 65536) throw new Error('RSI_NATIVE_SCAN_LIMIT');
           const receipt = delegatedRead(row);
           if (runtimeImageId !== null && receipt?.decision.runtimeImageId !== runtimeImageId) continue;
           const item = verifiedDelegated(row);
-          if (item) observations.push(item);
+          if (item) {
+            if (observations.length >= maxRecords) throw new Error('RSI_NATIVE_OBSERVATION_LIMIT');
+            observations.push(item);
+          }
         }
         return observations.sort((a, b) => a.source.lineageId.localeCompare(b.source.lineageId)
           || a.source.operationId.localeCompare(b.source.operationId));

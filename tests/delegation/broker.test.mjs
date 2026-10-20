@@ -12,7 +12,9 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve, sep, isAbsolute } from "node:path";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
-import { createDelegationBroker } from "../../runtime/delegation/broker.mjs";
+import { createDelegationBroker as createBroker } from "../../runtime/delegation/broker.mjs";
+import { testResourceGovernor } from '../helpers/resource-governor.mjs';
+const createDelegationBroker = (options) => createBroker({ resourceGovernor: testResourceGovernor(), ...options });
 import { readDelegationRecord } from "../../runtime/delegation/store.mjs";
 
 function git(cwd, ...args) {
@@ -80,6 +82,20 @@ function requestFor(repoRoot, overrides = {}) {
     workspace: { ...base.workspace, ...(overrides.workspace ?? {}) },
   };
 }
+
+test('legacy broker pressure defers before provider discovery or workspace preparation', async (t) => {
+  const repoRoot = createRepo();
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  let calls = 0;
+  const broker = createDelegationBroker({
+    resourceGovernor: { reserve: () => ({ ok: false, reason: 'RESOURCE_BUDGET_UNAVAILABLE' }) },
+    executors: [{ provider: 'antigravity', discover: async () => { calls++; }, execute: async () => { calls++; } }],
+    workspace: { prepare: async () => { calls++; } },
+  });
+  const result = await broker.executeDelegation(requestFor(repoRoot), { repoRoot, generation: 7, actor: actor() });
+  assert.equal(result.reason, 'RESOURCE_BUDGET_UNAVAILABLE');
+  assert.equal(calls, 0);
+});
 
 function actor(overrides = {}) {
   return {

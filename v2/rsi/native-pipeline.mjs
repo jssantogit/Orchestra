@@ -66,10 +66,12 @@ function prepare(nativeStore, runtimeImageId = null) {
   }
   let observations;
   try {
-    observations = nativeStore.listObserved({ runtimeImageId });
-  } catch {
+    observations = nativeStore.listObserved({ runtimeImageId, maxRecords: 4096 });
+  } catch (error) {
+    if (error?.message === 'RSI_NATIVE_OBSERVATION_LIMIT' || error?.message === 'RSI_NATIVE_SCAN_LIMIT') return fail(error.message);
     return fail("RSI_NATIVE_STORE_INVALID");
   }
+  if (Array.isArray(observations) && observations.length > 4096) return fail('RSI_NATIVE_OBSERVATION_LIMIT');
   if (!Array.isArray(observations) || observations.length < 4
     || observations.some((item) => item?.schema !== "orchestra.rsi-decision-outcome.v1"
       || item.domainCohort !== DOMAIN || !KNOWN_ROUTES.has(item.decision?.selectedRoute)

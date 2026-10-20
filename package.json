@@ -51,6 +51,9 @@
     "handoff:orchestrator": "node runtimes/antigravity/.agents/skills/orchestra/orchestrator-handoff-cli.mjs",
     "handoff:codex": "node runtimes/codex/.codex/astra-orchestra/session-handoff-cli.mjs"
   },
+  "dependencies": {
+    "koffi": "3.3.3"
+  },
   "devDependencies": {
     "ajv": "^8.17.1"
   }
