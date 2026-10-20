@@ -380,3 +380,21 @@ if (NODE_MAJOR < 24) {
     }
   });
 }
+
+test("canonical native RSI probe refuses caller-authored cohort lineages and promotion gates", async () => {
+  const { rsiReplay } = await import("../../v2/cutover/readiness-probes.mjs");
+  await assert.rejects(
+    rsiReplay({
+      expectedHeadSha: "sha256:candidate",
+      expectedRuntimeImageId: "sha256:image",
+      args: {
+        home: "/unused", policyId: "native-policy", revision: 1,
+        trainLineageIds: ["fake-a", "fake-b"],
+        evaluateLineageIds: ["fake-c"],
+        holdoutLineageIds: ["fake-d"],
+        gate: { minTrainLineages: 2, requireSuccess: false, metrics: {} },
+      },
+    }),
+    /probe args contain unknown fields/,
+  );
+});
