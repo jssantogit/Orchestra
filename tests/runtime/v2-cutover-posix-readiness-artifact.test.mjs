@@ -6,6 +6,7 @@ import { validateCanonicalPosixReadinessArtifact } from '../../v2/cutover/posix-
 import {
   validateApiArtifactAssociation,
   validatePosixJobObservation,
+  waitForCanonicalPosixJob,
   validateRunAndPullRequestAssociation,
 } from '../../scripts/verify-posix-readiness-artifact.mjs';
 
@@ -374,4 +375,63 @@ test('POSIX consumer binds source head and synthetic merge SHA to the real PR AP
     pullRequest,
     expected,
   }), invalidCode('ORCHESTRA_POSIX_ARTIFACT_RUN_MISMATCH'));
+});
+
+test("POSIX job association polls only for eventually consistent exact-attempt completed evidence steps", async () => {
+  const ready = {
+    name: "POSIX Readiness (exact PR head)",
+    workflow_name: "V2 Persistence", status: "in_progress",
+    steps: [
+      { name: "Collect canonical POSIX readiness fragment", status: "completed", conclusion: "success" },
+      { name: "Upload sanitized POSIX readiness evidence", status: "completed", conclusion: "success" },
+    ],
+  };
+  let reads = 0, pauses = 0;
+  const job = await waitForCanonicalPosixJob({
+    readJobs: async () => {
+      reads += 1;
+      if (reads === 1) return [];
+      if (reads === 2) return [{ ...ready, steps: [ready.steps[0], { ...ready.steps[1], status: "in_progress", conclusion: null }] }];
+      return [ready];
+    },
+    pause: async () => { pauses += 1; },
+    attempts: 4,
+  });
+  assert.deepEqual(job, ready);
+  assert.equal(reads, 3);
+  assert.equal(pauses, 2);
+});
+
+test("POSIX job polling never accepts duplicate or incorrectly associated jobs", async () => {
+  const ready = {
+    name: "POSIX Readiness (exact PR head)",
+    workflow_name: "V2 Persistence", status: "in_progress",
+    steps: [
+      { name: "Collect canonical POSIX readiness fragment", status: "completed", conclusion: "success" },
+      { name: "Upload sanitized POSIX readiness evidence", status: "completed", conclusion: "success" },
+    ],
+  };
+  let duplicateReads = 0;
+  await assert.rejects(() => waitForCanonicalPosixJob({
+    readJobs: async () => { duplicateReads += 1; return [ready, { ...ready }]; },
+    pause: async () => {},
+    attempts: 3,
+  }), invalidCode("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH"));
+  assert.equal(duplicateReads, 1, "duplicate job identity must fail immediately");
+
+  await assert.rejects(() => waitForCanonicalPosixJob({
+    readJobs: async () => [{ ...ready, workflow_name: "Another workflow" }],
+    pause: async () => {},
+    attempts: 3,
+  }), invalidCode("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH"));
+});
+
+test("POSIX job polling remains fail-closed when the exact success evidence never appears", async () => {
+  let reads = 0;
+  await assert.rejects(() => waitForCanonicalPosixJob({
+    readJobs: async () => { reads += 1; return []; },
+    pause: async () => {},
+    attempts: 3,
+  }), invalidCode("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH"));
+  assert.equal(reads, 3);
 });
