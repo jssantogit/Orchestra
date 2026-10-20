@@ -19,6 +19,7 @@ import { authorizeCapability, authorizeAttach } from "../../v2/authority/authori
 import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
 import { createHostProcessIdentityReader } from "../../v2/liveness/local-process-probe.mjs";
 import { createManagedWorkspaceStore, resolveManagedWorkspacePaths } from "../../v2/workspaces/managed-workspace-store.mjs";
+import { createDelegatedChildTerminalStore } from "./v2-child-terminal-store.mjs";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const PROVIDERS = new Set(["codex", "antigravity"]);
@@ -341,6 +342,14 @@ export async function executeNativeDelegatedWork({
           let execution = null;
           let childOwnerRecorded = false;
           let childProofRejected = false;
+          let childTerminalRecorded = false;
+          let childTerminalRejected = false;
+          const childOwnerStore = createRuntimeOwnerStore({
+            rootDir: join(registry.paths.home, "runtime-owners"),
+          });
+          const childTerminalStore = createDelegatedChildTerminalStore({
+            home: registry.paths.home, runtimeOwnerStore: childOwnerStore,
+          });
           const onProcessSpawn = async ({ pid } = {}) => {
             let recorded = false;
             try {
@@ -356,16 +365,51 @@ export async function executeNativeDelegatedWork({
             }
             childOwnerRecorded = true;
           };
+          const onProcessExit = async ({ pid, exitCode, signal, timedOut } = {}) => {
+            try {
+              if (!childOwnerRecorded || childTerminalRecorded) {
+                throw new Error("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+              }
+              const owner = await childOwnerStore.read(
+                "owner_delegated_child_" + operationId,
+              );
+              if (!owner || owner.process.pid !== pid) {
+                throw new Error("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+              }
+              const record = {
+                schema: "orchestra.delegated-child-terminal.v1",
+                operationId, runtimeOwnerId: owner.runtimeOwnerId,
+                process: owner.process,
+                terminal: {
+                  exitCode, signal, timedOut,
+                  closedAt: new Date().toISOString(),
+                },
+              };
+              const stored = await childTerminalStore.register(record);
+              if (!stored?.ok || stored.replayed) {
+                throw new Error("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+              }
+              childTerminalRecorded = true;
+            } catch {
+              childTerminalRejected = true;
+              throw new Error("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+            }
+          };
           try {
             execution = await worker.execute({
               request, workerEnvelope: buildWorkerEnvelope(request),
-              workspace, onProcessSpawn,
+              workspace, onProcessSpawn, onProcessExit,
             });
           } catch { execution = null; }
-          // Controlled test executors may not spawn a real process. The real
-          // provider adapters MUST attest a child to count as native success.
+          // Controlled test executors may not spawn a real process. A real
+          // provider needs both independently attested birth and terminal
+          // events; never accept a worker that swallows a failed callback.
           if (childProofRejected || (executor === null && !childOwnerRecorded)) {
             result = fail("NATIVE_DELEGATION_CHILD_UNVERIFIED");
+          } else if (childTerminalRejected
+            || (childOwnerRecorded && !childTerminalRecorded)
+            || (executor === null && !childTerminalRecorded)) {
+            result = fail("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
           } else if (!validReport(execution, request.target.provider)) {
             result = fail("NATIVE_DELEGATION_WORKER_FAILED");
           } else {
