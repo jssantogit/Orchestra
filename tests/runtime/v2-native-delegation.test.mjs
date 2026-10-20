@@ -329,6 +329,17 @@ test("delegated LIVE Operation has a durable factual local-process owner for cra
     assert.equal(owner.kind, "LOCAL_PROCESS");
     assert.equal(owner.process.pid, process.pid);
     assert.match(owner.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
+    const { createLocalProcessOwnerProbe, createHostProcessIdentityReader } =
+      await import("../../v2/liveness/local-process-probe.mjs");
+    const { createOperationLivenessService } =
+      await import("../../v2/liveness/operation-liveness-service.mjs");
+    const service = createOperationLivenessService({
+      runtimeOwnerStore: store,
+      ownerProbe: createLocalProcessOwnerProbe({ readProcessIdentity: createHostProcessIdentityReader() }),
+    });
+    const assessment = await service.assess(op);
+    assert.equal(assessment.liveness, "LIVE", JSON.stringify(assessment));
+    assert.equal(assessment.reason, "OWNER_MATCH_HEARTBEAT_FRESH");
     writeFileSync(join(path, "tracked.txt"), "delegated\\n");
   }));
   assert.equal(result.ok, true, JSON.stringify(result));
