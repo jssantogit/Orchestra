@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -16,6 +16,8 @@ import { readDelegationGitStdout } from "./git-boundary.mjs";
 import { createAntigravityDelegationExecutor } from "../../providers/antigravity/delegation-executor.mjs";
 import { createCodexDelegationExecutor } from "../../providers/codex/delegation-executor.mjs";
 import { authorizeCapability, authorizeAttach } from "../../v2/authority/authority.mjs";
+import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
+import { createHostProcessIdentityReader } from "../../v2/liveness/local-process-probe.mjs";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const PROVIDERS = new Set(["codex", "antigravity"]);
@@ -52,6 +54,28 @@ function validReport(result, target) {
     && new Set(report.evidenceRefs).size === report.evidenceRefs.length
     && report.evidenceRefs.every((x) => typeof x === "string" && x.length > 0 && x.length <= 512);
 }
+// A real birth identity is required. A PID alone can be reused after a
+// crash and must not be promoted to operation-liveness proof.
+async function registerDelegationProcessOwner(home, operationId, registeredAt) {
+  let identity;
+  try { identity = await createHostProcessIdentityReader()(process.pid); }
+  catch { return null; }
+  if (identity?.status !== "PRESENT" || !identity.processIdentity) return null;
+  const ownerId = "owner_delegated_" + randomUUID();
+  const record = {
+    schema: "orchestra.runtime-owner.v2",
+    runtimeOwnerId: ownerId, operationId, kind: "LOCAL_PROCESS",
+    registeredAt,
+    process: { pid: process.pid, startIdentity: identity.processIdentity },
+    proof: { tokenHash: digest(randomBytes(32)) },
+  };
+  const store = createRuntimeOwnerStore({ rootDir: join(home, "runtime-owners") });
+  try {
+    const saved = await store.register(record);
+    return saved?.ok ? ownerId : null;
+  } catch { return null; }
+}
+
 function providerExecutor(target) {
   if (target === "antigravity") return createAntigravityDelegationExecutor();
   if (target === "codex") return createCodexDelegationExecutor();
@@ -145,7 +169,7 @@ export async function executeNativeDelegatedWork({
   const state = registry?.state;
   if (!state?.projects?.inspect || !state?.work?.current
     || !state?.operations?.begin || !state?.operations?.inspect
-    || !state?.operations?.terminalize
+    || !state?.operations?.heartbeat || !state?.operations?.terminalize
     || !state?.sessionObservations?.get || !registry?.blobs?.putBytes
     || typeof registry.paths?.home !== "string") {
     return fail("NATIVE_DELEGATION_HOME_REQUIRED");
@@ -185,6 +209,9 @@ export async function executeNativeDelegatedWork({
 
   let workspace = null;
   let operation = null;
+  let heartbeatTimer = null;
+  let lastHeartbeatAt = null;
+  let heartbeatFailed = false;
   let result = fail("NATIVE_DELEGATION_EXECUTION_FAILED");
   let succeeded = false;
   try {
@@ -198,14 +225,19 @@ export async function executeNativeDelegatedWork({
       const operationId = stableOperationId;
       const startedAt = now();
       const deadlineAt = new Date(Date.parse(startedAt) + request.limits.timeoutMs + 30_000).toISOString();
-      const begun = state.operations.begin({
+      const runtimeOwnerRef = await registerDelegationProcessOwner(
+        registry.paths.home, operationId, startedAt,
+      );
+      const begun = runtimeOwnerRef === null
+        ? { ok: false, reason: "NATIVE_DELEGATION_OWNER_UNVERIFIED" }
+        : state.operations.begin({
         expectedGeneration: generation,
         operation: {
           schema: "orchestra.operation.v2", operationId, projectId, workId, generation,
           kind: "DELEGATED_MUTATION", actorRef: actor.actorIdHash,
           capabilities: ["WORKSPACE_EDIT"], workflowState: "RUNNING",
           liveness: "LIVE", startedAt, heartbeatAt: startedAt, deadlineAt,
-          runtimeOwnerRef: null, workspaceRef: facts.project.workspace.canonicalRoot,
+          runtimeOwnerRef, workspaceRef: facts.project.workspace.canonicalRoot,
           resultRef: null,
         },
       });
@@ -219,6 +251,19 @@ export async function executeNativeDelegatedWork({
         result = fail("NATIVE_DELEGATION_ALREADY_RECORDED");
       } else {
         operation = begun.operation;
+        lastHeartbeatAt = operation.heartbeatAt;
+        heartbeatTimer = setInterval(() => {
+          // Heartbeats are authoritative only for this exact registered owner.
+          // If the lease is lost, terminal success must fail closed.
+          try {
+            const touched = state.operations.heartbeat({
+              operationId, runtimeOwnerRef, heartbeatAt: new Date().toISOString(),
+            });
+            if (touched?.ok) lastHeartbeatAt = touched.operation.heartbeatAt;
+            else heartbeatFailed = true;
+          } catch { heartbeatFailed = true; }
+        }, 10_000);
+        heartbeatTimer.unref?.();
         const rechecked = nativeFacts(state, projectId, workId, generation, actor, request);
         // The newly opened writer itself is the one expected LIVE mutation.
         const live = state.operations.listLive({ projectId, workId, generation });
@@ -297,6 +342,11 @@ export async function executeNativeDelegatedWork({
         result = fail("NATIVE_DELEGATION_CLEANUP_UNCERTAIN");
       }
     }
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (heartbeatFailed) {
+      succeeded = false;
+      result = fail("NATIVE_DELEGATION_OWNER_UNVERIFIED");
+    }
     if (operation) {
       const terminal = state.operations.terminalize({
         operationId: operation.operationId,
@@ -304,7 +354,7 @@ export async function executeNativeDelegatedWork({
         resultRef: succeeded
           ? "delegation-artifact:" + result.artifactRef
           : "native-delegation-uncertain:" + digest(Buffer.from(operation.operationId)),
-        expectedHeartbeatAt: operation.heartbeatAt,
+        expectedHeartbeatAt: lastHeartbeatAt ?? operation.heartbeatAt,
       });
       if (!terminal.ok) {
         result = fail("NATIVE_DELEGATION_TERMINAL_UNVERIFIED");
