@@ -302,3 +302,33 @@ quiescence. It is an internal diagnostic API, not a production control-plane
 route or an automatic recovery operation. The existing global reconciler
 continues to return UNKNOWN/human gate for delegated clone cleanup until
 independent complete lifecycle and ownership evidence is implemented.
+
+
+### Surviving POSIX process-group evidence — further hardening
+
+The bounded native process runner creates a detached process group on POSIX.
+\`runtime/delegation/v2-process-group-probe.mjs\` makes a strictly read-only
+\`kill(-pid, 0)\` existence observation, classifying \`PRESENT\`, \`ABSENT\`
+or \`UNAVAILABLE\`. Permission-denied is conservatively treated as present;
+Windows has no equivalent OS group ownership proof here and returns
+\`UNAVAILABLE\`.
+
+A **positive** surviving-group observation after the main child recorded a
+successful \`close\` now blocks delegated \`SUCCEEDED\` before the candidate can
+be sealed/promoted and preserves the registered clone for human-gated
+\`UNKNOWN\` handling. A real POSIX regression spawns a subprocess that exits
+healthy while an independently running grandchild remains in the same group;
+without this guard the controller incorrectly reported \`SUCCEEDED\`.
+
+The post-crash read-only inspector also records \`processGroupStatus\`. When
+the main child is absent, the terminal receipt is healthy and the original
+group still exists, it reports \`PROCESS_GROUP_STILL_ACTIVE\` rather than
+guessing descendants are gone. Even an \`ABSENT\` group **does not establish**
+that a descendant did not call \`setsid\`, detach, migrate elsewhere, or
+outlive the observation, nor does a surviving reused group ID authenticate
+which descendant remains. Both statuses retain \`humanGate:true\`,
+\`cleanupAuthorized:false\` and \`redispatchAuthorized:false\`.
+
+This is additional native POSIX evidence, not a Windows job-object
+implementation or full descendant containment. The release RSI and cutover
+gates remain unverified.
