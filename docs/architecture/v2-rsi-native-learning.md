@@ -273,3 +273,32 @@ A clean and verified child exit still follows the usual bounded cleanup
 path. This rule does not mean that an UNKNOWN child is definitely alive; it
 means that Orchestra has insufficient independent evidence to delete its
 workspace without risking loss of state.
+
+
+### Recovery inspection without cleanup authority (PR #72)
+
+\`runtime/delegation/v2-recovery-inspection.mjs\` exposes
+\`createDelegatedRecoveryInspection({home,state,readProcessIdentity}).inspect({operationId})\`
+for **read-only** post-crash diagnostics. It correlates the exact global
+\`DELEGATED_MUTATION\` Operation with its immutable Home-managed clone record,
+child \`LOCAL_PROCESS\` runtime owner, OS PID/birth identity observation, and
+immutable subprocess terminal receipt. It checks that the clone is a direct
+non-symlink child of the Home instances directory, and distinguishes a
+present/missing clone from an unverified or mismatched association.
+
+Its result always returns \`cleanupAuthorized:false\`,
+\`redispatchAuthorized:false\` and \`humanGate:true\`:
+- A matching live child is \`CHILD_STILL_LIVE\`.
+- Reused PID or unavailable birth probe is \`CHILD_LIFECYCLE_UNKNOWN\`.
+- An absent child without a cryptographically verified terminal receipt is
+  \`CHILD_TERMINAL_UNVERIFIED\`.
+- A verified nonzero, signalled or timed-out close is \`CHILD_EXIT_FAILED\`.
+- A verified healthy direct-child close is only
+  \`DESCENDANT_LIFECYCLE_UNPROVEN\`, not automatic clone cleanup.
+
+The inspector **does not** terminate processes, remove directories, close or
+reopen Operations, authorize replay, or assume process-group/descendant
+quiescence. It is an internal diagnostic API, not a production control-plane
+route or an automatic recovery operation. The existing global reconciler
+continues to return UNKNOWN/human gate for delegated clone cleanup until
+independent complete lifecycle and ownership evidence is implemented.
