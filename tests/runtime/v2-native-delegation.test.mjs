@@ -84,7 +84,7 @@ async function setup(t) {
 function executor(handler, { available = true } = {}) {
   return {
     provider: "antigravity",
-    async discover() { return { provider: "antigravity", available, capabilities: { implementation: true } }; },
+    async discover() { return { provider: "antigravity", available, version: "agy-test", capabilities: { implementation: true } }; },
     async execute({ workspace }) {
       await handler?.(workspace.path);
       return { ok: true, provider: "antigravity",
