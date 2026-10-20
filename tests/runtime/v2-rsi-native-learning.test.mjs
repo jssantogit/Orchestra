@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { deriveNativeRouteCandidate } from "../../v2/rsi/native-learning.mjs";
 
-const sha = (char) => `sha256:${char.repeat(64)}`;
+const sha = (value) => "sha256:" + createHash("sha256").update(value).digest("hex");
 function observation(lineageId, operationId, route = "DIRECT_WORK") {
   return {
     schema: "orchestra.rsi-decision-outcome.v1",
@@ -18,7 +19,10 @@ function observation(lineageId, operationId, route = "DIRECT_WORK") {
     },
     outcome: { success: true, retryCount: 0, durationMs: 250 },
     privacy: { containsRawProjectContent: false },
-    evidence: { choiceRef: sha("a"), outcomeRef: sha("b") },
+    evidence: {
+      choiceRef: sha(`${lineageId}:${operationId}:choice`),
+      outcomeRef: sha(`${lineageId}:${operationId}:outcome`),
+    },
   };
 }
 const metadata = Object.freeze({
@@ -101,4 +105,12 @@ test("TRAIN-only derivation is deterministic and does not persist or activate a 
   const reverse = deriveNativeRouteCandidate({ ...metadata, observations: facts().reverse() });
   assert.deepEqual(forward, reverse);
   assert.equal(Object.hasOwn(forward, "activated"), false);
+});
+
+test("the same native receipt cannot attest two independent Project lineages", () => {
+  const records = facts();
+  records[1].evidence.choiceRef = records[0].evidence.choiceRef;
+  const derived = deriveNativeRouteCandidate({ ...metadata, observations: records });
+  assert.equal(derived.ok, false);
+  assert.equal(derived.code, "RSI_TRAIN_RECEIPT_REUSED");
 });
