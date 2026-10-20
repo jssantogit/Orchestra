@@ -20,6 +20,7 @@ import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.m
 import { createHostProcessIdentityReader } from "../../v2/liveness/local-process-probe.mjs";
 import { createManagedWorkspaceStore, resolveManagedWorkspacePaths } from "../../v2/workspaces/managed-workspace-store.mjs";
 import { createDelegatedChildTerminalStore } from "./v2-child-terminal-store.mjs";
+import { readDelegatedProcessGroupStatus } from "./v2-process-group-probe.mjs";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const PROVIDERS = new Set(["codex", "antigravity"]);
@@ -420,13 +421,33 @@ export async function executeNativeDelegatedWork({
                 && terminal.terminal.exitCode === execution?.execution?.exitCode;
             } catch { childTerminalVerified = false; }
           }
+          // On POSIX the bounded runner starts a new process group. A
+          // surviving group after the direct child's verified close means
+          // a descendant may still mutate the clone. It must not be sealed
+          // or cleaned. An absent group does NOT prove escaped descendants
+          // terminated, and Windows cannot establish this probe.
+          let processGroupStillActive = false;
+          if (childTerminalVerified) {
+            try {
+              const childOwner = await childOwnerStore.read(
+                "owner_delegated_child_" + operationId,
+              );
+              processGroupStillActive = readDelegatedProcessGroupStatus(
+                childOwner.process.pid,
+              ) === "PRESENT";
+            } catch {
+              // Unknown group state remains non-authoritative; no cleanup
+              // or descendant quiescence claim is derived from absence.
+            }
+          }
           // A directly observed but unverified subprocess can outlive this
           // controller. Keep the registered Home clone intact for recovery,
           // rather than treating failed evidence as proof that it is safe
           // to delete the workspace.
           preserveUnverifiedChild = childProofRejected || childTerminalRejected
             || (childOwnerRecorded && !childTerminalVerified)
-            || (executor === null && !childTerminalVerified);
+            || (executor === null && !childTerminalVerified)
+            || processGroupStillActive;
           // Controlled test executors may not spawn a real process. A real
           // provider needs both independently attested birth and terminal
           // events; never accept a worker that swallows a failed callback.
@@ -436,6 +457,8 @@ export async function executeNativeDelegatedWork({
             || (childOwnerRecorded && !childTerminalVerified)
             || (executor === null && !childTerminalVerified)) {
             result = fail("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+          } else if (processGroupStillActive) {
+            result = fail("NATIVE_DELEGATION_PROCESS_GROUP_STILL_ACTIVE");
           } else if (!validReport(execution, request.target.provider)) {
             result = fail("NATIVE_DELEGATION_WORKER_FAILED");
           } else {
