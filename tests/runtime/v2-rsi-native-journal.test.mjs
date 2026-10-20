@@ -119,7 +119,7 @@ test("global SQLite state mounts the native journal on real persisted Project/Wo
     const operation = {
       schema: "orchestra.operation.v2", operationId: "op-native", projectId: project.projectId,
       workId: work.workId, generation: 0, kind: "DIRECT_MUTATION",
-      actorRef: "sha256:actor", capabilities: ["WORKSPACE_EDIT"],
+      actorRef: "sha256:" + "c".repeat(64), capabilities: ["WORKSPACE_EDIT"],
       workflowState: "RUNNING", liveness: "LIVE", startedAt: at, heartbeatAt: at,
       deadlineAt: new Date(Date.parse(at) + 60000).toISOString(),
       runtimeOwnerRef: "provider-owner:op-native",
