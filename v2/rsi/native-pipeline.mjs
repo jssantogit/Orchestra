@@ -15,6 +15,10 @@ export const NATIVE_RSI_GATE = Object.freeze({
 });
 const SEED = "orchestra-native-rsi-cohorts-v1";
 const DOMAIN = "software-engineering";
+// The reducer understands known route identities; it does not certify that
+// an executor exists. Only the source-verified Home journal may emit routes.
+// Current native hooks still attest DIRECT_WORK exclusively.
+const KNOWN_ROUTES = new Set(["DIRECT_WORK", "DELEGATED"]);
 
 function fail(code, stage = null) {
   return { ok: false, code, ...(stage ? { stage } : {}) };
@@ -68,7 +72,7 @@ function prepare(nativeStore, runtimeImageId = null) {
   }
   if (!Array.isArray(observations) || observations.length < 4
     || observations.some((item) => item?.schema !== "orchestra.rsi-decision-outcome.v1"
-      || item.domainCohort !== DOMAIN || item.decision?.selectedRoute !== "DIRECT_WORK"
+      || item.domainCohort !== DOMAIN || !KNOWN_ROUTES.has(item.decision?.selectedRoute)
       || !item.evidence?.choiceRef || !item.evidence?.outcomeRef)) {
     return fail("RSI_NATIVE_OBSERVATIONS_INVALID");
   }
