@@ -199,3 +199,37 @@ attribution and an operator-safe recovery protocol before an orphaned clone
 or operation is automatically cleaned, retried or marked ready. The native
 RSI field gate remains UNKNOWN until real provider executions and disjoint
 TRAIN/EVALUATE/HOLDOUT are independently evidenced.
+
+
+### Native subprocess close receipt (follow-up checkpoint)
+
+The bounded process runner now accepts \`onExit({pid,exitCode,signal,timedOut})\`.
+It invokes this callback only from its actual child-process \`close\` event,
+after the birth observer, and must await bounded evidence persistence before
+returning a result. Callback refusal or timeout fails the process instead of
+converting it to a successful report. The Codex and Antigravity executor
+adapters carry both onSpawn and onExit when the native V2 controller supplies
+them.
+
+\`runtime/delegation/v2-child-terminal-store.mjs\` creates an immutable,
+content-digest-checked \`orchestra.delegated-child-terminal.v1\` receipt
+beneath the global Home. The persisted record is keyed by the delegated
+Operation and includes exact child runtime-owner ID, birth identity, PID,
+exit code, signal, timeout status and close timestamp. The store checks the
+matching immutable child owner before write and read; races are idempotent
+only for identical receipts. Worker stdout/prompt/source bytes are excluded.
+
+The native V2 bridge requires the real process birth proof and independently
+recorded terminal close for built-in provider execution. It also **re-reads
+the exact terminal file after worker completion** and rejects mismatching
+PID, owner, result exit code, missing or tampered evidence. A worker report
+cannot override failed subprocess evidence or produce a verified native RSI
+terminal receipt from a corrupted close record.
+
+This is proof that the **direct child process closed**, not proof that
+descendants were terminated or that a transient clone is safe to delete after
+the controller crashes. The case where the controller itself dies between
+child close and durable receipt remains UNKNOWN. Recovery continues to
+preserve unknown clones and require independent investigation/approval.
+No field RSI readiness is claimed; the exact-HEAD Codex/AGY and independent
+multi-project TRAIN/EVALUATE/HOLDOUT field run remains missing.
