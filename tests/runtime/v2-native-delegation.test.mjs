@@ -495,6 +495,7 @@ test("rejected child birth proof cannot be swallowed by a delegated executor", {
 
 test("tampered native child-close receipt cannot turn a delegated process into RSI success", { skip: !supported || process.platform === "darwin" }, async t => {
   const ctx = await setup(t);
+  let isolatedClone = null;
   const { runBoundedProcess } = await import("../../runtime/delegation/process-runner.mjs");
   const { createDelegatedChildTerminalStore } = await import("../../runtime/delegation/v2-child-terminal-store.mjs");
   const { createRuntimeOwnerStore } = await import("../../v2/liveness/runtime-owner-store.mjs");
@@ -503,6 +504,7 @@ test("tampered native child-close receipt cannot turn a delegated process into R
     async discover() { return { provider: "antigravity", available: true,
       version: "test-native-child", capabilities: { implementation: true } }; },
     async execute({ workspace, onProcessSpawn, onProcessExit }) {
+      isolatedClone = workspace.path;
       const proc = await runBoundedProcess({
         command: process.execPath,
         args: ["-e", "process.stdin.once('data', () => process.exit(0))"],
@@ -528,6 +530,8 @@ test("tampered native child-close receipt cannot turn a delegated process into R
   assert.equal(result.ok, false);
   assert.equal(result.code, "NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
   assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+  assert.ok(isolatedClone && existsSync(isolatedClone),
+    "uncertain child terminal evidence must preserve the isolated clone");
 });
 
 
