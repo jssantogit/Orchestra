@@ -225,10 +225,15 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
         if (updated.changes !== 1) return fail("RSI_NATIVE_TERMINAL_RACE");
         return { ok: true, replayed: false, outcomeRef: ref };
       },
-      listObserved() {
+      listObserved({ runtimeImageId = null } = {}) {
         assertOpen();
+        if (runtimeImageId !== null && (typeof runtimeImageId !== "string" || !runtimeImageId)) {
+          throw new TypeError("native RSI runtime image filter invalid");
+        }
         const observations = [];
         for (const row of all.all()) {
+          const receipt = read(row);
+          if (runtimeImageId !== null && receipt?.decision.runtimeImageId !== runtimeImageId) continue;
           const item = verified(row);
           if (item) observations.push(item);
         }
