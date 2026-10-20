@@ -112,3 +112,33 @@ controlled worker fixture on the CI platforms. Their worker fixture is a
 
 **Current disposition: development integration slice only. RSI field gate
 remains UNKNOWN, CUTOVER_NOT_READY.**
+
+## Follow-up: delegated Operation crash/redispatch fence (PR #72)
+
+The native delegation bridge now derives an Operation identity from the immutable
+(Project ID, Work ID, generation, delegation ID) tuple. The Home SQLite
+`operations.begin` transaction remains the final concurrency fence. Once an
+Operation has been recorded, retries — even after success, UNKNOWN terminal,
+process restart, or a changed request body using the same delegation ID — must
+**not** execute another worker. A `NATIVE_DELEGATION_ALREADY_RECORDED`
+response is a fail-closed outcome, **not** an idempotent second success and not
+a request to release the mutation lock. A new generation requires the normal
+Work-control decision; a new delegation ID must be treated as a distinct
+operator-authorized action, not an automatic retry workaround.
+
+The bridge also records a birth-identity-bound LOCAL_PROCESS runtime owner in
+the Home owner store before opening the delegated Operation, and maintains
+heartbeats against that exact owner while the controller executes the worker.
+Missing process identity, heartbeat failure, or owner conflict cannot issue a
+successful delegated RSI receipt. Existing V2 liveness assessment can now
+observe the controller process as MATCH/ABSENT/MISMATCH/UNAVAILABLE instead of
+being forced into RUNTIME_OWNER_MISSING for every delegation.
+
+**This is NOT full interrupted-worker recovery**: the isolated clone must be
+registered durably and proven cleaned or preserved, and the child-provider
+lifecycle must be correlated independently before any automatic stale cleanup
+or retry is safe. A controlling process dying is not by itself proof that an
+external worker exited. The global reconciler's conservative UNKNOWN/human
+gates remain authoritative. The native RSI field gate remains unverified;
+software CI alone does not establish genuine legal route alternatives or
+independent TRAIN/EVALUATE/HOLDOUT field observations.
