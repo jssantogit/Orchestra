@@ -136,3 +136,42 @@ test("invalid limits and spawn failures fail closed", async () => {
     (error) => error?.code === "PROCESS_SPAWN_FAILED",
   );
 });
+
+
+test("bounded worker process awaits native PID observation before releasing stdin", async () => {
+  let witnessedPid = null;
+  const output = await runBoundedProcess({
+    command: process.execPath,
+    args: ["-e", "process.stdin.once('data', c => process.stdout.write('ready:'+c.toString()))"],
+    input: "authoritative-envelope",
+    timeoutMs: 3000,
+    maxOutputBytes: 1024,
+    async onSpawn({ pid }) {
+      assert.ok(Number.isInteger(pid) && pid > 0);
+      witnessedPid = pid;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    },
+  });
+  assert.ok(witnessedPid);
+  assert.equal(output.exitCode, 0);
+  assert.equal(output.stdout, "ready:authoritative-envelope");
+});
+
+test("rejected native child-process provenance aborts worker before stdin dispatch", async (t) => {
+  const root = tempRoot(t);
+  const target = join(root, "worker-side-effect.txt");
+  await assert.rejects(() => runBoundedProcess({
+    command: process.execPath,
+    args: ["-e",
+      "process.stdin.once('data', c => require('fs').writeFileSync(process.argv[1], c))",
+      target],
+    input: "must-not-be-released",
+    timeoutMs: 3000,
+    maxOutputBytes: 1024,
+    async onSpawn({ pid }) {
+      assert.ok(Number.isInteger(pid) && pid > 0);
+      throw new Error("NO_BIRTH_IDENTITY");
+    },
+  }), e => e?.code === "PROCESS_SPAWN_PROOF_FAILED");
+  assert.equal(existsSync(target), false);
+});
