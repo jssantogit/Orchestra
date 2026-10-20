@@ -354,3 +354,61 @@ test("delegated LIVE Operation persists an OS birth-bound owner and accepts matc
   assert.equal(typeof owner.process.startIdentity, "string");
   assert.ok(owner.process.startIdentity.length > 0);
 });
+
+
+test("delegated clone is recorded in Home before the worker and survives cleanup as audit evidence", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const { createManagedWorkspaceStore, resolveManagedWorkspacePaths } =
+    await import("../../v2/workspaces/managed-workspace-store.mjs");
+  const store = createManagedWorkspaceStore({ home: ctx.registry.paths.home });
+  let observed, scratch;
+  const result = await command(ctx, executor(async path => {
+    const operation = ctx.state.operations.listLive({ projectId: ctx.projectId })[0];
+    assert.equal(operation?.kind, "DELEGATED_MUTATION");
+    observed = await store.read("workspace:delegated:" + operation.operationId);
+    assert.ok(observed, "clone must be durable before provider process starts");
+    const { dirname, relative, isAbsolute } = await import("node:path");
+    scratch = dirname(path);
+    assert.equal(observed.schema, "orchestra.managed-workspace.v2");
+    assert.equal(observed.operationId, operation.operationId);
+    assert.equal(observed.projectId, ctx.projectId);
+    assert.equal(observed.workId, ctx.workId);
+    assert.equal(observed.generation, ctx.generation);
+    assert.equal(observed.root, scratch);
+    assert.equal(observed.kind, "TRANSIENT_GIT_CLONE");
+    const roots = resolveManagedWorkspacePaths({ home: ctx.registry.paths.home });
+    const rel = relative(roots.instancesRoot, observed.root);
+    assert.ok(rel && rel !== ".." && !rel.startsWith("..") && !isAbsolute(rel));
+    assert.equal(rel.includes("/") || rel.includes("\\"), false, "one managed instance directory");
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(existsSync(scratch), false, "normal cleanup removes only this sandbox");
+  assert.deepEqual(await store.read("workspace:delegated:" + result.operationId), observed);
+});
+
+test("a missing or rejected durable delegated clone association blocks worker dispatch", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const { createManagedWorkspaceStore } =
+    await import("../../v2/workspaces/managed-workspace-store.mjs");
+  const genuine = createManagedWorkspaceStore({ home: ctx.registry.paths.home });
+  let attempts = 0;
+  let workerCalls = 0;
+  const fakeStore = {
+    async register(record) {
+      attempts += 1;
+      assert.equal(record.kind, "TRANSIENT_GIT_CLONE");
+      return { ok: false, reason: "MANAGED_WORKSPACE_ID_CONFLICT" };
+    },
+    read: (...args) => genuine.read(...args),
+  };
+  const result = await command(ctx, executor(async () => { workerCalls++; }), {
+    managedWorkspaceStore: fakeStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_WORKSPACE_UNVERIFIED");
+  assert.equal(attempts, 1);
+  assert.equal(workerCalls, 0);
+  assert.equal(ctx.state.nativeRsi.listObserved().length, 0);
+  assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
+});
