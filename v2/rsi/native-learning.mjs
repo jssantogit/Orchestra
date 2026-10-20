@@ -96,6 +96,12 @@ export function deriveNativeRouteCandidate(input = {}) {
   if (input.observations.some((item) => !validObservation(item, input.domainCohort))) {
     return fail("RSI_TRAIN_OBSERVATION_INVALID");
   }
+  // Do not promote a tautology: observing the only possible action is not
+  // evidence that a learned preference improves a nontrivial policy choice.
+  if (input.observations.some((item) => item.decision.immutableRoutes.length < 2
+    || item.decision.legalRoutes.length < 2)) {
+    return fail("RSI_TRAIN_CHOICE_SPACE_INSUFFICIENT");
+  }
 
   const actual = new Set(input.observations.map((item) => item.source.lineageId));
   if (actual.size !== declared.size || [...actual].some((item) => !declared.has(item))) {
