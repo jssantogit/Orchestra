@@ -257,3 +257,19 @@ This prevents the previously reproduced false positive, but does not prove
 that the \`DIRECT_WORK\` alternative was genuinely available in production
 for every delegated decision or that all independent EVALUATE/HOLDOUT gates
 have been met. Field readiness remains \`UNKNOWN\`.
+
+
+### Fail-closed preservation when child-close proof fails
+
+If the delegated worker was spawned or birth observation was attempted, but
+the required terminal receipt is missing, rejected, corrupted or mismatched,
+the native V2 controller **does not invoke transient-clone cleanup**. It
+preserves the Home-managed clone and immutable association, refuses RSI
+success, and terminalizes the global Operation as \`UNKNOWN\`. A human-gated
+recovery must inspect the associated child lifecycle and clone before any
+cleanup or new Work-generation retry.
+
+A clean and verified child exit still follows the usual bounded cleanup
+path. This rule does not mean that an UNKNOWN child is definitely alive; it
+means that Orchestra has insufficient independent evidence to delete its
+workspace without risking loss of state.
