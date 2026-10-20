@@ -33,3 +33,22 @@ The old 27 sanitized Experience records across four lineages remain useful histo
 Use test-first changes and the V2 Ubuntu/Windows + V1 regression gates. Changes to software HEAD invalidate the previous HEAD-bound runtime/field/probe evidence. Run all 12 native provider scenarios and all factual readiness probes again **only after a final new HEAD / Runtime Image freeze**.
 
 Do not merge PR #70/#71, cut over production, publish, tag, migrate real Tsuzuki or remove V1 without operator authorization. Current #70 remains `CUTOVER_NOT_READY`; PR #71 is a bounded technical workstream only.
+
+## Implemented native journal and evaluator (PR #71)
+
+The global SQLite wrapper now provides `state.nativeRsi` for real Codex and Antigravity mutation hooks:
+
+1. After authorizing and persisting a Work/Operation + native correlation, PreToolUse records the selected direct route, the exact Work generation and image pin. The journal queries authoritative Project/Work/Operation and provider-correlation records rather than trusting hook payload fields.
+2. PostToolUse, **after official terminalization**, records the factual result. `UNKNOWN` is not an acceptable trained outcome. Failed native outcomes remain available to the evaluator rather than being silently filtered out.
+3. The journal is persisted in `rsi_native_observations` in Orchestra Home SQLite. It maintains immutable decision and terminal digests, rejects conflicting replays and rechecks the persisted operations when collecting cross-project observations.
+4. `v2/rsi/native-pipeline.mjs` constructs a sanitized DOMAIN view of native observations without rewriting Project Experience; deterministic lineage cohorts TRAIN/EVALUATE/HOLDOUT are derived by a source-controlled seed. It derives only from TRAIN, validates disjoint EVALUATE and HOLDOUT with fixed success/duration criteria, and persists a separately versioned receipt binding training sources to a candidate record.
+5. The canonical `rsiReplay` probe now accepts only `{home,policyId,revision}` and replays from Home with the exact expected Runtime Image; hand-authored cohort membership, gate thresholds and manually inserted candidates lacking native training receipts are rejected.
+6. The explicit training entrypoint is `node v2/rsi/native-train-cli.mjs --home <OrchestraHome> --runtime-image <exactImage> --policy-id <id> --revision <integer>`. It does not activate or deploy any learned policy.
+
+### Non-trivial choice prerequisite — **still blocking on current hooks**
+
+The currently verified native provider hooks only execute `DIRECT_WORK`. Their durable decision receipts therefore truthfully contain only that legal route. A single immutable legal choice is **not evidence of optimization**. `deriveNativeRouteCandidate` now fails with `RSI_TRAIN_CHOICE_SPACE_INSUFFICIENT` rather than learning a tautological policy from this one-route configuration.
+
+A future native execution selector must expose at least two **actually supported, immutable and permitted** routes at the same decision point, then bind the selected route to the terminal Operation. Do **not** hardcode `DELEGATED` as legal merely to make a test green; do not accept a caller-provided legal choice list at the release boundary. The route's real delegated executor and authority fencing must exist first. Both observational cohorts must execute the derived route, not just pass generic performance thresholds.
+
+**Status:** software pipeline implemented; current one-route field setup does not produce qualifying learning evidence. The RSI release field gate is not green. The new software HEAD invalidates old provider/runtime proofs; only a fresh native field campaign on the new HEAD can close readiness.
