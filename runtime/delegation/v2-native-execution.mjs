@@ -340,10 +340,18 @@ export async function executeNativeDelegatedWork({
           } else {
           let execution = null;
           let childOwnerRecorded = false;
+          let childProofRejected = false;
           const onProcessSpawn = async ({ pid } = {}) => {
-            if (childOwnerRecorded || !(await registerDelegationChildOwner(
-              registry.paths.home, operationId, pid,
-            ))) {
+            let recorded = false;
+            try {
+              if (!childOwnerRecorded) recorded = await registerDelegationChildOwner(
+                registry.paths.home, operationId, pid,
+              );
+            } catch {
+              recorded = false;
+            }
+            if (!recorded) {
+              childProofRejected = true;
               throw new Error("NATIVE_DELEGATION_CHILD_UNVERIFIED");
             }
             childOwnerRecorded = true;
@@ -356,7 +364,7 @@ export async function executeNativeDelegatedWork({
           } catch { execution = null; }
           // Controlled test executors may not spawn a real process. The real
           // provider adapters MUST attest a child to count as native success.
-          if (executor === null && !childOwnerRecorded) {
+          if (childProofRejected || (executor === null && !childOwnerRecorded)) {
             result = fail("NATIVE_DELEGATION_CHILD_UNVERIFIED");
           } else if (!validReport(execution, request.target.provider)) {
             result = fail("NATIVE_DELEGATION_WORKER_FAILED");
