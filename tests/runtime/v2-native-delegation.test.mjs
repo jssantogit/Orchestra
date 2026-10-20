@@ -490,3 +490,41 @@ test("rejected child birth proof cannot be swallowed by a delegated executor", {
   assert.equal(result.code, "NATIVE_DELEGATION_CHILD_UNVERIFIED");
   assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
 });
+
+
+test("tampered native child-close receipt cannot turn a delegated process into RSI success", { skip: !supported || process.platform === "darwin" }, async t => {
+  const ctx = await setup(t);
+  const { runBoundedProcess } = await import("../../runtime/delegation/process-runner.mjs");
+  const { createDelegatedChildTerminalStore } = await import("../../runtime/delegation/v2-child-terminal-store.mjs");
+  const { createRuntimeOwnerStore } = await import("../../v2/liveness/runtime-owner-store.mjs");
+  const result = await command(ctx, {
+    provider: "antigravity",
+    async discover() { return { provider: "antigravity", available: true,
+      version: "test-native-child", capabilities: { implementation: true } }; },
+    async execute({ workspace, onProcessSpawn, onProcessExit }) {
+      const proc = await runBoundedProcess({
+        command: process.execPath,
+        args: ["-e", "process.stdin.once('data', () => process.exit(0))"],
+        input: "envelope", cwd: workspace.path,
+        timeoutMs: 20000, maxOutputBytes: 4096,
+        onSpawn: onProcessSpawn, onExit: onProcessExit,
+      });
+      const op = ctx.state.operations.listLive({ projectId: ctx.projectId })[0];
+      const ownerStore = createRuntimeOwnerStore({
+        rootDir: join(ctx.registry.paths.home, "runtime-owners"),
+      });
+      const terminalStore = createDelegatedChildTerminalStore({
+        home: ctx.registry.paths.home, runtimeOwnerStore: ownerStore,
+      });
+      const path = terminalStore.pathFor(op.operationId);
+      writeFileSync(path, readFileSync(path, "utf8").replace('"exitCode":0', '"exitCode":7'));
+      writeFileSync(join(workspace.path, "tracked.txt"), "delegated\n");
+      return { ok: true, provider: "antigravity",
+        execution: { exitCode: proc.exitCode, durationMs: proc.durationMs },
+        report: { summary: "claimed success", findings: [], evidenceRefs: [] } };
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
