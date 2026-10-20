@@ -92,6 +92,16 @@ test('canonical collector executes only a tracked clean probe module at the exac
     assert.deepEqual(fragment.errors, []);
     assert.equal(fragment.probeSources.registryPersistence.modulePath, 'probe.mjs');
     assert.match(fragment.probeSources.registryPersistence.sourceDigest, /^sha256:[0-9a-f]{64}$/);
+
+    const merged = mergeCanonicalCutoverReadinessEvidence({
+      repoRoot: fixture.root,
+      expectedHeadSha: fixture.headSha,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+      fragments: [fragment],
+      providerFieldEvidence: {},
+    });
+    assert.deepEqual(merged.errors, []);
+    assert.equal(merged.evidence.registryPersistence.status, 'VERIFIED');
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -215,6 +225,44 @@ test('canonical merge refuses fragments produced through the unchecked compositi
 
     assert.equal(merged.readiness.ready, false);
     assert.ok(merged.errors.includes('fragment[0]:collectionMode'));
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('canonical merge rejects unchecked records even when caller adds canonical marker fields', async () => {
+  const fixture = makeProbeRepo();
+  try {
+    const unchecked = await collectCutoverReadinessFragment({
+      expectedHeadSha: fixture.headSha,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+      probes: {
+        registryPersistence: async () => ({
+          ok: true,
+          headSha: fixture.headSha,
+          runtimeImageId: RUNTIME_IMAGE,
+          facts: { restartVerified: true },
+          evidenceRefs: [`sha256:${'4'.repeat(64)}`],
+        }),
+      },
+    });
+    const forged = {
+      ...unchecked,
+      collectionMode: 'CANONICAL_GIT_PROBES',
+      probeSources: {},
+    };
+
+    const merged = mergeCanonicalCutoverReadinessEvidence({
+      repoRoot: fixture.root,
+      expectedHeadSha: fixture.headSha,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+      fragments: [forged],
+      providerFieldEvidence: {},
+    });
+
+    assert.equal(merged.evidence.registryPersistence, undefined);
+    assert.ok(merged.errors.some((error) => error.startsWith('fragment[0]:')));
+    assert.equal(merged.readiness.ready, false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

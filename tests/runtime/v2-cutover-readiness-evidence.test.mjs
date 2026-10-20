@@ -226,6 +226,47 @@ test('independent Windows/POSIX and Project fragments merge into the existing re
   assert.equal(result.evidence.platforms.posix.status, 'VERIFIED');
 });
 
+test('readiness rejects two Projects collected from different Orchestra Homes', async () => {
+  const common = await collectCutoverReadinessFragment({
+    expectedHeadSha: HEAD,
+    expectedRuntimeImageId: RUNTIME_IMAGE,
+    probes: {
+      ...scalarProbes(),
+      platforms: {
+        windows: async () => probeResult({ nativeVerified: true }),
+        posix: async () => probeResult({ nativeVerified: true }),
+      },
+      projects: [
+        async () => probeResult({
+          projectId: 'prj_alpha',
+          lineageId: 'lineage_alpha',
+          noFullLocalGovernanceRuntime: true,
+          homeIdentity: `sha256:${'a'.repeat(64)}`,
+        }),
+        async () => probeResult({
+          projectId: 'prj_beta',
+          lineageId: 'lineage_beta',
+          noFullLocalGovernanceRuntime: true,
+          homeIdentity: `sha256:${'b'.repeat(64)}`,
+        }),
+      ],
+    },
+  });
+
+  const result = mergeCutoverReadinessEvidence({
+    expectedHeadSha: HEAD,
+    expectedRuntimeImageId: RUNTIME_IMAGE,
+    fragments: [common],
+    providerFieldEvidence: {
+      codex: providerFieldEvidence('codex'),
+      antigravity: providerFieldEvidence('antigravity'),
+    },
+  });
+
+  assert.equal(result.readiness.ready, false);
+  assert.ok(result.readiness.invalid.includes('projects:home-identity'));
+});
+
 test('duplicate Project lineage and incomplete dirty/RSI facts remain NOT READY after collection', async () => {
   const common = await collectCutoverReadinessFragment({
     expectedHeadSha: HEAD,

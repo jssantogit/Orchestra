@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -151,6 +151,56 @@ if (NODE_MAJOR < 24) {
     } finally {
       rmSync(fixture.projectRoot, { recursive: true, force: true });
       rmSync(fixture.home, { recursive: true, force: true });
+    }
+  });
+
+  test('self-host probe fails closed when a full local governance-runtime marker is present', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'orchestra-readiness-self-host-'));
+    const home = mkdtempSync(join(tmpdir(), 'orchestra-readiness-self-host-home-'));
+    try {
+      mkdirSync(join(projectRoot, 'v2/global'), { recursive: true });
+      writeFileSync(join(projectRoot, 'package.json'), JSON.stringify({ name: 'orchestra' }));
+      writeFileSync(join(projectRoot, 'v2/global/orchestra.mjs'), 'export {};\n');
+      git(projectRoot, 'init');
+      git(projectRoot, 'config', 'user.email', 'orchestra-tests@example.invalid');
+      git(projectRoot, 'config', 'user.name', 'Orchestra Tests');
+      git(projectRoot, 'add', '.');
+      git(projectRoot, 'commit', '-m', 'fixture: minimal Orchestra self-host');
+
+      const { verifyOrchestraSelfHost } = await import('../../v2/cutover/self-host.mjs');
+      const { installCodexV2Shim } = await import('../../v2/providers/codex/shim-manager.mjs');
+      const setup = await verifyOrchestraSelfHost({
+        projectRoot,
+        home,
+        launcherPath: process.execPath,
+        runtimeImage: RUNTIME_IMAGE,
+        instructionEpoch: 3,
+        actor: {
+          schema: 'orchestra.actor-provenance.v2',
+          provider: 'codex',
+          subjectHash: `sha256:${'a'.repeat(64)}`,
+          source: 'PROVIDER_FACT',
+          observedAt: new Date().toISOString(),
+        },
+        installThinShim: installCodexV2Shim,
+      });
+      assert.equal(setup.ok, true);
+
+      mkdirSync(join(projectRoot, '.orchestra/runtime/delegation'), { recursive: true });
+      writeFileSync(join(projectRoot, '.orchestra/runtime/delegation/brain.mjs'), 'export default true;\n');
+      const operationId = setup.operationBegin.operation.operationId;
+      const { selfHost } = await import('../../v2/cutover/readiness-probes.mjs');
+      const probe = await selfHost({
+        expectedHeadSha: HEAD,
+        expectedRuntimeImageId: RUNTIME_IMAGE,
+        args: { home, projectId: setup.project.projectId, operationId },
+      });
+
+      assert.equal(probe.ok, false);
+      assert.equal(probe.facts.noFullLocalGovernanceRuntime, false);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
     }
   });
 }
