@@ -82,7 +82,7 @@ function prepare(nativeStore, runtimeImageId = null) {
   const trainObservations = observations
     .filter((item) => trainSet.has(item.source.lineageId))
     .map((item) => ({ ...item, phase: "TRAIN" }));
-  return { ok: true, cohorts: prepared.cohorts, trainObservations, trainLineageIds, lineageCount };
+  return { ok: true, cohorts: prepared.cohorts, trainObservations, trainLineageIds, lineageCount, observations };
 }
 
 function derive(input, prepared) {
@@ -102,7 +102,25 @@ function checkEvaluation(candidate, prepared) {
   // by both independent unseen cohorts (not simply a syntactically legal value).
   for (const stage of ["evaluate", "holdout"]) {
     const rows = prepared.cohorts[stage].records;
-    if (!rows.length || rows.some((record) =>
+    const stageLineages = new Set(prepared.cohorts[stage].lineageIds);
+    const observations = prepared.observations.filter((item) =>
+      stageLineages.has(item.source.lineageId));
+    // TRAIN's legal-choice proof is not transferable to other lineages.
+    // Recheck the native decision context on EVALUATE and HOLDOUT: the
+    // selected route must have been permitted alongside a real alternative.
+    if (!observations.length || observations.length !== rows.length || observations.some((item) => {
+      const { immutableRoutes, legalRoutes, selectedRoute } = item.decision ?? {};
+      return !Array.isArray(immutableRoutes) || !Array.isArray(legalRoutes)
+        || immutableRoutes.length < 2 || legalRoutes.length < 2
+        || new Set(immutableRoutes).size !== immutableRoutes.length
+        || new Set(legalRoutes).size !== legalRoutes.length
+        || !immutableRoutes.includes(selectedRoute)
+        || !legalRoutes.includes(selectedRoute)
+        || legalRoutes.some((route) => !immutableRoutes.includes(route));
+    })) {
+      return fail("RSI_NATIVE_EVALUATION_CHOICE_SPACE_INVALID", stage);
+    }
+    if (rows.some((record) =>
       record.facts.routeClass !== candidate.selectors.routePreference)) {
       return fail("RSI_NATIVE_ROUTE_NOT_OBSERVED", stage);
     }
