@@ -22,6 +22,7 @@ async function setup(t) {
   git(repoRoot, "init");
   git(repoRoot, "config", "user.email", "test@example.com");
   git(repoRoot, "config", "user.name", "Orchestra Test");
+  writeFileSync(join(repoRoot, ".gitignore"), ".orchestra/state/\n");
   writeFileSync(join(repoRoot, "tracked.txt"), "canonical\n");
   git(repoRoot, "add", "tracked.txt");
   git(repoRoot, "commit", "-m", "init");
