@@ -251,3 +251,56 @@ test("corrupt native terminal journal reports an unverified receipt instead of l
   assert.equal(result.code, "NATIVE_DELEGATION_TERMINAL_RECEIPT_UNVERIFIED");
   assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
 });
+
+
+test("retry after successful delegated Work is at-most-once even after state reopen", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let executions = 0;
+  const worker = executor(async path => {
+    executions++;
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  });
+  const first = await command(ctx, worker);
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const second = await command(ctx, worker, {
+    now: () => new Date(Date.now()).toISOString(),
+  });
+  assert.equal(second.ok, false);
+  assert.equal(second.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
+  assert.equal(executions, 1);
+  assert.equal(ctx.state.nativeRsi.listObserved().length, 1);
+  assert.equal(ctx.state.operations.inspect(first.operationId).workflowState, "SUCCEEDED");
+});
+
+test("retry of a failed delegated Work is blocked until explicit reconciled new generation", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let executions = 0;
+  const worker = executor(async () => { executions++; throw new Error("worker failure"); });
+  const first = await command(ctx, worker);
+  assert.equal(first.ok, false);
+  assert.equal(first.code, "NATIVE_DELEGATION_WORKER_FAILED");
+  const repeated = await command(ctx, worker);
+  assert.equal(repeated.ok, false);
+  assert.equal(repeated.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
+  assert.equal(executions, 1);
+  assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
+
+test("same delegation ID with modified payload cannot bypass at-most-once fence", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let executions = 0;
+  const worker = executor(async path => {
+    executions++;
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  });
+  assert.equal((await command(ctx, worker)).ok, true);
+  const tampered = {
+    ...ctx.request,
+    packet: { ...ctx.request.packet, goal: "a different instruction" },
+  };
+  const second = await command(ctx, worker, { request: tampered });
+  assert.equal(second.ok, false);
+  assert.equal(second.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
+  assert.equal(executions, 1);
+});
