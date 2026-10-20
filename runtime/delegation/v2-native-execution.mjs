@@ -12,6 +12,7 @@ import {
   cleanupMutableDelegationWorkspace,
 } from "./mutable-workspace.mjs";
 import { readDelegationProductFingerprint } from "./source-snapshot.mjs";
+import { readDelegationGitStdout } from "./git-boundary.mjs";
 import { createAntigravityDelegationExecutor } from "../../providers/antigravity/delegation-executor.mjs";
 import { createCodexDelegationExecutor } from "../../providers/codex/delegation-executor.mjs";
 import { authorizeCapability, authorizeAttach } from "../../v2/authority/authority.mjs";
@@ -214,8 +215,15 @@ export async function executeNativeDelegatedWork({
             result = fail("NATIVE_DELEGATION_WORKER_FAILED");
           } else {
             const inspection = await inspectMutableDelegationWorkspace(workspace);
-            if (inspection.canonicalWorkspaceChanged || inspection.canonicalGitChanged
-              || inspection.cloneGitChanged || inspection.stagedByWorker) {
+            // The legacy changed-path scanner intentionally honors .gitignore.
+            // V2 must additionally catch ignored outputs, including concealed
+            // .orchestra/state files, before issuing any successful artifact.
+            const ignoredPaths = await readDelegationGitStdout(workspace.path, [
+              "ls-files", "--others", "--ignored", "--exclude-standard", "-z",
+            ]);
+            if (ignoredPaths.length > 0 || inspection.canonicalWorkspaceChanged
+              || inspection.canonicalGitChanged || inspection.cloneGitChanged
+              || inspection.stagedByWorker) {
               result = fail("NATIVE_DELEGATION_BOUNDARY_VIOLATION");
             } else {
               const mutation = await deriveMutationFacts({
