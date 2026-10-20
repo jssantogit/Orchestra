@@ -23,7 +23,9 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           ORCHESTRA_RESOURCE_EVIDENCE: resource-evidence.json
-        run: node scripts/check-resource-runtime.mjs
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          node scripts/check-resource-runtime.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: resource-linux-4g-${{ github.event.pull_request.head.sha }}
