@@ -106,6 +106,12 @@ export function deriveNativeRouteCandidate(input = {}) {
   if (operations.size !== input.observations.length) {
     return fail("RSI_TRAIN_OPERATION_REPLAY");
   }
+  const receipts = input.observations.flatMap((item) => [
+    item.evidence.choiceRef, item.evidence.outcomeRef,
+  ]);
+  if (new Set(receipts).size !== receipts.length) {
+    return fail("RSI_TRAIN_RECEIPT_REUSED");
+  }
 
   // Conservative consensus: never rank, infer or propose an unobserved route.
   // If TRAIN is ambiguous, fail rather than pick a winner.
