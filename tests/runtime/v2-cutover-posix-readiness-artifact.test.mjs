@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { validateCanonicalPosixReadinessArtifact } from '../../v2/cutover/posix-readiness-artifact.mjs';
 import {
   validateApiArtifactAssociation,
+  validatePosixJobObservation,
   validateRunAndPullRequestAssociation,
 } from '../../scripts/verify-posix-readiness-artifact.mjs';
 
@@ -339,7 +340,30 @@ test('POSIX consumer binds source head and synthetic merge SHA to the real PR AP
     pullRequestNumber: 70,
   };
 
-  assert.equal(validateRunAndPullRequestAssociation({ run, pullRequest, expected }), true);
+  const job = {
+    name: 'POSIX Readiness (exact PR head)',
+    workflow_name: 'V2 Persistence',
+    status: 'in_progress',
+    steps: [
+      { name: 'Collect canonical POSIX readiness fragment', status: 'completed', conclusion: 'success' },
+      { name: 'Upload sanitized POSIX readiness evidence', status: 'completed', conclusion: 'success' },
+    ],
+  };
+
+  assert.equal(validateRunAndPullRequestAssociation({
+    run: { ...run, status: 'queued', conclusion: null },
+    pullRequest,
+    expected,
+  }), true);
+  assert.equal(validatePosixJobObservation(job), true);
+  assert.throws(() => validatePosixJobObservation({ ...job, name: 'other-job' }),
+    invalidCode('ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH'));
+  assert.throws(() => validatePosixJobObservation({ ...job, status: 'completed' }),
+    invalidCode('ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH'));
+  assert.throws(() => validatePosixJobObservation({
+    ...job,
+    steps: [job.steps[0], { ...job.steps[1], conclusion: 'failure' }],
+  }), invalidCode('ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH'));
   assert.throws(() => validateRunAndPullRequestAssociation({
     run,
     pullRequest: { ...pullRequest, merge_commit_sha: 'e'.repeat(40) },

@@ -165,7 +165,7 @@ function parseSingleEvidenceMember(archivePath) {
   }
 }
 
-function requireSuccessfulSteps(job) {
+export function validatePosixJobObservation(job) {
   if (job?.name !== JOB_NAME || job?.workflow_name !== WORKFLOW_NAME || job.status !== "in_progress") {
     throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "The expected POSIX job is not the active workflow job");
   }
@@ -176,6 +176,7 @@ function requireSuccessfulSteps(job) {
       throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "The evidence collection and upload steps did not both succeed exactly once");
     }
   }
+  return true;
 }
 
 function delay(milliseconds) {
@@ -260,14 +261,11 @@ export async function verifyPosixReadinessArtifact({ repoRoot, expectedHeadSha, 
       pullRequestNumber: workflowIdentity.pullRequestNumber,
     },
   });
-  if (run.status !== "in_progress" || run.conclusion !== null) {
-    throw fail("ORCHESTRA_POSIX_ARTIFACT_RUN_MISMATCH", "GitHub run metadata does not match this exact PR-head job");
-  }
   const jobsResponse = await githubJson(`${repoApi}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, token);
   const jobs = Array.isArray(jobsResponse.jobs) ? jobsResponse.jobs : [];
   const matchingJobs = jobs.filter((job) => job.name === JOB_NAME);
   if (matchingJobs.length !== 1) throw fail("ORCHESTRA_POSIX_ARTIFACT_JOB_MISMATCH", "GitHub did not report exactly one canonical POSIX job");
-  requireSuccessfulSteps(matchingJobs[0]);
+  validatePosixJobObservation(matchingJobs[0]);
 
   const artifactName = `posix-readiness-${expectedHeadSha}-${runId}-${runAttempt}`;
   if (uploadName !== artifactName) {
