@@ -56,13 +56,13 @@ function projectedExperience(observation, lineageCount) {
   };
 }
 
-function prepare(nativeStore) {
+function prepare(nativeStore, runtimeImageId = null) {
   if (!nativeStore || typeof nativeStore.listObserved !== "function") {
     return fail("RSI_NATIVE_STORE_REQUIRED");
   }
   let observations;
   try {
-    observations = nativeStore.listObserved();
+    observations = nativeStore.listObserved({ runtimeImageId });
   } catch {
     return fail("RSI_NATIVE_STORE_INVALID");
   }
@@ -125,11 +125,11 @@ function checkEvaluation(candidate, prepared) {
 
 // Training is an explicit, never-background state-changing action. It must
 // operate on the native Home-backed journal; prebuilt Experience is not input.
-export function trainNativeRsiCandidate({ nativeStore, policyStore, policyId, revision, createdAt } = {}) {
+export function trainNativeRsiCandidate({ nativeStore, policyStore, policyId, revision, createdAt, runtimeImageId = null } = {}) {
   if (!policyStore?.putCandidate || !nativeStore?.putTrainingReceipt) {
     return fail("RSI_NATIVE_PERSISTENCE_REQUIRED");
   }
-  const prepared = prepare(nativeStore);
+  const prepared = prepare(nativeStore, runtimeImageId);
   if (!prepared.ok) return prepared;
   const derived = derive({ policyId, revision, createdAt }, prepared);
   if (!derived.ok) return derived;
@@ -159,7 +159,7 @@ export function trainNativeRsiCandidate({ nativeStore, policyStore, policyId, re
 
 // Canonical readiness uses this READ-ONLY function, which recomputes TRAIN
 // from re-opened native events. Hand-authored candidates or receipts fail.
-export function verifyNativeRsiReplay({ nativeStore, policyStore, policyId, revision } = {}) {
+export function verifyNativeRsiReplay({ nativeStore, policyStore, policyId, revision, runtimeImageId = null } = {}) {
   if (!policyStore?.inspect || !nativeStore?.inspectTrainingReceipt) {
     return fail("RSI_NATIVE_PERSISTENCE_REQUIRED");
   }
@@ -173,7 +173,7 @@ export function verifyNativeRsiReplay({ nativeStore, policyStore, policyId, revi
   if (!candidate) return fail("RSI_NATIVE_CANDIDATE_MISSING");
   if (!receipt) return fail("RSI_NATIVE_TRAINING_RECEIPT_MISSING");
 
-  const prepared = prepare(nativeStore);
+  const prepared = prepare(nativeStore, runtimeImageId);
   if (!prepared.ok) return prepared;
   const derived = derive({
     policyId, revision, createdAt: candidate.createdAt,
