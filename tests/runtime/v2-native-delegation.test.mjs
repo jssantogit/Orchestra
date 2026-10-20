@@ -451,3 +451,27 @@ test("native delegated child PID is bound to Home Operation independently of the
   assert.ok(child.process.startIdentity);
   assert.match(child.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
 });
+
+
+test("rejected child birth proof cannot be swallowed by a delegated executor", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const result = await command(ctx, {
+    provider: "antigravity",
+    async discover() {
+      return { provider: "antigravity", available: true, version: "controlled",
+        capabilities: { implementation: true } };
+    },
+    async execute({ workspace, onProcessSpawn }) {
+      await assert.rejects(
+        () => onProcessSpawn({ pid: process.pid }),
+        /NATIVE_DELEGATION_CHILD_UNVERIFIED/,
+      );
+      writeFileSync(join(workspace.path, "tracked.txt"), "attempted\n");
+      return { ok: true, provider: "antigravity", execution: { exitCode: 0, durationMs: 1 },
+        report: { summary: "pretended success", findings: [], evidenceRefs: [] } };
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_CHILD_UNVERIFIED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
