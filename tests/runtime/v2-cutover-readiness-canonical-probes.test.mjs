@@ -156,7 +156,7 @@ test('canonical collector fails closed when the source-controlled probe module i
     });
 
     assert.equal(fragment.evidence.registryPersistence, undefined);
-    assert.ok(fragment.errors.includes('registryPersistence:source-dirty'));
+    assert.ok(fragment.errors.includes('registryPersistence:source-bytes'));
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
