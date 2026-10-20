@@ -7,6 +7,7 @@ import {
   createManagedWorkspaceStore, resolveManagedWorkspacePaths,
 } from "../../v2/workspaces/managed-workspace-store.mjs";
 import { createDelegatedChildTerminalStore } from "./v2-child-terminal-store.mjs";
+import { readDelegatedProcessGroupStatus } from "./v2-process-group-probe.mjs";
 
 // This is evidence gathering, NEVER a recovery/cleanup/redispatch authority.
 // In particular, even a verified direct-child close does not prove that a
@@ -18,6 +19,7 @@ function blocked(operationId, reason, evidence = {}) {
       cloneStatus: evidence.cloneStatus ?? "UNVERIFIED",
       childStatus: evidence.childStatus ?? "UNAVAILABLE",
       terminalStatus: evidence.terminalStatus ?? "UNVERIFIED",
+      processGroupStatus: evidence.processGroupStatus ?? "UNAVAILABLE",
     }),
     humanGate: true, cleanupAuthorized: false, redispatchAuthorized: false,
   });
@@ -63,12 +65,14 @@ async function cloneStatus({ home, operation, workspaces }) {
 
 export function createDelegatedRecoveryInspection({
   home, state, readProcessIdentity = createHostProcessIdentityReader(),
+  readProcessGroupStatus = readDelegatedProcessGroupStatus,
   managedWorkspaceStore = null, runtimeOwnerStore = null,
   childTerminalStore = null,
 } = {}) {
   if (typeof home !== "string" || !home
     || typeof state?.operations?.inspect !== "function"
-    || typeof readProcessIdentity !== "function") {
+    || typeof readProcessIdentity !== "function"
+    || typeof readProcessGroupStatus !== "function") {
     throw new TypeError("NATIVE_DELEGATED_RECOVERY_FACTS_REQUIRED");
   }
 
@@ -137,7 +141,20 @@ export function createDelegatedRecoveryInspection({
             && terminal.terminal.timedOut === false;
         }
       } catch { terminalStatus = "INVALID"; }
-      const evidence = { cloneStatus: clone, childStatus, terminalStatus };
+      // The probe is sampled only after the direct child is absent. A group
+      // can outlive its leader; a missing group still does not prove that
+      // escaped descendants stopped. Never use this as cleanup authority.
+      let processGroupStatus = "UNAVAILABLE";
+      if (childStatus === "ABSENT") {
+        try {
+          const sample = await readProcessGroupStatus(owner.process.pid);
+          if (sample === "PRESENT" || sample === "ABSENT") {
+            processGroupStatus = sample;
+          }
+        } catch { processGroupStatus = "UNAVAILABLE"; }
+      }
+      const evidence = { cloneStatus: clone, childStatus,
+        terminalStatus, processGroupStatus };
 
       if (childStatus === "MATCH") return blocked(operationId, "CHILD_STILL_LIVE", evidence);
       if (childStatus === "UNAVAILABLE" || childStatus === "MISMATCH") {
@@ -148,6 +165,9 @@ export function createDelegatedRecoveryInspection({
       }
       if (!healthyExit) {
         return blocked(operationId, "CHILD_EXIT_FAILED", evidence);
+      }
+      if (processGroupStatus === "PRESENT") {
+        return blocked(operationId, "PROCESS_GROUP_STILL_ACTIVE", evidence);
       }
       return blocked(operationId, "DESCENDANT_LIFECYCLE_UNPROVEN", evidence);
     },
