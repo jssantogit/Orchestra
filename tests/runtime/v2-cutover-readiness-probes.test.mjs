@@ -398,3 +398,27 @@ test("canonical native RSI probe refuses caller-authored cohort lineages and pro
     /probe args contain unknown fields/,
   );
 });
+
+test("native RSI probe accepts a numeric policy revision but remains NOT VERIFIED without real Home evidence", {
+  skip: Number(process.versions.node.split(".")[0]) < 22,
+}, async () => {
+  const [{ mkdtemp, rm }, { join }, { tmpdir }, { rsiReplay }] = await Promise.all([
+    import("node:fs/promises"),
+    import("node:path"),
+    import("node:os"),
+    import("../../v2/cutover/readiness-probes.mjs"),
+  ]);
+  const home = await mkdtemp(join(tmpdir(), "orchestra-rsi-readiness-failclosed-"));
+  try {
+    const result = await rsiReplay({
+      expectedHeadSha: "head-unverified",
+      expectedRuntimeImageId: "image-unverified",
+      args: { home, policyId: "native-observation-policy", revision: 1 },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.facts.trainVerified, false);
+    assert.equal(result.facts.holdoutVerified, false);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
