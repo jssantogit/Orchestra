@@ -75,6 +75,19 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
       terminal_digest TEXT,
       CHECK ((terminal_json IS NULL) = (terminal_digest IS NULL))
     ) STRICT`);
+    db.exec(`CREATE TABLE IF NOT EXISTS rsi_native_training (
+      policy_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      receipt_json TEXT NOT NULL,
+      receipt_digest TEXT NOT NULL,
+      PRIMARY KEY (policy_id, revision)
+    ) STRICT`);
+    const trainingGet = db.prepare(
+      "SELECT * FROM rsi_native_training WHERE policy_id=? AND revision=?",
+    );
+    const trainingInsert = db.prepare(
+      "INSERT INTO rsi_native_training(policy_id,revision,receipt_json,receipt_digest) VALUES(?,?,?,?)",
+    );
     const get = db.prepare("SELECT * FROM rsi_native_observations WHERE operation_id = ?");
     const all = db.prepare("SELECT * FROM rsi_native_observations ORDER BY operation_id");
     const insert = db.prepare(
@@ -224,6 +237,36 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
       },
       listEligible() {
         return this.listObserved().filter((item) => item.outcome.success === true);
+      },
+      putTrainingReceipt(receipt) {
+        assertOpen();
+        if (!receipt || Object.keys(receipt).sort().join(",") !==
+          ["candidateDigest", "policyId", "revision", "seed", "sourceDigest", "trainLineageIds"].sort().join(",")
+          || typeof receipt.policyId !== "string" || !receipt.policyId
+          || !Number.isInteger(receipt.revision) || receipt.revision < 1
+          || !REF.test(receipt.sourceDigest) || !REF.test(receipt.candidateDigest)
+          || typeof receipt.seed !== "string" || !receipt.seed
+          || !Array.isArray(receipt.trainLineageIds)
+          || receipt.trainLineageIds.length < 2
+          || !receipt.trainLineageIds.every((x) => typeof x === "string" && x)
+          || new Set(receipt.trainLineageIds).size !== receipt.trainLineageIds.length) {
+          return fail("RSI_NATIVE_TRAINING_RECEIPT_INVALID");
+        }
+        const json = encode(receipt), ref = digest(receipt);
+        const existing = trainingGet.get(receipt.policyId, receipt.revision);
+        if (existing) {
+          safelyRead(existing.receipt_json, existing.receipt_digest);
+          return existing.receipt_json === json && existing.receipt_digest === ref
+            ? { ok: true, replayed: true, receiptRef: ref }
+            : fail("RSI_NATIVE_TRAINING_RECEIPT_CONFLICT");
+        }
+        trainingInsert.run(receipt.policyId, receipt.revision, json, ref);
+        return { ok: true, replayed: false, receiptRef: ref };
+      },
+      inspectTrainingReceipt(policyId, revision) {
+        assertOpen();
+        const existing = trainingGet.get(policyId, revision);
+        return existing ? safelyRead(existing.receipt_json, existing.receipt_digest) : null;
       },
       close() {
         if (closed) return;
