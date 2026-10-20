@@ -144,7 +144,7 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
           legalRoutes: ["DIRECT_WORK"],
           selectedRoute: "DIRECT_WORK",
         },
-        outcome: { success: terminal.workflowState === "SUCCEEDED", retryCount: 0, durationMs: terminal.durationMs },
+        outcome: { success: terminal.workflowState === "SUCCEEDED", durationMs: terminal.durationMs },
         privacy: { containsRawProjectContent: false },
         evidence: { choiceRef: row.decision_digest, outcomeRef: row.terminal_digest },
       };
