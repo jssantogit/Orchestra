@@ -40,7 +40,7 @@ export function validateApiArtifactAssociation({
   apiArtifact,
   runId,
   runAttempt,
-  runHeadSha,
+  workflowRunHeadSha,
   expectedHeadSha,
   uploadId,
   uploadName,
@@ -51,11 +51,38 @@ export function validateApiArtifactAssociation({
     || apiArtifact.name !== expectedName || uploadName !== expectedName
     || apiArtifact.expired !== false
     || String(apiArtifact.workflow_run?.id) !== String(runId)
-    || apiArtifact.workflow_run?.head_sha !== runHeadSha
-    || !/^[0-9a-f]{40}$/.test(runHeadSha ?? "")
+    || apiArtifact.workflow_run?.head_sha !== workflowRunHeadSha
+    || !/^[0-9a-f]{40}$/.test(workflowRunHeadSha ?? "")
     || !/^[0-9a-f]{40}$/.test(expectedHeadSha ?? "")
     || normalizeDigest(apiArtifact.digest) !== normalizeDigest(uploadDigest)) {
     throw fail("ORCHESTRA_POSIX_ARTIFACT_API_METADATA_MISMATCH", "The artifact metadata does not match the workflow run and PR head");
+  }
+  return true;
+}
+
+export function validateRunAndPullRequestAssociation({ run, pullRequest, expected } = {}) {
+  const matchingPullRequests = Array.isArray(run?.pull_requests) ? run.pull_requests.filter((item) =>
+    item?.number === expected?.pullRequestNumber && item.head?.sha === expected?.sourceHeadSha) : [];
+  if (!run || !pullRequest || !expected
+    || String(run.id) !== String(expected.id)
+    || String(run.run_attempt) !== String(expected.runAttempt)
+    || run.event !== "pull_request"
+    || run.path !== WORKFLOW_PATH
+    || run.head_sha !== expected.sourceHeadSha
+    || run.repository?.full_name !== expected.repository
+    || run.head_repository?.full_name !== expected.headRepository
+    || matchingPullRequests.length !== 1
+    || pullRequest.number !== expected.pullRequestNumber
+    || pullRequest.state !== "open"
+    || pullRequest.head?.sha !== expected.sourceHeadSha
+    || pullRequest.head?.repo?.full_name !== expected.headRepository
+    || pullRequest.base?.repo?.full_name !== expected.repository
+    || pullRequest.merge_commit_sha !== expected.runHeadSha
+    || !/^[0-9a-f]{40}$/.test(expected.sourceHeadSha ?? "")
+    || !/^[0-9a-f]{40}$/.test(expected.runHeadSha ?? "")
+    || !/^[1-9]\d*$/.test(String(expected.id ?? ""))
+    || !/^[1-9]\d*$/.test(String(expected.runAttempt ?? ""))) {
+    throw fail("ORCHESTRA_POSIX_ARTIFACT_RUN_MISMATCH", "GitHub run and pull-request metadata are not bound to the same source and merge revision");
   }
   return true;
 }
@@ -219,14 +246,21 @@ export async function verifyPosixReadinessArtifact({ repoRoot, expectedHeadSha, 
   const [owner, repo] = repository.split("/");
   const repoApi = `${apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const run = await githubJson(`${repoApi}/actions/runs/${runId}`, token);
-  const matchingPullRequest = (Array.isArray(run.pull_requests) ? run.pull_requests : [])
-    .filter((pullRequest) => pullRequest.number === workflowIdentity.pullRequestNumber
-      && pullRequest.head?.sha === expectedHeadSha);
-  const expectedWorkflowApiPath = `${WORKFLOW_PATH}@refs/pull/${workflowIdentity.pullRequestNumber}/merge`;
-  if (String(run.id) !== runId || String(run.run_attempt) !== runAttempt || run.event !== "pull_request"
-    || run.path !== expectedWorkflowApiPath || run.head_sha !== workflowIdentity.runHeadSha
-    || run.repository?.full_name !== repository || run.head_repository?.full_name !== workflowIdentity.headRepository
-    || run.status !== "in_progress" || run.conclusion !== null || matchingPullRequest.length !== 1) {
+  const pullRequest = await githubJson(`${repoApi}/pulls/${workflowIdentity.pullRequestNumber}`, token);
+  validateRunAndPullRequestAssociation({
+    run,
+    pullRequest,
+    expected: {
+      id: runId,
+      runAttempt,
+      sourceHeadSha: expectedHeadSha,
+      runHeadSha: workflowIdentity.runHeadSha,
+      repository,
+      headRepository: workflowIdentity.headRepository,
+      pullRequestNumber: workflowIdentity.pullRequestNumber,
+    },
+  });
+  if (run.status !== "in_progress" || run.conclusion !== null) {
     throw fail("ORCHESTRA_POSIX_ARTIFACT_RUN_MISMATCH", "GitHub run metadata does not match this exact PR-head job");
   }
   const jobsResponse = await githubJson(`${repoApi}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, token);
@@ -244,7 +278,7 @@ export async function verifyPosixReadinessArtifact({ repoRoot, expectedHeadSha, 
     apiArtifact,
     runId,
     runAttempt,
-    runHeadSha: run.head_sha,
+    workflowRunHeadSha: run.head_sha,
     expectedHeadSha,
     uploadId,
     uploadName,
@@ -270,7 +304,8 @@ export async function verifyPosixReadinessArtifact({ repoRoot, expectedHeadSha, 
       id: run.id,
       run_attempt: run.run_attempt,
       head_sha: run.head_sha,
-      pull_request_head_sha: matchingPullRequest[0].head.sha,
+      pull_request_head_sha: pullRequest.head.sha,
+      run_head_sha: workflowIdentity.runHeadSha,
       repository: run.repository.full_name,
       repository_id: run.repository.id,
       head_repository: run.head_repository.full_name,

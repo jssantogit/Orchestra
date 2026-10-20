@@ -38,7 +38,12 @@ function repositoryRoot(repoRoot) {
     if (error?.code === "ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_INVALID") throw error;
     throw sourceError("ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_INVALID", "repoRoot must be a readable Git working tree");
   }
-  if (resolve(requestedRoot) !== resolve(gitRoot)) {
+  const canonicalRequestedRoot = resolve(requestedRoot);
+  const canonicalGitRoot = resolve(gitRoot);
+  const rootsMatch = process.platform === "win32"
+    ? canonicalRequestedRoot.toLowerCase() === canonicalGitRoot.toLowerCase()
+    : canonicalRequestedRoot === canonicalGitRoot;
+  if (!rootsMatch) {
     throw sourceError("ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_INVALID", "repoRoot must be the Git checkout root");
   }
   return gitRoot;

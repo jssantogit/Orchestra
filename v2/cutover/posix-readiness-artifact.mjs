@@ -40,8 +40,8 @@ function expectedWorkflowRef(repository, pullRequestNumber) {
   return `${repository}/${WORKFLOW_PATH}@refs/pull/${pullRequestNumber}/merge`;
 }
 
-function expectedWorkflowApiPath(pullRequestNumber) {
-  return `${WORKFLOW_PATH}@refs/pull/${pullRequestNumber}/merge`;
+function expectedWorkflowApiPath() {
+  return WORKFLOW_PATH;
 }
 
 function sameWorkflow(envelope, expected) {
@@ -53,7 +53,7 @@ function sameWorkflow(envelope, expected) {
     && workflow.headRepository === expected.head_repository
     && workflow.eventName === expected.event
     && workflow.headSha === expected.pull_request_head_sha
-    && workflow.runHeadSha === expected.head_sha
+    && workflow.runHeadSha === expected.run_head_sha
     && workflow.workflowPath === WORKFLOW_PATH
     && workflow.workflowRef === expected.workflow_ref
     && workflow.jobId === expected.job_id
@@ -65,6 +65,8 @@ function sameWorkflow(envelope, expected) {
     && positiveId(expected.run_attempt)
     && expected.event === 'pull_request'
     && expected.path === expectedWorkflowApiPath(expected.pull_request_number)
+    && expected.head_sha === expected.pull_request_head_sha
+    && /^[0-9a-f]{40}$/.test(expected.run_head_sha ?? '')
     && /^[0-9a-f]{40}$/.test(expected.head_sha ?? '')
     && /^[0-9a-f]{40}$/.test(expected.pull_request_head_sha ?? '')
     && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(expected.repository ?? '')
@@ -89,7 +91,7 @@ function sameArtifactMetadata(actual, upload, workflow, expectedRun) {
     && isObject(upload)
     && positiveId(actual.id)
     && positiveId(upload.id)
-    && positiveId(actual.repository_id)
+    && (actual.repository_id == null || positiveId(actual.repository_id))
     && positiveId(actual.workflow_run?.id)
     && positiveId(actual.workflow_run?.repository_id)
     && positiveId(actual.workflow_run?.head_repository_id)
@@ -101,7 +103,7 @@ function sameArtifactMetadata(actual, upload, workflow, expectedRun) {
     && normalizeDigest(actual.digest) === normalizeDigest(upload.digest)
     && DIGEST_PATTERN.test(normalizeDigest(actual.digest) ?? '')
     && actual.expired === false
-    && String(actual.repository_id) === String(expectedRun.repository_id)
+    && (actual.repository_id == null || String(actual.repository_id) === String(expectedRun.repository_id))
     && isObject(actual.workflow_run)
     && String(actual.workflow_run.id) === workflow.runId
     && actual.workflow_run.head_sha === expectedRun.head_sha

@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
 import { validateCanonicalPosixReadinessArtifact } from '../../v2/cutover/posix-readiness-artifact.mjs';
-import { validateApiArtifactAssociation } from '../../scripts/verify-posix-readiness-artifact.mjs';
+import {
+  validateApiArtifactAssociation,
+  validateRunAndPullRequestAssociation,
+} from '../../scripts/verify-posix-readiness-artifact.mjs';
 
 const HEAD = 'a'.repeat(40);
 const IMAGE_ID = `sha256:${'b'.repeat(64)}`;
@@ -41,15 +44,15 @@ function makeInputs() {
   const run = {
     id: 123456,
     run_attempt: 2,
-    head_sha: 'f'.repeat(40),
+    head_sha: HEAD,
     pull_request_head_sha: HEAD,
+    run_head_sha: 'f'.repeat(40),
     repository: 'owner/repository',
     repository_id: 111,
     head_repository: 'contributor/repository',
     head_repository_id: 222,
     event: 'pull_request',
-    path: '.github/workflows/v2-persistence.yml@refs/pull/70/merge',
-    workflow_ref: 'owner/repository/.github/workflows/v2-persistence.yml@refs/pull/70/merge',
+    path: '.github/workflows/v2-persistence.yml',
     job_id: 'posix-readiness',
     job_name: 'POSIX Readiness (exact PR head)',
     workflow_ref: 'owner/repository/.github/workflows/v2-persistence.yml@refs/pull/70/merge',
@@ -62,7 +65,7 @@ function makeInputs() {
     digest: ARTIFACT_DIGEST,
     expired: false,
     workflow_run: { id: run.id, head_sha: run.head_sha },
-    repository_id: run.repository_id,
+    repository_id: null,
   };
   artifact.workflow_run.repository_id = run.repository_id;
   artifact.workflow_run.head_repository_id = run.head_repository_id;
@@ -80,7 +83,7 @@ function makeInputs() {
       headRepository: run.head_repository,
       eventName: run.event,
       headSha: HEAD,
-      runHeadSha: run.head_sha,
+      runHeadSha: run.run_head_sha,
       platform: 'linux',
       nodeVersion: '24.15.0',
       workflowPath: '.github/workflows/v2-persistence.yml',
@@ -148,6 +151,7 @@ test('POSIX artifact validation rejects mismatched run and upload artifact metad
     { ...input.run, id: input.run.id + 1 },
     { ...input.run, run_attempt: input.run.run_attempt + 1 },
     { ...input.run, head_sha: 'e'.repeat(40) },
+    { ...input.run, run_head_sha: 'e'.repeat(40) },
     { ...input.run, pull_request_head_sha: 'e'.repeat(40) },
     { ...input.run, event: 'push' },
     { ...input.run, repository: 'other/repository' },
@@ -236,7 +240,7 @@ test('POSIX artifact validation binds the downloaded ZIP digest and rejects inco
     expectedUpload: input.uploadOutput,
     downloadedArchiveDigest: ARTIFACT_DIGEST,
   }), invalidCode('ORCHESTRA_POSIX_READINESS_ARTIFACT_WORKFLOW_MISMATCH'));
-  input.envelope.workflow.runHeadSha = input.run.head_sha;
+  input.envelope.workflow.runHeadSha = input.run.run_head_sha;
 
   assert.throws(() => validateCanonicalPosixReadinessArtifact({
     artifact: input.envelope,
@@ -263,6 +267,7 @@ test('POSIX consumer binds artifact to merge-run SHA and PR artifact name to sou
   const runId = '123456';
   const runAttempt = '2';
   const runHeadSha = 'f'.repeat(40);
+  const workflowHeadSha = HEAD;
   const digest = `sha256:${'d'.repeat(64)}`;
   const uploadId = '987654';
   const uploadName = `posix-readiness-${HEAD}-${runId}-${runAttempt}`;
@@ -271,24 +276,24 @@ test('POSIX consumer binds artifact to merge-run SHA and PR artifact name to sou
     name: uploadName,
     digest,
     expired: false,
-    workflow_run: { id: Number(runId), head_sha: runHeadSha },
+    workflow_run: { id: Number(runId), head_sha: workflowHeadSha },
   };
 
   assert.equal(validateApiArtifactAssociation({
     apiArtifact,
     runId,
     runAttempt,
-    runHeadSha,
+    workflowRunHeadSha: workflowHeadSha,
     expectedHeadSha: HEAD,
     uploadId,
     uploadName,
     uploadDigest: digest,
   }), true);
   assert.throws(() => validateApiArtifactAssociation({
-    apiArtifact: { ...apiArtifact, workflow_run: { ...apiArtifact.workflow_run, head_sha: HEAD } },
+    apiArtifact: { ...apiArtifact, workflow_run: { ...apiArtifact.workflow_run, head_sha: runHeadSha } },
     runId,
     runAttempt,
-    runHeadSha,
+    workflowRunHeadSha: workflowHeadSha,
     expectedHeadSha: HEAD,
     uploadId,
     uploadName,
@@ -298,10 +303,51 @@ test('POSIX consumer binds artifact to merge-run SHA and PR artifact name to sou
     apiArtifact,
     runId,
     runAttempt,
-    runHeadSha,
     expectedHeadSha: runHeadSha,
     uploadId,
     uploadName,
     uploadDigest: digest,
   }), invalidCode('ORCHESTRA_POSIX_ARTIFACT_API_METADATA_MISMATCH'));
+});
+
+test('POSIX consumer binds source head and synthetic merge SHA to the real PR API response', () => {
+  const run = {
+    id: 123456,
+    run_attempt: 2,
+    event: 'pull_request',
+    path: '.github/workflows/v2-persistence.yml',
+    head_sha: HEAD,
+    repository: { full_name: 'owner/repository' },
+    head_repository: { full_name: 'contributor/repository' },
+    pull_requests: [{ number: 70, head: { sha: HEAD } }],
+  };
+  const pullRequest = {
+    number: 70,
+    state: 'open',
+    head: { sha: HEAD, repo: { full_name: 'contributor/repository' } },
+    base: { repo: { full_name: 'owner/repository' } },
+    merge_commit_sha: 'f'.repeat(40),
+  };
+  const expected = {
+    id: '123456',
+    runAttempt: '2',
+    sourceHeadSha: HEAD,
+    runHeadSha: 'f'.repeat(40),
+    repository: 'owner/repository',
+    headRepository: 'contributor/repository',
+    workflowPath: '.github/workflows/v2-persistence.yml',
+    pullRequestNumber: 70,
+  };
+
+  assert.equal(validateRunAndPullRequestAssociation({ run, pullRequest, expected }), true);
+  assert.throws(() => validateRunAndPullRequestAssociation({
+    run,
+    pullRequest: { ...pullRequest, merge_commit_sha: 'e'.repeat(40) },
+    expected,
+  }), invalidCode('ORCHESTRA_POSIX_ARTIFACT_RUN_MISMATCH'));
+  assert.throws(() => validateRunAndPullRequestAssociation({
+    run: { ...run, path: `${expected.workflowPath}@refs/pull/70/merge` },
+    pullRequest,
+    expected,
+  }), invalidCode('ORCHESTRA_POSIX_ARTIFACT_RUN_MISMATCH'));
 });

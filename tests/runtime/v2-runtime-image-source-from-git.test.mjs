@@ -107,11 +107,13 @@ test("source-derived image identity is stable across isolated homes", async () =
     try {
       await writeFile(sourcePath, JSON.stringify(source));
       const input = await loadRuntimeImageSource(sourcePath);
-      const first = await createRuntimeImageStore({ orchestraHome: firstHome }).install(input);
-      const second = await createRuntimeImageStore({ orchestraHome: secondHome }).install(input);
+      const firstStore = createRuntimeImageStore({ orchestraHome: firstHome });
+      const secondStore = createRuntimeImageStore({ orchestraHome: secondHome });
+      const first = await firstStore.install(input);
+      const second = await secondStore.install(input);
       assert.equal(first.imageId, second.imageId);
-      assert.equal((await createRuntimeImageStore({ orchestraHome: firstHome }).verify(first.imageId)).valid, true);
-      assert.equal((await createRuntimeImageStore({ orchestraHome: secondHome }).verify(second.imageId)).valid, true);
+      assert.equal((await firstStore.verify(first.imageId)).valid, true);
+      assert.equal((await secondStore.verify(second.imageId)).valid, true);
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });
       await rm(firstHome, { recursive: true, force: true });
