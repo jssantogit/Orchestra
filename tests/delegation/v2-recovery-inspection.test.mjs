@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDelegatedRecoveryInspection } from "../../runtime/delegation/v2-recovery-inspection.mjs";
@@ -119,4 +119,21 @@ test("cross-work clone record, missing clone and tampered terminal fail closed",
   const b = await mismatched.inspect({ operationId: operation.operationId });
   assert.equal(b.reason, "CLONE_ASSOCIATION_UNVERIFIED");
   assert.equal(b.cleanupAuthorized, false);
+});
+
+
+test("nonzero child-close receipt stays terminal failure, never a successful quiescence claim", async t => {
+  const f = await setup(t);
+  assert.equal((await f.terminals.register({
+    schema: "orchestra.delegated-child-terminal.v1",
+    operationId: operation.operationId, runtimeOwnerId: childOwnerId,
+    process: { pid: 45678, startIdentity: birth },
+    terminal: { exitCode: 9, signal: null, timedOut: false,
+      closedAt: "2026-10-20T12:02:00.000Z" },
+  })).ok, true);
+  const a = await f.inspect(async () => ({ status: "ABSENT" }));
+  assert.equal(a.evidence.terminalStatus, "VERIFIED");
+  assert.equal(a.reason, "CHILD_EXIT_FAILED");
+  assert.equal(a.cleanupAuthorized, false);
+  assert.equal(existsSync(f.clone), true);
 });
