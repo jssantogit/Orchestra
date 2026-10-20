@@ -233,3 +233,27 @@ child close and durable receipt remains UNKNOWN. Recovery continues to
 preserve unknown clones and require independent investigation/approval.
 No field RSI readiness is claimed; the exact-HEAD Codex/AGY and independent
 multi-project TRAIN/EVALUATE/HOLDOUT field run remains missing.
+
+
+### RSI replay eligibility: terminal child close required
+
+The global SQLite \`nativeRsi.listObserved()\` projection now independently
+re-opens both immutable native Home envelopes: \`runtime-owners\` for the
+distinct delegated child and \`delegation-child-terminals\` for that exact
+Operation. It verifies bounded source bytes, canonical digest, owner identity,
+PID, process birth identity and a successful non-timeout, nonsignalled close
+before an observation becomes RSI training evidence. Replaying a succeeded
+Operation alone, an intact source-artifact blob alone, or an injected test
+worker reporting \`ok:true\` is **not sufficient**.
+
+A test-double can still exercise clone isolation, native Operation lifecycle
+and candidate-blob persistence. Its result is **intentionally excluded from
+learned-policy candidate derivation** without independent process-close
+evidence. The native subprocess integration test exercises the positive path
+and verifies that altering the terminal receipt after successful execution
+removes the observation on replay.
+
+This prevents the previously reproduced false positive, but does not prove
+that the \`DIRECT_WORK\` alternative was genuinely available in production
+for every delegated decision or that all independent EVALUATE/HOLDOUT gates
+have been met. Field readiness remains \`UNKNOWN\`.
