@@ -11,7 +11,8 @@ import { executeNativeDelegatedWork } from "../../runtime/delegation/v2-native-e
 
 const supported = Number(process.versions.node.split(".")[0]) >= 22;
 const ACTOR = "sha256:" + "a".repeat(64);
-const now = "2026-10-20T12:00:00.000Z";
+// Real journal elapsed time must remain non-negative regardless of CI clock.
+const now = new Date(Date.now() - 1_000).toISOString();
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
 async function setup(t) {
   const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
@@ -156,7 +157,7 @@ test("revoked provider session after the Operation begins cannot execute the wor
           const denied = ctx.state.sessionObservations.put({
             provider: "codex", projectId: ctx.projectId, actorIdHash: ACTOR,
             observedInstructionEpoch: 0, observedWorkId: null, observedGeneration: null,
-            observedAt: "2026-10-20T12:00:01.000Z",
+            observedAt: new Date(Date.now() + 60_000).toISOString(),
           });
           assert.equal(denied.ok, true);
         }
