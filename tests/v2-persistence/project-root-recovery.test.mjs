@@ -231,3 +231,43 @@ test("stale delegated controller cannot claim cleanup from persistent Project ro
     await fx.cleanup();
   }
 });
+
+
+test("registered delegated clone is auditable but not automatically cleanable while child lifecycle is unproven", async () => {
+  const fx = await fixture();
+  try {
+    const { state, op } = seededState(fx.projectRoot, "DELEGATED_MUTATION");
+    const { createManagedWorkspaceStore, resolveManagedWorkspacePaths } =
+      await import("../../v2/workspaces/managed-workspace-store.mjs");
+    const store = createManagedWorkspaceStore({ home: fx.home });
+    const { instancesRoot } = resolveManagedWorkspacePaths({ home: fx.home });
+    const root = join(instancesRoot, "delegated-child-1");
+    await mkdir(root, { recursive: true });
+    git("init", root);
+    const workspaceRef = "workspace:delegated:" + op.operationId;
+    const record = {
+      schema: "orchestra.managed-workspace.v2",
+      workspaceRef, operationId: op.operationId,
+      projectId: op.projectId, workId: op.workId, generation: op.generation,
+      kind: "TRANSIENT_GIT_CLONE", root, registeredAt: "2026-10-20T12:00:00.000Z",
+    };
+    assert.equal((await store.register(record)).ok, true);
+    assert.deepEqual(await store.read(workspaceRef), record);
+    const workspaceRecovery = createManagedWorkspaceRecovery({ home: fx.home, state });
+    assert.equal((await workspaceRecovery.inspect(op.workspaceRef, op)).status, "UNKNOWN");
+    const reconciler = createOperationReconciler({
+      state, operationLiveness: staleAssessment(), workspaceRecovery,
+      now: () => "2026-10-18T12:00:00.000Z",
+    });
+    const recovered = await reconciler.recover({
+      projectId: op.projectId, operationId: op.operationId,
+      commandId: "do-not-recover-recorded-clone-with-unproven-child",
+    });
+    assert.equal(recovered.ok, false);
+    assert.equal(recovered.reason, "RECOVERY_WORKSPACE_UNKNOWN");
+    assert.equal(state.operations.inspect(op.operationId).liveness, "LIVE");
+    assert.equal(await exists(root), true, "uncertain clone must be preserved");
+  } finally {
+    await fx.cleanup();
+  }
+});
