@@ -11,6 +11,7 @@ const HEAD = 'a'.repeat(40);
 const STALE_HEAD = 'f'.repeat(40);
 const RUNTIME_IMAGE = `sha256:${'b'.repeat(64)}`;
 const STALE_RUNTIME_IMAGE = `sha256:${'c'.repeat(64)}`;
+const HOME_IDENTITY = `sha256:${'a'.repeat(64)}`;
 
 function probeResult(facts = {}, {
   headSha = HEAD,
@@ -76,6 +77,7 @@ function scalarProbes() {
       lineageId: 'lineage_orchestra',
       runtimeImageId: RUNTIME_IMAGE,
       noFullLocalGovernanceRuntime: true,
+      homeIdentity: HOME_IDENTITY,
     }),
   };
 }
@@ -188,6 +190,7 @@ test('independent Windows/POSIX and Project fragments merge into the existing re
           projectId: 'prj_alpha',
           lineageId: 'lineage_alpha',
           noFullLocalGovernanceRuntime: true,
+          homeIdentity: HOME_IDENTITY,
         }),
       ],
     },
@@ -204,6 +207,7 @@ test('independent Windows/POSIX and Project fragments merge into the existing re
           projectId: 'prj_beta',
           lineageId: 'lineage_beta',
           noFullLocalGovernanceRuntime: true,
+          homeIdentity: HOME_IDENTITY,
         }),
       ],
     },
@@ -284,11 +288,13 @@ test('duplicate Project lineage and incomplete dirty/RSI facts remain NOT READY 
           projectId: 'prj_alpha',
           lineageId: 'lineage_same',
           noFullLocalGovernanceRuntime: true,
+          homeIdentity: HOME_IDENTITY,
         }),
         async () => probeResult({
           projectId: 'prj_beta',
           lineageId: 'lineage_same',
           noFullLocalGovernanceRuntime: true,
+          homeIdentity: HOME_IDENTITY,
         }),
       ],
     },

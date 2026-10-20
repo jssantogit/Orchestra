@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -11,6 +11,8 @@ export const CUTOVER_READINESS_FRAGMENT_SCHEMA = 'orchestra.cutover-readiness-fr
 export const CUTOVER_READINESS_FRAGMENT_VERSION = 1;
 export const CUTOVER_READINESS_PROBE_MODULE_SCHEMA = 'orchestra.cutover-readiness-probe-module.v2';
 export const CUTOVER_READINESS_COLLECTION_MODE = 'CANONICAL_GIT_PROBES';
+const CANONICAL_PROBE_MODULE_PATH = 'v2/cutover/readiness-probes.mjs';
+const PROBE_RECEIPT_PREFIX = 'evidence:probe-receipt:';
 
 const SCALAR_FAMILIES = Object.freeze([
   'registryPersistence',
@@ -37,6 +39,7 @@ const FRAGMENT_KEYS = new Set([
 const EVIDENCE_KEYS = new Set([...SCALAR_FAMILIES, 'platforms', 'projects']);
 const PROBE_DESCRIPTOR_KEYS = new Set(['modulePath', 'args']);
 const PROBE_MANIFEST_KEYS = new Set(['schema', 'version', 'probes']);
+const SOURCE_DESCRIPTOR_KEYS = new Set(['modulePath', 'exportName', 'sourceDigest']);
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -265,7 +268,53 @@ function resolveTrackedProbePath(repoRoot, modulePath) {
 }
 
 function sourceDigest(path) {
-  return `sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`;
+  const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+  return `sha256:${createHash('sha256').update(source, 'utf8').digest('hex')}`;
+}
+
+function trackedSourceBytesMatch({ root, absolute, modulePath, expectedHeadSha }) {
+  try {
+    const stats = lstatSync(absolute);
+    const repositoryRoot = realpathSync(root);
+    const sourcePath = realpathSync(absolute);
+    const fromRoot = relative(repositoryRoot, sourcePath);
+    if (!stats.isFile() || stats.isSymbolicLink()
+      || fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) return false;
+    const gitBytes = execFileSync('git', ['-C', repositoryRoot, 'show', `${expectedHeadSha}:${modulePath}`], {
+      encoding: null,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    const committedSource = gitBytes.toString('utf8').replace(/\r\n/g, '\n');
+    const workingSource = readFileSync(absolute, 'utf8').replace(/\r\n/g, '\n');
+    return committedSource === workingSource;
+  } catch {
+    return false;
+  }
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (!isObject(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]));
+}
+
+function canonicalProbeReceipt({ family, source, expected, facts, observationRefs }) {
+  const receipt = {
+    schema: 'orchestra.cutover-probe-receipt.v1',
+    family,
+    headSha: expected.expectedHeadSha,
+    runtimeImageId: expected.expectedRuntimeImageId,
+    source: {
+      modulePath: source.modulePath,
+      exportName: source.exportName,
+      sourceDigest: source.sourceDigest,
+    },
+    facts,
+    observationRefs: [...new Set(observationRefs)].sort(),
+  };
+  const digest = createHash('sha256').update(JSON.stringify(canonicalValue(receipt)), 'utf8').digest('hex');
+  return `${PROBE_RECEIPT_PREFIX}${digest}`;
 }
 
 async function canonicalProbeExecutor({
@@ -284,7 +333,7 @@ async function canonicalProbeExecutor({
   }
 
   const resolvedPath = resolveTrackedProbePath(repoRoot, descriptor.modulePath);
-  if (!resolvedPath) {
+  if (!resolvedPath || resolvedPath.modulePath !== CANONICAL_PROBE_MODULE_PATH) {
     addUnique(errors, `${path}:probe-descriptor`);
     return null;
   }
@@ -298,6 +347,14 @@ async function canonicalProbeExecutor({
   const tracked = git(resolvedPath.root, ['ls-files', '--error-unmatch', '--', resolvedPath.modulePath]);
   if (!tracked.ok) {
     addUnique(errors, `${path}:source-untracked`);
+    return null;
+  }
+
+  if (!trackedSourceBytesMatch({
+    ...resolvedPath,
+    expectedHeadSha: expected.expectedHeadSha,
+  })) {
+    addUnique(errors, `${path}:source-bytes`);
     return null;
   }
 
@@ -356,9 +413,18 @@ async function canonicalProbeExecutor({
       args,
       probeSource: sources[path],
     }));
-    if (!isObject(result)) return result;
-    const refs = Array.isArray(result.evidenceRefs) ? [...result.evidenceRefs] : result.evidenceRefs;
-    if (Array.isArray(refs) && !refs.includes(digest)) refs.push(digest);
+    if (!isObject(result) || !Array.isArray(result.evidenceRefs)
+      || !isObject(result.facts) || !isJsonValue(result.facts)) return result;
+    const refs = [...new Set(result.evidenceRefs)];
+    const receipt = canonicalProbeReceipt({
+      family: probeFamilyPath(path),
+      source: sources[path],
+      expected,
+      facts: result.facts,
+      observationRefs: refs,
+    });
+    if (!refs.includes(digest)) refs.push(digest);
+    refs.push(receipt);
     return { ...result, evidenceRefs: refs };
   };
 }
@@ -667,24 +733,144 @@ export function mergeCutoverReadinessEvidence({
   });
 }
 
-export function mergeCanonicalCutoverReadinessEvidence({
+function canonicalSourceFamily(path) {
+  if (SCALAR_FAMILIES.includes(path)) return path;
+  if (path === 'platforms.windows' || path === 'platforms.posix') return path;
+  if (/^projects\[\d+\]$/.test(path)) return 'projects';
+  return null;
+}
+
+function canonicalRecords(fragment) {
+  const records = [];
+  for (const family of SCALAR_FAMILIES) {
+    if (Object.hasOwn(fragment.evidence ?? {}, family)) {
+      records.push({ family, record: fragment.evidence[family] });
+    }
+  }
+  for (const platform of PLATFORM_FAMILIES) {
+    const record = fragment.evidence?.platforms?.[platform];
+    if (record !== undefined) records.push({ family: `platforms.${platform}`, record });
+  }
+  if (Array.isArray(fragment.evidence?.projects)) {
+    for (const record of fragment.evidence.projects) records.push({ family: 'projects', record });
+  }
+  return records;
+}
+
+async function validateCanonicalSource({ path, source, family, repoRoot, expected }) {
+  if (!hasOnlyKeys(source, SOURCE_DESCRIPTOR_KEYS)
+    || typeof source.modulePath !== 'string'
+    || source.modulePath !== CANONICAL_PROBE_MODULE_PATH
+    || typeof source.exportName !== 'string'
+    || !/^sha256:[0-9a-f]{64}$/.test(source.sourceDigest)) return false;
+  const resolvedPath = resolveTrackedProbePath(repoRoot, source.modulePath);
+  if (!resolvedPath) return false;
+  const head = git(resolvedPath.root, ['rev-parse', 'HEAD']);
+  if (!head.ok || head.stdout !== expected.expectedHeadSha) return false;
+  const tracked = git(resolvedPath.root, ['ls-files', '--error-unmatch', '--', resolvedPath.modulePath]);
+  if (!tracked.ok) return false;
+  const dirty = git(resolvedPath.root, ['status', '--porcelain', '--untracked-files=all']);
+  if (!dirty.ok || dirty.stdout.length > 0) return false;
+  if (!trackedSourceBytesMatch({
+    ...resolvedPath,
+    expectedHeadSha: expected.expectedHeadSha,
+  })) return false;
+  let actualDigest;
+  let module;
+  try {
+    actualDigest = sourceDigest(resolvedPath.absolute);
+    if (actualDigest !== source.sourceDigest) return false;
+    module = await import(`${pathToFileURL(resolvedPath.absolute).href}?orchestra_probe_verify=${actualDigest.slice('sha256:'.length)}`);
+  } catch {
+    return false;
+  }
+  const manifest = module.readinessProbeManifest;
+  const familyPath = probeFamilyPath(path);
+  return hasOnlyKeys(manifest, PROBE_MANIFEST_KEYS)
+    && manifest.schema === CUTOVER_READINESS_PROBE_MODULE_SCHEMA
+    && manifest.version === 1
+    && isObject(manifest.probes)
+    && manifest.probes[familyPath] === source.exportName
+    && typeof module[source.exportName] === 'function'
+    && family !== null;
+}
+
+async function validateCanonicalFragmentSources(fragment, repoRoot, expected, index, errors) {
+  const prefix = `fragment[${index}]`;
+  if (!isObject(fragment) || fragment.collectionMode !== CUTOVER_READINESS_COLLECTION_MODE) {
+    addUnique(errors, `${prefix}:collectionMode`);
+    return false;
+  }
+  if (!isObject(fragment.probeSources)) {
+    addUnique(errors, `${prefix}:probeSources`);
+    return false;
+  }
+  const sources = Object.entries(fragment.probeSources);
+  if (sources.some(([path]) => canonicalSourceFamily(path) === null)) {
+    addUnique(errors, `${prefix}:probe-source-family`);
+    return false;
+  }
+  for (const [path, source] of sources) {
+    const family = canonicalSourceFamily(path);
+    if (!await validateCanonicalSource({ path, source, family, repoRoot, expected })) {
+      addUnique(errors, `${prefix}:${path}:probe-source`);
+      return false;
+    }
+  }
+  for (const { family, record } of canonicalRecords(fragment)) {
+    const linked = sources.some(([path, source]) => {
+      if (canonicalSourceFamily(path) !== family
+        || !isObject(record?.facts)
+        || !isJsonValue(record.facts)
+        || !Array.isArray(record?.evidenceRefs)
+        || !record.evidenceRefs.includes(source.sourceDigest)
+        || !Array.isArray(fragment.evidenceRefs)
+        || !fragment.evidenceRefs.includes(source.sourceDigest)) return false;
+      const receipts = record.evidenceRefs.filter((ref) => ref.startsWith(PROBE_RECEIPT_PREFIX));
+      const expectedReceipt = canonicalProbeReceipt({
+        family,
+        source,
+        expected,
+        facts: record.facts,
+        observationRefs: record.evidenceRefs
+          .filter((ref) => ref !== source.sourceDigest && !ref.startsWith(PROBE_RECEIPT_PREFIX)),
+      });
+      return receipts.length === 1
+        && receipts[0] === expectedReceipt
+        && fragment.evidenceRefs.includes(expectedReceipt);
+    });
+    if (!linked) {
+      addUnique(errors, `${prefix}:${family}:record-receipt`);
+      return false;
+    }
+  }
+  return true;
+}
+
+export async function mergeCanonicalCutoverReadinessEvidence({
+  repoRoot,
   expectedHeadSha,
   expectedRuntimeImageId,
   fragments = [],
   providerFieldEvidence = {},
 } = {}) {
-  identity({ expectedHeadSha, expectedRuntimeImageId });
+  const expected = identity({ expectedHeadSha, expectedRuntimeImageId });
   if (!Array.isArray(fragments)) throw new TypeError('fragments must be an array');
 
   const canonicalErrors = [];
   const canonicalFragments = [];
+  if (typeof repoRoot !== 'string' || repoRoot.trim().length === 0) {
+    addUnique(canonicalErrors, 'repoRoot');
+  } else {
+    const head = git(repoRoot, ['rev-parse', 'HEAD']);
+    const dirty = git(repoRoot, ['status', '--porcelain', '--untracked-files=all']);
+    if (!head.ok || head.stdout !== expectedHeadSha) addUnique(canonicalErrors, 'source-head');
+    if (!dirty.ok || dirty.stdout.length > 0) addUnique(canonicalErrors, 'source-repo-dirty');
+  }
   for (let index = 0; index < fragments.length; index += 1) {
     const fragment = fragments[index];
-    if (!isObject(fragment) || fragment.collectionMode !== CUTOVER_READINESS_COLLECTION_MODE
-      || !isObject(fragment.probeSources)) {
-      addUnique(canonicalErrors, `fragment[${index}]:collectionMode`);
-      continue;
-    }
+    if (canonicalErrors.length > 0) continue;
+    if (!await validateCanonicalFragmentSources(fragment, repoRoot, expected, index, canonicalErrors)) continue;
     canonicalFragments.push(fragment);
   }
 

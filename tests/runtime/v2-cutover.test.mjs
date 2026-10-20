@@ -21,6 +21,7 @@ import {
 const HEAD = 'a'.repeat(40);
 const RUNTIME_IMAGE = 'sha256:' + 'b'.repeat(64);
 const RUNTIME_IMAGE_B = 'sha256:' + 'd'.repeat(64);
+const HOME_IDENTITY = `sha256:${'e'.repeat(64)}`;
 const FIXED_NOW = '2026-10-17T23:30:00.000Z';
 const GLOBAL_LAUNCHER = fileURLToPath(new URL('../../v2/global/orchestra.mjs', import.meta.url));
 const CURRENT_NODE_MAJOR = Number(process.versions.node.split('.')[0]);
@@ -69,11 +70,13 @@ function completeEvidence() {
         projectId: 'prj_alpha',
         lineageId: 'lineage_alpha',
         noFullLocalGovernanceRuntime: true,
+        homeIdentity: HOME_IDENTITY,
       }),
       verified(HEAD, {
         projectId: 'prj_beta',
         lineageId: 'lineage_beta',
         noFullLocalGovernanceRuntime: true,
+        homeIdentity: HOME_IDENTITY,
       }),
     ],
     selfHost: verified(HEAD, {
@@ -81,6 +84,7 @@ function completeEvidence() {
       lineageId: 'lineage_orchestra',
       runtimeImageId: RUNTIME_IMAGE,
       noFullLocalGovernanceRuntime: true,
+      homeIdentity: HOME_IDENTITY,
     }),
     v1Compatibility: verified(),
   };
@@ -180,6 +184,7 @@ test('one lineage repeated twice does not satisfy the independent-project requir
     projectId: 'prj_beta',
     lineageId: 'lineage_alpha',
     noFullLocalGovernanceRuntime: true,
+    homeIdentity: HOME_IDENTITY,
   });
 
   const result = evaluateCutoverReadiness({
@@ -189,6 +194,25 @@ test('one lineage repeated twice does not satisfy the independent-project requir
 
   assert.equal(result.ready, false);
   assert.ok(result.invalid.includes('projects:independent-lineages'));
+});
+
+test('self-host readiness rejects a Home different from the independent Projects Home', () => {
+  const evidence = completeEvidence();
+  evidence.selfHost = verified(HEAD, {
+    projectId: 'prj_orchestra',
+    lineageId: 'lineage_orchestra',
+    runtimeImageId: RUNTIME_IMAGE,
+    noFullLocalGovernanceRuntime: true,
+    homeIdentity: `sha256:${'f'.repeat(64)}`,
+  });
+
+  const result = evaluateCutoverReadiness({
+    expectedHeadSha: HEAD,
+    evidence,
+  });
+
+  assert.equal(result.ready, false);
+  assert.ok(result.invalid.includes('selfHost:home-identity'));
 });
 
 test('stale exact-head evidence cannot satisfy readiness', () => {

@@ -103,6 +103,7 @@ if (NODE_MAJOR < 24) {
       assert.equal(fragment.evidence.projects[0].facts.projectId, fixture.project.projectId);
       assert.equal(fragment.evidence.projects[0].facts.lineageId, fixture.project.lineageId);
       assert.equal(fragment.evidence.projects[0].facts.noFullLocalGovernanceRuntime, true);
+      assert.match(fragment.evidence.projects[0].facts.homeIdentity, /^sha256:[0-9a-f]{64}$/);
       assert.match(fragment.evidenceRefs[0], /^sha256:[0-9a-f]{64}$/);
     } finally {
       rmSync(fixture.projectRoot, { recursive: true, force: true });
@@ -195,9 +196,17 @@ if (NODE_MAJOR < 24) {
         expectedRuntimeImageId: RUNTIME_IMAGE,
         args: { home, projectId: setup.project.projectId, operationId },
       });
+      const { project } = await import('../../v2/cutover/readiness-probes.mjs');
+      const projectProbe = await project({
+        expectedHeadSha: HEAD,
+        expectedRuntimeImageId: RUNTIME_IMAGE,
+        args: { home, projectId: setup.project.projectId },
+      });
 
       assert.equal(probe.ok, false);
       assert.equal(probe.facts.noFullLocalGovernanceRuntime, false);
+      assert.match(probe.facts.homeIdentity, /^sha256:[0-9a-f]{64}$/);
+      assert.equal(projectProbe.facts.homeIdentity, probe.facts.homeIdentity);
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

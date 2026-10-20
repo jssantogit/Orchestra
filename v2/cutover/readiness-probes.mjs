@@ -103,6 +103,16 @@ function realDirectory(path) {
   }
 }
 
+function homeIdentity(home) {
+  try {
+    const canonical = realpathSync(home);
+    const normalized = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+    return `sha256:${createHash('sha256').update(normalized, 'utf8').digest('hex')}`;
+  } catch {
+    return null;
+  }
+}
+
 function noFullLocalGovernanceRuntime(root) {
   return FULL_LOCAL_GOVERNANCE_MARKERS.every((marker) => !existsSync(join(root, marker)));
 }
@@ -602,6 +612,7 @@ export async function posixPlatform({ expectedHeadSha, expectedRuntimeImageId, a
 
 export async function project({ expectedHeadSha, expectedRuntimeImageId, args } = {}) {
   const input = requireArgs(args, new Set(['home', 'projectId']), ['home', 'projectId']);
+  const homeId = homeIdentity(input.home);
   const registry = await openRegistry(input.home);
   let projectRecord;
   try {
@@ -624,7 +635,8 @@ export async function project({ expectedHeadSha, expectedRuntimeImageId, args } 
   const ok = projectRecord !== null
     && projectMatchesRuntime(projectRecord, expectedRuntimeImageId)
     && canonicalGit
-    && noLocalBrain;
+    && noLocalBrain
+    && homeId !== null;
   return result({
     ok,
     expectedHeadSha,
@@ -634,6 +646,7 @@ export async function project({ expectedHeadSha, expectedRuntimeImageId, args } 
       projectId: projectRecord?.projectId ?? '',
       lineageId: projectRecord?.lineageId ?? '',
       noFullLocalGovernanceRuntime: noLocalBrain,
+      homeIdentity: homeId ?? '',
     },
     snapshot: {
       projectId: projectRecord?.projectId ?? null,
@@ -641,6 +654,7 @@ export async function project({ expectedHeadSha, expectedRuntimeImageId, args } 
       runtimeImageId: projectRecord?.runtime?.pinnedImage ?? null,
       canonicalGit,
       noLocalBrain,
+      homeIdentity: homeId,
     },
   });
 }
@@ -682,6 +696,7 @@ export async function selfHost({ expectedHeadSha, expectedRuntimeImageId, args }
   }
   const root = projectRecord?.workspace?.canonicalRoot ?? null;
   const realRoot = typeof root === 'string' ? realDirectory(root) : null;
+  const homeId = homeIdentity(input.home);
   const statePath = resolveGlobalRegistryPaths({ home: input.home }).statePath;
   const globalStateOutsideProject = realRoot !== null && !inside(realRoot, statePath);
   const sourceIdentity = realRoot !== null && orchestraSourceIdentity(realRoot);
@@ -691,12 +706,16 @@ export async function selfHost({ expectedHeadSha, expectedRuntimeImageId, args }
     && operation?.workflowState === 'COMPLETED'
     && typeof operation?.resultRef === 'string'
     && operation.resultRef.length > 0;
-  const noLocalBrain = globalStateOutsideProject && thinShim;
+  const noLocalBrain = realRoot !== null
+    && noFullLocalGovernanceRuntime(realRoot)
+    && globalStateOutsideProject
+    && thinShim;
   const ok = projectRecord !== null
     && projectMatchesRuntime(projectRecord, expectedRuntimeImageId)
     && sourceIdentity
     && terminalMutation
-    && noLocalBrain;
+    && noLocalBrain
+    && homeId !== null;
   return result({
     ok,
     expectedHeadSha,
@@ -707,6 +726,7 @@ export async function selfHost({ expectedHeadSha, expectedRuntimeImageId, args }
       lineageId: projectRecord?.lineageId ?? '',
       runtimeImageId: projectRecord?.runtime?.pinnedImage ?? '',
       noFullLocalGovernanceRuntime: noLocalBrain,
+      homeIdentity: homeId ?? '',
     },
     snapshot: {
       projectId: projectRecord?.projectId ?? null,
@@ -715,6 +735,7 @@ export async function selfHost({ expectedHeadSha, expectedRuntimeImageId, args }
       terminalMutation,
       globalStateOutsideProject,
       thinShim,
+      homeIdentity: homeId,
     },
   });
 }

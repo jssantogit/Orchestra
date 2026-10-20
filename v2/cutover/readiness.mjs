@@ -173,6 +173,7 @@ export function evaluateCutoverReadiness({ expectedHeadSha, evidence } = {}) {
     );
   }
 
+  const projectHomeIdentities = new Set();
   if (!Array.isArray(input.projects)) {
     if ('projects' in input) addUnique(invalid, 'projects:shape');
   } else {
@@ -192,6 +193,12 @@ export function evaluateCutoverReadiness({ expectedHeadSha, evidence } = {}) {
         if (record?.facts?.noFullLocalGovernanceRuntime !== true) {
           addUnique(invalid, 'projects:no-full-local-governance-runtime');
         }
+        const homeIdentity = record?.facts?.homeIdentity;
+        if (typeof homeIdentity !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(homeIdentity)) {
+          addUnique(invalid, `${path}:home-identity`);
+        } else {
+          projectHomeIdentities.add(homeIdentity);
+        }
         if (
           typeof projectId === 'string' && projectId.length > 0 &&
           typeof lineageId === 'string' && lineageId.length > 0
@@ -206,6 +213,7 @@ export function evaluateCutoverReadiness({ expectedHeadSha, evidence } = {}) {
     if (projectIds.size < 2 || lineageIds.size < 2) {
       addUnique(invalid, 'projects:independent-lineages');
     }
+    if (projectHomeIdentities.size !== 1) addUnique(invalid, 'projects:home-identity');
   }
 
   if (validateVerifiedRecord(
@@ -218,6 +226,12 @@ export function evaluateCutoverReadiness({ expectedHeadSha, evidence } = {}) {
     requireNonEmptyString(input.selfHost, 'selfHost', 'projectId', invalid);
     requireNonEmptyString(input.selfHost, 'selfHost', 'lineageId', invalid);
     requireNonEmptyString(input.selfHost, 'selfHost', 'runtimeImageId', invalid);
+    const selfHostHomeIdentity = input.selfHost?.facts?.homeIdentity;
+    if (!/^sha256:[0-9a-f]{64}$/.test(selfHostHomeIdentity ?? '')
+      || projectHomeIdentities.size !== 1
+      || !projectHomeIdentities.has(selfHostHomeIdentity)) {
+      addUnique(invalid, 'selfHost:home-identity');
+    }
     if (input.selfHost?.facts?.noFullLocalGovernanceRuntime !== true) {
       addUnique(invalid, 'selfHost:no-full-local-governance-runtime');
     }
