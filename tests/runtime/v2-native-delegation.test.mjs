@@ -193,17 +193,11 @@ test("delegated success is re-derived from Home journal, terminal Operation and 
     writeFileSync(join(path, "tracked.txt"), "delegated\n");
   }));
   assert.equal(result.ok, true, JSON.stringify(result));
+  // The controller and artifact may be factual, but this controlled
+  // executor has no observed OS child-close receipt. It must never become
+  // a native RSI experience, even after reopening Home.
   const original = ctx.state.nativeRsi.listObserved({ runtimeImageId: "sha256:exact-image" });
-  assert.equal(original.length, 1);
-  assert.equal(original[0].source.operationId, result.operationId);
-  assert.deepEqual(original[0].decision, {
-    immutableRoutes: ["DIRECT_WORK", "DELEGATED"],
-    legalRoutes: ["DIRECT_WORK", "DELEGATED"],
-    selectedRoute: "DELEGATED",
-  });
-  assert.equal(original[0].outcome.success, true);
-  assert.match(original[0].evidence.choiceRef, /^sha256:[a-f0-9]{64}$/);
-  assert.match(original[0].evidence.outcomeRef, /^sha256:[a-f0-9]{64}$/);
+  assert.deepEqual(original, []);
   ctx.state.close();
   const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
   const reopened = createSqliteState({ dbPath: join(ctx.registry.paths.home, "state", "orchestra.db") });
@@ -220,9 +214,11 @@ test("tampered delegated artifact bytes invalidate its native outcome receipt", 
     writeFileSync(join(path, "tracked.txt"), "delegated\n");
   }));
   assert.equal(result.ok, true);
-  assert.equal(ctx.state.nativeRsi.listObserved().length, 1);
+  assert.equal((await ctx.registry.blobs.verify(result.artifactRef)).valid, true);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
   writeFileSync(ctx.registry.blobs.pathFor(result.artifactRef), "tampered");
-  assert.equal(ctx.state.nativeRsi.listObserved().length, 0);
+  assert.equal((await ctx.registry.blobs.verify(result.artifactRef)).valid, false);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
 });
 
 test("delegated RSI journal rejects caller-authored decisions without native Operation", { skip: !supported }, async (t) => {
@@ -276,7 +272,7 @@ test("retry after successful delegated Work is at-most-once even after state reo
   assert.equal(second.ok, false);
   assert.equal(second.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
   assert.equal(executions, 1);
-  assert.equal(ctx.state.nativeRsi.listObserved().length, 1);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
   assert.equal(ctx.state.operations.inspect(first.operationId).workflowState, "SUCCEEDED");
 });
 
@@ -465,6 +461,11 @@ test("native delegated child PID is bound to Home Operation independently of the
   assert.equal(terminal.terminal.exitCode, 0);
   assert.equal(terminal.terminal.signal, null);
   assert.equal(terminal.terminal.timedOut, false);
+  assert.equal(ctx.state.nativeRsi.listObserved().length, 1,
+    "a real observed child close is eligible for native RSI replay");
+  writeFileSync(terminalStore.pathFor(outcome.operationId), "corrupted-close-receipt");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), [],
+    "replay must re-open and verify the child exit receipt");
 });
 
 
