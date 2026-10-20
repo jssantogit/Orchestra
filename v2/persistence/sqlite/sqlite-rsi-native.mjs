@@ -246,7 +246,8 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
       putTrainingReceipt(receipt) {
         assertOpen();
         if (!receipt || Object.keys(receipt).sort().join(",") !==
-          ["candidateDigest", "policyId", "revision", "seed", "sourceDigest", "trainLineageIds"].sort().join(",")
+          ["schema", "version", "candidateDigest", "policyId", "revision", "seed", "sourceDigest", "trainLineageIds"].sort().join(",")
+          || receipt.schema !== "orchestra.rsi-native-training.v1" || receipt.version !== 1
           || typeof receipt.policyId !== "string" || !receipt.policyId
           || !Number.isInteger(receipt.revision) || receipt.revision < 1
           || !REF.test(receipt.sourceDigest) || !REF.test(receipt.candidateDigest)
