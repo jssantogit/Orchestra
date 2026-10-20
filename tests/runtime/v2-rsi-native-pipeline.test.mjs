@@ -107,3 +107,17 @@ test("legacy one-lineage or PROJECT-only Experience cannot fake native observati
   assert.equal(result.ok, false);
   assert.equal(x.candidates.size, 0);
 });
+
+test("native direct-only routes cannot be certified as learned choices", () => {
+  const records = ["a", "b", "c", "d"].map(lineage => row(lineage));
+  for (const item of records) {
+    item.decision.immutableRoutes = ["DIRECT_WORK"];
+    item.decision.legalRoutes = ["DIRECT_WORK"];
+  }
+  const x = backing(records);
+  const result = trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_TRAIN_CHOICE_SPACE_INSUFFICIENT");
+  assert.equal(x.candidates.size, 0);
+  assert.equal(x.receipts.size, 0);
+});
