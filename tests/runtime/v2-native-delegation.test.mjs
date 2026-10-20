@@ -12,7 +12,7 @@ import { executeNativeDelegatedWork } from "../../runtime/delegation/v2-native-e
 const supported = Number(process.versions.node.split(".")[0]) >= 22;
 const ACTOR = "sha256:" + "a".repeat(64);
 // Real journal elapsed time must remain non-negative regardless of CI clock.
-const now = new Date(Date.now() - 1_000).toISOString();
+const now = () => new Date(Date.now() - 1_000).toISOString();
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
 async function setup(t) {
   const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
@@ -49,7 +49,7 @@ async function setup(t) {
   assert.equal(state.sessionObservations.put({
     provider: "codex", projectId, actorIdHash: ACTOR,
     observedInstructionEpoch: 0, observedWorkId: workId, observedGeneration: generation,
-    observedAt: now,
+    observedAt: now(),
   }).ok, true);
   const source = readWorkspaceFingerprint(repoRoot, { excludedPaths: [".orchestra/state/**"] });
   const request = {
@@ -99,7 +99,7 @@ function command(ctx, worker, overrides = {}) {
     registry: ctx.registry, projectId: ctx.projectId, workId: ctx.workId,
     generation: ctx.generation, actor: { provider: "codex", actorIdHash: ACTOR },
     request: ctx.request, executor: worker,
-    now: () => now, ...overrides,
+    now, ...overrides,
   });
 }
 
@@ -193,17 +193,11 @@ test("delegated success is re-derived from Home journal, terminal Operation and 
     writeFileSync(join(path, "tracked.txt"), "delegated\n");
   }));
   assert.equal(result.ok, true, JSON.stringify(result));
+  // The controller and artifact may be factual, but this controlled
+  // executor has no observed OS child-close receipt. It must never become
+  // a native RSI experience, even after reopening Home.
   const original = ctx.state.nativeRsi.listObserved({ runtimeImageId: "sha256:exact-image" });
-  assert.equal(original.length, 1);
-  assert.equal(original[0].source.operationId, result.operationId);
-  assert.deepEqual(original[0].decision, {
-    immutableRoutes: ["DIRECT_WORK", "DELEGATED"],
-    legalRoutes: ["DIRECT_WORK", "DELEGATED"],
-    selectedRoute: "DELEGATED",
-  });
-  assert.equal(original[0].outcome.success, true);
-  assert.match(original[0].evidence.choiceRef, /^sha256:[a-f0-9]{64}$/);
-  assert.match(original[0].evidence.outcomeRef, /^sha256:[a-f0-9]{64}$/);
+  assert.deepEqual(original, []);
   ctx.state.close();
   const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
   const reopened = createSqliteState({ dbPath: join(ctx.registry.paths.home, "state", "orchestra.db") });
@@ -220,9 +214,11 @@ test("tampered delegated artifact bytes invalidate its native outcome receipt", 
     writeFileSync(join(path, "tracked.txt"), "delegated\n");
   }));
   assert.equal(result.ok, true);
-  assert.equal(ctx.state.nativeRsi.listObserved().length, 1);
+  assert.equal((await ctx.registry.blobs.verify(result.artifactRef)).valid, true);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
   writeFileSync(ctx.registry.blobs.pathFor(result.artifactRef), "tampered");
-  assert.equal(ctx.state.nativeRsi.listObserved().length, 0);
+  assert.equal((await ctx.registry.blobs.verify(result.artifactRef)).valid, false);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
 });
 
 test("delegated RSI journal rejects caller-authored decisions without native Operation", { skip: !supported }, async (t) => {
@@ -249,5 +245,353 @@ test("corrupt native terminal journal reports an unverified receipt instead of l
   }), { registry: { ...ctx.registry, state: wrapped } });
   assert.equal(result.ok, false);
   assert.equal(result.code, "NATIVE_DELEGATION_TERMINAL_RECEIPT_UNVERIFIED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
+
+
+test("retry after successful delegated Work is at-most-once even after state reopen", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let executions = 0;
+  const worker = executor(async path => {
+    executions++;
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  });
+  const first = await command(ctx, worker);
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
+  const reopened = createSqliteState({ dbPath: join(ctx.registry.paths.home, "state", "orchestra.db") });
+  let second;
+  try {
+    second = await command(ctx, worker, {
+      registry: { ...ctx.registry, state: reopened },
+      now: () => new Date(Date.now()).toISOString(),
+    });
+  } finally {
+    reopened.close();
+  }
+  assert.equal(second.ok, false);
+  assert.equal(second.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
+  assert.equal(executions, 1);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+  assert.equal(ctx.state.operations.inspect(first.operationId).workflowState, "SUCCEEDED");
+});
+
+test("retry of a failed delegated Work is blocked until explicit reconciled new generation", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let executions = 0;
+  const worker = executor(async () => { executions++; throw new Error("worker failure"); });
+  const first = await command(ctx, worker);
+  assert.equal(first.ok, false);
+  assert.equal(first.code, "NATIVE_DELEGATION_WORKER_FAILED");
+  const repeated = await command(ctx, worker);
+  assert.equal(repeated.ok, false);
+  assert.equal(repeated.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
+  assert.equal(executions, 1);
+  assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
+
+test("same delegation ID with modified payload cannot bypass at-most-once fence", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  let executions = 0;
+  const worker = executor(async path => {
+    executions++;
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  });
+  assert.equal((await command(ctx, worker)).ok, true);
+  const tampered = {
+    ...ctx.request,
+    packet: { ...ctx.request.packet, goal: "a different instruction" },
+  };
+  const second = await command(ctx, worker, { request: tampered });
+  assert.equal(second.ok, false);
+  assert.equal(second.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
+  assert.equal(executions, 1);
+});
+
+
+test("delegated LIVE Operation persists an OS birth-bound owner and accepts matching birth proof", { skip: !supported || process.platform === "darwin" }, async (t) => {
+  const ctx = await setup(t);
+  let owner;
+  const result = await command(ctx, executor(async path => {
+    const op = ctx.state.operations.listLive({ projectId: ctx.projectId })[0];
+    assert.equal(op?.kind, "DELEGATED_MUTATION");
+    assert.equal(typeof op.runtimeOwnerRef, "string");
+    assert.ok(op.runtimeOwnerRef);
+    const { createRuntimeOwnerStore } = await import("../../v2/liveness/runtime-owner-store.mjs");
+    const store = createRuntimeOwnerStore({ rootDir: join(ctx.registry.paths.home, "runtime-owners") });
+    owner = await store.read(op.runtimeOwnerRef);
+    assert.equal(owner.operationId, op.operationId);
+    assert.equal(owner.kind, "LOCAL_PROCESS");
+    assert.equal(owner.process.pid, process.pid);
+    assert.match(owner.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
+    const { createLocalProcessOwnerProbe } =
+      await import("../../v2/liveness/local-process-probe.mjs");
+    const { createOperationLivenessService } =
+      await import("../../v2/liveness/operation-liveness-service.mjs");
+    // The owner was registered from a real OS process identity. Re-probe
+    // semantics use a deterministic matching observation; on Windows a
+    // separate PowerShell probe can legitimately be temporarily UNAVAILABLE.
+    const service = createOperationLivenessService({
+      runtimeOwnerStore: store,
+      ownerProbe: createLocalProcessOwnerProbe({
+        readProcessIdentity: async (pid) => {
+          assert.equal(pid, process.pid);
+          return { status: "PRESENT", processIdentity: owner.process.startIdentity };
+        },
+      }),
+    });
+    const assessment = await service.assess(op);
+    assert.equal(assessment.liveness, "LIVE", JSON.stringify(assessment));
+    assert.equal(assessment.reason, "OWNER_MATCH_HEARTBEAT_FRESH");
+    writeFileSync(join(path, "tracked.txt"), "delegated\\n");
+  }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(typeof owner.process.startIdentity, "string");
+  assert.ok(owner.process.startIdentity.length > 0);
+});
+
+
+test("delegated clone is recorded in Home before the worker and survives cleanup as audit evidence", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const { createManagedWorkspaceStore, resolveManagedWorkspacePaths } =
+    await import("../../v2/workspaces/managed-workspace-store.mjs");
+  const store = createManagedWorkspaceStore({ home: ctx.registry.paths.home });
+  let observed, scratch;
+  const result = await command(ctx, executor(async path => {
+    const operation = ctx.state.operations.listLive({ projectId: ctx.projectId })[0];
+    assert.equal(operation?.kind, "DELEGATED_MUTATION");
+    observed = await store.read("workspace:delegated:" + operation.operationId);
+    assert.ok(observed, "clone must be durable before provider process starts");
+    const { dirname, relative, isAbsolute } = await import("node:path");
+    scratch = dirname(path);
+    assert.equal(observed.schema, "orchestra.managed-workspace.v2");
+    assert.equal(observed.operationId, operation.operationId);
+    assert.equal(observed.projectId, ctx.projectId);
+    assert.equal(observed.workId, ctx.workId);
+    assert.equal(observed.generation, ctx.generation);
+    assert.equal(observed.root, scratch);
+    assert.equal(observed.kind, "TRANSIENT_GIT_CLONE");
+    const roots = resolveManagedWorkspacePaths({ home: ctx.registry.paths.home });
+    const rel = relative(roots.instancesRoot, observed.root);
+    assert.ok(rel && rel !== ".." && !rel.startsWith("..") && !isAbsolute(rel));
+    assert.equal(rel.includes("/") || rel.includes("\\"), false, "one managed instance directory");
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(existsSync(scratch), false, "normal cleanup removes only this sandbox");
+  assert.deepEqual(await store.read("workspace:delegated:" + result.operationId), observed);
+});
+
+test("a missing or rejected durable delegated clone association blocks worker dispatch", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const { createManagedWorkspaceStore } =
+    await import("../../v2/workspaces/managed-workspace-store.mjs");
+  const genuine = createManagedWorkspaceStore({ home: ctx.registry.paths.home });
+  let attempts = 0;
+  let workerCalls = 0;
+  const fakeStore = {
+    async register(record) {
+      attempts += 1;
+      assert.equal(record.kind, "TRANSIENT_GIT_CLONE");
+      return { ok: false, reason: "MANAGED_WORKSPACE_ID_CONFLICT" };
+    },
+    read: (...args) => genuine.read(...args),
+  };
+  const result = await command(ctx, executor(async () => { workerCalls++; }), {
+    managedWorkspaceStore: fakeStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_WORKSPACE_UNVERIFIED");
+  assert.equal(attempts, 1);
+  assert.equal(workerCalls, 0);
+  assert.equal(ctx.state.nativeRsi.listObserved().length, 0);
+  assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
+});
+
+
+test("native delegated child PID is bound to Home Operation independently of the controller", { skip: !supported || process.platform === "darwin" }, async (t) => {
+  const ctx = await setup(t);
+  const { runBoundedProcess } = await import("../../runtime/delegation/process-runner.mjs");
+  const worker = {
+    provider: "antigravity",
+    async discover() {
+      return { provider: "antigravity", available: true, version: "controlled-node-fixture",
+        capabilities: { implementation: true } };
+    },
+    async execute({ workspace, onProcessSpawn, onProcessExit }) {
+      assert.equal(typeof onProcessSpawn, "function");
+      assert.equal(typeof onProcessExit, "function");
+      const ran = await runBoundedProcess({
+        command: process.execPath,
+        args: ["-e",
+          "process.stdin.on('data', () => { require('fs').writeFileSync('tracked.txt', 'delegated\\n'); process.exit(0) })"],
+        cwd: workspace.path, input: "envelope",
+        timeoutMs: 20_000, maxOutputBytes: 4096,
+        onSpawn: onProcessSpawn,
+        onExit: onProcessExit,
+      });
+      return { ok: ran.exitCode === 0, provider: "antigravity",
+        execution: { exitCode: ran.exitCode, durationMs: ran.durationMs },
+        report: { summary: "Scoped edit", findings: [], evidenceRefs: [] } };
+    },
+  };
+  const outcome = await command(ctx, worker);
+  assert.equal(outcome.ok, true, JSON.stringify(outcome));
+  const { createRuntimeOwnerStore } = await import("../../v2/liveness/runtime-owner-store.mjs");
+  const store = createRuntimeOwnerStore({ rootDir: join(ctx.registry.paths.home, "runtime-owners") });
+  const child = await store.read("owner_delegated_child_" + outcome.operationId);
+  assert.ok(child);
+  assert.equal(child.operationId, outcome.operationId);
+  assert.equal(child.kind, "LOCAL_PROCESS");
+  assert.ok(child.process.pid > 0);
+  assert.notEqual(child.process.pid, process.pid);
+  assert.ok(child.process.startIdentity);
+  assert.match(child.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
+  const { createDelegatedChildTerminalStore } = await import(
+    "../../runtime/delegation/v2-child-terminal-store.mjs"
+  );
+  const terminalStore = createDelegatedChildTerminalStore({
+    home: ctx.registry.paths.home, runtimeOwnerStore: store,
+  });
+  const terminal = await terminalStore.read(outcome.operationId);
+  assert.equal(terminal.operationId, outcome.operationId);
+  assert.equal(terminal.runtimeOwnerId, child.runtimeOwnerId);
+  assert.deepEqual(terminal.process, child.process);
+  assert.equal(terminal.terminal.exitCode, 0);
+  assert.equal(terminal.terminal.signal, null);
+  assert.equal(terminal.terminal.timedOut, false);
+  assert.equal(ctx.state.nativeRsi.listObserved().length, 1,
+    "a real observed child close is eligible for native RSI replay");
+  writeFileSync(terminalStore.pathFor(outcome.operationId), "corrupted-close-receipt");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), [],
+    "replay must re-open and verify the child exit receipt");
+});
+
+
+test("rejected child birth proof cannot be swallowed by a delegated executor", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const result = await command(ctx, {
+    provider: "antigravity",
+    async discover() {
+      return { provider: "antigravity", available: true, version: "controlled",
+        capabilities: { implementation: true } };
+    },
+    async execute({ workspace, onProcessSpawn }) {
+      await assert.rejects(
+        () => onProcessSpawn({ pid: process.pid }),
+        /NATIVE_DELEGATION_CHILD_UNVERIFIED/,
+      );
+      writeFileSync(join(workspace.path, "tracked.txt"), "attempted\n");
+      return { ok: true, provider: "antigravity", execution: { exitCode: 0, durationMs: 1 },
+        report: { summary: "pretended success", findings: [], evidenceRefs: [] } };
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_CHILD_UNVERIFIED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
+
+
+test("tampered native child-close receipt cannot turn a delegated process into RSI success", { skip: !supported || process.platform === "darwin" }, async t => {
+  const ctx = await setup(t);
+  let isolatedClone = null;
+  const { runBoundedProcess } = await import("../../runtime/delegation/process-runner.mjs");
+  const { createDelegatedChildTerminalStore } = await import("../../runtime/delegation/v2-child-terminal-store.mjs");
+  const { createRuntimeOwnerStore } = await import("../../v2/liveness/runtime-owner-store.mjs");
+  const result = await command(ctx, {
+    provider: "antigravity",
+    async discover() { return { provider: "antigravity", available: true,
+      version: "test-native-child", capabilities: { implementation: true } }; },
+    async execute({ workspace, onProcessSpawn, onProcessExit }) {
+      isolatedClone = workspace.path;
+      const proc = await runBoundedProcess({
+        command: process.execPath,
+        args: ["-e", "process.stdin.once('data', () => process.exit(0))"],
+        input: "envelope", cwd: workspace.path,
+        timeoutMs: 20000, maxOutputBytes: 4096,
+        onSpawn: onProcessSpawn, onExit: onProcessExit,
+      });
+      const op = ctx.state.operations.listLive({ projectId: ctx.projectId })[0];
+      const ownerStore = createRuntimeOwnerStore({
+        rootDir: join(ctx.registry.paths.home, "runtime-owners"),
+      });
+      const terminalStore = createDelegatedChildTerminalStore({
+        home: ctx.registry.paths.home, runtimeOwnerStore: ownerStore,
+      });
+      const path = terminalStore.pathFor(op.operationId);
+      writeFileSync(path, readFileSync(path, "utf8").replace('"exitCode":0', '"exitCode":7'));
+      writeFileSync(join(workspace.path, "tracked.txt"), "delegated\n");
+      return { ok: true, provider: "antigravity",
+        execution: { exitCode: proc.exitCode, durationMs: proc.durationMs },
+        report: { summary: "claimed success", findings: [], evidenceRefs: [] } };
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+  assert.ok(isolatedClone && existsSync(isolatedClone),
+    "uncertain child terminal evidence must preserve the isolated clone");
+});
+
+
+test("test-double delegated success without a native child-close receipt is ineligible for RSI replay", { skip: !supported }, async t => {
+  const ctx = await setup(t);
+  const result = await command(ctx, executor(async path => {
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(ctx.state.operations.inspect(result.operationId).workflowState, "SUCCEEDED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), [],
+    "a controlled fake executor cannot establish factual subprocess provenance");
+});
+
+
+test("a live descendant in the delegated POSIX group blocks native success and preserves clone", { skip: !supported || process.platform !== "linux" }, async (t) => {
+  const ctx = await setup(t);
+  const { runBoundedProcess } = await import("../../runtime/delegation/process-runner.mjs");
+  let processGroupId = null;
+  let isolatedClone = null;
+  t.after(() => {
+    if (Number.isSafeInteger(processGroupId) && processGroupId > 0) {
+      try { process.kill(-processGroupId, "SIGKILL"); }
+      catch (error) { if (error.code !== "ESRCH") throw error; }
+    }
+  });
+  const worker = {
+    provider: "antigravity",
+    async discover() {
+      return { provider: "antigravity", available: true,
+        version: "controlled-descendant", capabilities: { implementation: true } };
+    },
+    async execute({ workspace, onProcessSpawn, onProcessExit }) {
+      isolatedClone = workspace.path;
+      const child = await runBoundedProcess({
+        command: process.execPath,
+        args: ["-e", "process.stdin.once('data', () => {" +
+          "require('node:child_process').spawn(process.execPath," +
+          "['-e', 'setTimeout(() => process.exit(0), 12000)']," +
+          "{ stdio: 'ignore' }); process.exit(0); })"],
+        input: "worker-envelope", cwd: workspace.path,
+        timeoutMs: 20_000, maxOutputBytes: 4096,
+        onSpawn: async observed => {
+          processGroupId = observed.pid;
+          await onProcessSpawn(observed);
+        },
+        onExit: onProcessExit,
+      });
+      assert.equal(child.exitCode, 0);
+      writeFileSync(join(workspace.path, "tracked.txt"), "delegated\n");
+      return { ok: true, provider: "antigravity",
+        execution: { exitCode: child.exitCode, durationMs: child.durationMs },
+        report: { summary: "claimed success with surviving descendant",
+          findings: [], evidenceRefs: [] } };
+    },
+  };
+  const result = await command(ctx, worker);
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(result.code, "NATIVE_DELEGATION_PROCESS_GROUP_STILL_ACTIVE");
+  assert.ok(isolatedClone && existsSync(isolatedClone),
+    "a live descendant must preserve the registered clone for human recovery");
   assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
 });

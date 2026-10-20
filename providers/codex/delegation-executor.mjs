@@ -226,7 +226,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
       }
     },
 
-    async execute({ request, workerEnvelope, workspace } = {}) {
+    async execute({ request, workerEnvelope, workspace, onProcessSpawn = null, onProcessExit = null } = {}) {
       if (!validExecutionInput(request, workerEnvelope, workspace)) {
         return failure("CAPABILITY_DENIED");
       }
@@ -241,7 +241,9 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
       const scratch = mkdtempSync(join(tmpdir(), "orchestra-codex-worker-"));
       const schemaPath = join(scratch, "worker-report.schema.json");
       const resultPath = join(scratch, "worker-report.json");
-      writeFileSync(schemaPath, `${JSON.stringify(WORKER_REPORT_SCHEMA)}\n`, "utf8");
+      const outputSchema = structuredClone(WORKER_REPORT_SCHEMA);
+      delete outputSchema.properties.evidenceRefs.uniqueItems;
+      writeFileSync(schemaPath, `${JSON.stringify(outputSchema)}\n`, "utf8");
 
       let result;
       try {
@@ -262,6 +264,8 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
           timeoutMs: request.limits.timeoutMs,
           maxOutputBytes: request.limits.maxOutputBytes,
           env: processEnvironment(workspace.workerGitEnv ?? {}),
+          ...(typeof onProcessSpawn === "function" ? { onSpawn: onProcessSpawn } : {}),
+          ...(typeof onProcessExit === "function" ? { onExit: onProcessExit } : {}),
         });
       } catch (error) {
         rmSync(scratch, { recursive: true, force: true });

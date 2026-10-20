@@ -87,7 +87,11 @@ export async function runBoundedProcess({
   timeoutMs,
   maxOutputBytes,
   env = undefined,
+  onSpawn = null,
+  onExit = null,
 } = {}) {
+  if (onSpawn !== null && typeof onSpawn !== "function") fail("PROCESS_SPAWN_OBSERVER_INVALID");
+  if (onExit !== null && typeof onExit !== "function") fail("PROCESS_EXIT_OBSERVER_INVALID");
   validateInput({ command, args, timeoutMs, maxOutputBytes, env });
   if (input !== null && input !== undefined && typeof input !== "string" && !Buffer.isBuffer(input)) {
     fail("PROCESS_INPUT_INVALID");
@@ -117,6 +121,7 @@ export async function runBoundedProcess({
 
     let settled = false;
     let timedOut = false;
+    let spawnProofFailure = null;
     const timer = setTimeout(() => {
       timedOut = true;
       killProcessTree(child);
@@ -137,10 +142,76 @@ export async function runBoundedProcess({
       reject(error);
     });
 
-    child.once("close", (exitCode, signal) => {
+    // Do not send the provider's task envelope until the native parent has
+    // durably observed this exact spawned PID. On observer failure, terminate
+    // the process tree and never return successful provider output. Child
+    // processes that act solely from argv can still start before observation,
+    // so this is not a proof that no side effect occurred.
+    let observerTimeout = null;
+    const observer = onSpawn === null ? Promise.resolve() : Promise.race([
+      Promise.resolve().then(() => onSpawn({ pid: child.pid })),
+      new Promise((_, rejectObserver) => {
+        observerTimeout = setTimeout(
+          () => rejectObserver(new Error("PROCESS_SPAWN_PROOF_TIMEOUT")),
+          Math.min(timeoutMs, 15_000),
+        );
+        observerTimeout.unref?.();
+      }),
+    ]);
+    const spawnProof = observer.then(
+      () => {
+        if (!settled) {
+          if (input === null || input === undefined) child.stdin.end();
+          else child.stdin.end(input);
+        }
+      },
+      (cause) => {
+        spawnProofFailure = cause;
+        killProcessTree(child);
+      },
+    ).finally(() => {
+      if (observerTimeout) clearTimeout(observerTimeout);
+    });
+
+    child.once("close", async (exitCode, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      await spawnProof;
+      if (spawnProofFailure) {
+        const error = new Error("PROCESS_SPAWN_PROOF_FAILED");
+        error.code = "PROCESS_SPAWN_PROOF_FAILED";
+        error.cause = spawnProofFailure;
+        reject(error);
+        return;
+      }
+      if (onExit !== null) {
+        // This callback receives facts from this exact child's close event,
+        // never values reported by the worker. A failed Home persistence
+        // prevents an apparently successful provider result.
+        let timeout;
+        try {
+          await Promise.race([
+            Promise.resolve().then(() => onExit({
+              pid: child.pid, exitCode,
+              signal: signal ?? null, timedOut,
+            })),
+            new Promise((_, rejectClose) => {
+              timeout = setTimeout(() => rejectClose(
+                new Error("PROCESS_EXIT_PROOF_TIMEOUT"),
+              ), Math.min(timeoutMs, 15_000));
+            }),
+          ]);
+        } catch (cause) {
+          const error = new Error("PROCESS_EXIT_PROOF_FAILED");
+          error.code = "PROCESS_EXIT_PROOF_FAILED";
+          error.cause = cause;
+          reject(error);
+          return;
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
+      }
       const ended = process.hrtime.bigint();
       resolve({
         exitCode,
@@ -153,8 +224,5 @@ export async function runBoundedProcess({
         timedOut,
       });
     });
-
-    if (input === null || input === undefined) child.stdin.end();
-    else child.stdin.end(input);
   });
 }
