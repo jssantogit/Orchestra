@@ -423,8 +423,9 @@ test("native delegated child PID is bound to Home Operation independently of the
       return { provider: "antigravity", available: true, version: "controlled-node-fixture",
         capabilities: { implementation: true } };
     },
-    async execute({ workspace, onProcessSpawn }) {
+    async execute({ workspace, onProcessSpawn, onProcessExit }) {
       assert.equal(typeof onProcessSpawn, "function");
+      assert.equal(typeof onProcessExit, "function");
       const ran = await runBoundedProcess({
         command: process.execPath,
         args: ["-e",
@@ -432,6 +433,7 @@ test("native delegated child PID is bound to Home Operation independently of the
         cwd: workspace.path, input: "envelope",
         timeoutMs: 20_000, maxOutputBytes: 4096,
         onSpawn: onProcessSpawn,
+        onExit: onProcessExit,
       });
       return { ok: ran.exitCode === 0, provider: "antigravity",
         execution: { exitCode: ran.exitCode, durationMs: ran.durationMs },
@@ -450,6 +452,19 @@ test("native delegated child PID is bound to Home Operation independently of the
   assert.notEqual(child.process.pid, process.pid);
   assert.ok(child.process.startIdentity);
   assert.match(child.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
+  const { createDelegatedChildTerminalStore } = await import(
+    "../../runtime/delegation/v2-child-terminal-store.mjs"
+  );
+  const terminalStore = createDelegatedChildTerminalStore({
+    home: ctx.registry.paths.home, runtimeOwnerStore: store,
+  });
+  const terminal = await terminalStore.read(outcome.operationId);
+  assert.equal(terminal.operationId, outcome.operationId);
+  assert.equal(terminal.runtimeOwnerId, child.runtimeOwnerId);
+  assert.deepEqual(terminal.process, child.process);
+  assert.equal(terminal.terminal.exitCode, 0);
+  assert.equal(terminal.terminal.signal, null);
+  assert.equal(terminal.terminal.timedOut, false);
 });
 
 
