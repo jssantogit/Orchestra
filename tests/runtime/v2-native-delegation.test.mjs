@@ -233,3 +233,20 @@ test("delegated RSI journal rejects caller-authored decisions without native Ope
   assert.equal(attempt.ok, false);
   assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
 });
+
+test("corrupt native terminal journal reports an unverified receipt instead of leaking an exception or claiming readiness", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const wrapped = {
+    ...ctx.state,
+    nativeRsi: {
+      ...ctx.state.nativeRsi,
+      recordDelegatedTerminal() { throw new Error("corrupt journal"); },
+    },
+  };
+  const result = await command(ctx, executor(async path => {
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  }), { registry: { ...ctx.registry, state: wrapped } });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_TERMINAL_RECEIPT_UNVERIFIED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
