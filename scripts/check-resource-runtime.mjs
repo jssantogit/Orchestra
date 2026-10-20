@@ -61,12 +61,39 @@ if (process.argv.includes('--windows-limit')) {
     assert.equal(result.exitCode, 0);
     return { ok: true, worker: JSON.parse(result.stdout), resourceUsage: result.resourceUsage ?? null };
   });
+  let externalPressure = null;
+  if (process.platform === 'linux') {
+    const filler = spawn(process.execPath, ['-e', "globalThis.bytes=Buffer.alloc(2*1024**3,1);process.stdout.write('READY');setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let timer;
+    try {
+      await new Promise((resolveReady, rejectReady) => {
+        timer = setTimeout(() => rejectReady(Error('pressure workload timeout')), 15000);
+        filler.once('error', rejectReady);
+        filler.once('exit', () => rejectReady(Error('pressure workload exited before readiness')));
+        filler.stdout.once('data', (bytes) => bytes.toString() === 'READY' ? resolveReady() : rejectReady(Error('pressure workload invalid')));
+      });
+      const underPressure = sampleMemory();
+      const attempt = await withResourceAdmission({ governor, projectRef: 'second-project-under-pressure' }, () => assert.fail('heavy work must not start under real cgroup pressure'));
+      assert.equal(attempt.reason, 'RESOURCE_BUDGET_UNAVAILABLE');
+      externalPressure = { touchedBytes: 2 * GiB, memory: underPressure, attempt };
+    } finally {
+      clearTimeout(timer);
+      const closed = new Promise((resolveClose) => filler.once('close', resolveClose));
+      filler.kill('SIGKILL');
+      await closed;
+    }
+    const resumed = await withResourceAdmission({ governor, projectRef: 'fresh-revalidated-attempt', bytes: 256 * 1024 ** 2 }, async () => ({ ok: true }));
+    assert.equal(resumed.ok, true);
+    externalPressure.capacityRecheckedAfterOwnerClose = true;
+  }
   const pressure = createResourceGovernor({ home, sample: () => ({ ...sampleMemory(), availableBytes: 0 }) });
   let spawned = false;
   const denied = await withResourceAdmission({ governor: pressure }, () => { spawned = true; });
   assert.equal(denied.ok, false);
   assert.equal(spawned, false);
   const body = { schema: 'orchestra.resource-limited-check.v1', headSha, node: process.version, platform: process.platform, realMemoryLimit: true, memory, controlledWorker: controlled, pressure: denied, activeRssBytes: process.memoryUsage.rss(), beforeRssBytes: before, peakRssKiB: process.resourceUsage().maxRSS, admissionAndControlledWorkerMs: performance.now() - start, directSelectionP95Ms: directTimes[95], nativeProviderEvidence: false, retainedReservations: governor.inspect().leases.length, homeIdentity: `sha256:${createHash('sha256').update(home).digest('hex')}`, limitations: ['Controlled Node child is not a native provider', 'No native RSI or provider field success inferred from this check', 'Host memory pressure can defer even the controlled child'] };
+  writeFileSync(output, JSON.stringify(body, null, 2));
+  body.externalPressure = externalPressure;
   writeFileSync(output, JSON.stringify(body, null, 2));
   console.log(JSON.stringify(body));
 }
