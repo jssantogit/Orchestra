@@ -139,6 +139,8 @@ export async function runDelegationCli({
       generation: args.generation,
       actor: rootActorFor(request),
     });
+    if (['DEFERRED', 'UNKNOWN'].includes(result?.status)
+      && /^RESOURCE_[A-Z_]{1,64}$/.test(result?.reason ?? '')) return fail(stderr, result.reason);
     assertDelegationResult(result);
   } catch {
     return fail(stderr, EXECUTION_ERROR);

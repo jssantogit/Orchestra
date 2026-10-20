@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { withResourceAdmission, currentResourceAdmission } from '../resources/governor.mjs';
 
 import { assertDelegationRequest } from "../../core/domain/delegation.mjs";
 import { assertParallelImplementationGroup } from "../../core/domain/parallel-implementation.mjs";
@@ -252,6 +253,8 @@ export async function executeParallelImplementationGroup({
   group,
   actor,
   executors,
+  resourceGovernor,
+  orchestraHome,
 } = {}, serviceOverrides = {}) {
   const services = mergeServices(serviceOverrides);
   try {
@@ -286,6 +289,7 @@ export async function executeParallelImplementationGroup({
     return { ...resultBase, status: "FAILED", reason: "SCOPE_VIOLATION", members: [] };
   }
 
+  return withResourceAdmission({ governor: resourceGovernor, home: orchestraHome, projectRef: repoRoot, operationRef: group.groupId, workers: group.members.length }, async () => {
   if (!(await baselineDecision(repoRoot, group, services.source)).allowed) {
     return { ...resultBase, status: "FAILED", reason: "WORKSPACE_PREP_FAILED", members: [] };
   }
@@ -360,6 +364,7 @@ export async function executeParallelImplementationGroup({
   const executions = await Promise.all(executionPromises.map(async (promise) => {
     try { return await promise; } catch (error) { return { ok: false, reason: failureReason(error) }; }
   }));
+  if (currentResourceAdmission()?.uncertain) return { ...resultBase, status: 'UNKNOWN', reason: 'RESOURCE_PROCESS_TREE_UNVERIFIED', members: [] };
 
   const inspected = await Promise.all(prepared.map(async (entry) => {
     try { return await services.workspace.inspect(entry.workspace); } catch { return null; }
@@ -471,6 +476,7 @@ export async function executeParallelImplementationGroup({
     reason: null,
     members,
   };
+  });
 }
 
 export { composeParallelArtifacts } from "./composite-artifact-lifecycle.mjs";

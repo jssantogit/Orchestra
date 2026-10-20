@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { executeParallelImplementationGroup } from "../../runtime/delegation/parallel-broker.mjs";
+import { executeParallelImplementationGroup } from '../helpers/resource-governor.mjs';
 
 function packet({ taskId = "parallel-task", generation = 4, area = "src/a/**" } = {}) {
   return {
@@ -70,6 +70,17 @@ function group({ sourceProvider = "codex" } = {}) {
 function actor(provider = "codex") {
   return { provider, actorIdHash: "sha256:root", actorKind: "ROOT", isRoot: true };
 }
+
+test('parallel resource pressure defers the entire group before clone or group mutation', async () => {
+  const value = group();
+  let calls = 0;
+  const result = await executeParallelImplementationGroup({ repoRoot: '/repo', group: value, actor: actor(),
+    resourceGovernor: { reserve: () => ({ ok: false, reason: 'RESOURCE_BUDGET_UNAVAILABLE' }) },
+    executors: [successfulExecutor('codex', () => { calls++; }), successfulExecutor('antigravity', () => { calls++; })],
+  }, { readLease: () => leaseFor(value), source: sourceServices(value), workspace: { ...fakeWorkspace(), prepare: async () => { calls++; } }, groups: { ...fakeGroups(), create: () => { calls++; } } });
+  assert.equal(result.reason, 'RESOURCE_BUDGET_UNAVAILABLE');
+  assert.equal(calls, 0);
+});
 
 function leaseFor(value) {
   return {

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
 import { readDelegationArtifact } from "../../runtime/delegation/artifact-store.mjs";
-import { createDelegationBroker } from "../../runtime/delegation/broker.mjs";
+import { createDelegationBroker } from '../helpers/resource-governor.mjs';
 import { readDelegationRecord } from "../../runtime/delegation/store.mjs";
 
 function git(cwd, ...args) {

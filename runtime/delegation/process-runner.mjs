@@ -1,4 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
+import { withResourceAdmission } from '../resources/governor.mjs';
+import { attachWindowsJob } from '../resources/windows-job.mjs';
+import { readDelegatedProcessGroupStatus } from './v2-process-group-probe.mjs';
 
 const MAX_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_CAPTURE_BYTES = 16 * 1024 * 1024;
@@ -79,7 +82,46 @@ function killProcessTree(child) {
   }
 }
 
-export async function runBoundedProcess({
+export async function runBoundedProcess(input = {}) {
+  validateInput({ command: input.command, args: input.args ?? [], timeoutMs: input.timeoutMs, maxOutputBytes: input.maxOutputBytes, env: input.env });
+  const result = await withResourceAdmission({ governor: input.resourceGovernor, home: input.orchestraHome, signal: input.signal, deadlineAt: input.deadlineAt }, async (admission) => {
+    if (admission.activeChildren >= admission.workers) fail('RESOURCE_BUDGET_UNAVAILABLE');
+    const check = admission.governor.recheck(admission.leaseId);
+    if (!check.ok) fail(check.reason);
+    admission.activeChildren++;
+    admission.spawned = true;
+    let containment;
+    let pid;
+    try {
+      const result = await runAdmittedProcess({ ...input, resourceCheck: () => input.signal?.aborted ? { ok: false } : admission.governor.recheck(admission.leaseId), onSpawn: async (observed) => {
+        pid = observed.pid;
+        if (IS_WINDOWS) containment = attachWindowsJob(pid, Math.floor(admission.bytes / admission.workers));
+        if (input.onSpawn) await input.onSpawn(observed);
+      } });
+      if (result.resourcePressure) fail(input.signal?.aborted ? 'RESOURCE_CANCELLED' : 'RESOURCE_PRESSURE');
+      if (result.timedOut || result.signal !== null) admission.uncertain = true;
+      if (IS_WINDOWS) {
+        const job = containment.inspect();
+        if (job.activeProcesses !== 0) {
+          admission.uncertain = true;
+          fail('RESOURCE_PROCESS_TREE_UNVERIFIED');
+        }
+        result.resourceUsage = job;
+      } else if (readDelegatedProcessGroupStatus(pid) !== 'ABSENT') admission.uncertain = true;
+      return result;
+    } catch (error) {
+      admission.uncertain = true;
+      throw error;
+    } finally {
+      if (containment) containment.close();
+      admission.activeChildren--;
+    }
+  });
+  if (result?.status === 'DEFERRED') fail(result.reason);
+  return result;
+}
+
+async function runAdmittedProcess({
   command,
   args = [],
   cwd = process.cwd(),
@@ -89,6 +131,7 @@ export async function runBoundedProcess({
   env = undefined,
   onSpawn = null,
   onExit = null,
+  resourceCheck,
 } = {}) {
   if (onSpawn !== null && typeof onSpawn !== "function") fail("PROCESS_SPAWN_OBSERVER_INVALID");
   if (onExit !== null && typeof onExit !== "function") fail("PROCESS_EXIT_OBSERVER_INVALID");
@@ -121,12 +164,23 @@ export async function runBoundedProcess({
 
     let settled = false;
     let timedOut = false;
+    let resourcePressure = false;
     let spawnProofFailure = null;
     const timer = setTimeout(() => {
       timedOut = true;
       killProcessTree(child);
     }, timeoutMs);
     timer.unref?.();
+    const resourceTimer = setInterval(() => {
+      let check;
+      try { check = resourceCheck?.(); } catch { check = null; }
+      if (check?.ok !== true) {
+        resourcePressure = true;
+        clearInterval(resourceTimer);
+        killProcessTree(child);
+      }
+    }, 1000);
+    resourceTimer.unref?.();
 
     child.stdout.on("data", (chunk) => stdout.append(chunk));
     child.stderr.on("data", (chunk) => stderr.append(chunk));
@@ -136,6 +190,7 @@ export async function runBoundedProcess({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(resourceTimer);
       const error = new Error("PROCESS_SPAWN_FAILED");
       error.code = "PROCESS_SPAWN_FAILED";
       error.cause = cause;
@@ -177,6 +232,7 @@ export async function runBoundedProcess({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(resourceTimer);
       await spawnProof;
       if (spawnProofFailure) {
         const error = new Error("PROCESS_SPAWN_PROOF_FAILED");
@@ -222,6 +278,7 @@ export async function runBoundedProcess({
         stdoutTruncated: stdout.truncated,
         stderrTruncated: stderr.truncated,
         timedOut,
+        resourcePressure,
       });
     });
   });

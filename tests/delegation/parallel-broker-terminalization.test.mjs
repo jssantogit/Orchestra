@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { executeParallelImplementationGroup } from "../../runtime/delegation/parallel-broker.mjs";
+import { executeParallelImplementationGroup } from '../helpers/resource-governor.mjs';
 
 function packet(area) {
   return {

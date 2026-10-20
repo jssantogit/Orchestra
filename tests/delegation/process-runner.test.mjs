@@ -4,7 +4,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runBoundedProcess } from "../../runtime/delegation/process-runner.mjs";
+import { runBoundedProcess as runProcess } from "../../runtime/delegation/process-runner.mjs";
+import { testResourceGovernor } from '../helpers/resource-governor.mjs';
+const runBoundedProcess = (options) => runProcess({ resourceGovernor: testResourceGovernor(), ...options });
 
 function tempRoot(t) {
   const root = mkdtempSync(join(tmpdir(), "orchestra-process-runner-"));

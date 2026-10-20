@@ -5,8 +5,31 @@ on:
     branches:
       - main
       - feat/v2-*
+      - fix/v2-*
 
 jobs:
+  resource-limit:
+    name: Resource Runtime (Linux 4 GiB real cgroup)
+    runs-on: ubuntu-latest
+    container:
+      image: node:24-bookworm
+      options: --memory=4g --memory-swap=4g --pids-limit=256
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify actual memory limit and safe backpressure
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          ORCHESTRA_RESOURCE_EVIDENCE: resource-evidence.json
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          node scripts/check-resource-runtime.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resource-linux-4g-${{ github.event.pull_request.head.sha }}
+          path: resource-evidence.json
   posix-readiness:
     name: POSIX Readiness (exact PR head)
     if: github.event_name == 'pull_request'
@@ -80,6 +103,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - name: Set up Node.js 24 LTS
         uses: actions/setup-node@v4
@@ -88,6 +114,22 @@ jobs:
 
       - name: Install development dependencies
         run: npm ci --ignore-scripts
+
+      - name: Resource governor regression
+        run: node --test tests/delegation/resource-governor.test.mjs
+
+      - name: Verify actual Windows Job memory limit
+        if: matrix.os == 'windows-latest'
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          ORCHESTRA_RESOURCE_EVIDENCE: ${{ runner.temp }}/orchestra-resource-windows.json
+        run: node scripts/check-resource-runtime.mjs --windows-limit
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows-latest'
+        with:
+          name: resource-windows-4g-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/orchestra-resource-windows.json
 
       - name: Run v2 persistence tests
         run: node --test tests/v2-persistence/*.test.mjs

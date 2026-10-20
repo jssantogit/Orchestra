@@ -26,6 +26,11 @@
       "output": ".orchestra/runtime/delegation/runtime/delegation"
     },
     {
+      "type": "tree",
+      "source": "runtime/resources",
+      "output": ".orchestra/runtime/delegation/runtime/resources"
+    },
+    {
       "type": "file",
       "source": "runtime/project-runtime-manager.mjs",
       "output": ".orchestra/runtime/delegation/runtime/project-runtime-manager.mjs"

@@ -18,6 +18,7 @@ import {
 } from "./workspace.mjs";
 import { writeDelegationRecord } from "./store.mjs";
 import { createDelegationLifecycleEvent } from "./events.mjs";
+import { withResourceAdmission, currentResourceAdmission } from '../resources/governor.mjs';
 
 const UNALLOCATED_WORKSPACE = "UNALLOCATED";
 const FAILURE_REASONS = new Set([
@@ -458,6 +459,7 @@ async function executeReadOnlyLifecycle({
   });
 
   const executionResult = await runExecutor(executor, request, workspaceContext);
+  if (currentResourceAdmission()?.uncertain) return { ok: false, status: 'UNKNOWN', reason: 'RESOURCE_PROCESS_TREE_UNVERIFIED', delegationId: request.delegationId };
   const inspection = await safeInspect(workspace, workspaceContext);
 
   let result;
@@ -562,6 +564,7 @@ async function executeImplementationLifecycle({
   });
 
   const executionResult = await runExecutor(executor, request, workspaceContext);
+  if (currentResourceAdmission()?.uncertain) return { ok: false, status: 'UNKNOWN', reason: 'RESOURCE_PROCESS_TREE_UNVERIFIED', delegationId: request.delegationId };
   const inspection = await safeInspect(workspace, workspaceContext);
   const executorReason = executorFailureReason(executionResult);
   let result = null;
@@ -699,6 +702,8 @@ export function createDelegationBroker({
   artifacts: artifactOverrides = {},
   store: storeOverrides = {},
   events: eventOverrides = {},
+  resourceGovernor,
+  orchestraHome,
 } = {}) {
   const executorMap = normalizeExecutors(executors);
   const workspace = normalizeWorkspace(workspaceOverrides);
@@ -732,6 +737,7 @@ export function createDelegationBroker({
       const executor = executorMap.get(request.target.provider);
       if (!executor) return failureResult(request, "PROVIDER_UNAVAILABLE");
 
+      return withResourceAdmission({ governor: resourceGovernor, home: orchestraHome, projectRef: repoRoot, operationRef: request.delegationId }, async () => {
       let discovery;
       try {
         discovery = await executor.discover();
@@ -768,6 +774,7 @@ export function createDelegationBroker({
         workspace,
         store,
         events,
+      });
       });
     },
   };

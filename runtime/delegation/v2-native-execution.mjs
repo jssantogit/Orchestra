@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { withResourceAdmission } from '../resources/governor.mjs';
 
 import { authorizeDelegationRequest } from "../../core/delegation/policy.mjs";
 import { buildWorkerEnvelope } from "../../core/delegation/worker-envelope.mjs";
@@ -191,7 +192,7 @@ async function sealedBytes(workspace, mutation, binding) {
 // worker produces only a Home-owned sealed candidate, never a canonical edit.
 export async function executeNativeDelegatedWork({
   registry, projectId, workId, generation, actor, request,
-  executor = null, managedWorkspaceStore = null,
+  executor = null, managedWorkspaceStore = null, resourceGovernor,
   now = () => new Date().toISOString(),
 } = {}) {
   const state = registry?.state;
@@ -222,6 +223,7 @@ export async function executeNativeDelegatedWork({
   if (state.operations.inspect(stableOperationId)) {
     return fail("NATIVE_DELEGATION_ALREADY_RECORDED");
   }
+  return withResourceAdmission({ governor: resourceGovernor, home: registry.paths.home, projectRef: projectId, operationRef: stableOperationId }, async () => {
   const worker = executor ?? providerExecutor(request.target.provider);
   if (!worker || worker.provider !== request.target.provider
     || typeof worker.discover !== "function" || typeof worker.execute !== "function") {
@@ -552,4 +554,5 @@ export async function executeNativeDelegatedWork({
     }
   }
   return result;
+  });
 }

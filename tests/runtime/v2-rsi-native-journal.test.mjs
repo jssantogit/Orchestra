@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 
 const supported = Number(process.versions.node.split(".")[0]) >= 22;
 
+test('native RSI rejects invalid scan limits without unbounded allocation', { skip: !supported }, async () => {
+  const { createNativeRsiObservationStore } = await import('../../v2/persistence/sqlite/sqlite-rsi-native.mjs');
+  const state = { projects: { inspect() {} }, work: { read() {} }, operations: { inspect() {} }, operationCorrelations: { get() {} } };
+  const store = createNativeRsiObservationStore({ dbPath: ':memory:', state });
+  try {
+    assert.throws(() => store.listObserved({ maxRecords: 0 }), /limit/i);
+  } finally { store.close(); }
+});
+
 test("native RSI persists factual decision before allow and correlates it with terminal operation across reopen", { skip: !supported }, async () => {
   const [{ createNativeRsiObservationStore }, { mkdtemp, rm }, { join }, { tmpdir }] = await Promise.all([
     import("../../v2/persistence/sqlite/sqlite-rsi-native.mjs"),

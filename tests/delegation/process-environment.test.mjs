@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { runBoundedProcess } from "../../runtime/delegation/process-runner.mjs";
+import { runBoundedProcess } from '../helpers/resource-governor.mjs';
 
 test("explicit subprocess environment does not inherit undeclared parent secrets", async (t) => {
   const secretKey = `ORCHESTRA_PARENT_SECRET_${process.pid}`;

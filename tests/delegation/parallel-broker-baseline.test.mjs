@@ -11,7 +11,7 @@ import {
   cleanupMutableDelegationWorkspace,
   prepareMutableDelegationWorkspace,
 } from "../../runtime/delegation/mutable-workspace.mjs";
-import { executeParallelImplementationGroup } from "../../runtime/delegation/parallel-broker.mjs";
+import { executeParallelImplementationGroup } from '../helpers/resource-governor.mjs';
 
 function git(cwd, ...args) {
   return execFileSync("git", args, {
