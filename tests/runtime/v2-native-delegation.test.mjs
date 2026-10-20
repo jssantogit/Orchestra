@@ -185,3 +185,51 @@ test("ignored forbidden worker files cannot disappear from mutation inspection",
   assert.equal(readFileSync(join(ctx.repoRoot, "tracked.txt"), "utf8"), "canonical\n");
   assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
 });
+
+test("delegated success is re-derived from Home journal, terminal Operation and exact blob after reopen", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const result = await command(ctx, executor(async path => {
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const original = ctx.state.nativeRsi.listObserved({ runtimeImageId: "sha256:exact-image" });
+  assert.equal(original.length, 1);
+  assert.equal(original[0].source.operationId, result.operationId);
+  assert.deepEqual(original[0].decision, {
+    immutableRoutes: ["DIRECT_WORK", "DELEGATED"],
+    legalRoutes: ["DIRECT_WORK", "DELEGATED"],
+    selectedRoute: "DELEGATED",
+  });
+  assert.equal(original[0].outcome.success, true);
+  assert.match(original[0].evidence.choiceRef, /^sha256:[a-f0-9]{64}$/);
+  assert.match(original[0].evidence.outcomeRef, /^sha256:[a-f0-9]{64}$/);
+  ctx.state.close();
+  const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
+  const reopened = createSqliteState({ dbPath: join(ctx.registry.paths.home, "state", "orchestra.db") });
+  try {
+    assert.deepEqual(reopened.nativeRsi.listObserved({ runtimeImageId: "sha256:exact-image" }), original);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("tampered delegated artifact bytes invalidate its native outcome receipt", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const result = await command(ctx, executor(async path => {
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  }));
+  assert.equal(result.ok, true);
+  assert.equal(ctx.state.nativeRsi.listObserved().length, 1);
+  writeFileSync(ctx.registry.blobs.pathFor(result.artifactRef), "tampered");
+  assert.equal(ctx.state.nativeRsi.listObserved().length, 0);
+});
+
+test("delegated RSI journal rejects caller-authored decisions without native Operation", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const attempt = ctx.state.nativeRsi.recordDelegatedDecision({
+    operationId: "op-unregistered", sourceProvider: "codex",
+    targetProvider: "antigravity", providerVersion: "untrusted",
+  });
+  assert.equal(attempt.ok, false);
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
