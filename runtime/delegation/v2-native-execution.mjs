@@ -401,14 +401,32 @@ export async function executeNativeDelegatedWork({
               workspace, onProcessSpawn, onProcessExit,
             });
           } catch { execution = null; }
+          // Callback success is not sufficient: re-open the immutable receipt
+          // after the worker returns. An altered/absent Home file, a different
+          // PID or a reported exit inconsistent with OS close facts invalidates
+          // the terminal proof before any RSI success can be recorded.
+          let childTerminalVerified = false;
+          if (childTerminalRecorded) {
+            try {
+              const terminal = await childTerminalStore.read(operationId);
+              const owner = await childOwnerStore.read(
+                "owner_delegated_child_" + operationId,
+              );
+              childTerminalVerified = terminal?.operationId === operationId
+                && terminal.runtimeOwnerId === owner?.runtimeOwnerId
+                && terminal.process.pid === owner.process.pid
+                && terminal.process.startIdentity === owner.process.startIdentity
+                && terminal.terminal.exitCode === execution?.execution?.exitCode;
+            } catch { childTerminalVerified = false; }
+          }
           // Controlled test executors may not spawn a real process. A real
           // provider needs both independently attested birth and terminal
           // events; never accept a worker that swallows a failed callback.
           if (childProofRejected || (executor === null && !childOwnerRecorded)) {
             result = fail("NATIVE_DELEGATION_CHILD_UNVERIFIED");
           } else if (childTerminalRejected
-            || (childOwnerRecorded && !childTerminalRecorded)
-            || (executor === null && !childTerminalRecorded)) {
+            || (childOwnerRecorded && !childTerminalVerified)
+            || (executor === null && !childTerminalVerified)) {
             result = fail("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
           } else if (!validReport(execution, request.target.provider)) {
             result = fail("NATIVE_DELEGATION_WORKER_FAILED");
