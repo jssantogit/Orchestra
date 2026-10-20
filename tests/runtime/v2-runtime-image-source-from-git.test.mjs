@@ -8,7 +8,10 @@ import { tmpdir } from "node:os";
 import { buildRuntimeImageSourceFromGit } from "../../v2/runtime-images/source-from-git.mjs";
 import { loadRuntimeImageSource } from "../../v2/runtime-images/source.mjs";
 import { createRuntimeImageStore } from "../../v2/runtime-images/store.mjs";
-import { collectPosixReadiness } from "../../scripts/collect-posix-readiness.mjs";
+import {
+  collectPosixReadiness,
+  validatePosixWorkflowContext,
+} from "../../scripts/collect-posix-readiness.mjs";
 
 function git(root, ...args) {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
@@ -126,20 +129,75 @@ test("POSIX collector rejects an output directory inside its source checkout", a
   });
 });
 
-test("POSIX collector refuses to build from a revision other than the expected head", async () => {
-  await withGitRepo(async ({ root }) => {
-    const outputRoot = await mkdtemp(join(tmpdir(), "orchestra-posix-collector-output-"));
-    try {
-      await assert.rejects(
-        collectPosixReadiness({
-          repoRoot: root,
-          expectedHeadSha: "0".repeat(40),
-          outputDir: join(outputRoot, "result"),
-        }),
-        (error) => error?.code === "ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_HEAD_MISMATCH",
-      );
-    } finally {
-      await rm(outputRoot, { recursive: true, force: true });
-    }
+test("POSIX collector rejects non-Linux and non-Node-24 environments", () => {
+  assert.throws(
+    () => validatePosixWorkflowContext({ platform: "darwin", nodeVersion: "24.15.0" }),
+    (error) => error?.code === "ORCHESTRA_POSIX_READINESS_PLATFORM_INVALID",
+  );
+  assert.throws(
+    () => validatePosixWorkflowContext({ platform: "linux", nodeVersion: "25.0.0" }),
+    (error) => error?.code === "ORCHESTRA_POSIX_READINESS_NODE_VERSION_INVALID",
+  );
+});
+
+test("POSIX collector requires actual pull-request workflow identity and matching head", () => {
+  const workflow = {
+    GITHUB_ACTIONS: "true",
+    GITHUB_EVENT_NAME: "pull_request",
+    GITHUB_RUN_ID: "123456",
+    GITHUB_RUN_ATTEMPT: "1",
+    GITHUB_REPOSITORY: "owner/repository",
+    GITHUB_SHA: "c".repeat(40),
+    GITHUB_JOB: "posix-readiness",
+    GITHUB_WORKFLOW_REF: "owner/repository/.github/workflows/v2-persistence.yml@refs/pull/70/merge",
+  };
+  const event = {
+    repository: { full_name: "owner/repository" },
+    pull_request: {
+      number: 70,
+      head: { sha: "a".repeat(40), repo: { full_name: "contributor/repository" } },
+    },
+  };
+  assert.deepEqual(validatePosixWorkflowContext({
+    platform: "linux",
+    nodeVersion: "24.15.0",
+    workflow,
+    event,
+    expectedHeadSha: event.pull_request.head.sha,
+  }), {
+    runId: "123456",
+    runAttempt: "1",
+    repository: "owner/repository",
+    headRepository: "contributor/repository",
+    eventName: "pull_request",
+    headSha: event.pull_request.head.sha,
+    runHeadSha: "c".repeat(40),
+    platform: "linux",
+    nodeVersion: "24.15.0",
+    workflowPath: ".github/workflows/v2-persistence.yml",
+    workflowRef: "owner/repository/.github/workflows/v2-persistence.yml@refs/pull/70/merge",
+    jobId: "posix-readiness",
+    jobName: "POSIX Readiness (exact PR head)",
+    pullRequestNumber: 70,
   });
+  assert.throws(
+    () => validatePosixWorkflowContext({
+      platform: "linux",
+      nodeVersion: "24.15.0",
+      workflow: { ...workflow, GITHUB_RUN_ID: "" },
+      event,
+      expectedHeadSha: event.pull_request.head.sha,
+    }),
+    (error) => error?.code === "ORCHESTRA_POSIX_READINESS_WORKFLOW_IDENTITY_INVALID",
+  );
+  assert.throws(
+    () => validatePosixWorkflowContext({
+      platform: "linux",
+      nodeVersion: "24.15.0",
+      workflow,
+      event,
+      expectedHeadSha: "b".repeat(40),
+    }),
+    (error) => error?.code === "ORCHESTRA_POSIX_READINESS_WORKFLOW_HEAD_MISMATCH",
+  );
 });

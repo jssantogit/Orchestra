@@ -12,6 +12,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
 
     steps:
@@ -28,6 +29,7 @@ jobs:
           node-version: 24
 
       - name: Collect canonical POSIX readiness fragment
+        id: collect-posix
         run: >-
           node scripts/collect-posix-readiness.mjs
           --repo-root "$GITHUB_WORKSPACE"
@@ -38,24 +40,32 @@ jobs:
         id: upload-posix-evidence
         uses: actions/upload-artifact@v4
         with:
-          name: posix-readiness-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          name: posix-readiness-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/orchestra-posix-readiness/evidence.json
           if-no-files-found: error
 
-      - name: Record POSIX artifact provenance
+      - name: Download, verify, and canonical-merge POSIX artifact
         env:
-          ARTIFACT_DIGEST: ${{ steps.upload-posix-evidence.outputs.artifact-digest }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          VALIDATED_OUTPUT_DIR: ${{ runner.temp }}/orchestra-posix-readiness-validated
+          UPLOAD_ARTIFACT_ID: ${{ steps.upload-posix-evidence.outputs.artifact-id }}
+          UPLOAD_ARTIFACT_NAME: posix-readiness-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          UPLOAD_ARTIFACT_DIGEST: ${{ steps.upload-posix-evidence.outputs.artifact-digest }}
+        run: node scripts/verify-posix-readiness-artifact.mjs
+
+      - name: Record POSIX artifact provenance link
+        env:
           ARTIFACT_URL: ${{ steps.upload-posix-evidence.outputs.artifact-url }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          test -n "$ARTIFACT_DIGEST"
+          test -n "$ARTIFACT_URL"
           {
             echo "### POSIX readiness artifact"
             echo "- Exact PR head: \`$EXPECTED_HEAD\`"
             echo "- Workflow run: $RUN_URL"
             echo "- Artifact: $ARTIFACT_URL"
-            echo "- Artifact SHA-256: \`$ARTIFACT_DIGEST\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   persistence:
