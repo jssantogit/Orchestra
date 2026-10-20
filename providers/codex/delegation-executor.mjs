@@ -226,7 +226,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
       }
     },
 
-    async execute({ request, workerEnvelope, workspace } = {}) {
+    async execute({ request, workerEnvelope, workspace, onProcessSpawn = null } = {}) {
       if (!validExecutionInput(request, workerEnvelope, workspace)) {
         return failure("CAPABILITY_DENIED");
       }
@@ -262,6 +262,7 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
           timeoutMs: request.limits.timeoutMs,
           maxOutputBytes: request.limits.maxOutputBytes,
           env: processEnvironment(workspace.workerGitEnv ?? {}),
+          ...(typeof onProcessSpawn === "function" ? { onSpawn: onProcessSpawn } : {}),
         });
       } catch (error) {
         rmSync(scratch, { recursive: true, force: true });
