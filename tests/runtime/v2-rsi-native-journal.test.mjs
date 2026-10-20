@@ -22,7 +22,7 @@ test("native RSI persists factual decision before allow and correlates it with t
       startedAt: "2026-10-20T12:00:00.000Z", resultRef: null,
     };
     const correlation = {
-      provider: "codex", projectId: "prj-a", correlationHash: "sha256:correlation",
+      provider: "codex", projectId: "prj-a", correlationHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       operationId: "op-a", workId: "work-a", generation: 1, actorIdHash: "sha256:actor",
     };
     const state = {
@@ -32,13 +32,13 @@ test("native RSI persists factual decision before allow and correlates it with t
       operationCorrelations: { get: () => structuredClone(correlation) },
     };
     const first = createNativeRsiObservationStore({ dbPath, state, now: () => "2026-10-20T12:00:01.000Z" });
-    assert.equal(first.recordDecision({ operationId: "op-a", providerFamily: "codex", correlationHash: "sha256:correlation" }).ok, true);
+    assert.equal(first.recordDecision({ operationId: "op-a", providerFamily: "codex", correlationHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }).ok, true);
     assert.deepEqual(first.listEligible(), []);
-    assert.equal(first.recordDecision({ operationId: "op-a", providerFamily: "codex", correlationHash: "sha256:correlation" }).replayed, true);
+    assert.equal(first.recordDecision({ operationId: "op-a", providerFamily: "codex", correlationHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }).replayed, true);
     first.close();
     op.workflowState = "SUCCEEDED";
     op.liveness = "TERMINAL";
-    op.resultRef = "provider-result:succeeded:sha256:correlation";
+    op.resultRef = "provider-result:succeeded:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const reopened = createNativeRsiObservationStore({ dbPath, state, now: () => "2026-10-20T12:00:02.000Z" });
     assert.equal(reopened.recordTerminal({ operationId: "op-a" }).ok, true);
     const eligible = reopened.listEligible();
@@ -67,7 +67,7 @@ test("native RSI does not learn UNKNOWN and fails closed on corrupted terminal p
       startedAt: "2026-10-20T12:00:00.000Z", resultRef: null,
     };
     const correlation = {
-      provider: "codex", projectId: "prj-b", correlationHash: "sha256:correlation",
+      provider: "codex", projectId: "prj-b", correlationHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       operationId: "op-b", workId: "work-b", generation: 0, actorIdHash: "sha256:actor",
     };
     const state = {
@@ -77,10 +77,10 @@ test("native RSI does not learn UNKNOWN and fails closed on corrupted terminal p
       operationCorrelations: { get: () => structuredClone(correlation) },
     };
     const store = createNativeRsiObservationStore({ dbPath: join(home, "native.db"), state, now: () => "2026-10-20T12:00:01.000Z" });
-    assert.equal(store.recordDecision({ operationId: "op-b", providerFamily: "codex", correlationHash: "sha256:correlation" }).ok, true);
+    assert.equal(store.recordDecision({ operationId: "op-b", providerFamily: "codex", correlationHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }).ok, true);
     operation.workflowState = "UNKNOWN";
     operation.liveness = "TERMINAL";
-    operation.resultRef = "provider-result:unknown:sha256:correlation";
+    operation.resultRef = "provider-result:unknown:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     assert.equal(store.recordTerminal({ operationId: "op-b" }).ok, false);
     assert.deepEqual(store.listEligible(), []);
     operation.workflowState = "SUCCEEDED";
