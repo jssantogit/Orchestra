@@ -171,3 +171,31 @@ Outstanding boundary: durable child-process birth/terminal observation, exact
 worker/clone fencing across controller death, and an operator-authorized
 recovery/cleanup protocol. An intact Home record alone never proves that the
 external provider has terminated.
+
+
+### Native delegated child-process birth evidence
+
+The bounded process runner now supports a strict \`onSpawn({pid})\` observation
+callback. When supplied, the worker task's stdin is not released until the
+observer completes; failure or a bounded timeout terminates the process tree
+and rejects the process result. Both native Codex and Antigravity delegation
+adapters pass this callback to their actual process runner.
+
+The neutral V2 bridge registers an additional \`LOCAL_PROCESS\` runtime-owner
+record under \`owner_delegated_child_<operationId>\` with the **child's own**
+observed PID and operating-system birth identity. This is separate from the
+controller owner in \`operation.runtimeOwnerRef\`. The record is immutable in
+Orchestra Home and can be independently inspected after controller restart.
+The real built-in provider path cannot count a successful delegated result
+unless child birth registration succeeded. An observer rejection cannot be
+hidden by a worker success report.
+
+This is a **bounded birth observation, not complete child lifecycle
+reconciliation**: a provider invoked with its task entirely in argv may run
+before the asynchronous birth probe completes; shutdown/crash between spawn
+and registration can leave an unobserved child. Birth evidence is not
+terminal-exit evidence. The controller still needs durable child exit/kill
+attribution and an operator-safe recovery protocol before an orphaned clone
+or operation is automatically cleaned, retried or marked ready. The native
+RSI field gate remains UNKNOWN until real provider executions and disjoint
+TRAIN/EVALUATE/HOLDOUT are independently evidenced.
