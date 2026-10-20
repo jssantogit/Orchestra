@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createResourceGovernor, withResourceAdmission } from '../../runtime/resources/governor.mjs';
@@ -81,6 +81,24 @@ test('active worker stops fail-closed if memory proof disappears', () => fixture
   const governor = { ...base, recheck: (id) => ++checks === 1 ? base.recheck(id) : { ok: false, reason: 'RESOURCE_UNVERIFIED' } };
   await assert.rejects(runBoundedProcess({ resourceGovernor: governor, command: process.execPath, args: ['-e', 'setTimeout(()=>{},5000)'], timeoutMs: 6000, maxOutputBytes: 64 }), { code: 'RESOURCE_PRESSURE' });
   assert.equal(base.inspect().leases.length, 1);
+}));
+
+test('active cancellation stops the owned worker without releasing uncertain budget', () => fixture(async (home) => {
+  const governor = createResourceGovernor({ home, sample: () => sample() });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 100);
+  try {
+    await assert.rejects(runBoundedProcess({ resourceGovernor: governor, signal: controller.signal, command: process.execPath, args: ['-e', 'setTimeout(()=>{},5000)'], timeoutMs: 6000, maxOutputBytes: 64 }), { code: 'RESOURCE_CANCELLED' });
+    assert.equal(governor.inspect().leases.length, 1);
+  } finally { clearTimeout(timer); }
+}));
+
+test('valid JSON corruption cannot shrink a persisted reservation', () => fixture(async (home) => {
+  const governor = createResourceGovernor({ home, sample: () => sample() });
+  assert.equal(governor.reserve({ bytes: 1.5 * GiB }).ok, true);
+  const journal = join(home, 'resources', 'reservations.json');
+  writeFileSync(journal, readFileSync(journal, 'utf8').replace(String(1.5 * GiB), '1'));
+  assert.equal(governor.reserve({ bytes: 1.5 * GiB }).reason, 'RESOURCE_JOURNAL_UNVERIFIED');
 }));
 
 test('a process cannot inherit a reservation for a different Home', () => fixture(async (home) => {

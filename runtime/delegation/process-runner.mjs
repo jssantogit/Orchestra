@@ -93,12 +93,12 @@ export async function runBoundedProcess(input = {}) {
     let containment;
     let pid;
     try {
-      const result = await runAdmittedProcess({ ...input, resourceCheck: () => admission.governor.recheck(admission.leaseId), onSpawn: async (observed) => {
+      const result = await runAdmittedProcess({ ...input, resourceCheck: () => input.signal?.aborted ? { ok: false } : admission.governor.recheck(admission.leaseId), onSpawn: async (observed) => {
         pid = observed.pid;
         if (IS_WINDOWS) containment = attachWindowsJob(pid, Math.floor(admission.bytes / admission.workers));
         if (input.onSpawn) await input.onSpawn(observed);
       } });
-      if (result.resourcePressure) fail('RESOURCE_PRESSURE');
+      if (result.resourcePressure) fail(input.signal?.aborted ? 'RESOURCE_CANCELLED' : 'RESOURCE_PRESSURE');
       if (result.timedOut || result.signal !== null) admission.uncertain = true;
       if (IS_WINDOWS) {
         const job = containment.inspect();

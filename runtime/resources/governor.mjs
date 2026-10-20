@@ -27,7 +27,10 @@ export function createResourceGovernor({ home = defaultHome(), sample = sampleMe
   function read() {
     if (!existsSync(file)) return [];
     if (lstatSync(file).isSymbolicLink() || statSync(file).size > 65536) throw new Error('RESOURCE_JOURNAL_INVALID');
-    const value = JSON.parse(readFileSync(file, 'utf8'));
+    const envelope = JSON.parse(readFileSync(file, 'utf8'));
+    if (envelope.schema !== 'orchestra.resource-reservations.v1'
+      || envelope.digest !== digest(JSON.stringify(envelope.leases))) throw new Error('RESOURCE_JOURNAL_INVALID');
+    const value = envelope.leases;
     if (!Array.isArray(value) || value.length > 64 || value.some((row) =>
       typeof row.leaseId !== 'string' || !Number.isSafeInteger(row.bytes) || row.bytes <= 0)) throw new Error('RESOURCE_JOURNAL_INVALID');
     return value;
@@ -40,7 +43,7 @@ export function createResourceGovernor({ home = defaultHome(), sample = sampleMe
       const result = change(leases);
       if (result.ok) {
         const temporary = join(root, `${randomUUID()}.tmp`);
-        writeFileSync(temporary, JSON.stringify(leases), { flag: 'wx', mode: 0o600 });
+        writeFileSync(temporary, JSON.stringify({ schema: 'orchestra.resource-reservations.v1', leases, digest: digest(JSON.stringify(leases)) }), { flag: 'wx', mode: 0o600 });
         renameSync(temporary, file);
       }
       return result;
