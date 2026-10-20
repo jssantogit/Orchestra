@@ -9,6 +9,7 @@ import { FIELD_TEST_SCENARIOS } from "../../v2/cutover/field-evidence.mjs";
 
 const HEAD = "a".repeat(40);
 const RUNTIME_IMAGE = `sha256:${"b".repeat(64)}`;
+const HOME_IDENTITY = `sha256:${"c".repeat(64)}`;
 const REQUIRED_SCRIPTS = [
   "test",
   "test:runtime",
@@ -107,14 +108,15 @@ function cutoverEvidence() {
       migration: verified({ migrationVerified: true, tsuzukiF7Verified: true }),
       platforms: { windows: verified(), posix: verified() },
       projects: [
-        verified({ projectId: "project-a", lineageId: "lineage-a", noFullLocalGovernanceRuntime: true }),
-        verified({ projectId: "project-b", lineageId: "lineage-b", noFullLocalGovernanceRuntime: true }),
+        verified({ projectId: "project-a", lineageId: "lineage-a", noFullLocalGovernanceRuntime: true, homeIdentity: HOME_IDENTITY }),
+        verified({ projectId: "project-b", lineageId: "lineage-b", noFullLocalGovernanceRuntime: true, homeIdentity: HOME_IDENTITY }),
       ],
       selfHost: verified({
         projectId: "project-orchestra",
         lineageId: "lineage-orchestra",
         runtimeImageId: RUNTIME_IMAGE,
         noFullLocalGovernanceRuntime: true,
+        homeIdentity: HOME_IDENTITY,
       }),
     },
     providerFieldEvidence: {
