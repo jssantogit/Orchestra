@@ -252,7 +252,7 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
       const terminal = row.terminal_json === null
         ? null : safelyRead(row.terminal_json, row.terminal_digest);
       if (decision.operationId !== row.operation_id
-        || terminal?.operationId !== row.operation_id) {
+        || (terminal && terminal.operationId !== row.operation_id)) {
         throw new Error("ORCHESTRA_RSI_NATIVE_DELEGATED_IDENTITY_CORRUPT");
       }
       return { decision, terminal };
