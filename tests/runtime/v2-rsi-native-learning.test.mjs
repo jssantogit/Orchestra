@@ -114,3 +114,14 @@ test("the same native receipt cannot attest two independent Project lineages", (
   assert.equal(derived.ok, false);
   assert.equal(derived.code, "RSI_TRAIN_RECEIPT_REUSED");
 });
+
+test("training cannot claim improvement when immutable execution had only a single legal route", () => {
+  const records = facts();
+  for (const record of records) {
+    record.decision.immutableRoutes = ["DIRECT_WORK"];
+    record.decision.legalRoutes = ["DIRECT_WORK"];
+  }
+  const derived = deriveNativeRouteCandidate({ ...metadata, observations: records });
+  assert.equal(derived.ok, false);
+  assert.equal(derived.code, "RSI_TRAIN_CHOICE_SPACE_INSUFFICIENT");
+});
