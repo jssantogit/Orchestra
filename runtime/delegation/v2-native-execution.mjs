@@ -208,6 +208,14 @@ export async function executeNativeDelegatedWork({
           || state.projects.inspect(projectId)?.runtime?.pinnedImage !== facts.project.runtime.pinnedImage) {
           result = fail("NATIVE_DELEGATION_OPERATION_STALE");
         } else {
+          const selection = state.nativeRsi?.recordDelegatedDecision?.({
+            operationId, sourceProvider: actor.provider,
+            targetProvider: request.target.provider,
+            providerVersion: discovered.version,
+          });
+          if (!selection?.ok) {
+            result = fail("NATIVE_DELEGATION_DECISION_UNVERIFIED");
+          } else {
           let execution = null;
           try { execution = await worker.execute({ request, workerEnvelope: buildWorkerEnvelope(request), workspace }); }
           catch { execution = null; }
@@ -248,6 +256,7 @@ export async function executeNativeDelegatedWork({
               }
             }
           }
+          }
         }
       }
     }
@@ -273,7 +282,16 @@ export async function executeNativeDelegatedWork({
           : "native-delegation-uncertain:" + digest(Buffer.from(operation.operationId)),
         expectedHeartbeatAt: operation.heartbeatAt,
       });
-      if (!terminal.ok) result = fail("NATIVE_DELEGATION_TERMINAL_UNVERIFIED");
+      if (!terminal.ok) {
+        result = fail("NATIVE_DELEGATION_TERMINAL_UNVERIFIED");
+      } else if (succeeded) {
+        // Only an already-terminal, blob-verified global Operation can
+        // become factual RSI telemetry. A missing journal fails closed.
+        const receipt = state.nativeRsi?.recordDelegatedTerminal?.({
+          operationId: operation.operationId,
+        });
+        if (!receipt?.ok) result = fail("NATIVE_DELEGATION_TERMINAL_RECEIPT_UNVERIFIED");
+      }
     }
   }
   return result;
