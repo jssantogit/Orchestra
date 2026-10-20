@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -22,6 +22,17 @@ const PROVIDERS = new Set(["codex", "antigravity"]);
 const MAX_FILES = 128;
 const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+// A delegation identity is unique within one immutable Work generation.
+// Retries must never create another Operation for the same dispatched member,
+// even if the request body changes or the previous worker failed/crashed.
+function operationIdForDelegation(projectId, workId, generation, delegationId) {
+  const hash = createHash("sha256")
+    .update("orchestra.v2.delegated-operation.v1\0")
+    .update(JSON.stringify([projectId, workId, generation, delegationId]))
+    .digest("hex");
+  return "op_delegated_" + hash;
+}
 
 function fail(code) {
   return { ok: false, code };
@@ -133,7 +144,8 @@ export async function executeNativeDelegatedWork({
 } = {}) {
   const state = registry?.state;
   if (!state?.projects?.inspect || !state?.work?.current
-    || !state?.operations?.begin || !state?.operations?.terminalize
+    || !state?.operations?.begin || !state?.operations?.inspect
+    || !state?.operations?.terminalize
     || !state?.sessionObservations?.get || !registry?.blobs?.putBytes
     || typeof registry.paths?.home !== "string") {
     return fail("NATIVE_DELEGATION_HOME_REQUIRED");
@@ -151,6 +163,12 @@ export async function executeNativeDelegatedWork({
   });
   if (!authorization.allowed || source.head !== request.workspace.sourceRevision) {
     return fail("NATIVE_DELEGATION_REQUEST_DENIED");
+  }
+  const stableOperationId = operationIdForDelegation(projectId, workId, generation, request.delegationId);
+  // Read before clone preparation/discovery; the SQLite begin below is the
+  // authoritative collision fence when two callers race this precheck.
+  if (state.operations.inspect(stableOperationId)) {
+    return fail("NATIVE_DELEGATION_ALREADY_RECORDED");
   }
   const worker = executor ?? providerExecutor(request.target.provider);
   if (!worker || worker.provider !== request.target.provider
@@ -177,7 +195,7 @@ export async function executeNativeDelegatedWork({
     if (!facts.ok) {
       result = facts;
     } else {
-      const operationId = "op_" + randomUUID();
+      const operationId = stableOperationId;
       const startedAt = now();
       const deadlineAt = new Date(Date.parse(startedAt) + request.limits.timeoutMs + 30_000).toISOString();
       const begun = state.operations.begin({
@@ -192,7 +210,13 @@ export async function executeNativeDelegatedWork({
         },
       });
       if (!begun.ok) {
-        result = fail(begun.reason ?? "NATIVE_DELEGATION_OPERATION_DENIED");
+        result = fail(begun.reason === "OPERATION_ID_CONFLICT"
+          ? "NATIVE_DELEGATION_ALREADY_RECORDED"
+          : (begun.reason ?? "NATIVE_DELEGATION_OPERATION_DENIED"));
+      } else if (begun.replayed) {
+        // A replayed begin owns neither the previous worker nor its terminal;
+        // never execute or terminalize another caller's Operation.
+        result = fail("NATIVE_DELEGATION_ALREADY_RECORDED");
       } else {
         operation = begun.operation;
         const rechecked = nativeFacts(state, projectId, workId, generation, actor, request);
