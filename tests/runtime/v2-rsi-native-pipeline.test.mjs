@@ -121,3 +121,46 @@ test("native direct-only routes cannot be certified as learned choices", () => {
   assert.equal(x.candidates.size, 0);
   assert.equal(x.receipts.size, 0);
 });
+
+test("EVALUATE/HOLDOUT cannot pass when the supposedly selected route was not legally executable", () => {
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage));
+  const x = backing(entries);
+  assert.equal(trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  }).ok, true);
+  const receipt = x.receipts.get(opts.policyId + ":" + opts.revision);
+  const train = new Set(receipt.trainLineageIds);
+  const unseen = entries.filter(entry => !train.has(entry.source.lineageId));
+  assert.equal(unseen.length, 2);
+  for (const observation of unseen) {
+    observation.decision.immutableRoutes = ["DELEGATED"];
+    observation.decision.legalRoutes = ["DELEGATED"];
+  }
+  const result = verifyNativeRsiReplay({
+    policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_NATIVE_EVALUATION_CHOICE_SPACE_INVALID");
+});
+
+test("EVALUATE/HOLDOUT must preserve a real alternative, not a forced singleton route", () => {
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage));
+  const x = backing(entries);
+  assert.equal(trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  }).ok, true);
+  const train = new Set(x.receipts.get(opts.policyId + ":" + opts.revision).trainLineageIds);
+  const unseen = entries.filter(entry => !train.has(entry.source.lineageId));
+  assert.equal(unseen.length, 2);
+  for (const observation of unseen) {
+    observation.decision.immutableRoutes = ["DIRECT_WORK"];
+    observation.decision.legalRoutes = ["DIRECT_WORK"];
+  }
+  const result = verifyNativeRsiReplay({
+    policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_NATIVE_EVALUATION_CHOICE_SPACE_INVALID");
+});
