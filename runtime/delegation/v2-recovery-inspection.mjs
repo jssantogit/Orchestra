@@ -122,6 +122,7 @@ export function createDelegatedRecoveryInspection({
           ? "MATCH" : "MISMATCH";
       }
       let terminalStatus = "MISSING";
+      let healthyExit = false;
       try {
         const terminal = await terminals.read(operationId);
         if (terminal) {
@@ -130,6 +131,10 @@ export function createDelegatedRecoveryInspection({
             && terminal.process?.pid === owner.process.pid
             && terminal.process?.startIdentity === owner.process.startIdentity
             ? "VERIFIED" : "INVALID";
+          healthyExit = terminalStatus === "VERIFIED"
+            && terminal.terminal.exitCode === 0
+            && terminal.terminal.signal === null
+            && terminal.terminal.timedOut === false;
         }
       } catch { terminalStatus = "INVALID"; }
       const evidence = { cloneStatus: clone, childStatus, terminalStatus };
@@ -140,6 +145,9 @@ export function createDelegatedRecoveryInspection({
       }
       if (terminalStatus !== "VERIFIED") {
         return blocked(operationId, "CHILD_TERMINAL_UNVERIFIED", evidence);
+      }
+      if (!healthyExit) {
+        return blocked(operationId, "CHILD_EXIT_FAILED", evidence);
       }
       return blocked(operationId, "DESCENDANT_LIFECYCLE_UNPROVEN", evidence);
     },
