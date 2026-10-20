@@ -137,6 +137,7 @@ export function trainNativeRsiCandidate({ nativeStore, policyStore, policyId, re
   if (!checked.ok) return checked;
 
   const receipt = {
+    schema: "orchestra.rsi-native-training.v1", version: 1,
     policyId, revision, seed: SEED,
     sourceDigest: derived.evidence.sourceDigest,
     candidateDigest: hash(derived.candidate),
@@ -179,7 +180,8 @@ export function verifyNativeRsiReplay({ nativeStore, policyStore, policyId, revi
     policyId, revision, createdAt: candidate.createdAt,
   }, prepared);
   if (!derived.ok) return derived;
-  if (receipt.policyId !== policyId || receipt.revision !== revision
+  if (receipt.schema !== "orchestra.rsi-native-training.v1" || receipt.version !== 1
+    || receipt.policyId !== policyId || receipt.revision !== revision
     || receipt.seed !== SEED
     || receipt.sourceDigest !== derived.evidence.sourceDigest
     || receipt.candidateDigest !== hash(derived.candidate)
