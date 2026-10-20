@@ -12,7 +12,7 @@ import { executeNativeDelegatedWork } from "../../runtime/delegation/v2-native-e
 const supported = Number(process.versions.node.split(".")[0]) >= 22;
 const ACTOR = "sha256:" + "a".repeat(64);
 // Real journal elapsed time must remain non-negative regardless of CI clock.
-const now = new Date(Date.now() - 1_000).toISOString();
+const now = () => new Date(Date.now() - 1_000).toISOString();
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
 async function setup(t) {
   const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
@@ -49,7 +49,7 @@ async function setup(t) {
   assert.equal(state.sessionObservations.put({
     provider: "codex", projectId, actorIdHash: ACTOR,
     observedInstructionEpoch: 0, observedWorkId: workId, observedGeneration: generation,
-    observedAt: now,
+    observedAt: now(),
   }).ok, true);
   const source = readWorkspaceFingerprint(repoRoot, { excludedPaths: [".orchestra/state/**"] });
   const request = {
@@ -99,7 +99,7 @@ function command(ctx, worker, overrides = {}) {
     registry: ctx.registry, projectId: ctx.projectId, workId: ctx.workId,
     generation: ctx.generation, actor: { provider: "codex", actorIdHash: ACTOR },
     request: ctx.request, executor: worker,
-    now: () => now, ...overrides,
+    now, ...overrides,
   });
 }
 
