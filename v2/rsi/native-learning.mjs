@@ -49,9 +49,8 @@ function validObservation(value, domainCohort) {
     || !value.decision.legalRoutes.includes(value.decision.selectedRoute)
     || !value.decision.immutableRoutes.includes(value.decision.selectedRoute)
     || !value.decision.legalRoutes.every((route) => value.decision.immutableRoutes.includes(route))
-    || !exactKeys(value.outcome, new Set(["success", "retryCount", "durationMs"]))
+    || !exactKeys(value.outcome, new Set(["success", "durationMs"]))
     || value.outcome.success !== true
-    || !Number.isSafeInteger(value.outcome.retryCount) || value.outcome.retryCount < 0
     || !Number.isSafeInteger(value.outcome.durationMs) || value.outcome.durationMs < 0
     || !exactKeys(value.privacy, new Set(["containsRawProjectContent"]))
     || value.privacy.containsRawProjectContent !== false
