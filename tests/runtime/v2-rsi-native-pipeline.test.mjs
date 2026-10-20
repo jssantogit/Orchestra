@@ -11,7 +11,7 @@ function row(lineage, { route = "DIRECT_WORK", success = true, ms = 100 } = {}) 
     source: { lineageId: lineage, operationId: "op-" + lineage },
     domainCohort: "software-engineering",
     decision: { immutableRoutes: ["DIRECT_WORK", "DELEGATED"], legalRoutes: ["DIRECT_WORK", "DELEGATED"], selectedRoute: route },
-    outcome: { success, retryCount: 0, durationMs: ms },
+    outcome: { success, durationMs: ms },
     privacy: { containsRawProjectContent: false },
     evidence: { choiceRef: sha(lineage+"choice"), outcomeRef: sha(lineage+"terminal") },
   };
