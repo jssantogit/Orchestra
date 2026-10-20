@@ -52,3 +52,55 @@ The currently verified native provider hooks only execute `DIRECT_WORK`. Their d
 A future native execution selector must expose at least two **actually supported, immutable and permitted** routes at the same decision point, then bind the selected route to the terminal Operation. Do **not** hardcode `DELEGATED` as legal merely to make a test green; do not accept a caller-provided legal choice list at the release boundary. The route's real delegated executor and authority fencing must exist first. Both observational cohorts must execute the derived route, not just pass generic performance thresholds.
 
 **Status:** software pipeline implemented; current one-route field setup does not produce qualifying learning evidence. The RSI release field gate is not green. The new software HEAD invalidates old provider/runtime proofs; only a fresh native field campaign on the new HEAD can close readiness.
+
+
+## V2 delegated execution bridge — new implementation checkpoint
+
+The neutral adapter `runtime/delegation/v2-native-execution.mjs` now exposes
+`executeNativeDelegatedWork(...)` as an **internal** executable path. It uses
+the real isolated clone and Codex/Antigravity process executors where available,
+but **does not invoke the V1 delegation broker, V1 Work Lease, or V1 artifact
+promotion**. The `v2/**` import boundary remains intact.
+
+Facts checked before execution:
+- Global Home Project/active Work/generation/runtime image and exact matching provider
+  session observation; a caller-supplied actor string alone does not establish Work authority
+- Validated implementation-only v2 delegation request (cross-provider, no network or recursive
+  delegation), exact source fingerprint/HEAD, and a supported discovered target executor
+- V2 mutation authorization with live writer exclusion at the Project's canonical workspace
+- A new global `DELEGATED_MUTATION` Operation is recorded before the external worker
+  starts, then the actor/session/Work are rechecked; only the **same** Operation may appear as
+  the expected live writer
+
+The worker executes in a hardened independent Git clone, with no remotes,
+no canonical checkout editing and an enforced mutation scope. The adapter
+checks the canonical workspace and Git boundary, the delegated clone boundary,
+staged changes **and ignored files** (which ordinary Git status can miss).
+Allowed file bytes are bounded, rehashed and stored as a content-addressed
+candidate in the Orchestra Home blob store. The native Operation terminates
+`SUCCEEDED` only when the candidate and cleanup have succeeded. Failure or
+uncertain cleanup cannot manufacture a success. Canonical promotion is **not**
+performed automatically.
+
+The tests `tests/runtime/v2-native-delegation.test.mjs` exercise actual Home
+SQLite Project/Work/Operation state and an actual isolated Git clone using a
+controlled worker fixture on the CI platforms. Their worker fixture is a
+**test double, not native AGY/Codex field evidence**.
+
+### Remains release-blocking
+
+- Integrate this bridge at an actual authenticated V2 provider/control-plane
+  route-selection boundary. The current function is an internal service, not a
+  published end-user command or a verified production orchestration workflow.
+- Record `DELEGATED` decision and terminal outcome in a **trusted global native
+  RSI journal** with the real worker's process evidence, artifact digest and
+  exact Operation. Today `nativeRsi.listObserved()` still only emits
+  `DIRECT_WORK`, correctly. Do not fabricate `legalRoutes` or replay results.
+- Implement restart-safe owner liveness and recovery of interrupted delegated
+  Operations/candidate uploads, with bounded terminal states and cleanup proof.
+- Supply source-bound, nontrivial TRAIN/EVALUATE/HOLDOUT across genuine Project
+  lineages after the two-route field path exists, then re-freeze SHA/Runtime
+  Image, rerun native 12/12 and all canonical gates.
+
+**Current disposition: development integration slice only. RSI field gate
+remains UNKNOWN, CUTOVER_NOT_READY.**
