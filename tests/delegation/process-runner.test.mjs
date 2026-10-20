@@ -175,3 +175,48 @@ test("rejected native child-process provenance aborts worker before stdin dispat
   }), e => e?.code === "PROCESS_SPAWN_PROOF_FAILED");
   assert.equal(existsSync(target), false);
 });
+
+
+test("process close observer receives the same spawned PID and terminal facts before success", async () => {
+  let pid = null;
+  let terminal = null;
+  const result = await runBoundedProcess({
+    command: process.execPath,
+    args: ["-e", "process.stdin.once('data', () => { process.stdout.write('ok'); process.exit(0) })"],
+    input: "execute",
+    timeoutMs: 3000, maxOutputBytes: 1024,
+    onSpawn: async observed => { pid = observed.pid; },
+    onExit: async observed => { terminal = observed; },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, "ok");
+  assert.deepEqual(terminal, {
+    pid, exitCode: 0, signal: null, timedOut: false,
+  });
+});
+
+test("process close receipt failure prevents an otherwise successful worker outcome", async () => {
+  await assert.rejects(() => runBoundedProcess({
+    command: process.execPath,
+    args: ["-e", "process.stdin.once('data', () => process.exit(0))"],
+    input: "execute",
+    timeoutMs: 3000, maxOutputBytes: 1024,
+    onSpawn: async () => {},
+    onExit: async () => { throw new Error("TERMINAL_HOME_UNAVAILABLE"); },
+  }), e => e?.code === "PROCESS_EXIT_PROOF_FAILED");
+});
+
+test("process close observer preserves nonzero exit and signal provenance", async () => {
+  let terminal;
+  const result = await runBoundedProcess({
+    command: process.execPath,
+    args: ["-e", "process.exit(7)"],
+    timeoutMs: 3000, maxOutputBytes: 1024,
+    onExit: async facts => { terminal = facts; },
+  });
+  assert.equal(result.exitCode, 7);
+  assert.deepEqual(terminal, {
+    pid: terminal.pid, exitCode: 7, signal: null, timedOut: false,
+  });
+  assert.ok(Number.isInteger(terminal.pid) && terminal.pid > 0);
+});
