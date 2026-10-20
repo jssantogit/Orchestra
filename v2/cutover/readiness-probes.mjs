@@ -428,7 +428,7 @@ export async function rsiReplay({ expectedHeadSha, expectedRuntimeImageId, args 
   const input = requireArgs(
     args,
     new Set(['home', 'policyId', 'revision']),
-    ['home', 'policyId', 'revision'],
+    ['home', 'policyId'],
   );
   if (!Number.isInteger(input.revision) || input.revision < 1) {
     throw new TypeError('rsi replay revision is invalid');
