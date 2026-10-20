@@ -244,6 +244,7 @@ export async function executeNativeDelegatedWork({
   let heartbeatFailed = false;
   let result = fail("NATIVE_DELEGATION_EXECUTION_FAILED");
   let succeeded = false;
+  let preserveUnverifiedChild = false;
   try {
     workspace = await prepareMutableDelegationWorkspace({
       repoRoot: facts.project.workspace.canonicalRoot, request,
@@ -419,6 +420,13 @@ export async function executeNativeDelegatedWork({
                 && terminal.terminal.exitCode === execution?.execution?.exitCode;
             } catch { childTerminalVerified = false; }
           }
+          // A directly observed but unverified subprocess can outlive this
+          // controller. Keep the registered Home clone intact for recovery,
+          // rather than treating failed evidence as proof that it is safe
+          // to delete the workspace.
+          preserveUnverifiedChild = childProofRejected || childTerminalRejected
+            || (childOwnerRecorded && !childTerminalVerified)
+            || (executor === null && !childTerminalVerified);
           // Controlled test executors may not spawn a real process. A real
           // provider needs both independently attested birth and terminal
           // events; never accept a worker that swallows a failed callback.
@@ -474,12 +482,19 @@ export async function executeNativeDelegatedWork({
       ? "NATIVE_DELEGATION_SCOPE_VIOLATION" : "NATIVE_DELEGATION_EXECUTION_FAILED");
   } finally {
     if (workspace) {
-      let cleanup;
-      try { cleanup = await cleanupMutableDelegationWorkspace(workspace); }
-      catch { cleanup = null; }
-      if (cleanup?.cleaned !== true) {
+      if (preserveUnverifiedChild) {
+        // A valid Operation and managed-workspace record already exist.
+        // Preserve its isolated files for the human-gated UNKNOWN recovery.
         succeeded = false;
-        result = fail("NATIVE_DELEGATION_CLEANUP_UNCERTAIN");
+        if (result.ok) result = fail("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
+      } else {
+        let cleanup;
+        try { cleanup = await cleanupMutableDelegationWorkspace(workspace); }
+        catch { cleanup = null; }
+        if (cleanup?.cleaned !== true) {
+          succeeded = false;
+          result = fail("NATIVE_DELEGATION_CLEANUP_UNCERTAIN");
+        }
       }
     }
     if (heartbeatTimer) clearInterval(heartbeatTimer);
