@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -136,6 +136,57 @@ function verifiedDelegatedArtifact(blobRoot, ref, decision) {
     === candidate.mutationDigest;
 }
 
+// RSI observation replay must be independently conditioned on a real child
+// process close, not just a caller-constructed SUCCEEDED Operation or artifact.
+// All Home bytes and their immutable runtime-owner relationship are re-read.
+function verifiedDelegatedChildClose(home, operationId) {
+  if (typeof home !== "string" || !home || typeof operationId !== "string"
+    || !operationId || operationId.length > 256) return false;
+  const ownerId = "owner_delegated_child_" + operationId;
+  const file = (root, identity) => {
+    const key = createHash("sha256").update(identity).digest("hex");
+    return join(home, root, key.slice(0, 2), key + ".json");
+  };
+  const bounded = (path) => {
+    if (statSync(path).size > 16_384) return null;
+    return JSON.parse(readFileSync(path, "utf8"));
+  };
+  let ownerEnvelope, terminalEnvelope;
+  try {
+    ownerEnvelope = bounded(file("runtime-owners", ownerId));
+    terminalEnvelope = bounded(file("delegation-child-terminals", operationId));
+  } catch { return false; }
+  if (!exactKeys(ownerEnvelope, ["schema", "digest", "owner"])
+    || !exactKeys(terminalEnvelope, ["schema", "digest", "receipt"])
+    || ownerEnvelope.schema !== "orchestra.runtime-owner-record.v1"
+    || terminalEnvelope.schema !== "orchestra.delegated-child-terminal-record.v1"
+    || ownerEnvelope.digest !== digest(ownerEnvelope.owner)
+    || terminalEnvelope.digest !== digest(terminalEnvelope.receipt)) return false;
+  const owner = ownerEnvelope.owner, receipt = terminalEnvelope.receipt;
+  if (!exactKeys(owner, ["schema", "runtimeOwnerId", "operationId", "kind", "registeredAt", "process", "proof"])
+    || !exactKeys(owner.process, ["pid", "startIdentity"])
+    || !exactKeys(owner.proof, ["tokenHash"])
+    || !exactKeys(receipt, ["schema", "operationId", "runtimeOwnerId", "process", "terminal"])
+    || !exactKeys(receipt.process, ["pid", "startIdentity"])
+    || !exactKeys(receipt.terminal, ["exitCode", "signal", "timedOut", "closedAt"])
+    || owner.schema !== "orchestra.runtime-owner.v2"
+    || owner.kind !== "LOCAL_PROCESS"
+    || owner.runtimeOwnerId !== ownerId || owner.operationId !== operationId
+    || receipt.schema !== "orchestra.delegated-child-terminal.v1"
+    || receipt.operationId !== operationId || receipt.runtimeOwnerId !== ownerId
+    || !Number.isSafeInteger(owner.process.pid) || owner.process.pid <= 0
+    || owner.process.pid !== receipt.process.pid
+    || typeof owner.process.startIdentity !== "string" || !owner.process.startIdentity
+    || owner.process.startIdentity !== receipt.process.startIdentity
+    || !REF.test(owner.proof.tokenHash)
+    || receipt.terminal.exitCode !== 0
+    || receipt.terminal.signal !== null || receipt.terminal.timedOut !== false
+    || !Number.isFinite(Date.parse(owner.registeredAt))
+    || !Number.isFinite(Date.parse(receipt.terminal.closedAt))
+    || Date.parse(receipt.terminal.closedAt) < Date.parse(owner.registeredAt)) return false;
+  return true;
+}
+
 export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null, now = () => new Date().toISOString() } = {}) {
   if (typeof dbPath !== "string" || !dbPath
     || !state?.projects?.inspect || !state?.work?.read
@@ -192,6 +243,7 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
     const nativeBlobRoot = blobRoot === null
       ? dbPath === ":memory:" ? null : resolve(dirname(dbPath), "..", "blobs")
       : resolve(blobRoot);
+    const nativeHomeRoot = dbPath === ":memory:" ? null : resolve(dirname(dbPath), "..");
     let closed = false;
     function assertOpen() {
       if (closed) throw new Error("ORCHESTRA_RSI_NATIVE_STORE_CLOSED");
@@ -282,7 +334,8 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
         || JSON.stringify(decision.legalRoutes) !== JSON.stringify(DELEGATED_CHOICE)
         || !Number.isSafeInteger(terminal.durationMs) || terminal.durationMs < 0
         || !REF.test(row.decision_digest) || !REF.test(row.terminal_digest)
-        || !verifiedDelegatedArtifact(nativeBlobRoot, artifactRef, decision)) return null;
+        || !verifiedDelegatedArtifact(nativeBlobRoot, artifactRef, decision)
+        || !verifiedDelegatedChildClose(nativeHomeRoot, decision.operationId)) return null;
       return {
         schema: "orchestra.rsi-decision-outcome.v1", version: 1, phase: "TRAIN",
         source: { lineageId: decision.lineageId, operationId: decision.operationId },
