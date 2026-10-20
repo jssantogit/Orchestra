@@ -168,3 +168,16 @@ test("revoked provider session after the Operation begins cannot execute the wor
   assert.equal(ran, false);
   assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
 });
+
+test("ignored forbidden worker files cannot disappear from mutation inspection", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
+  const result = await command(ctx, executor(async path => {
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+    mkdirSync(join(path, ".orchestra", "state"), { recursive: true });
+    writeFileSync(join(path, ".orchestra", "state", "shadow.json"), "forbidden\n");
+  }));
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NATIVE_DELEGATION_BOUNDARY_VIOLATION");
+  assert.equal(readFileSync(join(ctx.repoRoot, "tracked.txt"), "utf8"), "canonical\n");
+  assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
+});
