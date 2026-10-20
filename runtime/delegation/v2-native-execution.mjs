@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { authorizeDelegationRequest } from "../../core/delegation/policy.mjs";
 import { buildWorkerEnvelope } from "../../core/delegation/worker-envelope.mjs";
@@ -18,6 +18,7 @@ import { createCodexDelegationExecutor } from "../../providers/codex/delegation-
 import { authorizeCapability, authorizeAttach } from "../../v2/authority/authority.mjs";
 import { createRuntimeOwnerStore } from "../../v2/liveness/runtime-owner-store.mjs";
 import { createHostProcessIdentityReader } from "../../v2/liveness/local-process-probe.mjs";
+import { createManagedWorkspaceStore, resolveManagedWorkspacePaths } from "../../v2/workspaces/managed-workspace-store.mjs";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const PROVIDERS = new Set(["codex", "antigravity"]);
@@ -164,7 +165,8 @@ async function sealedBytes(workspace, mutation, binding) {
 // worker produces only a Home-owned sealed candidate, never a canonical edit.
 export async function executeNativeDelegatedWork({
   registry, projectId, workId, generation, actor, request,
-  executor = null, now = () => new Date().toISOString(),
+  executor = null, managedWorkspaceStore = null,
+  now = () => new Date().toISOString(),
 } = {}) {
   const state = registry?.state;
   if (!state?.projects?.inspect || !state?.work?.current
@@ -207,6 +209,9 @@ export async function executeNativeDelegatedWork({
     return fail("NATIVE_DELEGATION_EXECUTOR_UNAVAILABLE");
   }
 
+  const workspaceStore = managedWorkspaceStore ?? createManagedWorkspaceStore({
+    home: registry.paths.home,
+  });
   let workspace = null;
   let operation = null;
   let heartbeatTimer = null;
@@ -217,6 +222,7 @@ export async function executeNativeDelegatedWork({
   try {
     workspace = await prepareMutableDelegationWorkspace({
       repoRoot: facts.project.workspace.canonicalRoot, request,
+      baseDir: resolveManagedWorkspacePaths({ home: registry.paths.home }).instancesRoot,
     });
     facts = nativeFacts(state, projectId, workId, generation, actor, request);
     if (!facts.ok) {
@@ -264,13 +270,36 @@ export async function executeNativeDelegatedWork({
           } catch { heartbeatFailed = true; }
         }, 10_000);
         heartbeatTimer.unref?.();
+        // Bind the scratch clone to this exact Operation before any provider
+        // worker executes. The immutable Home record survives sandbox cleanup
+        // and is auditable after a controller crash. Never reuse an old
+        // association or infer safety from the Project root.
+        const workspaceRef = "workspace:delegated:" + operationId;
+        const association = {
+          schema: "orchestra.managed-workspace.v2", workspaceRef,
+          operationId, projectId, workId, generation,
+          kind: "TRANSIENT_GIT_CLONE",
+          root: dirname(workspace.path), registeredAt: startedAt,
+        };
+        let workspaceBound = false;
+        try {
+          const registered = await workspaceStore.register(association);
+          const observed = registered?.ok && !registered.replayed
+            ? await workspaceStore.read(workspaceRef) : null;
+          workspaceBound = observed !== null
+            && JSON.stringify(observed) === JSON.stringify(association);
+        } catch {
+          workspaceBound = false;
+        }
         const rechecked = nativeFacts(state, projectId, workId, generation, actor, request);
         // The newly opened writer itself is the one expected LIVE mutation.
         const live = state.operations.listLive({ projectId, workId, generation });
         // The only acceptable new denial is our own operation's writer fence.
         // A revoked session, changed Work/epoch or another live writer may not
         // be interpreted as approval to start the external worker.
-        if (rechecked.ok || rechecked.code !== "INCOMPATIBLE_LIVE_OPERATION"
+        if (!workspaceBound) {
+          result = fail("NATIVE_DELEGATION_WORKSPACE_UNVERIFIED");
+        } else if (rechecked.ok || rechecked.code !== "INCOMPATIBLE_LIVE_OPERATION"
           || live.length !== 1 || live[0].operationId !== operationId
           || live[0].kind !== "DELEGATED_MUTATION"
           || state.work.current(projectId)?.workId !== workId
