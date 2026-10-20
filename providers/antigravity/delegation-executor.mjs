@@ -220,7 +220,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
       }
     },
 
-    async execute({ request, workerEnvelope, workspace, onProcessSpawn = null } = {}) {
+    async execute({ request, workerEnvelope, workspace, onProcessSpawn = null, onProcessExit = null } = {}) {
       if (!validExecutionInput(request, workerEnvelope, workspace)) {
         return failure("CAPABILITY_DENIED");
       }
@@ -251,6 +251,7 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
           maxOutputBytes: request.limits.maxOutputBytes,
           env: processEnvironment(workspace.workerGitEnv ?? {}),
           ...(typeof onProcessSpawn === "function" ? { onSpawn: onProcessSpawn } : {}),
+          ...(typeof onProcessExit === "function" ? { onExit: onProcessExit } : {}),
         });
       } catch (error) {
         if (error?.code === "PROCESS_SPAWN_FAILED") {
