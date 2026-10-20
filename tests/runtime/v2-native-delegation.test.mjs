@@ -16,7 +16,6 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8",
 async function setup(t) {
   const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
   const home = mkdtempSync(join(tmpdir(), "orchestra-v2-delegation-"));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
   const repoRoot = join(home, "repository");
   mkdirSync(repoRoot);
   git(repoRoot, "init");
@@ -27,7 +26,11 @@ async function setup(t) {
   git(repoRoot, "add", "tracked.txt");
   git(repoRoot, "commit", "-m", "init");
   const state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
-  t.after(() => state.close());
+  t.after(() => {
+    // Windows holds an open SQLite file lock until state.close().
+    state.close();
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 120 });
+  });
   const projectId = "project-native", workId = "work-native", generation = 1;
   const project = {
     schema: "orchestra.project.v2", projectId, lineageId: "lineage-native",
