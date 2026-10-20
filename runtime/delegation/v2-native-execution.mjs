@@ -196,7 +196,14 @@ export async function executeNativeDelegatedWork({
         operation = begun.operation;
         const rechecked = nativeFacts(state, projectId, workId, generation, actor, request);
         // The newly opened writer itself is the one expected LIVE mutation.
-        if (rechecked.ok || state.work.current(projectId)?.workId !== workId
+        const live = state.operations.listLive({ projectId, workId, generation });
+        // The only acceptable new denial is our own operation's writer fence.
+        // A revoked session, changed Work/epoch or another live writer may not
+        // be interpreted as approval to start the external worker.
+        if (rechecked.ok || rechecked.code !== "INCOMPATIBLE_LIVE_OPERATION"
+          || live.length !== 1 || live[0].operationId !== operationId
+          || live[0].kind !== "DELEGATED_MUTATION"
+          || state.work.current(projectId)?.workId !== workId
           || state.projects.inspect(projectId)?.runtime?.pinnedImage !== facts.project.runtime.pinnedImage) {
           result = fail("NATIVE_DELEGATION_OPERATION_STALE");
         } else {
