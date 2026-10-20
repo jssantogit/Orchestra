@@ -701,11 +701,18 @@ export async function selfHost({ expectedHeadSha, expectedRuntimeImageId, args }
   const globalStateOutsideProject = realRoot !== null && !inside(realRoot, statePath);
   const sourceIdentity = realRoot !== null && orchestraSourceIdentity(realRoot);
   const thinShim = realRoot !== null && selfHostThinShim(realRoot, input.home);
+  const legacyWorkspaceRef = `workspace:self-host:${projectRecord?.lineageId ?? ''}`;
+  const workspaceBound = operation?.workspaceRef === realRoot
+    || (operation?.workflowState === 'COMPLETED' && operation?.workspaceRef === legacyWorkspaceRef);
   const terminalMutation = operation?.projectId === input.projectId
+    && operation?.kind === 'DIRECT_MUTATION'
+    && Array.isArray(operation?.capabilities)
+    && operation.capabilities.includes('WORKSPACE_EDIT')
     && operation?.liveness === 'TERMINAL'
-    && operation?.workflowState === 'COMPLETED'
+    && ['COMPLETED', 'SUCCEEDED'].includes(operation?.workflowState)
     && typeof operation?.resultRef === 'string'
-    && operation.resultRef.length > 0;
+    && operation.resultRef.trim().length > 0
+    && workspaceBound;
   const noLocalBrain = realRoot !== null
     && noFullLocalGovernanceRuntime(realRoot)
     && globalStateOutsideProject
