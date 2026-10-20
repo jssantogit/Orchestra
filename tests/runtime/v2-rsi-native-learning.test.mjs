@@ -17,7 +17,7 @@ function observation(lineageId, operationId, route = "DIRECT_WORK") {
       legalRoutes: ["DIRECT_WORK", "DELEGATED"],
       selectedRoute: route,
     },
-    outcome: { success: true, retryCount: 0, durationMs: 250 },
+    outcome: { success: true, durationMs: 250 },
     privacy: { containsRawProjectContent: false },
     evidence: {
       choiceRef: sha(`${lineageId}:${operationId}:choice`),
