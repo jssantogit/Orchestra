@@ -159,6 +159,24 @@ test("Codex execution accepts exactly one bounded worker report and maps malform
   }
 });
 
+test("Codex strict output wire omits unsupported uniqueItems without relaxing local report validation", async () => {
+  let outputSchema;
+  const executor = createCodexDelegationExecutor({
+    runProcess: async input => {
+      const schemaPath = input.args[input.args.indexOf("--output-schema") + 1];
+      outputSchema = JSON.parse(readFileSync(schemaPath, "utf8"));
+      writeReport(input, { summary: "Completed", findings: [], evidenceRefs: ["test:same", "test:same"] });
+      return processResult();
+    },
+  });
+  const result = await executor.execute({ request: request(), workerEnvelope: workerEnvelope(), workspace: { path: "/tmp/worktree" } });
+  assert.equal(Object.hasOwn(outputSchema.properties.evidenceRefs, "uniqueItems"), false);
+  assert.equal(outputSchema.additionalProperties, false);
+  assert.deepEqual(outputSchema.required, ["summary", "findings", "evidenceRefs"]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "INVALID_RESULT");
+});
+
 test("Codex execution maps timeout, nonzero, truncation, and missing binary to bounded failure taxonomy", async () => {
   const cases = [
     [processResult({ exitCode: null, signal: "SIGKILL", timedOut: true }), "EXECUTION_TIMED_OUT"],

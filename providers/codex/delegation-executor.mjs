@@ -241,7 +241,9 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
       const scratch = mkdtempSync(join(tmpdir(), "orchestra-codex-worker-"));
       const schemaPath = join(scratch, "worker-report.schema.json");
       const resultPath = join(scratch, "worker-report.json");
-      writeFileSync(schemaPath, `${JSON.stringify(WORKER_REPORT_SCHEMA)}\n`, "utf8");
+      const outputSchema = structuredClone(WORKER_REPORT_SCHEMA);
+      delete outputSchema.properties.evidenceRefs.uniqueItems;
+      writeFileSync(schemaPath, `${JSON.stringify(outputSchema)}\n`, "utf8");
 
       let result;
       try {
