@@ -114,8 +114,8 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
         || operation.workflowState !== terminal.workflowState
         || operation.resultRef !== terminal.resultRef
         || operation.liveness !== "TERMINAL"
-        || terminal.workflowState !== "SUCCEEDED"
-        || terminal.resultRef !== `provider-result:succeeded:${decision.correlationHash}`
+        || !["SUCCEEDED", "FAILED"].includes(terminal.workflowState)
+        || terminal.resultRef !== `provider-result:${terminal.workflowState.toLowerCase()}:${decision.correlationHash}`
         || decision.selectedRoute !== "DIRECT_WORK"
         || decision.domainCohort !== "software-engineering"
         || terminal.durationMs < 0 || !Number.isSafeInteger(terminal.durationMs)
@@ -131,7 +131,7 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
           legalRoutes: ["DIRECT_WORK"],
           selectedRoute: "DIRECT_WORK",
         },
-        outcome: { success: true, retryCount: 0, durationMs: terminal.durationMs },
+        outcome: { success: terminal.workflowState === "SUCCEEDED", retryCount: 0, durationMs: terminal.durationMs },
         privacy: { containsRawProjectContent: false },
         evidence: { choiceRef: row.decision_digest, outcomeRef: row.terminal_digest },
       };
@@ -212,7 +212,7 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
         if (updated.changes !== 1) return fail("RSI_NATIVE_TERMINAL_RACE");
         return { ok: true, replayed: false, outcomeRef: ref };
       },
-      listEligible() {
+      listObserved() {
         assertOpen();
         const observations = [];
         for (const row of all.all()) {
@@ -221,6 +221,9 @@ export function createNativeRsiObservationStore({ dbPath, state, now = () => new
         }
         return observations.sort((a, b) => a.source.lineageId.localeCompare(b.source.lineageId)
           || a.source.operationId.localeCompare(b.source.operationId));
+      },
+      listEligible() {
+        return this.listObserved().filter((item) => item.outcome.success === true);
       },
       close() {
         if (closed) return;
