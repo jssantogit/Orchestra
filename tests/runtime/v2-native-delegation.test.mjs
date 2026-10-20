@@ -262,9 +262,17 @@ test("retry after successful delegated Work is at-most-once even after state reo
   });
   const first = await command(ctx, worker);
   assert.equal(first.ok, true, JSON.stringify(first));
-  const second = await command(ctx, worker, {
-    now: () => new Date(Date.now()).toISOString(),
-  });
+  const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
+  const reopened = createSqliteState({ dbPath: join(ctx.registry.paths.home, "state", "orchestra.db") });
+  let second;
+  try {
+    second = await command(ctx, worker, {
+      registry: { ...ctx.registry, state: reopened },
+      now: () => new Date(Date.now()).toISOString(),
+    });
+  } finally {
+    reopened.close();
+  }
   assert.equal(second.ok, false);
   assert.equal(second.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
   assert.equal(executions, 1);
