@@ -145,3 +145,29 @@ requires a human gate without terminalizing the operation. Direct provider
 Project-root recovery remains unchanged. The native RSI field gate remains unverified;
 software CI alone does not establish genuine legal route alternatives or
 independent TRAIN/EVALUATE/HOLDOUT field observations.
+
+
+### Durable delegated clone association (PR #72 continuation)
+
+Before any delegated worker process can start, the neutral V2 adapter now
+creates the independent clone beneath
+\`ORCHESTRA_HOME/workspaces/instances/\` and registers an immutable
+\`orchestra.managed-workspace.v2\` record through the existing Home managed
+workspace store. The key is \`workspace:delegated:<operationId>\`, bound to
+the actual operation/project/work/generation and the scratch instance root.
+A failed/conflicting/unreadable registration prevents worker dispatch.
+The record is retained after normal workspace cleanup as provenance;
+the transient files are removed only by the exact live controller path.
+
+The global Operation still uses the canonical Project root as a **mutation
+exclusivity fence**, not as the location of the transient child workspace.
+The recovery inspector must not interpret that canonical root as proof of
+clone cleanup. For stale delegated work, even an intact registered clone is
+preserved under \`UNKNOWN\` pending independent proof of child process exit
+and integrity/cleanup of its managed instance. This deliberately does not
+claim automatic recovery or field readiness.
+
+Outstanding boundary: durable child-process birth/terminal observation, exact
+worker/clone fencing across controller death, and an operator-authorized
+recovery/cleanup protocol. An intact Home record alone never proves that the
+external provider has terminated.
