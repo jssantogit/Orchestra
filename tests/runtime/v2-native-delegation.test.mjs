@@ -412,3 +412,42 @@ test("a missing or rejected durable delegated clone association blocks worker di
   assert.equal(ctx.state.nativeRsi.listObserved().length, 0);
   assert.equal(ctx.state.operations.listLive({ projectId: ctx.projectId }).length, 0);
 });
+
+
+test("native delegated child PID is bound to Home Operation independently of the controller", { skip: !supported || process.platform === "darwin" }, async (t) => {
+  const ctx = await setup(t);
+  const { runBoundedProcess } = await import("../../runtime/delegation/process-runner.mjs");
+  const worker = {
+    provider: "antigravity",
+    async discover() {
+      return { provider: "antigravity", available: true, version: "controlled-node-fixture",
+        capabilities: { implementation: true } };
+    },
+    async execute({ workspace, onProcessSpawn }) {
+      assert.equal(typeof onProcessSpawn, "function");
+      const ran = await runBoundedProcess({
+        command: process.execPath,
+        args: ["-e",
+          "process.stdin.on('data', () => { require('fs').writeFileSync('tracked.txt', 'delegated\\n'); process.exit(0) })"],
+        cwd: workspace.path, input: "envelope",
+        timeoutMs: 20_000, maxOutputBytes: 4096,
+        onSpawn: onProcessSpawn,
+      });
+      return { ok: ran.exitCode === 0, provider: "antigravity",
+        execution: { exitCode: ran.exitCode, durationMs: ran.durationMs },
+        report: { summary: "Scoped edit", findings: [], evidenceRefs: [] } };
+    },
+  };
+  const outcome = await command(ctx, worker);
+  assert.equal(outcome.ok, true, JSON.stringify(outcome));
+  const { createRuntimeOwnerStore } = await import("../../v2/liveness/runtime-owner-store.mjs");
+  const store = createRuntimeOwnerStore({ rootDir: join(ctx.registry.paths.home, "runtime-owners") });
+  const child = await store.read("owner_delegated_child_" + outcome.operationId);
+  assert.ok(child);
+  assert.equal(child.operationId, outcome.operationId);
+  assert.equal(child.kind, "LOCAL_PROCESS");
+  assert.ok(child.process.pid > 0);
+  assert.notEqual(child.process.pid, process.pid);
+  assert.ok(child.process.startIdentity);
+  assert.match(child.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
+});
