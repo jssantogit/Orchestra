@@ -77,6 +77,30 @@ async function registerDelegationProcessOwner(home, operationId, registeredAt) {
   } catch { return null; }
 }
 
+// A worker is a distinct process from the controlling session. Observing
+// only the controller's PID cannot establish the child's post-crash liveness.
+async function registerDelegationChildOwner(home, operationId, pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  let identity;
+  try { identity = await createHostProcessIdentityReader()(pid); }
+  catch { return false; }
+  if (identity?.status !== "PRESENT" || !identity.processIdentity) return false;
+  const owner = {
+    schema: "orchestra.runtime-owner.v2",
+    runtimeOwnerId: "owner_delegated_child_" + operationId,
+    operationId, kind: "LOCAL_PROCESS",
+    registeredAt: new Date().toISOString(),
+    process: { pid, startIdentity: identity.processIdentity },
+    proof: { tokenHash: digest(randomBytes(32)) },
+  };
+  try {
+    const result = await createRuntimeOwnerStore({
+      rootDir: join(home, "runtime-owners"),
+    }).register(owner);
+    return result?.ok === true && result.replayed !== true;
+  } catch { return false; }
+}
+
 function providerExecutor(target) {
   if (target === "antigravity") return createAntigravityDelegationExecutor();
   if (target === "codex") return createCodexDelegationExecutor();
@@ -315,9 +339,26 @@ export async function executeNativeDelegatedWork({
             result = fail("NATIVE_DELEGATION_DECISION_UNVERIFIED");
           } else {
           let execution = null;
-          try { execution = await worker.execute({ request, workerEnvelope: buildWorkerEnvelope(request), workspace }); }
-          catch { execution = null; }
-          if (!validReport(execution, request.target.provider)) {
+          let childOwnerRecorded = false;
+          const onProcessSpawn = async ({ pid } = {}) => {
+            if (childOwnerRecorded || !(await registerDelegationChildOwner(
+              registry.paths.home, operationId, pid,
+            ))) {
+              throw new Error("NATIVE_DELEGATION_CHILD_UNVERIFIED");
+            }
+            childOwnerRecorded = true;
+          };
+          try {
+            execution = await worker.execute({
+              request, workerEnvelope: buildWorkerEnvelope(request),
+              workspace, onProcessSpawn,
+            });
+          } catch { execution = null; }
+          // Controlled test executors may not spawn a real process. The real
+          // provider adapters MUST attest a child to count as native success.
+          if (executor === null && !childOwnerRecorded) {
+            result = fail("NATIVE_DELEGATION_CHILD_UNVERIFIED");
+          } else if (!validReport(execution, request.target.provider)) {
             result = fail("NATIVE_DELEGATION_WORKER_FAILED");
           } else {
             const inspection = await inspectMutableDelegationWorkspace(workspace);
