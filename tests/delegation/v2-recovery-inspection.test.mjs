@@ -43,8 +43,8 @@ async function setup(t) {
   })).ok, true);
   const terminals = createDelegatedChildTerminalStore({ home, runtimeOwnerStore: owners });
   const state = { operations: { inspect: id => id === operation.operationId ? operation : null } };
-  const inspect = reader => createDelegatedRecoveryInspection({
-    home, state, readProcessIdentity: reader,
+  const inspect = (reader, groupReader = async () => "UNAVAILABLE") => createDelegatedRecoveryInspection({
+    home, state, readProcessIdentity: reader, readProcessGroupStatus: groupReader,
   }).inspect({ operationId: operation.operationId });
   return { home, clone, workspaces, owners, terminals, inspect };
 }
@@ -136,4 +136,41 @@ test("nonzero child-close receipt stays terminal failure, never a successful qui
   assert.equal(a.reason, "CHILD_EXIT_FAILED");
   assert.equal(a.cleanupAuthorized, false);
   assert.equal(existsSync(f.clone), true);
+});
+
+
+test("a still-active POSIX process group after child close blocks any quiescence claim", async t => {
+  const f = await setup(t);
+  assert.equal((await f.terminals.register({
+    schema: "orchestra.delegated-child-terminal.v1",
+    operationId: operation.operationId, runtimeOwnerId: childOwnerId,
+    process: { pid: 45678, startIdentity: birth },
+    terminal: { exitCode: 0, signal: null, timedOut: false,
+      closedAt: "2026-10-20T12:01:00.000Z" },
+  })).ok, true);
+  const a = await f.inspect(async () => ({ status: "ABSENT" }), async pid => {
+    assert.equal(pid, 45678);
+    return "PRESENT";
+  });
+  assert.equal(a.evidence.processGroupStatus, "PRESENT");
+  assert.equal(a.reason, "PROCESS_GROUP_STILL_ACTIVE");
+  assert.equal(a.cleanupAuthorized, false);
+  assert.equal(a.redispatchAuthorized, false);
+  assert.equal(a.humanGate, true);
+});
+
+test("an absent process group still cannot prove escaped descendants terminated", async t => {
+  const f = await setup(t);
+  assert.equal((await f.terminals.register({
+    schema: "orchestra.delegated-child-terminal.v1",
+    operationId: operation.operationId, runtimeOwnerId: childOwnerId,
+    process: { pid: 45678, startIdentity: birth },
+    terminal: { exitCode: 0, signal: null, timedOut: false,
+      closedAt: "2026-10-20T12:01:00.000Z" },
+  })).ok, true);
+  const a = await f.inspect(async () => ({ status: "ABSENT" }),
+    async () => "ABSENT");
+  assert.equal(a.evidence.processGroupStatus, "ABSENT");
+  assert.equal(a.reason, "DESCENDANT_LIFECYCLE_UNPROVEN");
+  assert.equal(a.cleanupAuthorized, false);
 });
