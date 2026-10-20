@@ -138,7 +138,10 @@ being forced into RUNTIME_OWNER_MISSING for every delegation.
 registered durably and proven cleaned or preserved, and the child-provider
 lifecycle must be correlated independently before any automatic stale cleanup
 or retry is safe. A controlling process dying is not by itself proof that an
-external worker exited. The global reconciler's conservative UNKNOWN/human
-gates remain authoritative. The native RSI field gate remains unverified;
+external worker exited. The managed workspace inspector now explicitly rejects the canonical
+Project root as cleanup proof for `DELEGATED_MUTATION`; absent a matching
+durable managed-clone record it returns `UNKNOWN` and the global reconciler
+requires a human gate without terminalizing the operation. Direct provider
+Project-root recovery remains unchanged. The native RSI field gate remains unverified;
 software CI alone does not establish genuine legal route alternatives or
 independent TRAIN/EVALUATE/HOLDOUT field observations.
