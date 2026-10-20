@@ -528,3 +528,15 @@ test("tampered native child-close receipt cannot turn a delegated process into R
   assert.equal(result.code, "NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
   assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
 });
+
+
+test("test-double delegated success without a native child-close receipt is ineligible for RSI replay", { skip: !supported }, async t => {
+  const ctx = await setup(t);
+  const result = await command(ctx, executor(async path => {
+    writeFileSync(join(path, "tracked.txt"), "delegated\n");
+  }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(ctx.state.operations.inspect(result.operationId).workflowState, "SUCCEEDED");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), [],
+    "a controlled fake executor cannot establish factual subprocess provenance");
+});
