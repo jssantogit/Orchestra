@@ -90,3 +90,62 @@ test("native RSI does not learn UNKNOWN and fails closed on corrupted terminal p
     store.close();
   } finally { await rm(home, { recursive: true, force: true }); }
 });
+
+test("global SQLite state mounts the native journal on real persisted Project/Work/Operation and survives reopen", { skip: !supported }, async () => {
+  const [{ createSqliteState }, { mkdtemp, rm }, { join }, { tmpdir }] = await Promise.all([
+    import("../../v2/persistence/sqlite/sqlite-state.mjs"),
+    import("node:fs/promises"), import("node:path"), import("node:os"),
+  ]);
+  const root = await mkdtemp(join(tmpdir(), "orchestra-rsi-global-"));
+  const dbPath = join(root, "state.db");
+  try {
+    const state = createSqliteState({ dbPath });
+    const project = {
+      schema: "orchestra.project.v2", projectId: "prj-native", lineageId: "lineage-native",
+      workspace: { canonicalRoot: join(root, "project"), vcs: "git" },
+      runtime: { pinnedImage: "native-image", instructionEpoch: 0 },
+      trust: { mode: "trusted" },
+    };
+    assert.equal(state.projects.register(project).ok, true);
+    const work = {
+      schema: "orchestra.work-unit.v2", workId: "work-native", projectId: project.projectId,
+      taskId: "task-native", generation: 0, runtimeImage: "native-image",
+      instructionEpoch: 0, state: "INTAKE",
+      scopeRef: null, directionRef: null, candidateRef: null,
+      evidenceRefs: [], blockers: [], continuationRef: null,
+    };
+    assert.equal(state.work.startCurrent(work).ok, true);
+    const at = new Date().toISOString();
+    const operation = {
+      schema: "orchestra.operation.v2", operationId: "op-native", projectId: project.projectId,
+      workId: work.workId, generation: 0, kind: "DIRECT_MUTATION",
+      actorRef: "sha256:actor", capabilities: ["WORKSPACE_EDIT"],
+      workflowState: "RUNNING", liveness: "LIVE", startedAt: at, heartbeatAt: at,
+      deadlineAt: new Date(Date.parse(at) + 60000).toISOString(),
+      runtimeOwnerRef: "provider-owner:op-native",
+      workspaceRef: project.workspace.canonicalRoot, resultRef: null,
+    };
+    assert.equal(state.operations.begin({ expectedGeneration: 0, operation }).ok, true);
+    const hash = "sha256:" + "b".repeat(64);
+    assert.equal(state.operationCorrelations.put({
+      provider: "codex", projectId: project.projectId, correlationHash: hash,
+      operationId: operation.operationId, workId: work.workId,
+      generation: 0, actorIdHash: operation.actorRef,
+    }).ok, true);
+    assert.equal(state.nativeRsi.recordDecision({
+      operationId: operation.operationId, providerFamily: "codex", correlationHash: hash,
+    }).ok, true);
+    state.close();
+    const reopened = createSqliteState({ dbPath });
+    const terminal = reopened.operations.terminalize({
+      operationId: operation.operationId, workflowState: "SUCCEEDED",
+      resultRef: `provider-result:succeeded:${hash}`, expectedHeartbeatAt: operation.heartbeatAt,
+    });
+    assert.equal(terminal.ok, true, JSON.stringify(terminal));
+    assert.equal(reopened.nativeRsi.recordTerminal({ operationId: operation.operationId }).ok, true);
+    assert.equal(reopened.nativeRsi.listEligible().length, 1);
+    reopened.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
