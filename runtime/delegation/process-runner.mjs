@@ -88,8 +88,10 @@ export async function runBoundedProcess({
   maxOutputBytes,
   env = undefined,
   onSpawn = null,
+  onExit = null,
 } = {}) {
   if (onSpawn !== null && typeof onSpawn !== "function") fail("PROCESS_SPAWN_OBSERVER_INVALID");
+  if (onExit !== null && typeof onExit !== "function") fail("PROCESS_EXIT_OBSERVER_INVALID");
   validateInput({ command, args, timeoutMs, maxOutputBytes, env });
   if (input !== null && input !== undefined && typeof input !== "string" && !Buffer.isBuffer(input)) {
     fail("PROCESS_INPUT_INVALID");
@@ -182,6 +184,33 @@ export async function runBoundedProcess({
         error.cause = spawnProofFailure;
         reject(error);
         return;
+      }
+      if (onExit !== null) {
+        // This callback receives facts from this exact child's close event,
+        // never values reported by the worker. A failed Home persistence
+        // prevents an apparently successful provider result.
+        let timeout;
+        try {
+          await Promise.race([
+            Promise.resolve().then(() => onExit({
+              pid: child.pid, exitCode,
+              signal: signal ?? null, timedOut,
+            })),
+            new Promise((_, rejectClose) => {
+              timeout = setTimeout(() => rejectClose(
+                new Error("PROCESS_EXIT_PROOF_TIMEOUT"),
+              ), Math.min(timeoutMs, 15_000));
+            }),
+          ]);
+        } catch (cause) {
+          const error = new Error("PROCESS_EXIT_PROOF_FAILED");
+          error.code = "PROCESS_EXIT_PROOF_FAILED";
+          error.cause = cause;
+          reject(error);
+          return;
+        } finally {
+          if (timeout) clearTimeout(timeout);
+        }
       }
       const ended = process.hrtime.bigint();
       resolve({
