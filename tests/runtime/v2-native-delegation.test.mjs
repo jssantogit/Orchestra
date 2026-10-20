@@ -312,3 +312,26 @@ test("same delegation ID with modified payload cannot bypass at-most-once fence"
   assert.equal(second.code, "NATIVE_DELEGATION_ALREADY_RECORDED");
   assert.equal(executions, 1);
 });
+
+
+test("delegated LIVE Operation has a durable factual local-process owner for crash reconciliation", { skip: !supported || process.platform === "darwin" }, async (t) => {
+  const ctx = await setup(t);
+  let owner;
+  const result = await command(ctx, executor(async path => {
+    const op = ctx.state.operations.listLive({ projectId: ctx.projectId })[0];
+    assert.equal(op?.kind, "DELEGATED_MUTATION");
+    assert.equal(typeof op.runtimeOwnerRef, "string");
+    assert.ok(op.runtimeOwnerRef);
+    const { createRuntimeOwnerStore } = await import("../../v2/liveness/runtime-owner-store.mjs");
+    const store = createRuntimeOwnerStore({ rootDir: join(ctx.registry.paths.home, "runtime-owners") });
+    owner = await store.read(op.runtimeOwnerRef);
+    assert.equal(owner.operationId, op.operationId);
+    assert.equal(owner.kind, "LOCAL_PROCESS");
+    assert.equal(owner.process.pid, process.pid);
+    assert.match(owner.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
+    writeFileSync(join(path, "tracked.txt"), "delegated\\n");
+  }));
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(typeof owner.process.startIdentity, "string");
+  assert.ok(owner.process.startIdentity.length > 0);
+});
