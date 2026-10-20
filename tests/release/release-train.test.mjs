@@ -171,11 +171,19 @@ test("publish guard accepts only a successful exact-main release PR association"
   }).ok, false);
 });
 
-test("prepare workflow requires an operator bump, full preflight, and clean PR-creation failure", () => {
+test("prepare workflow requires explicit topology, factual v2 evidence, full preflight, and clean PR-creation failure", () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
   const workflow = readFileSync(join(root, ".github/workflows/prepare-release.yml"), "utf8");
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /select[\s\S]*patch[\s\S]*minor[\s\S]*major/);
+  assert.match(workflow, /topology:[\s\S]*v1-compat[\s\S]*v2-cutover/);
+  assert.match(workflow, /cutover_head_sha:/);
+  assert.match(workflow, /cutover_runtime_image_id:/);
+  assert.match(workflow, /cutover_evidence_json:/);
+  assert.match(workflow, /Materialize v2 cutover evidence/);
+  assert.match(workflow, /ORCHESTRA_V2_REQUIRE_CUTOVER=1/);
+  assert.match(workflow, /ORCHESTRA_V2_EXPECTED_HEAD=/);
+  assert.match(workflow, /ORCHESTRA_V2_EXPECTED_RUNTIME_IMAGE=/);
   assert.match(workflow, /contents:\s*write/);
   assert.match(workflow, /pull-requests:\s*write/);
   assert.match(workflow, /scripts\/release\/prepare-release\.mjs/);
@@ -188,6 +196,7 @@ test("prepare workflow requires an operator bump, full preflight, and clean PR-c
   assert.match(workflow, /gh pr create/);
   assert.match(workflow, /if ! gh pr create[\s\S]*git push origin --delete/);
   assert.match(workflow, /Create a merge commit/);
+  assert.match(workflow, /green CI run or a valid V2 cutover evidence record[\s\S]*neither one is publication authorization/i);
   assert.doesNotMatch(workflow, /gh release create/);
 });
 

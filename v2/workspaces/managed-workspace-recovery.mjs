@@ -74,8 +74,41 @@ export function createManagedWorkspaceRecovery({ home, state, store = null } = {
   const workspaceStore = store ?? createManagedWorkspaceStore({ home });
   if (typeof workspaceStore?.read !== "function") throw new TypeError("managed workspace store read is required");
 
+  async function inspectRegisteredProjectRoot(workspaceRef, operation) {
+    if (!isAbsolute(workspaceRef) || typeof operation?.projectId !== "string") return null;
+    const project = state.projects.inspect(operation.projectId);
+    if (!project || typeof project.workspace?.canonicalRoot !== "string" || !isAbsolute(project.workspace.canonicalRoot)) {
+      return null;
+    }
+
+    // Native provider Operations bind workspaceRef to the registered canonical Project root.
+    // Only the exact normalized root is eligible; aliases, symlinks and other Project roots
+    // must never acquire recovery authority through path equivalence alone.
+    if (comparable(workspaceRef) !== comparable(project.workspace.canonicalRoot)) return null;
+
+    try {
+      const rootStat = await lstat(workspaceRef);
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return status(workspaceRef, "UNKNOWN");
+
+      const rootCanonical = await realpath(workspaceRef);
+      const projectCanonical = await realpath(project.workspace.canonicalRoot);
+      if (comparable(rootCanonical) !== comparable(projectCanonical)) return status(workspaceRef, "UNKNOWN");
+
+      const gitTop = await gitOutput(["-C", rootCanonical, "rev-parse", "--show-toplevel"]);
+      const gitCanonical = await realpath(gitTop);
+      if (comparable(gitCanonical) !== comparable(rootCanonical)) return status(workspaceRef, "UNKNOWN");
+
+      return status(workspaceRef, "PROJECT_ROOT");
+    } catch {
+      return status(workspaceRef, "UNKNOWN");
+    }
+  }
+
   async function inspect(workspaceRef, operation) {
     if (typeof workspaceRef !== "string" || workspaceRef.length === 0) return status(workspaceRef ?? null, "UNKNOWN");
+
+    const projectRoot = await inspectRegisteredProjectRoot(workspaceRef, operation);
+    if (projectRoot) return projectRoot;
 
     let record;
     try {

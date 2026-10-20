@@ -493,18 +493,21 @@ test("explicit Codex shim installation requires registration and targets the sta
       encoding: "utf8",
     });
     const forwarded = JSON.parse(output);
-    assert.equal(forwarded.reason, "ORCHESTRA_V2_INTAKE");
+    assert.deepEqual(Object.keys(forwarded), ["hookSpecificOutput"]);
     assert.equal(forwarded.hookSpecificOutput.hookEventName, "SessionStart");
+    const context = JSON.parse(forwarded.hookSpecificOutput.additionalContext);
+    assert.equal(context.activeWork, null);
+    assert.equal(context.mutationAuthority, "UNAVAILABLE_UNTIL_WORK_STARTS");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("installed global shim preserves active Codex hook responses across attach and tool lifecycle", async () => {
+test("installed global shim projects valid Codex wire while preserving internal lifecycle effects", async () => {
   const root = await mkdtemp(join(tmpdir(), "orchestra-codex-shim-active-"));
   try {
     const home = join(root, "home");
-    const { cwd } = await prepareRegisteredWorkspace({ root, home, active: true });
+    const { cwd, project: registered } = await prepareRegisteredWorkspace({ root, home, active: true });
     let installOutput = "";
     const installCode = await runGlobalCli({
       argv: ["provider", "codex", "shim", "install", "--home", home],
@@ -528,14 +531,12 @@ test("installed global shim preserves active Codex hook responses across attach 
     }));
 
     const attached = invoke({ hook_event_name: "SessionStart", session_id: "shim-active-session" });
-    assert.equal(attached.ok, true);
+    assert.deepEqual(Object.keys(attached), ["hookSpecificOutput"]);
     assert.equal(attached.hookSpecificOutput.hookEventName, "SessionStart");
     assert.equal(JSON.parse(attached.hookSpecificOutput.additionalContext).work.workId, "work-hook");
 
     const read = invoke({ hook_event_name: "PreToolUse", session_id: "shim-active-session", tool_name: "read_file" });
-    assert.equal(read.ok, true);
-    assert.equal(read.reason, null);
-    assert.equal(read.hookSpecificOutput.permissionDecision, "allow");
+    assert.deepEqual(read, { hookSpecificOutput: { hookEventName: "PreToolUse" } });
 
     const mutation = invoke({
       hook_event_name: "PreToolUse",
@@ -543,9 +544,14 @@ test("installed global shim preserves active Codex hook responses across attach 
       tool_name: "write_file",
       tool_call_id: "shim-active-call",
     });
-    assert.equal(mutation.ok, true);
-    assert.equal(mutation.reason, null);
-    assert.equal(mutation.hookSpecificOutput.permissionDecision, "allow");
+    assert.deepEqual(mutation, { hookSpecificOutput: { hookEventName: "PreToolUse" } });
+
+    let state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    const live = state.operations.listLive({ projectId: registered.projectId });
+    assert.equal(live.length, 1);
+    const operationId = live[0].operationId;
+    assert.equal(live[0].workflowState, "RUNNING");
+    state.close();
 
     const terminal = invoke({
       hook_event_name: "PostToolUse",
@@ -554,9 +560,13 @@ test("installed global shim preserves active Codex hook responses across attach 
       tool_call_id: "shim-active-call",
       is_error: false,
     });
-    assert.equal(terminal.ok, true);
-    assert.equal(terminal.reason, null);
-    assert.equal(terminal.operation.workflowState, "SUCCEEDED");
+    assert.deepEqual(terminal, {});
+
+    state = createSqliteState({ dbPath: join(home, "state", "orchestra.db") });
+    const completed = state.operations.inspect(operationId);
+    assert.equal(completed.workflowState, "SUCCEEDED");
+    assert.equal(completed.liveness, "TERMINAL");
+    state.close();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

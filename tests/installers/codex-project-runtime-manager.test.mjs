@@ -135,7 +135,7 @@ test("Codex v2 shim installs only hook config and thin transport shim", () => {
   }
 });
 
-test("Codex v2 shim forwards stdin and preserves global launcher stdout", () => {
+test("Codex v2 shim forwards stdin internally and projects SessionStart provider stdout", () => {
   const project = makeProject();
   const global = makeProject("orch-global-launcher-");
   const launcher = join(global, "cli.mjs");
@@ -161,9 +161,6 @@ test("Codex v2 shim forwards stdin and preserves global launcher stdout", () => 
       encoding: "utf8",
     });
     assert.deepEqual(JSON.parse(output), {
-      ok: true,
-      reason: "FORWARDED",
-      forwarded: input,
       hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "forwarded" },
     });
   } finally {
@@ -172,7 +169,7 @@ test("Codex v2 shim forwards stdin and preserves global launcher stdout", () => 
   }
 });
 
-test("Codex v2 shim returns structured unavailable failure for malformed or missing launcher", () => {
+test("Codex v2 shim returns provider-safe fail-closed output for malformed or missing launcher", () => {
   const project = makeProject();
   const global = makeProject("orch-global-launcher-");
   const launcher = join(global, "cli.mjs");
@@ -209,10 +206,20 @@ test("Codex v2 shim returns structured unavailable failure for malformed or miss
         input: JSON.stringify({ hook_event_name: hookEventName }),
         encoding: "utf8",
       });
-      assert.notEqual(result.status, 0);
-      assert.equal(JSON.parse(result.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
-      assert.equal(JSON.parse(result.stdout).hookSpecificOutput.hookEventName, hookEventName);
-      if (hookEventName === "PreToolUse") assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, "deny");
+      const payload = JSON.parse(result.stdout);
+      if (hookEventName === "PreToolUse") {
+        assert.equal(result.status, 0);
+        assert.deepEqual(payload, {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: "ORCHESTRA_V2_GLOBAL_UNAVAILABLE",
+          },
+        });
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(payload, {});
+      }
     }
     rmSync(launcher);
     const unavailable = spawnSync(process.execPath, [shim], {
@@ -220,8 +227,14 @@ test("Codex v2 shim returns structured unavailable failure for malformed or miss
       input: JSON.stringify({ hook_event_name: "PreToolUse" }),
       encoding: "utf8",
     });
-    assert.notEqual(unavailable.status, 0);
-    assert.equal(JSON.parse(unavailable.stdout).reason, "ORCHESTRA_V2_GLOBAL_UNAVAILABLE");
+    assert.equal(unavailable.status, 0);
+    assert.deepEqual(JSON.parse(unavailable.stdout), {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "ORCHESTRA_V2_GLOBAL_UNAVAILABLE",
+      },
+    });
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(global, { recursive: true, force: true });

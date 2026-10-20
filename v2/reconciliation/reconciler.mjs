@@ -5,7 +5,7 @@ const RECOVERY_RESULT_REASON = "OWNER_TERMINATED_WITHOUT_TERMINALIZATION";
 const TERMINAL_CLEANUP_REASON = "RECOVERY_TERMINAL_PENDING_CLEANUP";
 const TERMINAL_DIRTY_REASON = "RECOVERY_TERMINAL_PENDING_DIRTY_RESOLUTION";
 const EXPLICIT_DISCARD_REASON = "STALE_DIRTY_EXPLICIT_DISCARD";
-const WORKSPACE_STATUSES = new Set(["ABSENT", "CLEAN", "DIRTY", "UNKNOWN"]);
+const WORKSPACE_STATUSES = new Set(["ABSENT", "CLEAN", "DIRTY", "PROJECT_ROOT", "UNKNOWN"]);
 const DIRTY_ACTIONS = new Set(["PRESERVE", "DISCARD"]);
 
 function failure(reason, fields = {}) {
@@ -217,7 +217,7 @@ export function createOperationReconciler({
     }
 
     const workspace = await inspectWorkspace(operation);
-    if (workspace.status === "CLEAN" || workspace.status === "ABSENT") {
+    if (workspace.status === "CLEAN" || workspace.status === "ABSENT" || workspace.status === "PROJECT_ROOT") {
       return {
         workspace,
         blocksMutation: false,
@@ -359,7 +359,7 @@ export function createOperationReconciler({
         replayed: Boolean(written.replayed),
       });
     }
-    if (workspace.status === "ABSENT") {
+    if (workspace.status === "ABSENT" || workspace.status === "PROJECT_ROOT") {
       const record = recoveryRecord({
         operation,
         commandId,
@@ -683,7 +683,7 @@ export function createOperationReconciler({
         });
       }
 
-      if (workspace.status === "ABSENT") {
+      if (workspace.status === "ABSENT" || workspace.status === "PROJECT_ROOT") {
         const record = recoveryRecord({
           operation,
           commandId,

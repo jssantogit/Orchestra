@@ -7,6 +7,68 @@ on:
       - feat/v2-*
 
 jobs:
+  posix-readiness:
+    name: POSIX Readiness (exact PR head)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Check out exact PR head without credentials
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js 24 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Collect canonical POSIX readiness fragment
+        id: collect-posix
+        run: >-
+          node scripts/collect-posix-readiness.mjs
+          --repo-root "$GITHUB_WORKSPACE"
+          --expected-head "${{ github.event.pull_request.head.sha }}"
+          --output-dir "$RUNNER_TEMP/orchestra-posix-readiness"
+
+      - name: Upload sanitized POSIX readiness evidence
+        id: upload-posix-evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: posix-readiness-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/orchestra-posix-readiness/evidence.json
+          if-no-files-found: error
+
+      - name: Download, verify, and canonical-merge POSIX artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          VALIDATED_OUTPUT_DIR: ${{ runner.temp }}/orchestra-posix-readiness-validated
+          UPLOAD_ARTIFACT_ID: ${{ steps.upload-posix-evidence.outputs.artifact-id }}
+          UPLOAD_ARTIFACT_NAME: posix-readiness-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          UPLOAD_ARTIFACT_DIGEST: ${{ steps.upload-posix-evidence.outputs.artifact-digest }}
+        run: node scripts/verify-posix-readiness-artifact.mjs
+
+      - name: Record POSIX artifact provenance link
+        env:
+          ARTIFACT_URL: ${{ steps.upload-posix-evidence.outputs.artifact-url }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          test -n "$ARTIFACT_URL"
+          {
+            echo "### POSIX readiness artifact"
+            echo "- Exact PR head: \`$EXPECTED_HEAD\`"
+            echo "- Workflow run: $RUN_URL"
+            echo "- Artifact: $ARTIFACT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   persistence:
     name: V2 Persistence (${{ matrix.os }})
     strategy:
@@ -30,6 +92,9 @@ jobs:
       - name: Run v2 persistence tests
         run: node --test tests/v2-persistence/*.test.mjs
 
+      - name: Run V2-11 cutover tests
+        run: node --test tests/runtime/v2-cutover*.test.mjs
+
       - name: Run migration tests
         run: node --test tests/runtime/v2-migration.test.mjs tests/runtime/v2-migration-import.test.mjs tests/runtime/v2-tsuzuki-f7-migration.test.mjs
 
@@ -40,7 +105,7 @@ jobs:
         run: node --test tests/runtime/v2-cross-project-rsi.test.mjs tests/runtime/v2-rsi-replay.test.mjs tests/runtime/v2-rsi-execution-policy.test.mjs tests/runtime/v2-rsi-adversarial.test.mjs
 
       - name: Run runtime image lifecycle tests
-        run: node --test tests/runtime/v2-runtime-images.test.mjs tests/runtime/v2-runtime-upgrade.test.mjs
+        run: node --test tests/runtime/v2-runtime-images.test.mjs tests/runtime/v2-runtime-upgrade.test.mjs tests/runtime/v2-runtime-image-source-from-git.test.mjs
 
       - name: Run Codex global adapter and provider-event tests
         run: node --test tests/runtime/v2-codex-global-adapter.test.mjs tests/runtime/v2-provider-event-liveness.test.mjs

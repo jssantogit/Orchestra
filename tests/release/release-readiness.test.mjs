@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { checkReleaseReadiness } from "../../scripts/release-readiness.mjs";
+import { FIELD_TEST_SCENARIOS } from "../../v2/cutover/field-evidence.mjs";
 
+const HEAD = "a".repeat(40);
+const RUNTIME_IMAGE = `sha256:${"b".repeat(64)}`;
+const HOME_IDENTITY = `sha256:${"c".repeat(64)}`;
 const REQUIRED_SCRIPTS = [
   "test",
   "test:runtime",
@@ -58,12 +62,139 @@ function fixture({
   return root;
 }
 
+function verified(facts = {}) {
+  return { status: "VERIFIED", headSha: HEAD, facts };
+}
+
+function providerFieldEvidence(provider) {
+  return FIELD_TEST_SCENARIOS.map((scenarioId, index) => ({
+    schema: "orchestra.cutover-field-evidence.v2",
+    version: 1,
+    provider: { family: provider, version: provider === "codex" ? "0.162.0" : "3.8.0" },
+    project: { lineageId: `lineage-${provider}` },
+    runtimeImageId: RUNTIME_IMAGE,
+    headSha: HEAD,
+    scenarioId,
+    factualResult: {
+      ok: true,
+      code: `FACT_${index + 1}`,
+      factRef: `evidence:${provider}:${scenarioId.toLowerCase()}`,
+    },
+    terminalStatus: "VERIFIED",
+    observedAt: "2026-10-18T01:00:00.000Z",
+    evidenceRefs: [`sha256:${String(index + 1).padStart(64, "0")}`],
+    operatorAttestation: null,
+  }));
+}
+
+function cutoverEvidence() {
+  return {
+    schema: "orchestra.cutover-release-evidence.v2",
+    version: 1,
+    headSha: HEAD,
+    runtimeImageId: RUNTIME_IMAGE,
+    readiness: {
+      registryPersistence: verified(),
+      providers: { codex: verified(), antigravity: verified() },
+      runtimeLifecycle: verified({
+        installed: true,
+        pinned: true,
+        rollbackVerified: true,
+        runtimeImageId: RUNTIME_IMAGE,
+      }),
+      reconciliation: verified({ staleRecoveryVerified: true, dirtyRecoveryVerified: true }),
+      experiencePrivacy: verified(),
+      rsiReplay: verified({ trainVerified: true, evaluateVerified: true, holdoutVerified: true }),
+      migration: verified({ migrationVerified: true, tsuzukiF7Verified: true }),
+      platforms: { windows: verified(), posix: verified() },
+      projects: [
+        verified({ projectId: "project-a", lineageId: "lineage-a", noFullLocalGovernanceRuntime: true, homeIdentity: HOME_IDENTITY }),
+        verified({ projectId: "project-b", lineageId: "lineage-b", noFullLocalGovernanceRuntime: true, homeIdentity: HOME_IDENTITY }),
+      ],
+      selfHost: verified({
+        projectId: "project-orchestra",
+        lineageId: "lineage-orchestra",
+        runtimeImageId: RUNTIME_IMAGE,
+        noFullLocalGovernanceRuntime: true,
+        homeIdentity: HOME_IDENTITY,
+      }),
+    },
+    providerFieldEvidence: {
+      codex: providerFieldEvidence("codex"),
+      antigravity: providerFieldEvidence("antigravity"),
+    },
+    ci: {
+      headSha: HEAD,
+      runId: 39000000000,
+      ubuntuV2: true,
+      windowsV2: true,
+      v1Compatibility: true,
+    },
+    evidenceRefs: ["github-actions:39000000000"],
+  };
+}
+
 test("release readiness accepts coherent RC metadata, gates, and rollback documentation", () => {
   const root = fixture();
   try {
     const report = checkReleaseReadiness({ repoRoot: root, expectedVersion: "1.0.0-rc.0" });
     assert.equal(report.ready, true);
     assert.deepEqual(report.failures, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("v2 release readiness consumes exact-head/runtime cutover evidence", () => {
+  const root = fixture();
+  try {
+    const report = checkReleaseReadiness({
+      repoRoot: root,
+      expectedVersion: "1.0.0-rc.0",
+      requireV2Cutover: true,
+      cutoverEvidence: cutoverEvidence(),
+      expectedHeadSha: HEAD,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+    });
+    assert.equal(report.ready, true);
+    assert.equal(report.checks.find((item) => item.id === "v2:cutover-evidence")?.ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("v2 release readiness fails closed without cutover evidence", () => {
+  const root = fixture();
+  try {
+    const report = checkReleaseReadiness({
+      repoRoot: root,
+      expectedVersion: "1.0.0-rc.0",
+      requireV2Cutover: true,
+      expectedHeadSha: HEAD,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+    });
+    assert.equal(report.ready, false);
+    assert.ok(report.failures.some((item) => item.id === "v2:cutover-evidence"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("v2 release readiness rejects stale-head field evidence", () => {
+  const root = fixture();
+  try {
+    const evidence = cutoverEvidence();
+    evidence.providerFieldEvidence.codex[0].headSha = "f".repeat(40);
+    const report = checkReleaseReadiness({
+      repoRoot: root,
+      expectedVersion: "1.0.0-rc.0",
+      requireV2Cutover: true,
+      cutoverEvidence: evidence,
+      expectedHeadSha: HEAD,
+      expectedRuntimeImageId: RUNTIME_IMAGE,
+    });
+    assert.equal(report.ready, false);
+    assert.ok(report.failures.some((item) => item.id === "v2:cutover-evidence"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
