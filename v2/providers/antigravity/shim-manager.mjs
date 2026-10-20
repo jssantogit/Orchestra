@@ -1,13 +1,13 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
 import { renderAntigravityV2Shim } from "./shim-template.mjs";
 
 const SHIM_RELATIVE_PATH = ".agents/orchestra-v2-hook.mjs";
 const HOOKS_RELATIVE_PATH = ".agents/hooks.json";
 const HOOK_GROUP = "orchestra-v2-global";
-const HOOK_EVENTS = ["SessionStart", "PreToolUse", "PostToolUse"];
+const HOOK_EVENTS = ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"];
 
 function shimError(code, message) {
   const error = new Error(message);
@@ -21,6 +21,17 @@ function shellQuotePosix(value) {
 
 function shellQuotePowerShell(value) {
   return `'${value.replaceAll("'", "''")}'`;
+}
+
+function shellQuoteCmd(value) {
+  if (/["%\r\n]/.test(value)) throw new TypeError("Antigravity Windows hook paths cannot contain command expansion characters");
+  return `"${value}"`;
+}
+
+function windowsInterpreter() {
+  const path = win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  if (!win32.isAbsolute(path) || /[\s"%&|<>^!()]/.test(path)) throw new TypeError("Antigravity Windows interpreter must be an absolute command-safe system path");
+  return path;
 }
 
 function isWithin(root, candidate) {
@@ -53,15 +64,19 @@ function makeHookEntry(eventName, command, commandWindows) {
     commandWindows,
     timeout: 10,
   };
+  if (eventName === "SessionStart" || eventName === "PreInvocation") return hook;
   return {
-    ...(eventName === "PreToolUse" || eventName === "PostToolUse" ? { matcher: "*" } : {}),
+    matcher: "*",
     hooks: [hook],
   };
 }
 
-function hasHook(entries, command, commandWindows) {
-  return entries.some((entry) => Array.isArray(entry?.hooks)
-    && entry.hooks.some((hook) => hook?.command === command && hook?.commandWindows === commandWindows));
+function hasHook(entries, eventName, command, commandWindows) {
+  const matches = (hook) => hook?.type === "command"
+    && hook.command === command && hook.commandWindows === commandWindows;
+  return entries.some((entry) => eventName === "SessionStart" || eventName === "PreInvocation"
+    ? matches(entry)
+    : entry?.matcher === "*" && Array.isArray(entry.hooks) && entry.hooks.some(matches));
 }
 
 function readHooksConfig(path) {
@@ -91,6 +106,7 @@ export function buildAntigravityV2ShimArtifacts({
   nodePath = process.execPath,
   orchestraHome = null,
   shimPath = SHIM_RELATIVE_PATH,
+  platform = process.platform,
 } = {}) {
   if (typeof launcherPath !== "string" || launcherPath.trim() === "") throw new TypeError("launcherPath is required");
   if (typeof nodePath !== "string" || nodePath.trim() === "") throw new TypeError("nodePath is required");
@@ -99,17 +115,26 @@ export function buildAntigravityV2ShimArtifacts({
     throw new TypeError("orchestraHome must be a non-empty path when provided");
   }
 
-  const command = `${shellQuotePosix(nodePath)} ${shellQuotePosix(shimPath)}`;
+  const command = platform === "win32"
+    ? `${shellQuoteCmd(nodePath)} ${shellQuoteCmd(shimPath)}`
+    : `${shellQuotePosix(nodePath)} ${shellQuotePosix(shimPath)}`;
   const commandWindows = `& ${shellQuotePowerShell(nodePath)} ${shellQuotePowerShell(shimPath)}`;
+  const commands = Object.fromEntries(HOOK_EVENTS.map((eventName) => {
+    const script = `${commandWindows} --event ${eventName}; exit $LASTEXITCODE`;
+    return [eventName, platform === "win32"
+      ? `${windowsInterpreter()} -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, "utf16le").toString("base64")}`
+      : `${command} --event ${eventName}`];
+  }));
   const hooks = Object.fromEntries(HOOK_EVENTS.map((eventName) => [
     eventName,
-    [makeHookEntry(eventName, command, commandWindows)],
+    [makeHookEntry(eventName, commands[eventName], `${commandWindows} --event ${eventName}`)],
   ]));
   return Object.freeze({
     shimSource: renderAntigravityV2Shim({ launcherPath, nodePath, orchestraHome }),
     hooksJson: `${JSON.stringify({ [HOOK_GROUP]: hooks }, null, 2)}\n`,
     command,
     commandWindows,
+    commands: Object.freeze(commands),
   });
 }
 
@@ -155,6 +180,7 @@ export async function installAntigravityV2Shim({
 
   const globalLauncherPath = await resolveGlobalFile(launcherPath, "launcherPath", canonicalRoot);
   const globalNodePath = await resolveGlobalFile(nodePath, "nodePath", canonicalRoot);
+  if (process.platform === "win32") await resolveGlobalFile(windowsInterpreter(), "PowerShell", canonicalRoot);
   const hooksPath = join(canonicalRoot, HOOKS_RELATIVE_PATH);
   const shimPath = join(canonicalRoot, SHIM_RELATIVE_PATH);
   const artifacts = buildAntigravityV2ShimArtifacts({
@@ -170,12 +196,28 @@ export async function installAntigravityV2Shim({
     throw shimError("ANTIGRAVITY_V2_HOOKS_CONFIG_INVALID", `Existing ${HOOK_GROUP} hooks must be an object.`);
   }
   const generatedHooks = JSON.parse(artifacts.hooksJson)[HOOK_GROUP];
+  const priorCommand = `${shellQuotePosix(globalNodePath)} ${shellQuotePosix(shimPath)}`;
   for (const [eventName, generatedEntries] of Object.entries(generatedHooks)) {
-    const entries = group[eventName] ?? [];
+    let entries = group[eventName] ?? [];
     if (!Array.isArray(entries)) {
       throw shimError("ANTIGRAVITY_V2_HOOKS_CONFIG_INVALID", `Existing Antigravity ${eventName} hooks must be an array.`);
     }
-    if (!hasHook(entries, artifacts.command, artifacts.commandWindows)) {
+    const priorCommands = [
+      [artifacts.command, artifacts.commandWindows],
+      [priorCommand, artifacts.commandWindows],
+      [`${artifacts.command} --event ${eventName}`, `${artifacts.commandWindows} --event ${eventName}`],
+      [`${priorCommand} --event ${eventName}`, `${artifacts.commandWindows} --event ${eventName}`],
+    ];
+    entries = entries.map((entry) => {
+      if (priorCommands.some(([command, commandWindows]) => hasHook([entry], eventName, command, commandWindows))) {
+        if (eventName === "SessionStart" || eventName === "PreInvocation") return generatedEntries[0];
+        return { ...entry, hooks: entry.hooks.map((hook) => hook?.type === "command"
+          && priorCommands.some(([command, commandWindows]) => hook.command === command && hook.commandWindows === commandWindows)
+          ? generatedEntries[0].hooks[0] : hook) };
+      }
+      return entry;
+    });
+    if (!hasHook(entries, eventName, artifacts.commands[eventName], `${artifacts.commandWindows} --event ${eventName}`)) {
       group[eventName] = [...entries, ...generatedEntries];
     } else {
       group[eventName] = entries;

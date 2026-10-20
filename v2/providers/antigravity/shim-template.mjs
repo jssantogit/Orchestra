@@ -20,6 +20,19 @@ const NODE_EXECUTABLE = ${JSON.stringify(nodePath)};
 const GLOBAL_ORCHESTRA_HOME = ${JSON.stringify(orchestraHome)};
 const GLOBAL_UNAVAILABLE = ${JSON.stringify(GLOBAL_UNAVAILABLE)};
 const GLOBAL_UNAVAILABLE_MESSAGE = ${JSON.stringify(GLOBAL_UNAVAILABLE_MESSAGE)};
+const CONFIGURED_EVENT = process.argv.length === 4 && process.argv[2] === "--event"
+  && ["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"].includes(process.argv[3])
+  ? process.argv[3] : null;
+
+function transportInput(input) {
+  if (!CONFIGURED_EVENT) return input;
+  const payload = JSON.parse(input);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new TypeError("Invalid hook input");
+  const supplied = ["eventType", "hook_event_name", "hookEventName"]
+    .filter((key) => Object.hasOwn(payload, key));
+  if (supplied.some((key) => payload[key] !== CONFIGURED_EVENT)) throw new TypeError("Conflicting hook event");
+  return JSON.stringify({ ...payload, hookEventName: CONFIGURED_EVENT });
+}
 
 function requestedEvent(input) {
   try {
@@ -30,7 +43,7 @@ function requestedEvent(input) {
     if (names.some((name) => typeof name !== "string")
       || (names.length > 0 && names.some((name) => name !== names[0]))) return null;
     const raw = names[0] ?? "";
-    if (raw === "SessionStart") return raw;
+    if (raw === "SessionStart" || raw === "PreInvocation") return raw;
     if (["PreToolUse", "ToolCall", "BeforeTool"].includes(raw)) return "PreToolUse";
     if (["PostToolUse", "ToolResult", "AfterTool"].includes(raw)) return "PostToolUse";
     if (!raw && (payload?.toolCall || payload?.tool_call)) return "PreToolUse";
@@ -41,26 +54,19 @@ function requestedEvent(input) {
 }
 
 function failClosed(input) {
-  const eventName = requestedEvent(input);
-  const response = {
-    ok: false,
-    reason: GLOBAL_UNAVAILABLE,
-    message: GLOBAL_UNAVAILABLE_MESSAGE,
-  };
-  if (eventName === "SessionStart") {
-    response.hookSpecificOutput = {
-      hookEventName: eventName,
-      additionalContext: GLOBAL_UNAVAILABLE_MESSAGE,
-    };
-  } else if (eventName === "PreToolUse") {
-    response.hookSpecificOutput = {
-      hookEventName: eventName,
-      permissionDecision: "deny",
-      permissionDecisionReason: GLOBAL_UNAVAILABLE,
-    };
-  }
+  const eventName = CONFIGURED_EVENT ?? requestedEvent(input);
+  const response = providerResponse({ ok: false, reason: GLOBAL_UNAVAILABLE }, eventName);
   process.stdout.write(JSON.stringify(response) + "\\n");
-  process.exitCode = 1;
+  process.stderr.write(GLOBAL_UNAVAILABLE_MESSAGE + "\\n");
+  process.exitCode = eventName === "PreToolUse" ? 0 : 1;
+}
+
+function providerResponse(response, eventName) {
+  if (eventName === "SessionStart" || eventName === "PreInvocation") return { injectSteps: [] };
+  if (eventName === "PreToolUse") {
+    return response.ok ? { decision: "allow" } : { decision: "deny", reason: response.reason };
+  }
+  return {};
 }
 
 function isProtocolResponse(value, eventName, exitCode) {
@@ -69,9 +75,10 @@ function isProtocolResponse(value, eventName, exitCode) {
     const response = JSON.parse(value);
     if (response === null || typeof response !== "object" || Array.isArray(response)) return false;
     if (typeof response.ok !== "boolean") return false;
+    if (!["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse"].includes(eventName)) return false;
     if (response.ok) {
       if (response.reason !== null && (typeof response.reason !== "string" || !response.reason.trim())) return false;
-    } else if (typeof response.reason !== "string" || !response.reason.trim()) {
+    } else if (typeof response.reason !== "string" || !/^[A-Z][A-Z0-9_]{0,127}$/.test(response.reason)) {
       return false;
     }
     if (response.ok !== (exitCode === 0)) return false;
@@ -85,9 +92,10 @@ function isProtocolResponse(value, eventName, exitCode) {
       if (expectedOutputEvent && output.hookEventName !== expectedOutputEvent) return false;
       if (expectedOutputEvent === "PreToolUse"
         && output.permissionDecision !== (response.ok ? "allow" : "deny")) return false;
-      if (expectedOutputEvent === "SessionStart" && response.ok && typeof output.additionalContext !== "string") return false;
+      if ((expectedOutputEvent === "SessionStart" || expectedOutputEvent === "PreInvocation")
+        && response.ok && typeof output.additionalContext !== "string") return false;
     } else if (eventName === "PreToolUse" || eventName === "ToolCall" || eventName === "BeforeTool"
-      || (eventName === "SessionStart" && response.ok)) {
+      || ((eventName === "SessionStart" || eventName === "PreInvocation") && response.ok)) {
       return false;
     }
     return true;
@@ -126,13 +134,20 @@ function invokeGlobalLauncher(input) {
 
 let input = "";
 for await (const chunk of process.stdin) input += chunk.toString();
+try {
+  input = transportInput(input);
+} catch {
+  failClosed(input);
+  process.exit(process.exitCode);
+}
 const result = await invokeGlobalLauncher(input);
 const eventName = requestedEvent(input);
 if (result.launchError || result.code === null || !isProtocolResponse(result.stdout, eventName, result.code)) {
   failClosed(input);
 } else {
-  process.stdout.write(result.stdout);
-  process.exitCode = result.code;
+  const response = JSON.parse(result.stdout);
+  process.stdout.write(JSON.stringify(providerResponse(response, eventName)) + "\\n");
+  process.exitCode = eventName === "PreToolUse" ? 0 : result.code;
 }
 `;
 }

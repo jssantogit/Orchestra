@@ -28,4 +28,5 @@ if (currentNodeMajor < MINIMUM_NODE_MAJOR) {
   });
 } else {
   await import("./v2-codex-global-adapter.cases.mjs");
+  await import("./v2-codex-native-hook-protocol.cases.mjs");
 }

@@ -9,17 +9,20 @@ function value(value, maxLength = 500) {
 }
 
 function factualToolCallId(payload) {
-  const hasId = Object.hasOwn(payload, "tool_call_id")
-    || Object.hasOwn(payload, "toolCallId")
-    || payload.tool_call && Object.hasOwn(payload.tool_call, "id");
-  if (!hasId) return null;
-  const id = payload.tool_call_id ?? payload.toolCallId ?? payload.tool_call?.id;
-  if (typeof id !== "string" || !id.trim()) {
-    const error = new TypeError("Codex tool_call_id must be a non-empty string");
-    error.code = "CODEX_TOOL_CALL_ID_INVALID";
+  const values = [
+    ...(Object.hasOwn(payload, "tool_use_id") ? [payload.tool_use_id] : []),
+    ...(Object.hasOwn(payload, "tool_call_id") ? [payload.tool_call_id] : []),
+    ...(Object.hasOwn(payload, "toolCallId") ? [payload.toolCallId] : []),
+    ...(payload.tool_call && Object.hasOwn(payload.tool_call, "id") ? [payload.tool_call.id] : []),
+  ];
+  if (values.length === 0) return null;
+  if (values.some((id) => typeof id !== "string" || !id.trim())
+    || values.some((id) => id !== values[0])) {
+    const error = new TypeError("Codex tool correlation aliases must identify one factual call");
+    error.code = "CODEX_TOOL_CORRELATION_INVALID";
     throw error;
   }
-  return id;
+  return values[0];
 }
 
 export function normalizeCodexToolEvent(payload = {}) {

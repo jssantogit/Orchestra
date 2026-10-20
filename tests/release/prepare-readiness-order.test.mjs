@@ -15,6 +15,20 @@ test("prepare workflow builds runtimes before checking current-main release read
   assert.ok(buildIndex < readinessIndex);
 });
 
+test("v2 cutover evidence is materialized before current-main readiness and before any release candidate exists", () => {
+  const evidenceIndex = workflow.indexOf("- name: Materialize v2 cutover evidence");
+  const readinessIndex = workflow.indexOf("- name: Verify current main release metadata");
+  const candidateIndex = workflow.indexOf("- name: Create local release candidate");
+  assert.notEqual(evidenceIndex, -1, "v2 releases must materialize sanitized factual evidence");
+  assert.notEqual(readinessIndex, -1);
+  assert.notEqual(candidateIndex, -1);
+  assert.ok(evidenceIndex < readinessIndex, "cutover evidence must be consumed by release-readiness");
+  assert.ok(readinessIndex < candidateIndex, "an invalid cutover record must block release metadata mutation");
+  assert.match(workflow, /ORCHESTRA_V2_REQUIRE_CUTOVER=1/);
+  assert.match(workflow, /ORCHESTRA_V2_EXPECTED_HEAD=/);
+  assert.match(workflow, /ORCHESTRA_V2_EXPECTED_RUNTIME_IMAGE=/);
+});
+
 test("prepare workflow commits the release candidate locally before preflight and pushes only after green validation", () => {
   const localCandidateIndex = workflow.indexOf("- name: Create local release candidate");
   const commitIndex = workflow.indexOf('git commit -m "chore(release): prepare ${TAG}"');

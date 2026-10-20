@@ -12,6 +12,26 @@ on:
           - patch
           - minor
           - major
+      topology:
+        description: "Release topology being authorized"
+        required: true
+        type: choice
+        options:
+          - select
+          - v1-compat
+          - v2-cutover
+      cutover_head_sha:
+        description: "Exact reviewed V2-11 head (required for v2-cutover)"
+        required: false
+        type: string
+      cutover_runtime_image_id:
+        description: "Exact reviewed Runtime Image ID (required for v2-cutover)"
+        required: false
+        type: string
+      cutover_evidence_json:
+        description: "Sanitized orchestra.cutover-release-evidence.v2 JSON (required for v2-cutover)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -27,12 +47,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Require an explicit bump choice
+      - name: Require explicit release choices
         env:
           BUMP: ${{ inputs.bump }}
+          TOPOLOGY: ${{ inputs.topology }}
         run: |
           if [ "$BUMP" = "select" ]; then
             echo "Choose patch, minor, or major before preparing a release." >&2
+            exit 2
+          fi
+          if [ "$TOPOLOGY" = "select" ]; then
+            echo "Choose v1-compat or v2-cutover before preparing a release." >&2
             exit 2
           fi
 
@@ -49,6 +74,29 @@ jobs:
 
       - name: Install development dependencies
         run: npm ci --ignore-scripts
+
+      - name: Materialize v2 cutover evidence
+        if: inputs.topology == 'v2-cutover'
+        env:
+          CUTOVER_HEAD_SHA: ${{ inputs.cutover_head_sha }}
+          CUTOVER_RUNTIME_IMAGE_ID: ${{ inputs.cutover_runtime_image_id }}
+          CUTOVER_EVIDENCE_JSON: ${{ inputs.cutover_evidence_json }}
+        run: |
+          if [ -z "$CUTOVER_HEAD_SHA" ] || [ -z "$CUTOVER_RUNTIME_IMAGE_ID" ] || [ -z "$CUTOVER_EVIDENCE_JSON" ]; then
+            echo "v2-cutover requires exact head, Runtime Image ID, and sanitized cutover evidence JSON." >&2
+            exit 2
+          fi
+          if ! printf '%s' "$CUTOVER_HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "cutover_head_sha must be a 40-character lowercase Git SHA." >&2
+            exit 2
+          fi
+          EVIDENCE_PATH="$RUNNER_TEMP/v2-cutover-evidence.json"
+          printf '%s' "$CUTOVER_EVIDENCE_JSON" > "$EVIDENCE_PATH"
+          node -e "const fs=require('node:fs'); JSON.parse(fs.readFileSync(process.argv[1],'utf8'));" "$EVIDENCE_PATH"
+          echo "ORCHESTRA_V2_REQUIRE_CUTOVER=1" >> "$GITHUB_ENV"
+          echo "ORCHESTRA_V2_CUTOVER_EVIDENCE=$EVIDENCE_PATH" >> "$GITHUB_ENV"
+          echo "ORCHESTRA_V2_EXPECTED_HEAD=$CUTOVER_HEAD_SHA" >> "$GITHUB_ENV"
+          echo "ORCHESTRA_V2_EXPECTED_RUNTIME_IMAGE=$CUTOVER_RUNTIME_IMAGE_ID" >> "$GITHUB_ENV"
 
       - name: Build current main runtimes for readiness
         run: npm run build:runtimes
@@ -134,6 +182,9 @@ jobs:
           BASE_TAG: ${{ steps.prepare.outputs.base_tag }}
           REQUESTED_BUMP: ${{ steps.prepare.outputs.requested_bump }}
           SUGGESTED_BUMP: ${{ steps.prepare.outputs.suggested_bump }}
+          TOPOLOGY: ${{ inputs.topology }}
+          CUTOVER_HEAD_SHA: ${{ inputs.cutover_head_sha }}
+          CUTOVER_RUNTIME_IMAGE_ID: ${{ inputs.cutover_runtime_image_id }}
         run: |
           BRANCH="release/${TAG}"
           cat > "$RUNNER_TEMP/release-pr.md" <<EOF_PR
@@ -143,9 +194,21 @@ jobs:
           - Target: \`${TAG}\`
           - Requested bump: \`${REQUESTED_BUMP}\`
           - Suggested bump from conventional commits: \`${SUGGESTED_BUMP}\`
+          - Topology: \`${TOPOLOGY}\`
           - Prepared-release preflight: full regression, Doctor, contamination, runtime checks, and release-readiness passed before this branch was pushed.
+          EOF_PR
+          if [ "$TOPOLOGY" = "v2-cutover" ]; then
+            {
+              echo "- V2 cutover evidence head: \`${CUTOVER_HEAD_SHA}\`"
+              echo "- V2 Runtime Image: \`${CUTOVER_RUNTIME_IMAGE_ID}\`"
+              echo "- V2 cutover evidence: validated by release-readiness; the sanitized JSON itself is not committed by this workflow."
+            } >> "$RUNNER_TEMP/release-pr.md"
+          fi
+          cat >> "$RUNNER_TEMP/release-pr.md" <<EOF_PR
 
           Review the generated release notes and the complete diff. **Merging this PR is the operator authorization to publish ${TAG}.**
+
+          A green CI run or a valid V2 cutover evidence record is necessary evidence, but neither one is publication authorization by itself.
 
           After this PR is merged into \`main\`, publication remains blocked until the canonical **CI** workflow succeeds on the exact resulting \`main\` SHA. The publisher then creates the annotated tag and GitHub Release automatically.
 
@@ -167,6 +230,9 @@ jobs:
           BASE_TAG: ${{ steps.prepare.outputs.base_tag }}
           REQUESTED_BUMP: ${{ steps.prepare.outputs.requested_bump }}
           SUGGESTED_BUMP: ${{ steps.prepare.outputs.suggested_bump }}
+          TOPOLOGY: ${{ inputs.topology }}
+          CUTOVER_HEAD_SHA: ${{ inputs.cutover_head_sha }}
+          CUTOVER_RUNTIME_IMAGE_ID: ${{ inputs.cutover_runtime_image_id }}
         run: |
           {
             echo "## Release PR prepared"
@@ -175,8 +241,13 @@ jobs:
             echo "- Target: \`${TAG}\`"
             echo "- Requested bump: \`${REQUESTED_BUMP}\`"
             echo "- Suggested bump: \`${SUGGESTED_BUMP}\`"
+            echo "- Topology: \`${TOPOLOGY}\`"
             echo "- Prepared-release preflight: \`green\`"
             echo "- Required merge method: \`Create a merge commit\`"
+            if [ "$TOPOLOGY" = "v2-cutover" ]; then
+              echo "- V2 cutover evidence head: \`${CUTOVER_HEAD_SHA}\`"
+              echo "- V2 Runtime Image: \`${CUTOVER_RUNTIME_IMAGE_ID}\`"
+            fi
             if [ "$REQUESTED_BUMP" != "$SUGGESTED_BUMP" ] && [ "$SUGGESTED_BUMP" != "none" ]; then
               echo "- ⚠️ Requested bump differs from the conventional-commit suggestion; review before merging."
             fi

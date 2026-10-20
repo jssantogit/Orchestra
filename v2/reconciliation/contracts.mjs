@@ -1,6 +1,6 @@
 const LIVENESS = new Set(["LIVE", "TERMINAL", "STALE_RECOVERABLE", "STALE_DIRTY", "UNKNOWN"]);
 const RECOVERY_ASSESSMENT_LIVENESS = new Set(["TERMINAL", "STALE_RECOVERABLE"]);
-const WORKSPACE_STATUS = new Set(["ABSENT", "CLEAN", "DIRTY", "UNKNOWN"]);
+const WORKSPACE_STATUS = new Set(["ABSENT", "CLEAN", "DIRTY", "PROJECT_ROOT", "UNKNOWN"]);
 const CLEANUP_STATUS = new Set(["NOT_REQUIRED", "CLEANED", "FAILED", "PRESERVED", "PENDING"]);
 const OUTCOME = new Set(["RECOVERED", "STALE_DIRTY", "CLEANUP_FAILED"]);
 const RESOLUTION_ACTIONS = new Set(["PRESERVE", "DISCARD"]);
@@ -106,8 +106,11 @@ function validateRecoverySemantics(value) {
     if (value.workspace.status === "ABSENT" && value.cleanup.status !== "NOT_REQUIRED") {
       return invalid("absent recovered workspace needs no cleanup", "/cleanup/status");
     }
-    if (!new Set(["CLEAN", "ABSENT"]).has(value.workspace.status)) {
-      return invalid("recovered outcome requires clean or absent workspace", "/workspace/status");
+    if (value.workspace.status === "PROJECT_ROOT" && value.cleanup.status !== "NOT_REQUIRED") {
+      return invalid("persistent project root must never be cleaned", "/cleanup/status");
+    }
+    if (!new Set(["CLEAN", "ABSENT", "PROJECT_ROOT"]).has(value.workspace.status)) {
+      return invalid("recovered outcome requires clean, absent, or persistent project-root workspace", "/workspace/status");
     }
     return valid();
   }

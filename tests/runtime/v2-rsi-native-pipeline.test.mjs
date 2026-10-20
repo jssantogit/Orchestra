@@ -1,0 +1,197 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+
+import { trainNativeRsiCandidate, verifyNativeRsiReplay } from "../../v2/rsi/native-pipeline.mjs";
+
+const sha = (s) => "sha256:" + createHash("sha256").update(s).digest("hex");
+function row(lineage, { route = "DIRECT_WORK", success = true, ms = 100 } = {}) {
+  return {
+    schema: "orchestra.rsi-decision-outcome.v1", version: 1, phase: "TRAIN",
+    source: { lineageId: lineage, operationId: "op-" + lineage },
+    domainCohort: "software-engineering",
+    decision: { immutableRoutes: ["DIRECT_WORK", "DELEGATED"], legalRoutes: ["DIRECT_WORK", "DELEGATED"], selectedRoute: route },
+    outcome: { success, durationMs: ms },
+    privacy: { containsRawProjectContent: false },
+    evidence: { choiceRef: sha(lineage+"choice"), outcomeRef: sha(lineage+"terminal") },
+  };
+}
+function backing(data) {
+  const candidates = new Map(), receipts = new Map();
+  return {
+    state: {
+      nativeRsi: {
+        listObserved: () => structuredClone(data),
+        putTrainingReceipt(receipt) {
+          receipts.set(receipt.policyId + ":" + receipt.revision, structuredClone(receipt));
+          return { ok: true };
+        },
+        inspectTrainingReceipt: (id, revision) => receipts.get(id + ":" + revision) ?? null,
+      },
+      learnedPolicies: {},
+    },
+    policyStore: {
+      putCandidate(candidate) { candidates.set(candidate.policyId + ":" + candidate.revision, structuredClone(candidate)); return { ok: true }; },
+      inspect(id, revision) { return candidates.get(id + ":" + revision) ?? null; },
+    },
+    candidates, receipts,
+  };
+}
+const opts = {
+  policyId: "native-rsi-v2-route", revision: 1,
+  createdAt: "2026-10-20T12:00:00.000Z",
+};
+
+test("native trainer derives and persists only from TRAIN and replays on disjoint EVALUATE/HOLDOUT", () => {
+  const x = backing(["a","b","c","d"].map(lineage => row(lineage)));
+  const trained = trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(trained.ok, true, JSON.stringify(trained));
+  assert.equal(trained.candidate.selectors.routePreference, "DIRECT_WORK");
+  assert.equal(x.candidates.size, 1);
+  const verified = verifyNativeRsiReplay({ policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(verified.ok, true, JSON.stringify(verified));
+  assert.equal(verified.trainVerified, true);
+  assert.equal(verified.evaluateVerified, true);
+  assert.equal(verified.holdoutVerified, true);
+  assert.equal(verified.lineageCount, 4);
+});
+
+test("manual candidate without a native TRAIN receipt never passes the replay gate", () => {
+  const x = backing(["a","b","c","d"].map(lineage => row(lineage)));
+  x.policyStore.putCandidate({
+    schema: "orchestra.learned-policy.v2", version: 1,
+    policyId: opts.policyId, revision: 1, scope: "DOMAIN",
+    domainCohort: "software-engineering", projectId: null,
+    lifecycle: "CANDIDATE", selectors: { routePreference: "DIRECT_WORK" },
+    createdAt: opts.createdAt,
+  });
+  const result = verifyNativeRsiReplay({ policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_NATIVE_TRAINING_RECEIPT_MISSING");
+});
+
+test("unobserved route cannot pass via manually modified persisted policy", () => {
+  const x = backing(["a","b","c","d"].map(lineage => row(lineage)));
+  assert.equal(trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore }).ok, true);
+  x.candidates.get(opts.policyId+":1").selectors.routePreference = "UNOBSERVED_ROUTE";
+  const result = verifyNativeRsiReplay({ policyId: opts.policyId, revision: 1,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(result.ok, false);
+});
+
+test("changing factual source after TRAIN invalidates its durable source digest", () => {
+  const entries = ["a","b","c","d"].map(lineage => row(lineage));
+  const x = backing(entries);
+  assert.equal(trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore }).ok, true);
+  for (const record of entries) record.outcome.durationMs += 1;
+  assert.equal(verifyNativeRsiReplay({ policyId: opts.policyId, revision: 1,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore }).ok, false);
+});
+
+test("failed EVALUATE or HOLDOUT cannot be omitted to declare replay verified", () => {
+  const entries = ["a","b","c","d"].map(lineage => row(lineage));
+  const x = backing(entries);
+  assert.equal(trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore }).ok, true);
+  entries[2].outcome.success = false;
+  entries[3].outcome.success = false;
+  const result = verifyNativeRsiReplay({ policyId: opts.policyId, revision: 1,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(result.ok, false);
+});
+
+test("legacy one-lineage or PROJECT-only Experience cannot fake native observations", () => {
+  const x = backing([row("a")]);
+  const result = trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(result.ok, false);
+  assert.equal(x.candidates.size, 0);
+});
+
+test("native direct-only routes cannot be certified as learned choices", () => {
+  const records = ["a", "b", "c", "d"].map(lineage => row(lineage));
+  for (const item of records) {
+    item.decision.immutableRoutes = ["DIRECT_WORK"];
+    item.decision.legalRoutes = ["DIRECT_WORK"];
+  }
+  const x = backing(records);
+  const result = trainNativeRsiCandidate({ ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_TRAIN_CHOICE_SPACE_INSUFFICIENT");
+  assert.equal(x.candidates.size, 0);
+  assert.equal(x.receipts.size, 0);
+});
+
+test("EVALUATE/HOLDOUT cannot pass when the supposedly selected route was not legally executable", () => {
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage));
+  const x = backing(entries);
+  assert.equal(trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  }).ok, true);
+  const receipt = x.receipts.get(opts.policyId + ":" + opts.revision);
+  const train = new Set(receipt.trainLineageIds);
+  const unseen = entries.filter(entry => !train.has(entry.source.lineageId));
+  assert.equal(unseen.length, 2);
+  for (const observation of unseen) {
+    observation.decision.immutableRoutes = ["DELEGATED"];
+    observation.decision.legalRoutes = ["DELEGATED"];
+  }
+  const result = verifyNativeRsiReplay({
+    policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_NATIVE_EVALUATION_CHOICE_SPACE_INVALID");
+});
+
+test("EVALUATE/HOLDOUT must preserve a real alternative, not a forced singleton route", () => {
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage));
+  const x = backing(entries);
+  assert.equal(trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  }).ok, true);
+  const train = new Set(x.receipts.get(opts.policyId + ":" + opts.revision).trainLineageIds);
+  const unseen = entries.filter(entry => !train.has(entry.source.lineageId));
+  assert.equal(unseen.length, 2);
+  for (const observation of unseen) {
+    observation.decision.immutableRoutes = ["DIRECT_WORK"];
+    observation.decision.legalRoutes = ["DIRECT_WORK"];
+  }
+  const result = verifyNativeRsiReplay({
+    policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_NATIVE_EVALUATION_CHOICE_SPACE_INVALID");
+});
+
+test("pure RSI pipeline can consume a source-verified delegated route without claiming an executor exists", () => {
+  // This is an isolated reducer fixture; the Home journal still cannot emit
+  // DELEGATED until an actual governance-fenced delegated executor is wired.
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage, { route: "DELEGATED" }));
+  const x = backing(entries);
+  const result = trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.candidate.selectors.routePreference, "DELEGATED");
+  const verified = verifyNativeRsiReplay({
+    policyId: opts.policyId, revision: opts.revision,
+    nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(verified.ok, true, JSON.stringify(verified));
+});
+
+test("pure RSI pipeline rejects unknown synthetic route classes even when caller marks them legal", () => {
+  const entries = ["a", "b", "c", "d"].map(lineage => row(lineage, { route: "MAGIC_ROUTE" }));
+  for (const item of entries) {
+    item.decision.immutableRoutes.push("MAGIC_ROUTE");
+    item.decision.legalRoutes.push("MAGIC_ROUTE");
+  }
+  const x = backing(entries);
+  const result = trainNativeRsiCandidate({
+    ...opts, nativeStore: x.state.nativeRsi, policyStore: x.policyStore,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "RSI_NATIVE_OBSERVATIONS_INVALID");
+});
