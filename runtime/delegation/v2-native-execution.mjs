@@ -287,9 +287,14 @@ export async function executeNativeDelegatedWork({
       } else if (succeeded) {
         // Only an already-terminal, blob-verified global Operation can
         // become factual RSI telemetry. A missing journal fails closed.
-        const receipt = state.nativeRsi?.recordDelegatedTerminal?.({
-          operationId: operation.operationId,
-        });
+        let receipt = null;
+        try {
+          receipt = state.nativeRsi?.recordDelegatedTerminal?.({
+            operationId: operation.operationId,
+          });
+        } catch {
+          // A broken evidence journal cannot promote or certify a result.
+        }
         if (!receipt?.ok) result = fail("NATIVE_DELEGATION_TERMINAL_RECEIPT_UNVERIFIED");
       }
     }
