@@ -10,7 +10,7 @@ function row(lineage, { route = "DIRECT_WORK", success = true, ms = 100 } = {}) 
     schema: "orchestra.rsi-decision-outcome.v1", version: 1, phase: "TRAIN",
     source: { lineageId: lineage, operationId: "op-" + lineage },
     domainCohort: "software-engineering",
-    decision: { immutableRoutes: ["DIRECT_WORK"], legalRoutes: ["DIRECT_WORK"], selectedRoute: route },
+    decision: { immutableRoutes: ["DIRECT_WORK", "DELEGATED"], legalRoutes: ["DIRECT_WORK", "DELEGATED"], selectedRoute: route },
     outcome: { success, retryCount: 0, durationMs: ms },
     privacy: { containsRawProjectContent: false },
     evidence: { choiceRef: sha(lineage+"choice"), outcomeRef: sha(lineage+"terminal") },
