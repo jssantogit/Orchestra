@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
 import { createBlobStore } from "../../v2/persistence/blob-store.mjs";
-import { executeNativeDelegatedWork } from "../../v2/delegation/native-execution.mjs";
+import { executeNativeDelegatedWork } from "../../runtime/delegation/v2-native-execution.mjs";
 
 const supported = Number(process.versions.node.split(".")[0]) >= 22;
 const ACTOR = "sha256:" + "a".repeat(64);
