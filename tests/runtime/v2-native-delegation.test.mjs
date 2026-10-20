@@ -545,3 +545,53 @@ test("test-double delegated success without a native child-close receipt is inel
   assert.deepEqual(ctx.state.nativeRsi.listObserved(), [],
     "a controlled fake executor cannot establish factual subprocess provenance");
 });
+
+
+test("a live descendant in the delegated POSIX group blocks native success and preserves clone", { skip: !supported || process.platform !== "linux" }, async (t) => {
+  const ctx = await setup(t);
+  const { runBoundedProcess } = await import("../../runtime/delegation/process-runner.mjs");
+  let processGroupId = null;
+  let isolatedClone = null;
+  t.after(() => {
+    if (Number.isSafeInteger(processGroupId) && processGroupId > 0) {
+      try { process.kill(-processGroupId, "SIGKILL"); }
+      catch (error) { if (error.code !== "ESRCH") throw error; }
+    }
+  });
+  const worker = {
+    provider: "antigravity",
+    async discover() {
+      return { provider: "antigravity", available: true,
+        version: "controlled-descendant", capabilities: { implementation: true } };
+    },
+    async execute({ workspace, onProcessSpawn, onProcessExit }) {
+      isolatedClone = workspace.path;
+      const child = await runBoundedProcess({
+        command: process.execPath,
+        args: ["-e", "process.stdin.once('data', () => {" +
+          "require('node:child_process').spawn(process.execPath," +
+          "['-e', 'setTimeout(() => process.exit(0), 12000)']," +
+          "{ stdio: 'ignore' }); process.exit(0); })"],
+        input: "worker-envelope", cwd: workspace.path,
+        timeoutMs: 20_000, maxOutputBytes: 4096,
+        onSpawn: async observed => {
+          processGroupId = observed.pid;
+          await onProcessSpawn(observed);
+        },
+        onExit: onProcessExit,
+      });
+      assert.equal(child.exitCode, 0);
+      writeFileSync(join(workspace.path, "tracked.txt"), "delegated\n");
+      return { ok: true, provider: "antigravity",
+        execution: { exitCode: child.exitCode, durationMs: child.durationMs },
+        report: { summary: "claimed success with surviving descendant",
+          findings: [], evidenceRefs: [] } };
+    },
+  };
+  const result = await command(ctx, worker);
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(result.code, "NATIVE_DELEGATION_PROCESS_GROUP_STILL_ACTIVE");
+  assert.ok(isolatedClone && existsSync(isolatedClone),
+    "a live descendant must preserve the registered clone for human recovery");
+  assert.deepEqual(ctx.state.nativeRsi.listObserved(), []);
+});
