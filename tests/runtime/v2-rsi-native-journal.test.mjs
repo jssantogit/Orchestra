@@ -48,6 +48,7 @@ test("native RSI persists factual decision before allow and correlates it with t
     assert.equal(eligible[0].decision.selectedRoute, "DIRECT_WORK");
     assert.equal(eligible[0].source.lineageId, "lineage-a");
     assert.equal(eligible[0].outcome.durationMs, 2000);
+    assert.equal(Object.hasOwn(eligible[0].outcome, "retryCount"), false, "unknown native retries must never default to zero");
     assert.equal(reopened.recordTerminal({ operationId: "op-a" }).replayed, true);
     reopened.close();
   } finally { await rm(home, { recursive: true, force: true }); }
