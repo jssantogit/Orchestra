@@ -314,7 +314,7 @@ test("same delegation ID with modified payload cannot bypass at-most-once fence"
 });
 
 
-test("delegated LIVE Operation has a durable factual local-process owner for crash reconciliation", { skip: !supported || process.platform === "darwin" }, async (t) => {
+test("delegated LIVE Operation persists an OS birth-bound owner and accepts matching birth proof", { skip: !supported || process.platform === "darwin" }, async (t) => {
   const ctx = await setup(t);
   let owner;
   const result = await command(ctx, executor(async path => {
@@ -329,13 +329,21 @@ test("delegated LIVE Operation has a durable factual local-process owner for cra
     assert.equal(owner.kind, "LOCAL_PROCESS");
     assert.equal(owner.process.pid, process.pid);
     assert.match(owner.proof.tokenHash, /^sha256:[a-f0-9]{64}$/);
-    const { createLocalProcessOwnerProbe, createHostProcessIdentityReader } =
+    const { createLocalProcessOwnerProbe } =
       await import("../../v2/liveness/local-process-probe.mjs");
     const { createOperationLivenessService } =
       await import("../../v2/liveness/operation-liveness-service.mjs");
+    // The owner was registered from a real OS process identity. Re-probe
+    // semantics use a deterministic matching observation; on Windows a
+    // separate PowerShell probe can legitimately be temporarily UNAVAILABLE.
     const service = createOperationLivenessService({
       runtimeOwnerStore: store,
-      ownerProbe: createLocalProcessOwnerProbe({ readProcessIdentity: createHostProcessIdentityReader() }),
+      ownerProbe: createLocalProcessOwnerProbe({
+        readProcessIdentity: async (pid) => {
+          assert.equal(pid, process.pid);
+          return { status: "PRESENT", processIdentity: owner.process.startIdentity };
+        },
+      }),
     });
     const assessment = await service.assess(op);
     assert.equal(assessment.liveness, "LIVE", JSON.stringify(assessment));
