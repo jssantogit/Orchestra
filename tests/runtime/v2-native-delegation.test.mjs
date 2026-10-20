@@ -6,14 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readWorkspaceFingerprint } from "../../core/leases/workspace-fingerprint.mjs";
-import { createSqliteState } from "../../v2/persistence/sqlite/sqlite-state.mjs";
 import { createBlobStore } from "../../v2/persistence/blob-store.mjs";
 import { executeNativeDelegatedWork } from "../../v2/delegation/native-execution.mjs";
 
+const supported = Number(process.versions.node.split(".")[0]) >= 22;
 const ACTOR = "sha256:" + "a".repeat(64);
 const now = "2026-10-20T12:00:00.000Z";
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" }).trim();
-function setup(t) {
+async function setup(t) {
+  const { createSqliteState } = await import("../../v2/persistence/sqlite/sqlite-state.mjs");
   const home = mkdtempSync(join(tmpdir(), "orchestra-v2-delegation-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const repoRoot = join(home, "repository");
@@ -97,8 +98,8 @@ function command(ctx, worker, overrides = {}) {
   });
 }
 
-test("delegated V2 executes in isolated clone and binds sealed mutation bytes to Home/global Operation", async (t) => {
-  const ctx = setup(t);
+test("delegated V2 executes in isolated clone and binds sealed mutation bytes to Home/global Operation", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
   const result = await command(ctx, executor(async path => {
     assert.notEqual(path, ctx.repoRoot);
     writeFileSync(join(path, "tracked.txt"), "delegated\n");
@@ -119,8 +120,8 @@ test("delegated V2 executes in isolated clone and binds sealed mutation bytes to
   assert.equal(existsSync(join(ctx.repoRoot, ".orchestra", "state", "delegations")), false);
 });
 
-test("stale global session and forbidden mutation both fail closed", async (t) => {
-  const ctx = setup(t);
+test("stale global session and forbidden mutation both fail closed", { skip: !supported }, async (t) => {
+  const ctx = await setup(t);
   let calls = 0;
   const worker = executor(async path => { calls++; writeFileSync(join(path, "tracked.txt"), "changed\n"); });
   const stale = await command(ctx, worker, { generation: 2 });
