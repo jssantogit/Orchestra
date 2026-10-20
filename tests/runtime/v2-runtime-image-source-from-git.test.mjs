@@ -62,6 +62,15 @@ test("runtime image source rejects a requested SHA other than the checked-out HE
   });
 });
 
+test("runtime image source rejects a Git subdirectory instead of the checkout root", async () => {
+  await withGitRepo(async ({ root, head }) => {
+    assert.throws(
+      () => buildRuntimeImageSourceFromGit({ repoRoot: join(root, "v2"), expectedHeadSha: head }),
+      (error) => error?.code === "ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_INVALID",
+    );
+  });
+});
+
 test("runtime image source rejects dirty and untracked source trees", async () => {
   await withGitRepo(async ({ root, head }) => {
     await writeFile(join(root, "v2", "runtime.mjs"), "changed worktree bytes\n");

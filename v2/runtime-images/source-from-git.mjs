@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
 
 const SOURCE_SCHEMA = "orchestra.runtime-image-source.v2";
 const RUNTIME_VERSION = "2.0.0";
@@ -30,23 +29,18 @@ function repositoryRoot(repoRoot) {
     throw new TypeError("repoRoot is required");
   }
   let requestedRoot;
-  let gitRoot;
+  let relativeToGitRoot;
   try {
     requestedRoot = realpathSync(repoRoot);
-    gitRoot = realpathSync(git(repoRoot, ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim());
+    relativeToGitRoot = git(repoRoot, ["rev-parse", "--show-cdup"], { encoding: "utf8" }).trim();
   } catch (error) {
     if (error?.code === "ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_INVALID") throw error;
     throw sourceError("ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_INVALID", "repoRoot must be a readable Git working tree");
   }
-  const canonicalRequestedRoot = resolve(requestedRoot);
-  const canonicalGitRoot = resolve(gitRoot);
-  const rootsMatch = process.platform === "win32"
-    ? canonicalRequestedRoot.toLowerCase() === canonicalGitRoot.toLowerCase()
-    : canonicalRequestedRoot === canonicalGitRoot;
-  if (!rootsMatch) {
+  if (relativeToGitRoot.length > 0) {
     throw sourceError("ORCHESTRA_RUNTIME_IMAGE_SOURCE_GIT_INVALID", "repoRoot must be the Git checkout root");
   }
-  return gitRoot;
+  return requestedRoot;
 }
 
 function trackedV2Entries(repoRoot) {
