@@ -114,11 +114,11 @@ function staleAssessment() {
   };
 }
 
-function seededState(projectRoot) {
+function seededState(projectRoot, kind = "DIRECT_MUTATION") {
   const state = createReferenceState();
   assert.equal(state.projects.register(project("prj-project-root", projectRoot)).ok, true);
   assert.equal(state.work.startCurrent(work()).ok, true);
-  const op = operation(projectRoot);
+  const op = { ...operation(projectRoot), kind };
   assert.equal(state.operations.begin({ expectedGeneration: 0, operation: op }).ok, true);
   return { state, op };
 }
@@ -199,6 +199,34 @@ test("Project-root recovery rejects arbitrary and cross-project roots", async ()
       workspaceRef: fx.otherProjectRoot,
       status: "UNKNOWN",
     });
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+
+test("stale delegated controller cannot claim cleanup from persistent Project root alone", async () => {
+  const fx = await fixture();
+  try {
+    const { state, op } = seededState(fx.projectRoot, "DELEGATED_MUTATION");
+    const workspaceRecovery = createManagedWorkspaceRecovery({ home: fx.home, state });
+    const inspected = await workspaceRecovery.inspect(op.workspaceRef, op);
+    assert.deepEqual(inspected, {
+      workspaceRef: fx.projectRoot, status: "UNKNOWN",
+    });
+    const reconciler = createOperationReconciler({
+      state, operationLiveness: staleAssessment(),
+      workspaceRecovery, now: () => "2026-10-18T12:00:00.000Z",
+    });
+    const result = await reconciler.recover({
+      projectId: op.projectId, operationId: op.operationId,
+      commandId: "do-not-recover-unproven-delegated-clone",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "RECOVERY_WORKSPACE_UNKNOWN");
+    assert.equal(result.humanGate, true);
+    assert.equal(state.operations.inspect(op.operationId).liveness, "LIVE");
+    assert.equal(state.recoveries.latest({ projectId: op.projectId, operationId: op.operationId }), null);
   } finally {
     await fx.cleanup();
   }
