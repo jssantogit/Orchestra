@@ -75,6 +75,11 @@ export function createManagedWorkspaceRecovery({ home, state, store = null } = {
   if (typeof workspaceStore?.read !== "function") throw new TypeError("managed workspace store read is required");
 
   async function inspectRegisteredProjectRoot(workspaceRef, operation) {
+    // A delegated member writes an independent transient clone. Its
+    // canonical Project-root lock is NOT evidence that the clone was removed.
+    // Until the clone/child lifecycle is durably bound, recover only through
+    // a separately verified managed-workspace record; otherwise fail closed.
+    if (operation?.kind === "DELEGATED_MUTATION") return null;
     if (!isAbsolute(workspaceRef) || typeof operation?.projectId !== "string") return null;
     const project = state.projects.inspect(operation.projectId);
     if (!project || typeof project.workspace?.canonicalRoot !== "string" || !isAbsolute(project.workspace.canonicalRoot)) {
