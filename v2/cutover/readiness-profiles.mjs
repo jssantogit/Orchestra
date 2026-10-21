@@ -11,7 +11,7 @@ const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 export function evaluateV2ReadinessProfile({
   profile = 'ADAPTIVE', expectedHeadSha, expectedRuntimeImageId,
-  evidence, nativeDelegation = null,
+  evidence,
 } = {}) {
   if (profile !== 'CORE' && profile !== 'ADAPTIVE') {
     throw new TypeError('profile must be CORE or ADAPTIVE');
@@ -28,43 +28,41 @@ export function evaluateV2ReadinessProfile({
     !path.startsWith('rsiReplay:') && path !== 'migration:tsuzukiF7Verified');
   const addInvalid = field => { if (!invalid.includes(field)) invalid.push(field); };
 
-  // Two provider 6/6 sets do not prove a completed cross-provider dispatch.
-  // This record must ultimately come from an independently verified Home
-  // probe; a caller-made record alone is not authoritative release evidence.
+  // A provider's 6/6 alone cannot prove a native cross-provider dispatch.
+  // Canonical collection must source this record from actual Home receipts.
+  const nativeDelegation = evidence?.nativeDelegation ?? null;
   if (nativeDelegation === null) {
     missing.push('nativeDelegation');
-  } else if (!nativeDelegation || typeof nativeDelegation !== 'object' || Array.isArray(nativeDelegation)) {
+  } else if (typeof nativeDelegation !== 'object' || Array.isArray(nativeDelegation)) {
     addInvalid('nativeDelegation:shape');
   } else {
-    const exact = {
-      schema: 'orchestra.core-native-delegation-evidence.v1', version: 1,
-      status: 'VERIFIED', headSha: expectedHeadSha,
-      runtimeImageId: expectedRuntimeImageId,
-      sourceProvider: 'codex', targetProvider: 'antigravity',
-      evidenceClass: 'NATIVE', selectedRoute: 'DELEGATED',
-      operationKind: 'DELEGATED_MUTATION', workflowState: 'SUCCEEDED',
-    };
-    for (const [field, value] of Object.entries(exact)) {
+    const exact = {status:'VERIFIED',headSha:expectedHeadSha,runtimeImageId:expectedRuntimeImageId};
+    for (const [field,value] of Object.entries(exact)) {
       if (nativeDelegation[field] !== value) addInvalid(`nativeDelegation:${field}`);
     }
-    if (!nativeDelegation.facts || DELEGATION_FACTS.some(
-      name => nativeDelegation.facts[name] !== true)) {
-      addInvalid('nativeDelegation:facts');
+    const expectedFacts = {
+      sourceProvider:'codex',targetProvider:'antigravity',selectedRoute:'DELEGATED',
+      operationKind:'DELEGATED_MUTATION',
+    };
+    for (const [field,value] of Object.entries(expectedFacts)) {
+      if (nativeDelegation.facts?.[field] !== value) addInvalid(`nativeDelegation:${field}`);
     }
+    if (!nativeDelegation.facts || DELEGATION_FACTS.some(
+      name => nativeDelegation.facts[name] !== true)) addInvalid('nativeDelegation:facts');
     if (!Array.isArray(nativeDelegation.evidenceRefs)
-      || nativeDelegation.evidenceRefs.length === 0
+      || nativeDelegation.evidenceRefs.length < 3
       || nativeDelegation.evidenceRefs.some(ref => !SHA256.test(ref))) {
       addInvalid('nativeDelegation:evidenceRefs');
     }
-    const keys = new Set([...Object.keys(exact), 'facts', 'evidenceRefs']);
+    const keys = new Set(['status','headSha','runtimeImageId','facts','evidenceRefs']);
     if (Object.keys(nativeDelegation).some(key => !keys.has(key))) {
       addInvalid('nativeDelegation:shape');
     }
   }
 
   const evidenceComplete = missing.length === 0 && invalid.length === 0;
-  // The canonical Home probe and collector are not yet connected. Never
-  // promote caller-provided evidence shape into a release-ready verdict.
+  // Source-bound collection is necessary but not sufficient: a dedicated Core
+  // release validator has not yet been integrated. Do not claim cutover.
   return Object.freeze({
     profile: 'CORE', ready: false, evidenceComplete,
     code: evidenceComplete ? 'V2_CORE_EVIDENCE_COMPLETE_UNVERIFIED' : 'V2_CORE_EVIDENCE_INCOMPLETE',
