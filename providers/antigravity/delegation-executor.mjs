@@ -1,4 +1,5 @@
 import { WORKER_REPORT_SCHEMA } from "../../core/delegation/policy.mjs";
+import { randomUUID, createHash } from 'node:crypto';
 import { buildDelegationProcessEnvironment } from "../../runtime/delegation/process-environment.mjs";
 import { runBoundedProcess } from "../../runtime/delegation/process-runner.mjs";
 import { resolveModelProfile } from "./model-catalog.mjs";
@@ -170,6 +171,22 @@ export function createAntigravityDelegationExecutor({ runProcess = runBoundedPro
 
   return {
     provider: PROVIDER,
+    async verifyAuthentication({ cwd } = {}) {
+      const nonce = 'ORCHESTRA_AUTH_' + randomUUID();
+      try {
+        const result = await runProcess({ command: 'agy', args: ['--sandbox', '--print-timeout', '30s',
+          '--print', `Do not use tools or inspect files. Reply with exactly ${nonce}.`], cwd,
+          env: processEnvironment(), timeoutMs: 30000, maxOutputBytes: 65536 });
+        const authenticated = result.exitCode === 0 && !result.timedOut && !result.stdoutTruncated
+          && !result.stderrTruncated && String(result.stdout ?? '').trim() === nonce;
+        const sha = value => 'sha256:' + createHash('sha256').update(value).digest('hex');
+        const evidence = { schema: 'orchestra.executor-authentication.v1', provider: PROVIDER,
+          authenticated, exitCode: result.exitCode, timedOut: result.timedOut === true,
+          nonceDigest: sha(nonce), outputDigest: sha(String(result.stdout ?? '')),
+          observedAt: new Date().toISOString() };
+        return { authenticated, evidence, evidenceRef: sha(JSON.stringify(evidence)) };
+      } catch { return { authenticated: false }; }
+    },
 
     async discover() {
       try {

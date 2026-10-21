@@ -2,6 +2,13 @@
 
 Status: implementation in progress in PR #71, stacked on #70. **NOT READY for release.**
 
+Current continuation of PR #75: the production Work ingress now connects the
+selector, global authority and existing delegated bridge. See
+[Native V2 Work execution integration](v2-native-execution-integration.md) for
+entrypoints, causal receipts and the distinction between software verification
+and the still-missing native two-route field campaign. Earlier implementation
+checkpoints below are historical; they do not override the current field gates.
+
 ## Problem reproduced
 
 The existing `v2/rsi/policy-store.mjs` persists caller-supplied candidates. The existing promotion evaluator checks train/evaluate outcomes and scopes, but not whether every proposed selector was actually chosen within immutable legal execution choices. It can accept an unobserved route preference in a manually supplied candidate. `v2/experience/recorders.mjs` writes provider terminal Experience in PROJECT scope, without binding a legal choice set and a factual selected policy route to that terminal result. The result is not legitimate candidate-training provenance.

@@ -22,6 +22,7 @@ import { createHostProcessIdentityReader } from "../../v2/liveness/local-process
 import { createManagedWorkspaceStore, resolveManagedWorkspacePaths } from "../../v2/workspaces/managed-workspace-store.mjs";
 import { createDelegatedChildTerminalStore } from "./v2-child-terminal-store.mjs";
 import { readDelegatedProcessGroupStatus } from "./v2-process-group-probe.mjs";
+import { readExecutionSelection } from '../../v2/rsi/execution-selection.mjs';
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const PROVIDERS = new Set(["codex", "antigravity"]);
@@ -32,7 +33,7 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 // A delegation identity is unique within one immutable Work generation.
 // Retries must never create another Operation for the same dispatched member,
 // even if the request body changes or the previous worker failed/crashed.
-function operationIdForDelegation(projectId, workId, generation, delegationId) {
+export function operationIdForDelegation(projectId, workId, generation, delegationId) {
   const hash = createHash("sha256")
     .update("orchestra.v2.delegated-operation.v1\0")
     .update(JSON.stringify([projectId, workId, generation, delegationId]))
@@ -194,6 +195,7 @@ export async function executeNativeDelegatedWork({
   registry, projectId, workId, generation, actor, request,
   executor = null, managedWorkspaceStore = null, resourceGovernor,
   now = () => new Date().toISOString(),
+  executionSelection = null,
 } = {}) {
   const state = registry?.state;
   if (!state?.projects?.inspect || !state?.work?.current
@@ -218,6 +220,16 @@ export async function executeNativeDelegatedWork({
     return fail("NATIVE_DELEGATION_REQUEST_DENIED");
   }
   const stableOperationId = operationIdForDelegation(projectId, workId, generation, request.delegationId);
+  const selection = readExecutionSelection(executionSelection);
+  if (executionSelection !== null && (!selection || selection.operationId !== stableOperationId
+    || selection.selectedRoute !== 'DELEGATED' || selection.projectId !== projectId
+    || selection.workId !== workId || selection.generation !== generation
+    || selection.actorRef !== actor.actorIdHash || selection.sourceProvider !== actor.provider
+    || selection.targetProvider !== request.target.provider
+    || selection.runtimeImageId !== facts.project.runtime.pinnedImage
+    || selection.instructionEpoch !== facts.project.runtime.instructionEpoch
+    || selection.requestRef !== digest(Buffer.from(JSON.stringify(request))))) return fail('NATIVE_EXECUTION_SELECTION_INVALID');
+  const requireNativeChildProof = executor === null || selection?.evidenceClass === 'NATIVE';
   // Read before clone preparation/discovery; the SQLite begin below is the
   // authoritative collision fence when two callers race this precheck.
   if (state.operations.inspect(stableOperationId)) {
@@ -335,6 +347,20 @@ export async function executeNativeDelegatedWork({
           || state.projects.inspect(projectId)?.runtime?.pinnedImage !== facts.project.runtime.pinnedImage) {
           result = fail("NATIVE_DELEGATION_OPERATION_STALE");
         } else {
+          // A preselected alternative must still be available after the writer
+          // fence and immediately before dispatch. Legacy bridge callers have
+          // no two-route selection proof and retain a one-route journal.
+          if (selection && !(await worker.verifyAuthentication?.({ cwd: facts.project.workspace.canonicalRoot }))?.authenticated) {
+            result = fail('NATIVE_EXECUTION_READINESS_CHANGED');
+          } else if (selection && (state.work.current(projectId)?.workId !== workId
+            || state.work.current(projectId)?.generation !== generation
+            || state.projects.inspect(projectId)?.runtime.instructionEpoch !== selection.instructionEpoch
+            || state.projects.inspect(projectId)?.runtime.pinnedImage !== selection.runtimeImageId
+            || state.sessionObservations.get({ provider: actor.provider, projectId, actorIdHash: actor.actorIdHash })?.observedWorkId !== workId
+            || state.sessionObservations.get({ provider: actor.provider, projectId, actorIdHash: actor.actorIdHash })?.observedGeneration !== generation
+            || state.sessionObservations.get({ provider: actor.provider, projectId, actorIdHash: actor.actorIdHash })?.observedInstructionEpoch !== selection.instructionEpoch)) {
+            result = fail('NATIVE_EXECUTION_AUTHORITY_STALE');
+          } else {
           const selection = state.nativeRsi?.recordDelegatedDecision?.({
             operationId, sourceProvider: actor.provider,
             targetProvider: request.target.provider,
@@ -448,16 +474,16 @@ export async function executeNativeDelegatedWork({
           // to delete the workspace.
           preserveUnverifiedChild = childProofRejected || childTerminalRejected
             || (childOwnerRecorded && !childTerminalVerified)
-            || (executor === null && !childTerminalVerified)
+            || (requireNativeChildProof && !childTerminalVerified)
             || processGroupStillActive;
           // Controlled test executors may not spawn a real process. A real
           // provider needs both independently attested birth and terminal
           // events; never accept a worker that swallows a failed callback.
-          if (childProofRejected || (executor === null && !childOwnerRecorded)) {
+          if (childProofRejected || (requireNativeChildProof && !childOwnerRecorded)) {
             result = fail("NATIVE_DELEGATION_CHILD_UNVERIFIED");
           } else if (childTerminalRejected
             || (childOwnerRecorded && !childTerminalVerified)
-            || (executor === null && !childTerminalVerified)) {
+            || (requireNativeChildProof && !childTerminalVerified)) {
             result = fail("NATIVE_DELEGATION_CHILD_TERMINAL_UNVERIFIED");
           } else if (processGroupStillActive) {
             result = fail("NATIVE_DELEGATION_PROCESS_GROUP_STILL_ACTIVE");
@@ -497,6 +523,7 @@ export async function executeNativeDelegatedWork({
                   changedPaths: mutation.changedPaths };
               }
             }
+          }
           }
           }
         }
