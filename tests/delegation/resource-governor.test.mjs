@@ -126,6 +126,112 @@ test('cgroup ancestor high pressure blocks even if a child has unlimited memory'
   assert.equal(value.pressured, true);
 });
 
+function namespaceCgroup() {
+  const mount = '/sys/fs/cgroup';
+  const files = {
+    '/proc/self/cgroup': '0::/\n',
+    '/proc/self/mountinfo': `59 58 0:24 /.. ${mount} rw - cgroup2 cgroup2 rw,nsdelegate\n`,
+    [`${mount}/init/cgroup.procs`]: `${process.pid}\n`,
+  };
+  for (const [path, limit, current] of [[mount, 4 * GiB, GiB], [`${mount}/init`, 'max', 100]]) {
+    files[`${path}/memory.max`] = String(limit);
+    files[`${path}/memory.current`] = String(current);
+    files[`${path}/memory.high`] = 'max';
+  }
+  const directory = (name) => ({ name, isDirectory: () => true, isSymbolicLink: () => false });
+  const entries = { [mount]: [directory('init')] };
+  return {
+    files, entries, directory,
+    read(path) { if (!(path in files)) throw Error('unreadable'); return files[path]; },
+    list(path) { if (!(path in entries)) throw Error('unreadable'); return entries[path]; },
+  };
+}
+
+test('cgroup namespace Cloud maps the actual PID, preserving the visible ancestor budget', () => {
+  const f = namespaceCgroup();
+  const result = sampleMemory({ platform: 'linux', read: f.read, list: f.list });
+  assert.equal(result.verified, true);
+  assert.equal(result.effectiveBytes, 4 * GiB);
+  assert.equal(result.availableBytes, 3 * GiB);
+  assert.equal(result.pressured, false);
+  f.files['/sys/fs/cgroup/memory.high'] = String(GiB);
+  assert.equal(sampleMemory({ platform: 'linux', read: f.read, list: f.list }).pressured, true);
+});
+
+test('cgroup namespace mapping keeps membership suffix and all visible ancestor limits', () => {
+  const f = namespaceCgroup();
+  f.files['/proc/self/cgroup'] = '0::/child\n';
+  f.entries['/sys/fs/cgroup/init'] = [f.directory('child')];
+  f.files['/sys/fs/cgroup/init/child/cgroup.procs'] = `${process.pid}\n`;
+  f.files['/sys/fs/cgroup/init/child/memory.max'] = String(2 * GiB);
+  f.files['/sys/fs/cgroup/init/child/memory.current'] = String(GiB);
+  f.files['/sys/fs/cgroup/init/child/memory.high'] = 'max';
+  const result = sampleMemory({ platform: 'linux', read: f.read, list: f.list });
+  assert.equal(result.verified, true);
+  assert.equal(result.effectiveBytes, 2 * GiB);
+  assert.equal(result.availableBytes, GiB);
+});
+
+test('cgroup common root and subtree mounts retain their ordinary mapping', () => {
+  for (const [root, member] of [['/', '/'], ['/tenant', '/tenant']]) {
+    const f = namespaceCgroup();
+    f.files['/proc/self/cgroup'] = `0::${member}\n`;
+    f.files['/proc/self/mountinfo'] = `59 58 0:24 ${root} /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n`;
+    const result = sampleMemory({ platform: 'linux', read: f.read, list: () => assert.fail('ordinary mapping must not scan') });
+    assert.equal(result.verified, true);
+    assert.equal(result.effectiveBytes, 4 * GiB);
+    assert.equal(result.availableBytes, 3 * GiB);
+  }
+});
+
+test('cgroup namespace mapping supports two visible ancestors without discarding their limits', () => {
+  const f = namespaceCgroup();
+  f.files['/proc/self/mountinfo'] = f.files['/proc/self/mountinfo'].replace('/.. ', '/../.. ');
+  f.entries['/sys/fs/cgroup/init'] = [f.directory('namespace')];
+  f.files['/sys/fs/cgroup/init/namespace/cgroup.procs'] = `${process.pid}\n`;
+  for (const file of ['memory.max', 'memory.high']) f.files[`/sys/fs/cgroup/init/namespace/${file}`] = 'max';
+  f.files['/sys/fs/cgroup/init/namespace/memory.current'] = '100';
+  f.files['/sys/fs/cgroup/init/memory.max'] = String(2 * GiB);
+  f.files['/sys/fs/cgroup/init/memory.current'] = String(GiB);
+  const result = sampleMemory({ platform: 'linux', read: f.read, list: f.list });
+  assert.equal(result.verified, true);
+  assert.equal(result.effectiveBytes, 2 * GiB);
+  assert.equal(result.availableBytes, GiB);
+});
+
+test('cgroup namespace missing, duplicate, inaccessible or changing PID proof fails closed', () => {
+  for (const change of [
+    f => { f.files['/sys/fs/cgroup/init/cgroup.procs'] = ''; },
+    f => { delete f.files['/sys/fs/cgroup/init/cgroup.procs']; },
+    f => { f.entries['/sys/fs/cgroup'].push(f.directory('other')); f.files['/sys/fs/cgroup/other/cgroup.procs'] = `${process.pid}\n`; },
+    f => { f.entries['/sys/fs/cgroup'].push(f.directory('inaccessible')); },
+    f => { let n = 0; const read = f.read; f.read = p => p.endsWith('/cgroup.procs') && ++n > 1 ? '' : read(p); },
+    f => { let n = 0; const read = f.read; f.read = p => p === '/proc/self/cgroup' && ++n > 1 ? '0::/changed\n' : read(p); },
+    f => { delete f.files['/sys/fs/cgroup/memory.high']; },
+  ]) {
+    const f = namespaceCgroup(); change(f);
+    assert.deepEqual(sampleMemory({ platform: 'linux', read: f.read, list: f.list }), { verified: false, reason: 'RESOURCE_UNVERIFIED' });
+  }
+});
+
+test('cgroup namespace rejects escape, malformed roots, symlinks and bounded-search overflow', () => {
+  for (const change of [
+    f => { f.files['/proc/self/cgroup'] = '0::/../init\n'; },
+    f => { f.files['/proc/self/cgroup'] = '0::/a/../init\n'; },
+    f => { f.files['/proc/self/mountinfo'] = f.files['/proc/self/mountinfo'].replace('/.. ', '/a/.. '); },
+    f => { f.files['/proc/self/mountinfo'] += f.files['/proc/self/mountinfo']; },
+    f => { f.entries['/sys/fs/cgroup'] = [f.directory('../init')]; },
+    f => { f.entries['/sys/fs/cgroup'] = [{ name: 'init', isDirectory: () => true, isSymbolicLink: () => true }]; },
+    f => { f.files['/proc/self/cgroup'] = '0::/child\n'; f.entries['/sys/fs/cgroup/init'] = [{ name: 'child', isDirectory: () => true, isSymbolicLink: () => true }]; },
+    f => { f.entries['/sys/fs/cgroup'] = Array.from({ length: 129 }, (_, i) => f.directory(`dir${i}`)); },
+    f => { f.files['/sys/fs/cgroup/memory.max'] = '4e9'; },
+    f => { f.files['/sys/fs/cgroup/memory.current'] = '-1'; },
+  ]) {
+    const f = namespaceCgroup(); change(f);
+    assert.deepEqual(sampleMemory({ platform: 'linux', read: f.read, list: f.list }), { verified: false, reason: 'RESOURCE_UNVERIFIED' });
+  }
+});
+
 test('two independent Node controllers cannot both reserve the same Home capacity', () => fixture(async (home) => {
   const execute = (project) => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [fileURLToPath(new URL('../helpers/resource-reserve-child.mjs', import.meta.url)), home, project], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
