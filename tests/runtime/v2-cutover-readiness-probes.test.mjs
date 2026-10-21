@@ -69,6 +69,7 @@ if (NODE_MAJOR < 24) {
         reconciliation: 'reconciliation',
         experiencePrivacy: 'experiencePrivacy',
         rsiReplay: 'rsiReplay',
+        nativeDelegation: 'nativeDelegation',
         migration: 'migration',
         'platforms.windows': 'windowsPlatform',
         'platforms.posix': 'posixPlatform',
