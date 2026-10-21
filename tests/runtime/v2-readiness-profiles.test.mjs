@@ -42,8 +42,9 @@ test('Adaptive keeps the original RSI and factual Tsuzuki F7 requirements', () =
 
 test('Core defers only adaptive learning and Tsuzuki-specific F7, retaining generic migration', () => {
   const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:evidence(),nativeDelegation:nativeDelegation()});
-  assert.equal(result.ready,true);
-  assert.equal(result.code,'V2_CORE_READY');
+  assert.equal(result.ready,false,'shape validation alone is not canonical field readiness');
+  assert.equal(result.evidenceComplete,true);
+  assert.equal(result.code,'V2_CORE_EVIDENCE_COMPLETE_UNVERIFIED');
   assert.deepEqual(result.missing,[]);
   assert.deepEqual(result.invalid,[]);
   assert.deepEqual(result.deferred,['rsiReplay','migration.tsuzukiF7Verified']);
