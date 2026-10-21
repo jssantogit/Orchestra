@@ -62,9 +62,12 @@ export function evaluateV2ReadinessProfile({
     }
   }
 
-  const ready = missing.length === 0 && invalid.length === 0;
+  const evidenceComplete = missing.length === 0 && invalid.length === 0;
+  // The canonical Home probe and collector are not yet connected. Never
+  // promote caller-provided evidence shape into a release-ready verdict.
   return Object.freeze({
-    profile: 'CORE', ready, code: ready ? 'V2_CORE_READY' : 'V2_CORE_NOT_READY',
+    profile: 'CORE', ready: false, evidenceComplete,
+    code: evidenceComplete ? 'V2_CORE_EVIDENCE_COMPLETE_UNVERIFIED' : 'V2_CORE_EVIDENCE_INCOMPLETE',
     expectedHeadSha, expectedRuntimeImageId,
     missing: Object.freeze(missing), invalid: Object.freeze(invalid),
     deferred: DEFERRED,
