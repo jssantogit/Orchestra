@@ -4,6 +4,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID, createHash } from 'node:crypto';
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -177,6 +178,26 @@ export function createCodexDelegationExecutor({ runProcess = runBoundedProcess }
 
   return {
     provider: PROVIDER,
+    async verifyAuthentication({ cwd } = {}) {
+      const nonce = 'ORCHESTRA_AUTH_' + randomUUID();
+      try {
+        const result = await runProcess({ command: 'codex',
+          args: ['exec', '--ignore-user-config', '--disable', 'hooks', '--sandbox', 'read-only',
+            '-c', 'approval_policy="never"', '--json', '--skip-git-repo-check', '-'],
+          input: `Do not use tools or inspect files. Reply with exactly ${nonce}.`, cwd,
+          env: processEnvironment(), timeoutMs: 30000, maxOutputBytes: 65536 });
+        const events = String(result.stdout ?? '').split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+        const authenticated = result.exitCode === 0 && !result.timedOut && !result.stdoutTruncated && !result.stderrTruncated
+          && events.some(x => x.type === 'turn.completed')
+          && events.some(x => x.type === 'item.completed' && x.item?.type === 'agent_message' && x.item.text?.trim() === nonce);
+        const sha = value => 'sha256:' + createHash('sha256').update(value).digest('hex');
+        const evidence = { schema: 'orchestra.executor-authentication.v1', provider: PROVIDER,
+          authenticated, exitCode: result.exitCode, timedOut: result.timedOut === true,
+          nonceDigest: sha(nonce), outputDigest: sha(String(result.stdout ?? '')),
+          observedAt: new Date().toISOString() };
+        return { authenticated, evidence, evidenceRef: sha(JSON.stringify(evidence)) };
+      } catch { return { authenticated: false }; }
+    },
 
     async discover() {
       try {

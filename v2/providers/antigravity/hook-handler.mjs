@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { readExecutionSelection } from '../../rsi/execution-selection.mjs';
 
 import { createWorkAuthority } from "../../authority/work-authority.mjs";
 import { createExperienceRecorders } from "../../experience/recorders.mjs";
@@ -108,6 +109,7 @@ export function createAntigravityHookHandler({
   registry,
   now = () => new Date().toISOString(),
   experienceRecorder = null,
+  executionSelection = null,
 } = {}) {
   if (!registry?.state || typeof registry.resolveWorkspace !== "function") {
     throw new TypeError("global project registry is required");
@@ -275,7 +277,14 @@ export function createAntigravityHookHandler({
     const authorized = await authorizedAuthority.authorize({ ...expectedTuple, capability: "WORKSPACE_EDIT" });
     if (!authorized.allowed) return preToolUseResponse(false, authorized.reason, freshnessFields(authorized));
 
-    const operationId = `op_${randomUUID()}`;
+    const selection = readExecutionSelection(executionSelection);
+    if (executionSelection !== null && (!selection || selection.selectedRoute !== 'DIRECT_WORK'
+      || selection.projectId !== project.projectId || selection.workId !== observation.observedWorkId
+      || selection.generation !== observation.observedGeneration || selection.actorRef !== actor.actorIdHash
+      || selection.instructionEpoch !== project.runtime.instructionEpoch)) {
+      return preToolUseResponse(false, 'NATIVE_EXECUTION_SELECTION_INVALID');
+    }
+    const operationId = selection?.operationId ?? `op_${randomUUID()}`;
     const runtimeOwnerId = `provider-owner:${operationId}`;
     const startedAt = now();
     const deadlineAt = addMilliseconds(startedAt, PROVIDER_EVENT_DEADLINE_MS);
@@ -328,11 +337,16 @@ export function createAntigravityHookHandler({
     });
     if (!correlation.ok) return preToolUseResponse(false, correlation.reason, { projectId: project.projectId });
 
-    await safeNative("recordDecision", {
+    const decisionReceipt = await safeNative("recordDecision", {
       operationId,
       providerFamily: "antigravity",
       correlationHash,
     });
+    if (executionSelection !== null && !decisionReceipt?.ok) {
+      registry.state.operations.terminalize({ operationId, workflowState: 'ABORTED',
+        resultRef: 'execution-selection:receipt-unverified', expectedHeartbeatAt: startedAt });
+      return preToolUseResponse(false, 'NATIVE_EXECUTION_DECISION_UNVERIFIED');
+    }
     await safeRecord("recordProviderCapability", {
       project,
       workId: observation.observedWorkId,

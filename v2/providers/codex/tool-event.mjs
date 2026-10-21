@@ -8,6 +8,18 @@ function value(value, maxLength = 500) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
 
+// Native apply_patch uses tool_input.command; freeform/older transports may
+// carry the patch itself. Never choose one of contradictory supplied aliases.
+export function codexPatchText(payload = {}) {
+  const input = payload.tool_input;
+  if (typeof input === 'string') return input;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const values = ['command', 'patch', 'input'].filter(key => Object.hasOwn(input,key)).map(key => input[key]);
+  if (values.length === 0 || values.some(text => typeof text !== 'string' || !text)
+    || values.some(text => text !== values[0])) return null;
+  return values[0];
+}
+
 function factualToolCallId(payload) {
   const values = [
     ...(Object.hasOwn(payload, "tool_use_id") ? [payload.tool_use_id] : []),

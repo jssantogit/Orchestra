@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readExecutionSelection } from '../../rsi/execution-selection.mjs';
 
 // Separate v2 Home-owned, append-only observation boundary. An observation is
 // never accepted from provider payloads or caller-authored candidate selectors.
@@ -61,7 +62,6 @@ function validateSource(state, operationId, providerFamily, correlationHash) {
   return { project, work, operation };
 }
 
-const DELEGATED_CHOICE = Object.freeze(["DIRECT_WORK", "DELEGATED"]);
 const BLOB_LIMIT = 8 * 1024 * 1024;
 
 function exactKeys(value, keys) {
@@ -221,6 +221,36 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
     const trainingGet = db.prepare(
       "SELECT * FROM rsi_native_training WHERE policy_id=? AND revision=?",
     );
+    db.exec(`CREATE TABLE IF NOT EXISTS rsi_execution_selections (
+      operation_id TEXT PRIMARY KEY, selection_json TEXT NOT NULL, selection_digest TEXT NOT NULL
+    ) STRICT`);
+    const selectionGet = db.prepare('SELECT * FROM rsi_execution_selections WHERE operation_id=?');
+    const selectionInsert = db.prepare('INSERT INTO rsi_execution_selections VALUES(?,?,?)');
+    function selectionFor(operationId, route, source) {
+      const row = selectionGet.get(operationId);
+      if (!row) return null;
+      const selection = safelyRead(row.selection_json, row.selection_digest);
+      const op = source?.operation;
+      if (!op || selection.operationId !== operationId || selection.selectedRoute !== route
+        || selection.projectId !== op.projectId || selection.workId !== op.workId
+        || selection.generation !== op.generation || selection.actorRef !== op.actorRef
+        || selection.instructionEpoch !== source.work.instructionEpoch
+        || selection.runtimeImageId !== source.work.runtimeImage) throw new Error('RSI_EXECUTION_SELECTION_UNVERIFIED');
+      if (selection.evidenceClass === 'NATIVE' && selection.immutableRoutes.includes('DELEGATED')) {
+        if (!REF.test(selection.readinessRef ?? '')) throw new Error('RSI_EXECUTION_AUTH_RECEIPT_UNVERIFIED');
+        const hex = selection.readinessRef.slice(7);
+        const bytes = readFileSync(join(nativeBlobRoot, 'sha256', hex.slice(0,2), hex.slice(2)));
+        const proof = bytes.length <= 65536 ? JSON.parse(bytes.toString('utf8')) : null;
+        if ('sha256:' + createHash('sha256').update(bytes).digest('hex') !== selection.readinessRef
+          || proof?.schema !== 'orchestra.executor-authentication.v1' || proof.authenticated !== true
+          || proof.exitCode !== 0 || proof.timedOut !== false || proof.provider !== selection.targetProvider
+          || !REF.test(proof.nonceDigest) || !REF.test(proof.outputDigest)
+          || !Number.isFinite(Date.parse(proof.observedAt))
+          || Date.parse(proof.observedAt) > Date.parse(selection.observedAt)
+          || Date.parse(selection.observedAt) - Date.parse(proof.observedAt) > 30000) throw new Error('RSI_EXECUTION_AUTH_RECEIPT_UNVERIFIED');
+      }
+      return { ...selection, selectionRef: row.selection_digest };
+    }
     const trainingInsert = db.prepare(
       "INSERT INTO rsi_native_training(policy_id,revision,receipt_json,receipt_digest) VALUES(?,?,?,?)",
     );
@@ -267,6 +297,9 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
         state, decision.operationId, decision.providerFamily, decision.correlationHash,
       );
       const operation = source?.operation;
+      const selection = selectionFor(decision.operationId, 'DIRECT_WORK', source);
+      if (selection && selection.evidenceClass !== 'NATIVE') return null;
+      if ((decision.executionSelectionRef ?? null) !== (selection?.selectionRef ?? null)) return null;
       if (!source || source.project.lineageId !== decision.lineageId
         || source.work.runtimeImage !== decision.runtimeImageId
         || operation.workId !== decision.workId
@@ -288,8 +321,8 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
         source: { lineageId: decision.lineageId, operationId: decision.operationId },
         domainCohort: decision.domainCohort,
         decision: {
-          immutableRoutes: ["DIRECT_WORK"],
-          legalRoutes: ["DIRECT_WORK"],
+          immutableRoutes: selection?.immutableRoutes ?? ["DIRECT_WORK"],
+          legalRoutes: selection?.legalRoutes ?? ["DIRECT_WORK"],
           selectedRoute: "DIRECT_WORK",
         },
         outcome: { success: terminal.workflowState === "SUCCEEDED", durationMs: terminal.durationMs },
@@ -316,6 +349,9 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
       const { decision, terminal } = receipt;
       const source = delegatedSource(state, decision.operationId);
       const op = source?.operation;
+      const selection = selectionFor(decision.operationId, 'DELEGATED', source);
+      if (selection && selection.evidenceClass !== 'NATIVE') return null;
+      if ((decision.executionSelectionRef ?? null) !== (selection?.selectionRef ?? null)) return null;
       const artifactRef = typeof terminal.resultRef === "string"
         && terminal.resultRef.startsWith("delegation-artifact:")
           ? terminal.resultRef.slice("delegation-artifact:".length) : null;
@@ -331,7 +367,7 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
         || !PROVIDERS.has(decision.targetProvider)
         || decision.sourceProvider === decision.targetProvider
         || !Array.isArray(decision.legalRoutes)
-        || JSON.stringify(decision.legalRoutes) !== JSON.stringify(DELEGATED_CHOICE)
+        || !decision.legalRoutes.includes('DELEGATED')
         || !Number.isSafeInteger(terminal.durationMs) || terminal.durationMs < 0
         || !REF.test(row.decision_digest) || !REF.test(row.terminal_digest)
         || !verifiedDelegatedArtifact(nativeBlobRoot, artifactRef, decision)
@@ -341,7 +377,7 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
         source: { lineageId: decision.lineageId, operationId: decision.operationId },
         domainCohort: decision.domainCohort,
         decision: {
-          immutableRoutes: [...DELEGATED_CHOICE], legalRoutes: [...DELEGATED_CHOICE],
+          immutableRoutes: selection?.immutableRoutes ?? ['DELEGATED'], legalRoutes: selection?.legalRoutes ?? ['DELEGATED'],
           selectedRoute: "DELEGATED",
         },
         outcome: { success: true, durationMs: terminal.durationMs },
@@ -351,6 +387,26 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
     }
 
     return Object.freeze({
+      recordExecutionSelection(permit) {
+        assertOpen();
+        const selection = readExecutionSelection(permit);
+        if (!selection) return fail('RSI_EXECUTION_SELECTION_UNTRUSTED');
+        const old = selectionGet.get(selection.operationId);
+        if (old || state.operations.inspect(selection.operationId)) return fail('RSI_EXECUTION_SELECTION_ALREADY_RECORDED');
+        const project = state.projects.inspect(selection.projectId), work = state.work.current(selection.projectId);
+        const session = state.sessionObservations.get({ provider: selection.sourceProvider,
+          projectId: selection.projectId, actorIdHash: selection.actorRef });
+        if (!project || !work || !session || work.workId !== selection.workId || work.generation !== selection.generation
+          || work.runtimeImage !== selection.runtimeImageId || project.runtime.pinnedImage !== selection.runtimeImageId
+          || project.runtime.instructionEpoch !== selection.instructionEpoch || session.observedWorkId !== work.workId
+          || session.observedGeneration !== work.generation || session.observedInstructionEpoch !== selection.instructionEpoch) return fail('RSI_EXECUTION_SELECTION_STALE');
+        selectionInsert.run(selection.operationId, encode(selection), digest(selection));
+        return { ok: true, selectionRef: digest(selection) };
+      },
+      inspectExecutionSelection(operationId) {
+        assertOpen(); const row = selectionGet.get(operationId);
+        return row ? safelyRead(row.selection_json, row.selection_digest) : null;
+      },
       recordDelegatedDecision({ operationId, sourceProvider, targetProvider, providerVersion } = {}) {
         assertOpen();
         if (typeof operationId !== "string" || !operationId
@@ -372,13 +428,14 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
         }
         const decision = {
           schema: "orchestra.rsi-native-delegated-decision.v1", version: 1,
+          executionSelectionRef: selectionFor(operationId, 'DELEGATED', source)?.selectionRef ?? null,
           operationId, projectId: source.project.projectId,
           lineageId: source.project.lineageId,
           workId: op.workId, generation: op.generation,
           runtimeImageId: source.work.runtimeImage, actorRef: op.actorRef,
           sourceProvider, targetProvider, providerVersion,
           startedAt: op.startedAt, domainCohort: "software-engineering",
-          legalRoutes: [...DELEGATED_CHOICE], selectedRoute: "DELEGATED",
+          legalRoutes: selectionFor(operationId, 'DELEGATED', source)?.legalRoutes ?? ['DELEGATED'], selectedRoute: "DELEGATED",
         };
         const json = encode(decision), ref = digest(decision);
         const old = delegatedGet.get(operationId);
@@ -439,6 +496,7 @@ export function createNativeRsiObservationStore({ dbPath, state, blobRoot = null
           || source.operation.liveness !== "LIVE") return fail("RSI_NATIVE_DECISION_UNVERIFIED");
         const decision = {
           schema: "orchestra.rsi-native-decision.v1",
+          executionSelectionRef: selectionFor(operationId, 'DIRECT_WORK', source)?.selectionRef ?? null,
           version: 1,
           operationId,
           projectId: source.project.projectId,
