@@ -130,6 +130,18 @@ test('public global CLI executes the direct native authorization path against pe
  assert.equal(f.state.operations.list({projectId:f.input.projectId}).length,1);
 });
 
+test('native Codex command-shaped apply_patch input is a legal bounded implementation packet',async t=>{
+ const f=await routingFixture(t);const payload={...f.input.payload,tool_input:{command:f.input.payload.tool_input.patch}};
+ const result=await executeNativeWork({...f.input,payload},{registry:f.registry,executor:controlledExecutor(),resourceGovernor:{...testResourceGovernor(),home:f.home}});
+ assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.route,'DIRECT_WORK');
+});
+
+test('contradictory patch-input aliases cannot lend authority to another mutation',async t=>{
+ const f=await routingFixture(t);const payload={...f.input.payload,tool_input:{patch:f.input.payload.tool_input.patch,command:'*** Update File: ../escape'}};
+ const result=await executeNativeWork({...f.input,payload},{registry:f.registry,executor:controlledExecutor(),resourceGovernor:{...testResourceGovernor(),home:f.home}});
+ assert.equal(result.code,'NATIVE_EXECUTION_TOOL_SCOPE_DENIED');
+});
+
 test('writers in independent Projects do not acquire each others workspace authority',async t=>{
  const f=await routingFixture(t),root=join(f.home,'project-b');
  execFileSync('git',['clone','--quiet','--no-hardlinks',f.repoRoot,root]);

@@ -7,6 +7,7 @@ import { createAntigravityDelegationExecutor } from '../../providers/antigravity
 import { createCodexHookHandler } from '../../v2/providers/codex/hook-handler.mjs';
 import { createAntigravityHookHandler } from '../../v2/providers/antigravity/hook-handler.mjs';
 import { normalizeCodexActor } from '../../v2/providers/codex/actor.mjs';
+import { codexPatchText } from '../../v2/providers/codex/tool-event.mjs';
 import { normalizeAntigravityActor } from '../../v2/providers/antigravity/actor.mjs';
 import { selectNativeExecution } from '../../v2/rsi/execution-selection.mjs';
 import { createLearnedPolicyStore } from '../../v2/rsi/policy-store.mjs';
@@ -44,7 +45,8 @@ export async function executeNativeWork(input, { registry, resourceGovernor,
   try { assertDelegationRequest(request); } catch { return fail('NATIVE_EXECUTION_PACKET_INVALID'); }
   // Both alternatives must implement the same bounded mutation request. An
   // opaque shell command cannot acquire a two-route learning receipt.
-  const patch = typeof payload.tool_input === 'string' ? payload.tool_input : payload.tool_input?.patch;
+  const patch = provider === 'codex' ? codexPatchText(payload)
+    : typeof payload.tool_input === 'string' ? payload.tool_input : payload.tool_input?.patch;
   const paths = typeof patch === 'string' ? [...patch.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)].map(x => x[1]) : [];
   if (payload.tool_name !== 'apply_patch' || paths.length === 0
     || !authorizeChangedPaths(paths, normalizeMutationScope(request.workspace.mutationScope)).allowed) return fail('NATIVE_EXECUTION_TOOL_SCOPE_DENIED');
