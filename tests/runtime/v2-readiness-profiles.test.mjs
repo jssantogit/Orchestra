@@ -23,17 +23,15 @@ function evidence() {
 }
 function nativeDelegation() {
   return {
-    schema:'orchestra.core-native-delegation-evidence.v1',version:1,
     status:'VERIFIED',headSha:HEAD,runtimeImageId:IMAGE,
-    sourceProvider:'codex',targetProvider:'antigravity',evidenceClass:'NATIVE',
-    selectedRoute:'DELEGATED',operationKind:'DELEGATED_MUTATION',workflowState:'SUCCEEDED',
-    facts:{workAuthorityVerified:true,terminalVerified:true,artifactVerified:true,processProvenanceVerified:true,selectionVerified:true},
-    evidenceRefs:[`sha256:${'d'.repeat(64)}`],
+    facts:{sourceProvider:'codex',targetProvider:'antigravity',selectedRoute:'DELEGATED',operationKind:'DELEGATED_MUTATION',
+      workAuthorityVerified:true,selectionVerified:true,terminalVerified:true,artifactVerified:true,processProvenanceVerified:true},
+    evidenceRefs:[`sha256:${'d'.repeat(64)}`,`sha256:${'e'.repeat(64)}`,`sha256:${'f'.repeat(64)}`],
   };
 }
 
 test('Adaptive keeps the original RSI and factual Tsuzuki F7 requirements', () => {
-  const result=evaluateV2ReadinessProfile({profile:'ADAPTIVE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:evidence(),nativeDelegation:nativeDelegation()});
+  const result=evaluateV2ReadinessProfile({profile:'ADAPTIVE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:{...evidence(),nativeDelegation:nativeDelegation()}});
   assert.equal(result.ready,false);
   assert.equal(result.code,'CUTOVER_NOT_READY');
   assert.ok(result.missing.includes('rsiReplay'));
@@ -41,7 +39,7 @@ test('Adaptive keeps the original RSI and factual Tsuzuki F7 requirements', () =
 });
 
 test('Core defers only adaptive learning and Tsuzuki-specific F7, retaining generic migration', () => {
-  const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:evidence(),nativeDelegation:nativeDelegation()});
+  const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:{...evidence(),nativeDelegation:nativeDelegation()}});
   assert.equal(result.ready,false,'shape validation alone is not canonical field readiness');
   assert.equal(result.evidenceComplete,true);
   assert.equal(result.code,'V2_CORE_EVIDENCE_COMPLETE_UNVERIFIED');
@@ -53,13 +51,13 @@ test('Core defers only adaptive learning and Tsuzuki-specific F7, retaining gene
 test('Core refuses missing, controlled, stale and incomplete native cross-provider proof', () => {
   for(const d of [null,
     {...nativeDelegation(),headSha:'e'.repeat(40)},
-    {...nativeDelegation(),evidenceClass:'CONTROLLED_TEST'},
-    {...nativeDelegation(),sourceProvider:'antigravity',targetProvider:'codex'},
+    {...nativeDelegation(),facts:{...nativeDelegation().facts,terminalVerified:false}},
+    {...nativeDelegation(),facts:{...nativeDelegation().facts,sourceProvider:'antigravity',targetProvider:'codex'}},
     {...nativeDelegation(),facts:{...nativeDelegation().facts,artifactVerified:false}},
     {...nativeDelegation(),evidenceRefs:[]},
-    {...nativeDelegation(),workflowState:'UNKNOWN'},
+    {...nativeDelegation(),facts:{...nativeDelegation().facts,workAuthorityVerified:false}},
   ]) {
-    const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:evidence(),nativeDelegation:d});
+    const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:{...evidence(),nativeDelegation:d}});
     assert.equal(result.ready,false,JSON.stringify(d));
     assert.ok(result.missing.includes('nativeDelegation')||result.invalid.some(v=>v.startsWith('nativeDelegation:')));
   }
@@ -71,7 +69,7 @@ test('Core still requires AGY field, native Windows and generic migration', () =
     if(missing==='antigravity')delete e.providers.antigravity;
     if(missing==='windows')delete e.platforms.windows;
     if(missing==='migration')delete e.migration;
-    const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:e,nativeDelegation:nativeDelegation()});
+    const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:{...e,nativeDelegation:nativeDelegation()}});
     assert.equal(result.ready,false);
     assert.ok(result.missing.some(v=>v.includes(missing)));
   }
@@ -79,8 +77,8 @@ test('Core still requires AGY field, native Windows and generic migration', () =
 
 test('unknown profile fails closed and Core checks the exact Runtime Image', () => {
   assert.throws(()=>evaluateV2ReadinessProfile({profile:'TRIAL',expectedHeadSha:HEAD,expectedRuntimeImageId:IMAGE,evidence:evidence()}),/profile/);
-  assert.throws(()=>evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:'sha256:wrong',evidence:evidence(),nativeDelegation:nativeDelegation()}),/expectedRuntimeImageId/);
-  const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:`sha256:${'e'.repeat(64)}`,evidence:evidence(),nativeDelegation:nativeDelegation()});
+  assert.throws(()=>evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:'sha256:wrong',evidence:{...evidence(),nativeDelegation:nativeDelegation()}}),/expectedRuntimeImageId/);
+  const result=evaluateV2ReadinessProfile({profile:'CORE',expectedHeadSha:HEAD,expectedRuntimeImageId:`sha256:${'e'.repeat(64)}`,evidence:{...evidence(),nativeDelegation:nativeDelegation()}});
   assert.equal(result.ready,false);
   assert.ok(result.invalid.includes('nativeDelegation:runtimeImageId'));
 });
