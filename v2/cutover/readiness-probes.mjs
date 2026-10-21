@@ -32,6 +32,7 @@ export const readinessProbeManifest = Object.freeze({
     reconciliation: 'reconciliation',
     experiencePrivacy: 'experiencePrivacy',
     rsiReplay: 'rsiReplay',
+    nativeDelegation: 'nativeDelegation',
     migration: 'migration',
     'platforms.windows': 'windowsPlatform',
     'platforms.posix': 'posixPlatform',
@@ -498,6 +499,26 @@ function tsuzukiRecoveryVerified(work) {
     ));
 }
 
+export async function nativeDelegation({ expectedHeadSha, expectedRuntimeImageId, args } = {}) {
+  const input = requireArgs(args, new Set(['home']), ['home']);
+  const { inspectCoreNativeDelegation } = await import('./core-native-delegation.mjs');
+  const registry = await openRegistry(input.home);
+  let proof;
+  try {
+    proof = inspectCoreNativeDelegation({state:registry.state,runtimeImageId:expectedRuntimeImageId});
+  } finally {
+    registry.close();
+  }
+  const accepted = proof.ok === true;
+  const facts = accepted ? proof.facts : {nativeDelegationVerified:false};
+  const projected = result({ok:accepted,expectedHeadSha,expectedRuntimeImageId,
+    kind:'native-delegation',facts,
+    snapshot:{sourceProvider:accepted?'codex':null,targetProvider:accepted?'antigravity':null,
+      evidenceRefs:accepted?proof.evidenceRefs:[]},
+  });
+  return Object.freeze({...projected,
+    evidenceRefs:Object.freeze([...projected.evidenceRefs,...(accepted?proof.evidenceRefs:[])])});
+}
 export async function migration({ expectedHeadSha, expectedRuntimeImageId, args } = {}) {
   const input = requireArgs(
     args,

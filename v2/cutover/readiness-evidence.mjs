@@ -20,6 +20,7 @@ const SCALAR_FAMILIES = Object.freeze([
   'reconciliation',
   'experiencePrivacy',
   'rsiReplay',
+  'nativeDelegation',
   'migration',
   'selfHost',
 ]);
