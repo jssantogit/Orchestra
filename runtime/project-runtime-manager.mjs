@@ -366,6 +366,38 @@ function assertUninstallWorkLease(targetDir) {
   }
 }
 
+async function assertUninstallPathBoundaries(targetDir, runtimeManifest, roots) {
+  // Manifest entries are relative paths, but an existing symlink in any
+  // ancestor can redirect fs.rm/fs.cp to another worktree. Never follow
+  // such a link during uninstallation, including backups and metadata.
+  const base = await lstat(targetDir);
+  if (base.isSymbolicLink() || !base.isDirectory()) {
+    rejectUninstall("RUNTIME_UNINSTALL_SYMLINK_BOUNDARY", "target root");
+  }
+  const candidates = [
+    ...roots.map((path) => dirname(path)),
+    dirname(metadataPath(targetDir, runtimeManifest.runtime)).slice(resolve(targetDir).length + 1),
+    backupsRoot(targetDir, runtimeManifest.runtime).slice(resolve(targetDir).length + 1),
+  ];
+  for (const rel of candidates) {
+    const parts = rel.split(/[\\/]/).filter((part) => part !== "." && part !== "");
+    let current = resolve(targetDir);
+    for (const part of parts) {
+      current = join(current, part);
+      let statEntry;
+      try {
+        statEntry = await lstat(current);
+      } catch (error) {
+        if (error?.code === "ENOENT") break;
+        throw error;
+      }
+      if (statEntry.isSymbolicLink() || !statEntry.isDirectory()) {
+        rejectUninstall("RUNTIME_UNINSTALL_SYMLINK_BOUNDARY", current);
+      }
+    }
+  }
+}
+
 function assertUninstallOwnership(inspection, runtimeManifest, roots) {
   const owner = inspection.metadata;
   if (!owner) {
@@ -392,6 +424,7 @@ export async function uninstallProjectRuntime({
   validateRuntimeManifest(runtimeManifest);
   await ensureTarget(targetDir);
   const roots = managedRoots(runtimeManifest);
+  await assertUninstallPathBoundaries(targetDir, runtimeManifest, roots);
   const initial = await inspectProjectRuntime({ targetDir, runtimeManifest, builtRuntime: targetDir });
   if (!initial.installed && !initial.managed) {
     return { operation: "noop", changed: false, dryRun, targetDir: resolve(targetDir) };
