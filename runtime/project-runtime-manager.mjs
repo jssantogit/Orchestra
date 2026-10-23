@@ -14,6 +14,7 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { ensureProjectStateIgnored } from "./project-state-ignore.mjs";
+import { readWorkLease } from "../core/leases/work-lease-store.mjs";
 import { validateRuntimeManifest } from "./manifest-loader.mjs";
 
 const METADATA_SCHEMA = "orchestra.project-runtime.v2";
@@ -344,6 +345,87 @@ export async function updateProjectRuntime({ targetDir, runtimeManifest, builtRu
   });
   await appendHistory(targetDir, runtimeManifest.runtime, { operation, backupId: backup?.backupId || null, runtimeHash: builtSnapshot.hash });
   return { operation, changed: true, runtimeChanged, metadataChanged, backupId: backup?.backupId || null, metadata };
+}
+
+function rejectUninstall(code, detail) {
+  const error = new Error(code + (detail ? ": " + detail : ""));
+  error.code = code;
+  throw error;
+}
+
+function assertUninstallWorkLease(targetDir) {
+  const observed = readWorkLease(targetDir);
+  if (!observed.valid) rejectUninstall("RUNTIME_UNINSTALL_LEASE_UNKNOWN", observed.reason);
+  if (!observed.exists) return;
+  const lease = observed.lease;
+  if (lease?.capabilities?.includes("WORKSPACE_EDIT")) {
+    rejectUninstall("RUNTIME_UNINSTALL_ACTIVE_WRITER");
+  }
+  if (!["DONE", "BLOCKED"].includes(lease?.state)) {
+    rejectUninstall("RUNTIME_UNINSTALL_ACTIVE_LEASE");
+  }
+}
+
+function assertUninstallOwnership(inspection, runtimeManifest, roots) {
+  const owner = inspection.metadata;
+  if (!owner) {
+    rejectUninstall("RUNTIME_UNINSTALL_UNMANAGED", "No official runtime ownership metadata");
+  }
+  if (owner.schema !== METADATA_SCHEMA || owner.runtime !== runtimeManifest.runtime
+    || !Array.isArray(owner.managedPaths)
+    || owner.managedPaths.length !== roots.length
+    || roots.some((root, index) => owner.managedPaths[index] !== root)) {
+    rejectUninstall("RUNTIME_UNINSTALL_UNMANAGED", "Runtime ownership metadata differs from manifest");
+  }
+  if (!inspection.installed || inspection.targetHash !== owner.runtimeHash) {
+    rejectUninstall("RUNTIME_UNINSTALL_DRIFT", "Installed runtime differs from owned image");
+  }
+}
+
+// Removes only an exactly-verified manifest-managed runtime. State, leases,
+// evidence and history remain in the worktree. A pre-removal backup supports
+// the existing official rollback command. Shared Git info/exclude is untouched:
+// linked worktrees may use the same exclude file.
+export async function uninstallProjectRuntime({
+  targetDir, runtimeManifest, adapter = null, dryRun = false,
+} = {}) {
+  validateRuntimeManifest(runtimeManifest);
+  await ensureTarget(targetDir);
+  const roots = managedRoots(runtimeManifest);
+  const initial = await inspectProjectRuntime({ targetDir, runtimeManifest, builtRuntime: targetDir });
+  if (!initial.installed && !initial.managed) {
+    return { operation: "noop", changed: false, dryRun, targetDir: resolve(targetDir) };
+  }
+  assertUninstallOwnership(initial, runtimeManifest, roots);
+  await assertQuiescent(targetDir, adapter, false);
+  assertUninstallWorkLease(targetDir);
+  if (dryRun) {
+    return {
+      operation: "uninstall", changed: true, dryRun: true,
+      targetDir: resolve(targetDir), managedPaths: roots, statePreserved: true,
+    };
+  }
+
+  // Recheck after quiescence and before backing up, so changed/unowned files
+  // cannot be deleted by a stale inspection.
+  const verified = await inspectProjectRuntime({ targetDir, runtimeManifest, builtRuntime: targetDir });
+  assertUninstallOwnership(verified, runtimeManifest, roots);
+  assertUninstallWorkLease(targetDir);
+  const backup = await createBackup({ targetDir, manifest: runtimeManifest, reason: "uninstall" });
+  if (backup.runtimeHash !== verified.metadata.runtimeHash) {
+    rejectUninstall("RUNTIME_UNINSTALL_DRIFT", "Files changed while creating uninstall backup");
+  }
+  await removeManagedRoots(targetDir, roots);
+  await rm(metadataPath(targetDir, runtimeManifest.runtime));
+  await appendHistory(targetDir, runtimeManifest.runtime, {
+    operation: "uninstall", backupId: backup.backupId,
+    runtimeHash: backup.runtimeHash,
+  });
+  return {
+    operation: "uninstall", changed: true, dryRun: false,
+    targetDir: resolve(targetDir), backupId: backup.backupId,
+    managedPaths: roots, statePreserved: true,
+  };
 }
 
 export async function rollbackProjectRuntime({ targetDir, runtimeManifest, backupId, adapter = null, force = false }) {
