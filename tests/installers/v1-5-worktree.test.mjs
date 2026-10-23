@@ -80,3 +80,54 @@ test("temporary create refuses an existing directory without changing Git branch
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("worktree uninstall dry-run is read-only and actual uninstall preserves worktree and peers", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-worktree-uninstall-"));
+  try {
+    const repo = makeRepository(scratch);
+    const a = join(scratch, "task-a");
+    const b = join(scratch, "task-b");
+    const base = git(repo, "rev-parse", "HEAD");
+    for (const [dir, name] of [[a, "test/temp-a"], [b, "test/temp-b"]]) {
+      const created = call(worktreeCli, ["create", "--repo", repo, "--path", dir, "--branch", name, "--from", base]);
+      assert.equal(created.status, 0, created.stderr || created.stdout);
+    }
+
+    const preview = call(worktreeCli, ["uninstall", "--path", a, "--dry-run"]);
+    assert.equal(preview.status, 0, preview.stderr || preview.stdout);
+    assert.equal(JSON.parse(preview.stdout).dryRun, true);
+    assert.equal(JSON.parse(preview.stdout).changed, true);
+    assert.ok(existsSync(join(a, ".codex", "hooks.json")));
+
+    const removed = call(worktreeCli, ["uninstall", "--path", a]);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    const result = JSON.parse(removed.stdout);
+    assert.equal(result.operation, "uninstall");
+    assert.equal(result.statePreserved, true);
+    assert.ok(existsSync(a));
+    assert.equal(git(a, "rev-parse", "HEAD"), base);
+    assert.equal(existsSync(join(a, ".codex", "hooks.json")), false);
+    assert.equal(existsSync(join(b, ".codex", "hooks.json")), true);
+    assert.equal(git(repo, "status", "--short"), "");
+
+    const again = call(worktreeCli, ["uninstall", "--path", a]);
+    assert.equal(again.status, 0, again.stderr || again.stdout);
+    assert.equal(JSON.parse(again.stdout).changed, false);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("worktree uninstall refuses non-root paths and does not uninstall their root runtime", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-worktree-root-only-"));
+  try {
+    const repo = makeRepository(scratch);
+    const child = join(repo, "nested");
+    mkdirSync(child);
+    const before = call(worktreeCli, ["uninstall", "--path", child]);
+    assert.notEqual(before.status, 0);
+    assert.match(before.stderr, /WORKTREE_REPOSITORY_ROOT_REQUIRED/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
