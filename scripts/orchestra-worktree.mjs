@@ -133,7 +133,7 @@ function uninstall({ "--path": location, "--dry-run": dryRun = false }) {
   const gitDir = realpathSync(git(target, "rev-parse", "--absolute-git-dir"));
   const common = git(target, "rev-parse", "--git-common-dir");
   const commonDir = realpathSync(isAbsolute(common) ? common : resolve(target, common));
-  if (gitDir === commonDir) failure("WORKTREE_LINKED_ONLY");
+  if (relative(gitDir, commonDir) === "") failure("WORKTREE_LINKED_ONLY");
 
   const args = [manager, "uninstall", target, "--json"];
   if (dryRun) args.push("--dry-run");
