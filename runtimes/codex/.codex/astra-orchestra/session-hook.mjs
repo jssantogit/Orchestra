@@ -91,22 +91,21 @@ function emitRuntimeEvent(repoRoot, payload, lease, normalized) {
   } catch {}
 }
 
+// Codex 0.159.x has a closed provider-facing hook output schema.
+ // Rich internal errors stay in the reason/context; never forward custom
+ // top-level control flags that Codex would reject as unknown fields.
 function sessionStartOutput(context, { stop = false, stopReason = null, systemMessage = null } = {}) {
-  const output = {
-    continue: !stop,
+  const message = [context, stopReason, systemMessage].filter(Boolean).join("\n");
+  return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: context,
+      additionalContext: message,
     },
   };
-  if (stopReason) output.stopReason = stopReason;
-  if (systemMessage) output.systemMessage = systemMessage;
-  return output;
 }
 
-function preToolDeny(reason, message = "Orchestra blocked this tool because this Codex session does not own current project orchestration authority.") {
+function preToolDeny(reason, _message = null) {
   return {
-    systemMessage: message,
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
