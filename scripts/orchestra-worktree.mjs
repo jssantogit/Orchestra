@@ -80,7 +80,7 @@ function inspectRuntime(path) {
   let doctor;
   try { doctor = JSON.parse(output); } catch { failure("WORKTREE_DOCTOR_PROTOCOL_INVALID"); }
   if (doctor.healthy !== true) failure("WORKTREE_DOCTOR_UNHEALTHY");
-  return { healthy: true, status: doctor.status };
+  return { healthy: true, status: doctor.status, hookActivation: doctor.hookActivation };
 }
 
 function create({ "--repo": source, "--path": location, "--branch": branch, "--from": revision }) {
