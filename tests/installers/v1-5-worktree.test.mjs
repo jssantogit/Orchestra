@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { claimWorkLease } from "../../core/leases/work-lease-store.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const worktreeCli = join(root, "scripts", "orchestra-worktree.mjs");
@@ -127,6 +128,30 @@ test("worktree uninstall refuses non-root paths and does not uninstall their roo
     const before = call(worktreeCli, ["uninstall", "--path", child]);
     assert.notEqual(before.status, 0);
     assert.match(before.stderr, /WORKTREE_REPOSITORY_ROOT_REQUIRED/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("worktree uninstall refuses active writer and does not erase installed hooks or the Git worktree", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-worktree-busy-"));
+  try {
+    const repo = makeRepository(scratch);
+    const a = join(scratch, "task-busy");
+    const base = git(repo, "rev-parse", "HEAD");
+    const created = call(worktreeCli, ["create", "--repo", repo, "--path", a, "--branch", "test/busy", "--from", base]);
+    assert.equal(created.status, 0, created.stderr || created.stdout);
+
+    const actor = { provider: "codex", sessionIdHash: "sha256:" + "c".repeat(64) };
+    const lease = claimWorkLease(a, { taskId: "task-busy", actor, capabilities: ["WORKSPACE_EDIT"] });
+    assert.equal(lease.claimed, true);
+
+    const denied = call(worktreeCli, ["uninstall", "--path", a]);
+    assert.notEqual(denied.status, 0);
+    assert.match(denied.stderr, /RUNTIME_UNINSTALL_ACTIVE_WRITER/);
+    assert.equal(git(a, "rev-parse", "HEAD"), base);
+    assert.equal(existsSync(join(a, ".codex", "hooks.json")), true);
+    assert.equal(existsSync(join(a, ".orchestra", "state", "work-lease.json")), true);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
