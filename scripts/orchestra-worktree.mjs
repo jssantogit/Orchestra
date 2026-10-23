@@ -62,8 +62,11 @@ function git(repo, ...args) {
 
 function repository(path) {
   const root = realpathSync(resolve(path));
-  const top = realpathSync(git(root, "rev-parse", "--show-toplevel"));
-  if (root !== top) failure("WORKTREE_REPOSITORY_ROOT_REQUIRED");
+  // Git answers this relative to its *actual* worktree root, so no lexical
+  // comparison of differently cased/separated Windows absolute paths.
+  if (git(root, "rev-parse", "--show-prefix") !== "") {
+    failure("WORKTREE_REPOSITORY_ROOT_REQUIRED");
+  }
   return root;
 }
 
