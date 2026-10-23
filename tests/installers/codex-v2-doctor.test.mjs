@@ -131,7 +131,7 @@ test("official 1.5 candidate reports truthful prerelease identity and separates 
     assert.equal(doctor.healthy, true, "Runtime byte integrity remains healthy");
     assert.equal(doctor.hookActivation.status, "UNVERIFIED");
     assert.equal(doctor.hookActivation.requiresUserReview, true);
-    assert.match(doctor.hookActivation.instructions, /\\/hooks/);
+    assert.match(doctor.hookActivation.instructions, /\/hooks/);
     assert.match(doctor.hookActivation.instructions, /project.*trust/i);
   } finally {
     rmSync(project, { recursive: true, force: true });
