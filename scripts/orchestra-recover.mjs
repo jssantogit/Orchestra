@@ -50,10 +50,12 @@ function options(args) {
 
 function rootPath(input) {
   const root = realpathSync(resolve(input));
-  const top = execFileSync("git", ["-C", root, "rev-parse", "--show-toplevel"], {
+  const prefix = execFileSync("git", ["-C", root, "rev-parse", "--show-prefix"], {
     encoding: "utf8", windowsHide: true, timeout: 5_000,
   }).trim();
-  if (realpathSync(top) !== root) failure("RECOVERY_WORKTREE_ROOT_REQUIRED");
+  // Git's relative prefix is empty only at the actual worktree root.
+  // Absolute realpath string equality is unreliable on Windows.
+  if (prefix) failure("RECOVERY_WORKTREE_ROOT_REQUIRED");
   return root;
 }
 
