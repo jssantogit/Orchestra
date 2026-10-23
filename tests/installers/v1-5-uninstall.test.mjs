@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { after, before, test } from "node:test";
@@ -130,4 +130,25 @@ test("uninstall in one linked worktree never removes another's runtime or shared
   const sharedAfter = readFileSync(excludePath, "utf8");
   assert.equal(sharedAfter, sharedBefore);
   assert.match(sharedAfter, /orchestra managed state/);
+});
+
+test("uninstall refuses symlinked managed parent directories rather than touching files outside the worktree", async (t) => {
+  const root = project();
+  const outside = join(scratch, "external-managed-" + Date.now());
+  await installProjectRuntime({ targetDir: root, runtimeManifest, builtRuntime });
+  renameSync(join(root, ".codex"), outside);
+  try {
+    symlinkSync(outside, join(root, ".codex"), "dir");
+  } catch (error) {
+    if (error?.code === "EPERM" || error?.code === "EACCES") {
+      t.skip("host forbids symlink creation");
+      return;
+    }
+    throw error;
+  }
+  await assert.rejects(
+    uninstallProjectRuntime({ targetDir: root, runtimeManifest }),
+    /RUNTIME_UNINSTALL_SYMLINK_BOUNDARY/,
+  );
+  assert.ok(existsSync(join(outside, "hooks.json")));
 });
