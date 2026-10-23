@@ -335,17 +335,12 @@ function handleLegacyUserPromptSubmit(repoRoot, payload) {
   };
 }
 
-function handleLeaseUserPromptSubmit(repoRoot, payload, mode) {
-  const decision = authorizeCodexLeaseCapability(repoRoot, {
-    sessionId: payload.session_id,
-    capability: "CONTROL",
-    mode,
-  });
-  if (decision.allowed) return null;
-  return {
-    decision: "block",
-    reason: `CODEX_WORK_LEASE_AUTHORITY_DENIED:${decision.reason || "UNKNOWN"}. This session does not hold the current Orchestra Work Lease generation.`,
-  };
+// A text prompt never grants side-effect authority. Do not make a Codex chat
+// hostage to another session's Work Lease: keep natural language available
+// so a user can inspect or request recovery. Every actual tool remains gated
+// by PreToolUse and the current generation-fenced Work Lease.
+function handleLeaseUserPromptSubmit(_repoRoot, _payload, _mode) {
+  return null;
 }
 
 function handleUserPromptSubmit(repoRoot, payload) {
