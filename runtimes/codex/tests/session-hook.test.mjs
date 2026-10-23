@@ -203,3 +203,19 @@ test("blocked new root can submit a prompt but cannot edit while another session
     assert.match(jsonOut(forbidden).hookSpecificOutput.permissionDecisionReason, /LEASE_BINDING_MISSING|WRITE_LEASE_ACTIVE/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("Codex 0.159 native hook wire contains no unknown top-level fields", () => {
+  const root = project();
+  try {
+    const started = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" }, { authorityMode: "lease" });
+    assert.equal(started.status, 0);
+    assert.deepEqual(Object.keys(jsonOut(started)), ["hookSpecificOutput"]);
+    assert.deepEqual(Object.keys(jsonOut(started).hookSpecificOutput).sort(), ["additionalContext", "hookEventName"]);
+
+    const denied = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "apply_patch", tool_input: {} }, { authorityMode: "lease" });
+    assert.equal(denied.status, 0, "A semantic deny must exit successfully to be honored by Codex");
+    assert.deepEqual(Object.keys(jsonOut(denied)), ["hookSpecificOutput"]);
+    assert.deepEqual(Object.keys(jsonOut(denied).hookSpecificOutput).sort(), ["hookEventName", "permissionDecision", "permissionDecisionReason"]);
+    assert.equal(jsonOut(denied).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
