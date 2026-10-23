@@ -60,6 +60,8 @@ test("temporary worktree lifecycle installs separate Codex runtimes without alte
     const doctor = call(worktreeCli, ["doctor", "--path", b]);
     assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
     assert.equal(JSON.parse(doctor.stdout).healthy, true);
+    assert.equal(JSON.parse(doctor.stdout).hookActivation.status, "UNVERIFIED");
+    assert.equal(JSON.parse(doctor.stdout).hookActivation.requiresUserReview, true);
 
     const removed = call(codexCli, ["uninstall", a, "--json"]);
     assert.equal(removed.status, 0, removed.stderr || removed.stdout);
