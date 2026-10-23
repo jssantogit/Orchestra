@@ -124,6 +124,14 @@ function doctor({ "--path": location }) {
 // sibling worktrees even when the Orchestra runtime is fully uninstalled.
 function uninstall({ "--path": location, "--dry-run": dryRun = false }) {
   const target = repository(location);
+  // The convenience lifecycle command must never target the canonical checkout.
+  // Git's common directory is shared by every linked worktree. A separate
+  // non-worktree root must use the explicit generic runtime uninstall CLI.
+  const gitDir = realpathSync(git(target, "rev-parse", "--absolute-git-dir"));
+  const common = git(target, "rev-parse", "--git-common-dir");
+  const commonDir = realpathSync(isAbsolute(common) ? common : resolve(target, common));
+  if (gitDir === commonDir) failure("WORKTREE_LINKED_ONLY");
+
   const args = [manager, "uninstall", target, "--json"];
   if (dryRun) args.push("--dry-run");
   const raw = child(process.execPath, args, target);
