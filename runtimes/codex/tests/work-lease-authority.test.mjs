@@ -139,3 +139,31 @@ test("tool classifier grants CONTROL only to strict read-only operations", () =>
   assert.equal(codexCapabilityForTool({ tool_name: "Bash", tool_input: { command: "npm test" } }), "WORKSPACE_EDIT");
   assert.equal(codexCapabilityForTool({ tool_name: "Bash", tool_input: { command: "sed -i s/a/b/ file" } }), "WORKSPACE_EDIT");
 });
+
+test("runtime image change fences old Codex session while allowing a new factual session", () => {
+  const root = project();
+  try {
+    const runtimePath = join(root, ".orchestra", "state", "runtimes", "codex.json");
+    mkdirSync(join(root, ".orchestra", "state", "runtimes"), { recursive: true });
+    const image = (hash) => JSON.stringify({
+      schema: "orchestra.project-runtime.v2", runtime: "codex", runtimeHash: hash, manifestHash: "b".repeat(64),
+    });
+    writeFileSync(runtimePath, image("a".repeat(64)));
+    const original = enterCodexWorkLease(root, { sessionId: "root-a", mode: "lease" });
+    assert.equal(original.authoritative, true);
+    assert.equal(authorizeCodexLeaseCapability(root, { sessionId: "root-a", capability: "CONTROL" }).allowed, true);
+
+    writeFileSync(runtimePath, image("c".repeat(64)));
+    const stale = authorizeCodexLeaseCapability(root, { sessionId: "root-a", capability: "CONTROL" });
+    assert.equal(stale.allowed, false);
+    assert.equal(stale.reason, "SESSION_RUNTIME_STALE");
+    const reentry = enterCodexWorkLease(root, { sessionId: "root-a", mode: "lease" });
+    assert.equal(reentry.authoritative, false);
+    assert.equal(reentry.reason, "SESSION_RUNTIME_STALE");
+
+    const fresh = enterCodexWorkLease(root, { sessionId: "root-b", mode: "lease" });
+    assert.equal(fresh.authoritative, true);
+    assert.equal(fresh.lease.generation, original.lease.generation + 1);
+    assert.equal(authorizeCodexLeaseCapability(root, { sessionId: "root-b", capability: "CONTROL" }).allowed, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
