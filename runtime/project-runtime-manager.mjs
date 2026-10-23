@@ -376,8 +376,8 @@ async function assertUninstallPathBoundaries(targetDir, runtimeManifest, roots) 
   }
   const candidates = [
     ...roots.map((path) => dirname(path)),
-    dirname(metadataPath(targetDir, runtimeManifest.runtime)).slice(resolve(targetDir).length + 1),
-    backupsRoot(targetDir, runtimeManifest.runtime).slice(resolve(targetDir).length + 1),
+    relative(resolve(targetDir), dirname(metadataPath(resolve(targetDir), runtimeManifest.runtime))),
+    relative(resolve(targetDir), backupsRoot(resolve(targetDir), runtimeManifest.runtime)),
   ];
   for (const rel of candidates) {
     const parts = rel.split(/[\\/]/).filter((part) => part !== "." && part !== "");
