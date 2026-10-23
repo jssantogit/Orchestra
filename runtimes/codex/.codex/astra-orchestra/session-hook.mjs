@@ -91,22 +91,21 @@ function emitRuntimeEvent(repoRoot, payload, lease, normalized) {
   } catch {}
 }
 
+// Codex 0.159.x has a closed provider-facing hook output schema.
+ // Rich internal errors stay in the reason/context; never forward custom
+ // top-level control flags that Codex would reject as unknown fields.
 function sessionStartOutput(context, { stop = false, stopReason = null, systemMessage = null } = {}) {
-  const output = {
-    continue: !stop,
+  const message = [context, stopReason, systemMessage].filter(Boolean).join("\n");
+  return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: context,
+      additionalContext: message,
     },
   };
-  if (stopReason) output.stopReason = stopReason;
-  if (systemMessage) output.systemMessage = systemMessage;
-  return output;
 }
 
-function preToolDeny(reason, message = "Orchestra blocked this tool because this Codex session does not own current project orchestration authority.") {
+function preToolDeny(reason, _message = null) {
   return {
-    systemMessage: message,
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -335,17 +334,12 @@ function handleLegacyUserPromptSubmit(repoRoot, payload) {
   };
 }
 
-function handleLeaseUserPromptSubmit(repoRoot, payload, mode) {
-  const decision = authorizeCodexLeaseCapability(repoRoot, {
-    sessionId: payload.session_id,
-    capability: "CONTROL",
-    mode,
-  });
-  if (decision.allowed) return null;
-  return {
-    decision: "block",
-    reason: `CODEX_WORK_LEASE_AUTHORITY_DENIED:${decision.reason || "UNKNOWN"}. This session does not hold the current Orchestra Work Lease generation.`,
-  };
+// A text prompt never grants side-effect authority. Do not make a Codex chat
+// hostage to another session's Work Lease: keep natural language available
+// so a user can inspect or request recovery. Every actual tool remains gated
+// by PreToolUse and the current generation-fenced Work Lease.
+function handleLeaseUserPromptSubmit(_repoRoot, _payload, _mode) {
+  return null;
 }
 
 function handleUserPromptSubmit(repoRoot, payload) {

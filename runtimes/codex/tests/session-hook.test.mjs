@@ -85,8 +85,11 @@ test("dual mode fresh root advances Work Lease control without prepared handoff 
     assert.doesNotMatch(context, /HANDOFF REQUIRED/);
 
     const formerPrompt = hook(root, { hook_event_name: "UserPromptSubmit", session_id: "root-a", prompt: "keep working" }, { authorityMode: "dual" });
-    assert.equal(jsonOut(formerPrompt).decision, "block");
-    assert.match(jsonOut(formerPrompt).reason, /WORK_LEASE_AUTHORITY_DENIED/);
+    assert.equal(formerPrompt.status, 0, formerPrompt.stderr);
+    assert.equal(formerPrompt.stdout.trim(), ""); // Chat text remains usable; old generation has no tools.
+    const forbiddenEdit = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } }, { authorityMode: "dual" });
+    assert.equal(jsonOut(forbiddenEdit).hookSpecificOutput.permissionDecision, "deny");
+    assert.match(jsonOut(forbiddenEdit).hookSpecificOutput.permissionDecisionReason, /STALE_WORK_LEASE/);
 
     const currentRead = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "Bash", tool_input: { command: "git status --short" } }, { authorityMode: "dual" });
     assert.equal(currentRead.status, 0, currentRead.stderr);
@@ -177,5 +180,42 @@ test("invalid project verification policy blocks shell execution", () => {
     writeFileSync(join(root, ".codex", "orchestra-verification.json"), "{invalid");
     const result = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", tool_name: "Bash", tool_input: { command: "echo ok" } });
     assert.equal(jsonOut(result)?.hookSpecificOutput.permissionDecisionReason, "VERIFICATION_CONFIG_UNREADABLE");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("blocked new root can submit a prompt but cannot edit while another session holds the writer", () => {
+  const root = project();
+  try {
+    const first = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "writer-a" }, { authorityMode: "lease" });
+    assert.equal(first.status, 0, first.stderr);
+    const edit = hook(root, { hook_event_name: "PreToolUse", session_id: "writer-a", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } }, { authorityMode: "lease" });
+    assert.equal(edit.status, 0);
+    assert.equal(edit.stdout.trim(), "");
+
+    const newcomer = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "new-b" }, { authorityMode: "lease" });
+    assert.match(jsonOut(newcomer).hookSpecificOutput.additionalContext, /WRITE_LEASE_ACTIVE/);
+
+    const prompt = hook(root, { hook_event_name: "UserPromptSubmit", session_id: "new-b", prompt: "Diagnose why another chat is blocking this worktree" }, { authorityMode: "lease" });
+    assert.equal(prompt.status, 0, prompt.stderr);
+    assert.equal(prompt.stdout.trim(), "");
+    const forbidden = hook(root, { hook_event_name: "PreToolUse", session_id: "new-b", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(forbidden).hookSpecificOutput.permissionDecision, "deny");
+    assert.match(jsonOut(forbidden).hookSpecificOutput.permissionDecisionReason, /LEASE_BINDING_MISSING|WRITE_LEASE_ACTIVE/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Codex 0.159 native hook wire contains no unknown top-level fields", () => {
+  const root = project();
+  try {
+    const started = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" }, { authorityMode: "lease" });
+    assert.equal(started.status, 0);
+    assert.deepEqual(Object.keys(jsonOut(started)), ["hookSpecificOutput"]);
+    assert.deepEqual(Object.keys(jsonOut(started).hookSpecificOutput).sort(), ["additionalContext", "hookEventName"]);
+
+    const denied = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "apply_patch", tool_input: {} }, { authorityMode: "lease" });
+    assert.equal(denied.status, 0, "A semantic deny must exit successfully to be honored by Codex");
+    assert.deepEqual(Object.keys(jsonOut(denied)), ["hookSpecificOutput"]);
+    assert.deepEqual(Object.keys(jsonOut(denied).hookSpecificOutput).sort(), ["hookEventName", "permissionDecision", "permissionDecisionReason"]);
+    assert.equal(jsonOut(denied).hookSpecificOutput.permissionDecision, "deny");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
