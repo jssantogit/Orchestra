@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { claimWorkLease } from "../../core/leases/work-lease-store.mjs";
@@ -46,8 +46,8 @@ test("temporary worktree lifecycle installs separate Codex runtimes without alte
     const listed = call(worktreeCli, ["list", "--repo", repo]);
     assert.equal(listed.status, 0, listed.stderr);
     const worktrees = JSON.parse(listed.stdout).worktrees;
-    assert.ok(worktrees.some((item) => item.root === a));
-    assert.ok(worktrees.some((item) => item.root === b));
+    assert.ok(worktrees.some((item) => relative(realpathSync(item.root), realpathSync(a)) === ""), JSON.stringify({ a, worktrees }));
+    assert.ok(worktrees.some((item) => relative(realpathSync(item.root), realpathSync(b)) === ""), JSON.stringify({ b, worktrees }));
     const doctor = call(worktreeCli, ["doctor", "--path", b]);
     assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
     assert.equal(JSON.parse(doctor.stdout).healthy, true);
