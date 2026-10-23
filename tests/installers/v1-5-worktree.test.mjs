@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
@@ -10,6 +10,15 @@ import { claimWorkLease } from "../../core/leases/work-lease-store.mjs";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const worktreeCli = join(root, "scripts", "orchestra-worktree.mjs");
 const codexCli = join(root, "scripts", "orchestra-codex-project.mjs");
+
+// Windows NTFS can refer to the same directory via 8.3 aliases such as
+// RUNNER~1 and the long name runneradmin. Compare filesystem identities,
+// never lexical path strings, when validating Git's worktree list.
+function sameDirectory(a, b) {
+  const left = statSync(a);
+  const right = statSync(b);
+  return left.dev === right.dev && left.ino === right.ino;
+}
 
 function git(cwd, ...args) {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -46,8 +55,8 @@ test("temporary worktree lifecycle installs separate Codex runtimes without alte
     const listed = call(worktreeCli, ["list", "--repo", repo]);
     assert.equal(listed.status, 0, listed.stderr);
     const worktrees = JSON.parse(listed.stdout).worktrees;
-    assert.ok(worktrees.some((item) => relative(realpathSync(item.root), realpathSync(a)) === ""), JSON.stringify({ a, worktrees }));
-    assert.ok(worktrees.some((item) => relative(realpathSync(item.root), realpathSync(b)) === ""), JSON.stringify({ b, worktrees }));
+    assert.ok(worktrees.some((item) => sameDirectory(item.root, a)), JSON.stringify({ a, worktrees }));
+    assert.ok(worktrees.some((item) => sameDirectory(item.root, b)), JSON.stringify({ b, worktrees }));
     const doctor = call(worktreeCli, ["doctor", "--path", b]);
     assert.equal(doctor.status, 0, doctor.stderr || doctor.stdout);
     assert.equal(JSON.parse(doctor.stdout).healthy, true);
