@@ -16,20 +16,25 @@ function failure(code, message) {
 
 function parse(argv) {
   const command = argv.shift();
-  if (!["create", "list", "doctor"].includes(command)) failure("WORKTREE_COMMAND_INVALID");
+  if (!["create", "list", "doctor", "uninstall"].includes(command)) failure("WORKTREE_COMMAND_INVALID");
   const options = {};
-  const allowed = new Set(["--repo", "--path", "--branch", "--from"]);
+  const allowed = new Set(["--repo", "--path", "--branch", "--from", "--dry-run"]);
   while (argv.length) {
     const key = argv.shift();
     if (!allowed.has(key) || Object.hasOwn(options, key)) failure("WORKTREE_OPTIONS_INVALID");
+    if (key === "--dry-run") {
+      options[key] = true;
+      continue;
+    }
     const value = argv.shift();
     if (!value || value.startsWith("--")) failure("WORKTREE_OPTIONS_INVALID");
     options[key] = value;
   }
   const required = command === "create" ? ["--repo", "--path", "--branch", "--from"]
     : command === "list" ? ["--repo"] : ["--path"];
+  const permitted = command === "uninstall" ? [...required, "--dry-run"] : required;
   if (required.some((key) => !options[key])
-    || Object.keys(options).some((key) => !required.includes(key))) {
+    || Object.keys(options).some((key) => !permitted.includes(key))) {
     failure("WORKTREE_OPTIONS_INVALID");
   }
   return { command, options };
@@ -112,11 +117,36 @@ function doctor({ "--path": location }) {
   return { ok: true, path: target, ...inspectRuntime(target) };
 }
 
+// Temporary installation removal is intentionally separate from Git's
+// worktree remove. Preserve the directory, branch, user data, backups, and
+// sibling worktrees even when the Orchestra runtime is fully uninstalled.
+function uninstall({ "--path": location, "--dry-run": dryRun = false }) {
+  const target = repository(location);
+  const args = [manager, "uninstall", target, "--json"];
+  if (dryRun) args.push("--dry-run");
+  const raw = child(process.execPath, args, target);
+  let result;
+  try { result = JSON.parse(raw); }
+  catch { failure("WORKTREE_UNINSTALL_PROTOCOL_INVALID"); }
+  if (typeof result.changed !== "boolean") failure("WORKTREE_UNINSTALL_PROTOCOL_INVALID");
+  return {
+    ok: true,
+    operation: "uninstall",
+    path: target,
+    dryRun,
+    changed: result.changed,
+    statePreserved: true,
+    codex: result.codex ?? null,
+    delegation: result.delegation ?? null,
+  };
+}
+
 function main() {
   try {
     const { command, options } = parse(process.argv.slice(2));
     const result = command === "create" ? create(options)
-      : command === "list" ? list(options) : doctor(options);
+      : command === "list" ? list(options)
+        : command === "doctor" ? doctor(options) : uninstall(options);
     process.stdout.write(JSON.stringify(result) + "\n");
   } catch (error) {
     process.stderr.write(JSON.stringify({
