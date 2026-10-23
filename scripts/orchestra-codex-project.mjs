@@ -83,6 +83,14 @@ function composedDoctorResult(providerResult, delegationResult) {
     checks,
     providerRuntime: providerResult.inspection,
     delegationRuntime: delegationResult.inspection,
+    // Byte integrity does not tell us whether Codex loaded the project layer
+    // or whether a user reviewed its non-managed hook definitions. This
+    // distinction was exposed by the first F6D native 1.5 field test.
+    hookActivation: {
+      status: "UNVERIFIED",
+      requiresUserReview: true,
+      instructions: "Project .codex hooks require project trust and separate /hooks review/trust in an interactive Codex session. After approval, verify a factual SessionStart Work Lease and a protected tool. Do not bypass hook trust.",
+    },
   };
 }
 
@@ -286,6 +294,7 @@ async function run(args) {
     console.log("Version:              " + (result.metadata?.version || "unmanaged"));
     console.log("");
     for (const check of result.checks) console.log(" [" + (check.ok ? "PASS" : "FAIL") + "] " + check.id + " — " + check.detail);
+    console.log(" [UNVERIFIED] CODEX_HOOK_ACTIVATION — " + result.hookActivation.instructions);
     return result.healthy ? 0 : 1;
   }
 
