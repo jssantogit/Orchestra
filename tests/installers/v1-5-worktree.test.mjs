@@ -156,3 +156,15 @@ test("worktree uninstall refuses active writer and does not erase installed hook
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("worktree-specific uninstall refuses the original checkout and preserves its files", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-main-protection-"));
+  try {
+    const repo = makeRepository(scratch);
+    const refused = call(worktreeCli, ["uninstall", "--path", repo]);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /WORKTREE_LINKED_ONLY/);
+    assert.equal(readFileSync(join(repo, "product.txt"), "utf8"), "original source\n");
+    assert.equal(git(repo, "status", "--short"), "");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
