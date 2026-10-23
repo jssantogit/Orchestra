@@ -72,7 +72,7 @@ test("uninstall removes only verified managed assets, preserves state, and can b
   assert.equal(existsSync(join(root, ".codex", "astra-orchestra")), false);
   assert.equal(existsSync(join(root, ".orchestra", "state", "runtimes", "codex.json")), false);
   assert.equal(readFileSync(state, "utf8"), "private state\n");
-  assert.match(readFileSync(lease, "utf8"), /CONTROL/);
+  assert.equal(JSON.parse(readFileSync(lease, "utf8")).state, "DONE");
   assert.equal(readFileSync(user, "utf8"), "keep this\n");
   assert.equal(git(root, "status", "--short"), "?? user-notes.txt");
   const replay = await uninstallProjectRuntime({ targetDir: root, runtimeManifest });
