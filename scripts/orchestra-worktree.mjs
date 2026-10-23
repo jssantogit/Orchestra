@@ -103,7 +103,9 @@ function list({ "--repo": source }) {
     .split(/\r?\n\r?\n/).map((section) => section.split(/\r?\n/));
   const worktrees = records.filter((lines) => lines[0]?.startsWith("worktree "))
     .map((lines) => ({
-      root: lines[0].slice("worktree ".length),
+      root: existsSync(lines[0].slice("worktree ".length))
+        ? realpathSync(lines[0].slice("worktree ".length))
+        : resolve(lines[0].slice("worktree ".length)),
       head: lines.find((line) => line.startsWith("HEAD "))?.slice(5) ?? null,
       branch: lines.find((line) => line.startsWith("branch "))?.slice(7) ?? null,
       locked: lines.some((line) => line.startsWith("locked")),
