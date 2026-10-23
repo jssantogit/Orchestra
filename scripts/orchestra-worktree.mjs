@@ -2,7 +2,7 @@
 // Orchestra 1.5 temporary Codex worktree workflow.
 // Runs only on operator request; no daemon, scheduler, global Home or V2 Work.
 import { spawnSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -130,10 +130,15 @@ function uninstall({ "--path": location, "--dry-run": dryRun = false }) {
   // The convenience lifecycle command must never target the canonical checkout.
   // Git's common directory is shared by every linked worktree. A separate
   // non-worktree root must use the explicit generic runtime uninstall CLI.
-  const gitDir = realpathSync(git(target, "rev-parse", "--absolute-git-dir"));
-  const common = git(target, "rev-parse", "--git-common-dir");
-  const commonDir = realpathSync(isAbsolute(common) ? common : resolve(target, common));
-  if (relative(gitDir, commonDir) === "") failure("WORKTREE_LINKED_ONLY");
+  // A linked Git worktree uses a .git *file*, pointing to the main repo's
+  // .git/worktrees/<name> private Git directory. The primary checkout uses a
+  // .git directory. This check avoids Windows drive spelling/casing aliases.
+  let dotgit;
+  try { dotgit = lstatSync(resolve(target, ".git")); }
+  catch { failure("WORKTREE_LINKED_ONLY"); }
+  if (!dotgit.isFile()) failure("WORKTREE_LINKED_ONLY");
+  const gitDir = git(target, "rev-parse", "--absolute-git-dir");
+  if (!gitDir.split(/[\\/]/).includes("worktrees")) failure("WORKTREE_LINKED_ONLY");
 
   const args = [manager, "uninstall", target, "--json"];
   if (dryRun) args.push("--dry-run");
