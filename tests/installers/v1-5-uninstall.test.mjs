@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { after, before, test } from "node:test";
 
 import { buildRuntime } from "../../runtime/runtime-builder.mjs";
+import { claimWorkLease, releaseWorkLease } from "../../core/leases/work-lease-store.mjs";
 import { loadRuntimeManifest } from "../../runtime/manifest-loader.mjs";
 import {
   installProjectRuntime,
@@ -59,7 +60,10 @@ test("uninstall removes only verified managed assets, preserves state, and can b
   const user = join(root, "user-notes.txt");
   mkdirSync(join(root, ".codex", "orchestra-state"), { recursive: true });
   writeFileSync(state, "private state\n");
-  writeFileSync(lease, JSON.stringify({ state: "CONTROL", capabilities: ["CONTROL"] }));
+  const actor = { provider: "codex", sessionIdHash: "sha256:" + "a".repeat(64) };
+  const claimed = claimWorkLease(root, { taskId: "f6c", actor, capabilities: ["CONTROL"] });
+  assert.equal(claimed.claimed, true);
+  assert.equal(releaseWorkLease(root, { generation: claimed.lease.generation, actor, terminalState: "DONE" }).released, true);
   writeFileSync(user, "keep this\n");
   const installed = await uninstallProjectRuntime({ targetDir: root, runtimeManifest });
   assert.equal(installed.operation, "uninstall");
@@ -101,9 +105,9 @@ test("uninstall refuses managed file drift or missing ownership metadata", async
 test("uninstall refuses active Work Lease writers even when legacy active-state file is missing", async () => {
   const root = project();
   await installProjectRuntime({ targetDir: root, runtimeManifest, builtRuntime });
-  writeFileSync(join(root, ".orchestra", "state", "work-lease.json"), JSON.stringify({
-    schema: "orchestra.work-lease.v1", state: "IMPLEMENTING", capabilities: ["WORKSPACE_EDIT"],
-  }));
+  const actor = { provider: "codex", sessionIdHash: "sha256:" + "b".repeat(64) };
+  const claimed = claimWorkLease(root, { taskId: "f6c", actor, capabilities: ["CONTROL", "WORKSPACE_EDIT"] });
+  assert.equal(claimed.claimed, true);
   await assert.rejects(
     uninstallProjectRuntime({ targetDir: root, runtimeManifest }),
     /RUNTIME_UNINSTALL_ACTIVE_WRITER/,
