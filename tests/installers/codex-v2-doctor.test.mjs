@@ -111,3 +111,29 @@ test("Codex Doctor fails closed on managed runtime drift", () => {
     rmSync(project, { recursive: true, force: true });
   }
 });
+
+test("official 1.5 candidate reports truthful prerelease identity and separates file health from native hook activation", () => {
+  const project = makeProject();
+  try {
+    const install = runNode([installScript, project]);
+    assert.equal(install.status, 0, install.stderr || install.stdout);
+
+    const candidate = "1.5.0-rc.1";
+    const version = parseJsonOutput(runNode([projectCli, "version", project, "--json"]));
+    assert.equal(version.version, candidate);
+    assert.equal(version.orchestraVersion, candidate);
+    const codexMetadata = JSON.parse(readFileSync(join(project, ".orchestra", "state", "runtimes", "codex.json"), "utf8"));
+    const delegationMetadata = JSON.parse(readFileSync(join(project, ".orchestra", "state", "runtimes", "delegation.json"), "utf8"));
+    assert.equal(codexMetadata.version, candidate);
+    assert.equal(delegationMetadata.version, candidate);
+
+    const doctor = parseJsonOutput(runNode([projectCli, "doctor", project, "--json"]));
+    assert.equal(doctor.healthy, true, "Runtime byte integrity remains healthy");
+    assert.equal(doctor.hookActivation.status, "UNVERIFIED");
+    assert.equal(doctor.hookActivation.requiresUserReview, true);
+    assert.match(doctor.hookActivation.instructions, /\\/hooks/);
+    assert.match(doctor.hookActivation.instructions, /project.*trust/i);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
