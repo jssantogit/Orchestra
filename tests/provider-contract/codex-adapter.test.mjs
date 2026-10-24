@@ -49,3 +49,22 @@ test("Codex adapters fail closed when factual identity or evidence reference is 
   assert.throws(() => normalizeToolEvent({ hook_event_name: "PreToolUse", tool_name: "Read" }), /CODEX_SESSION_ID_REQUIRED/);
   assert.throws(() => normalizeProviderEvidence({ taskId: "task-1", candidateId: "candidate-1", candidateGeneration: 0, kind: "REMOTE_CI", conclusion: "success" }), /CODEX_EVIDENCE_REFERENCE_REQUIRED/);
 });
+
+
+test("Codex native collaboration names classify delegation without classifying arbitrary tools", () => {
+  const base = { hook_event_name: "PreToolUse", session_id: "root-155", tool_call_id: "native-155" };
+  for (const name of ["collaborationspawn_agent", "spawn_agent", "multi_agent_v1spawn_agent"]) {
+    const result = normalizeToolEvent({ ...base, tool_name: name, tool_input: { agent_type: "luna-max" } });
+    assert.equal(result.operation, "DELEGATE", name);
+    assert.equal(result.sideEffectClass, "DELEGATION", name);
+    assert.equal(result.target, "luna-max");
+  }
+  for (const name of ["collaborationwait_agent", "collaborationsend_message", "collaborationfollowup_task", "collaborationlist_agents", "collaborationinterrupt_agent", "multi_agent_v1wait_agent", "multi_agent_v1send_input", "multi_agent_v1close_agent"]) {
+    const result = normalizeToolEvent({ ...base, tool_name: name, tool_input: { target: "worker-1" } });
+    assert.equal(result.operation, "AGENT_CONTROL", name);
+    assert.equal(result.sideEffectClass, "DELEGATION", name);
+  }
+  for (const name of ["collaborationdangerous_tool", "spawn_everyone", "unknown_operation"]) {
+    assert.equal(normalizeToolEvent({ ...base, tool_name: name }).operation, "UNKNOWN", name);
+  }
+});
