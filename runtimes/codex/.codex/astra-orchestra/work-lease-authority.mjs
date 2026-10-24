@@ -8,6 +8,7 @@ import {
   transitionWorkLease,
 } from "./core/leases/work-lease-store.mjs";
 import { authorizeLeaseMutation } from "./core/leases/lease-authorizer.mjs";
+import { isCodexNativeAgentTool } from "./provider/codex/adapter/tool-event.mjs";
 
 const VALID_MODES = new Set(["session", "dual", "lease"]);
 const BINDINGS_SCHEMA = "orchestra.codex-work-lease-bindings.v1";
@@ -211,6 +212,7 @@ export function resolveCodexAuthorityMode(value = process.env.ORCHESTRA_AUTHORIT
 export function codexCapabilityForTool(payload = {}) {
   const name = clean(payload.tool_name || payload.toolName, 120).toLowerCase();
   if (READ_ONLY_TOOL_NAMES.has(name)) return "CONTROL";
+  if (isCodexNativeAgentTool(name)) return "CONTROL";
   if (name === "bash" || name === "shell" || name === "exec" || name === "run_command") {
     return readOnlyBash(payload.tool_input?.command || payload.toolInput?.command || "")
       ? "CONTROL"
