@@ -219,3 +219,35 @@ test("Codex 0.159 native hook wire contains no unknown top-level fields", () => 
     assert.equal(jsonOut(denied).hookSpecificOutput.permissionDecision, "deny");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("real issue 155 native Luna handoff is allowed for root CONTROL but unknown/child/unregistered roles stay denied", () => {
+  const root = project();
+  try {
+    const start = hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, { authorityMode: "lease" });
+    assert.equal(start.status, 0, start.stderr);
+    const input = { agent_type: "luna-max", message: "Implement bounded Phase 0 regressions", fork_context: false };
+    const spawn = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationspawn_agent", tool_call_id: "spawn-luna-1", tool_input: input }, { authorityMode: "lease" });
+    assert.equal(spawn.status, 0, spawn.stderr);
+    assert.equal(spawn.stdout.trim(), "", "root delegation does not silently mutate or require workspace edit");
+    const lease = JSON.parse(readFileSync(join(root, ".orchestra", "state", "work-lease.json"), "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL"]);
+
+    const wait = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationwait_agent", tool_input: { target: "worker-1" } }, { authorityMode: "lease" });
+    assert.equal(wait.status, 0, wait.stderr);
+    assert.equal(wait.stdout.trim(), "");
+
+    const nested = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-child", tool_name: "collaborationspawn_agent", tool_input: input }, { authorityMode: "lease" });
+    assert.equal(jsonOut(nested).hookSpecificOutput.permissionDecision, "deny");
+    assert.match(jsonOut(nested).hookSpecificOutput.permissionDecisionReason, /CHILD|DELEGATION/);
+    const missingRole = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationspawn_agent", tool_input: {} }, { authorityMode: "lease" });
+    assert.equal(jsonOut(missingRole).hookSpecificOutput.permissionDecision, "deny");
+    const unknownRole = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationspawn_agent", tool_input: { agent_type: "unregistered-agent" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(unknownRole).hookSpecificOutput.permissionDecision, "deny");
+    const unknown = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationfuture_unknown", tool_input: {} }, { authorityMode: "lease" });
+    assert.match(jsonOut(unknown).hookSpecificOutput.permissionDecisionReason, /UNKNOWN_OPERATION/);
+
+    const stale = hook(root, { hook_event_name: "PreToolUse", session_id: "wrong-generation", tool_name: "collaborationspawn_agent", tool_input: input }, { authorityMode: "lease" });
+    assert.equal(jsonOut(stale).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
