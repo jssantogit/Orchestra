@@ -40,15 +40,19 @@ function parse(argv) {
   return { command, options };
 }
 
-function child(binary, args, cwd) {
+function child(binary, args, cwd, { timeoutMs = 90_000 } = {}) {
   const result = spawnSync(binary, args, {
     cwd,
     encoding: "utf8",
     windowsHide: true,
     shell: false,
-    timeout: 90_000,
+    timeout: timeoutMs,
     maxBuffer: 2 * 1024 * 1024,
   });
+  if (result.error?.code === "ETIMEDOUT" && binary === "git" && args[0] === "clone") {
+    failure("WORKTREE_CLONE_TIMEOUT_PRESERVED",
+      "Independent clone exceeded its time budget; Git pack/index-pack children may still be running. Inspect running processes and repository integrity before reusing the preserved directory. Never delete or retry blindly.");
+  }
   if (result.error || result.status !== 0) {
     failure("WORKTREE_CHILD_FAILED", binary + " returned " +
       (result.error?.code || result.status) + ": " + (result.stderr || "").trim().slice(0, 700));
@@ -114,7 +118,10 @@ function createClone({ "--repo": source, "--path": location, "--branch": branch,
   const commit = git(repo, "rev-parse", "--verify", `${revision}^{commit}`);
   // --no-local uses Git transport, never Git object hardlinks or alternates.
   // Do not change the source repository, main checkout, or its branches.
-  child("git", ["clone", "--no-local", "--no-checkout", "--quiet", repo, target], repo);
+  // Large Android repositories may need longer than the regular 90s CLI
+  // budget for pack/index-pack. This does not authorize an automatic retry.
+  child("git", ["clone", "--no-local", "--no-checkout", "--quiet", repo, target], repo,
+    { timeoutMs: 10 * 60_000 });
   // As in create(), failures preserve the clone for operator inspection.
   git(target, "checkout", "-q", "-b", branch, commit);
   child(process.execPath, [manager, "install", target], target);
