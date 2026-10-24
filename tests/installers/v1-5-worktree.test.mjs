@@ -179,3 +179,53 @@ test("worktree-specific uninstall refuses the original checkout and preserves it
     assert.equal(git(repo, "status", "--short"), "");
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
+
+test("explicit create-clone installs in an independent Git checkout without touching primary hooks", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-independent-clone-"));
+  try {
+    const repo = makeRepository(scratch);
+    const clone = join(scratch, "f6d-isolated-clone");
+    const base = git(repo, "rev-parse", "HEAD");
+    const result = call(worktreeCli, [
+      "create-clone", "--repo", repo, "--path", clone,
+      "--branch", "test/isolated-clone", "--from", base,
+    ]);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.checkoutType, "INDEPENDENT_CLONE");
+    assert.equal(report.nativeHookDiscovery, "REQUIRES_NATIVE_VERIFICATION");
+    assert.equal(report.head, base);
+    assert.equal(statSync(join(clone, ".git")).isDirectory(), true);
+    assert.equal(git(clone, "rev-parse", "HEAD"), base);
+    assert.ok(existsSync(join(clone, ".codex", "hooks.json")));
+    assert.equal(existsSync(join(repo, ".codex", "hooks.json")), false);
+    assert.equal(git(repo, "status", "--short"), "");
+    assert.equal(git(repo, "branch", "--list", "test/isolated-clone"), "");
+
+    const check = call(worktreeCli, ["doctor", "--path", clone]);
+    assert.equal(check.status, 0, check.stderr || check.stdout);
+    assert.equal(JSON.parse(check.stdout).hookActivation.checkoutType, "INDEPENDENT_CHECKOUT");
+
+    const removed = call(codexCli, ["uninstall", clone, "--json"]);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(existsSync(join(clone, ".codex", "hooks.json")), false);
+    assert.equal(existsSync(join(repo, ".codex", "hooks.json")), false);
+    assert.equal(existsSync(clone), true);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("independent clone refuses existing destinations and never changes source branch", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "orchestra-independent-clone-refuse-"));
+  try {
+    const repo = makeRepository(scratch);
+    const target = join(scratch, "existing");
+    mkdirSync(target);
+    writeFileSync(join(target, "user.txt"), "protected\n");
+    const denied = call(worktreeCli, ["create-clone", "--repo", repo, "--path", target,
+      "--branch", "test/do-not-create", "--from", "HEAD"]);
+    assert.notEqual(denied.status, 0);
+    assert.match(denied.stderr, /WORKTREE_TARGET_EXISTS/);
+    assert.equal(readFileSync(join(target, "user.txt"), "utf8"), "protected\n");
+    assert.equal(git(repo, "status", "--short"), "");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
