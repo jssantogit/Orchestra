@@ -16,7 +16,7 @@ function failure(code, message) {
 
 function parse(argv) {
   const command = argv.shift();
-  if (!["create", "list", "doctor", "uninstall"].includes(command)) failure("WORKTREE_COMMAND_INVALID");
+  if (!["create", "create-clone", "list", "doctor", "uninstall"].includes(command)) failure("WORKTREE_COMMAND_INVALID");
   const options = {};
   const allowed = new Set(["--repo", "--path", "--branch", "--from", "--dry-run"]);
   while (argv.length) {
@@ -30,7 +30,7 @@ function parse(argv) {
     if (!value || value.startsWith("--")) failure("WORKTREE_OPTIONS_INVALID");
     options[key] = value;
   }
-  const required = command === "create" ? ["--repo", "--path", "--branch", "--from"]
+  const required = ["create", "create-clone"].includes(command) ? ["--repo", "--path", "--branch", "--from"]
     : command === "list" ? ["--repo"] : ["--path"];
   const permitted = command === "uninstall" ? [...required, "--dry-run"] : required;
   if (required.some((key) => !options[key])
@@ -100,6 +100,30 @@ function create({ "--repo": source, "--path": location, "--branch": branch, "--f
     head: git(target, "rev-parse", "HEAD"), ...verified };
 }
 
+// Codex 0.159/0.164 intentionally discovers project hooks in the primary
+// checkout of a linked worktree. This explicit alternative creates a separate
+// Git repository so its project hooks belong to its own checkout. No hooks or
+// trust settings are copied to the caller's main checkout or global Codex home.
+// Do NOT assume native hook discovery/approval: the operator must review /hooks.
+function createClone({ "--repo": source, "--path": location, "--branch": branch, "--from": revision }) {
+  const repo = repository(source);
+  const target = resolve(location);
+  if (existsSync(target)) failure("WORKTREE_TARGET_EXISTS");
+  if (within(repo, target)) failure("WORKTREE_TARGET_INSIDE_SOURCE");
+  git(repo, "check-ref-format", "--branch", branch);
+  const commit = git(repo, "rev-parse", "--verify", `${revision}^{commit}`);
+  // --no-local uses Git transport, never Git object hardlinks or alternates.
+  // Do not change the source repository, main checkout, or its branches.
+  child("git", ["clone", "--no-local", "--no-checkout", "--quiet", repo, target], repo);
+  // As in create(), failures preserve the clone for operator inspection.
+  git(target, "checkout", "-q", "-b", branch, commit);
+  child(process.execPath, [manager, "install", target], target);
+  const verified = inspectRuntime(target);
+  return { ok: true, operation: "create-clone", checkoutType: "INDEPENDENT_CLONE",
+    nativeHookDiscovery: "REQUIRES_NATIVE_VERIFICATION", path: target, branch,
+    head: git(target, "rev-parse", "HEAD"), ...verified };
+}
+
 function list({ "--repo": source }) {
   const repo = repository(source);
   const records = git(repo, "worktree", "list", "--porcelain")
@@ -163,6 +187,7 @@ function main() {
   try {
     const { command, options } = parse(process.argv.slice(2));
     const result = command === "create" ? create(options)
+      : command === "create-clone" ? createClone(options)
       : command === "list" ? list(options)
         : command === "doctor" ? doctor(options) : uninstall(options);
     process.stdout.write(JSON.stringify(result) + "\n");
