@@ -4,6 +4,21 @@ const READ_TOOLS = new Set(["read", "read_file", "view_file", "grep", "glob", "l
 const WRITE_TOOLS = new Set(["apply_patch", "write", "write_file", "edit", "edit_file", "replace_file_content", "delete_file"]);
 const COMMAND_TOOLS = new Set(["bash", "shell", "exec", "run_command"]);
 
+const SPAWN_TOOLS = new Set([
+  "spawn_agent", "collaborationspawn_agent", "multi_agent_v1spawn_agent",
+  "multi_agent_v1.spawn_agent",
+]);
+const AGENT_CONTROL_TOOLS = new Set([
+  "collaborationwait_agent", "collaborationsend_message",
+  "collaborationfollowup_task", "collaborationlist_agents",
+  "collaborationinterrupt_agent",
+  "multi_agent_v1wait_agent", "multi_agent_v1send_input",
+  "multi_agent_v1close_agent", "multi_agent_v1resume_agent",
+  "multi_agent_v1.wait_agent", "multi_agent_v1.send_input",
+  "multi_agent_v1.close_agent", "multi_agent_v1.resume_agent",
+]);
+
+
 function clean(value, max = 500) {
   const text = String(value ?? "").trim();
   return text.length > max ? text.slice(0, max) : text;
@@ -45,6 +60,16 @@ export function normalizeToolEvent(providerPayload = {}) {
       operation = "COMMAND";
       sideEffectClass = "UNKNOWN";
       target = "shell";
+    } else if (SPAWN_TOOLS.has(toolName)) {
+      // Delegation is a CONTROL-plane request, not direct workspace mutation.
+      // The PreToolUse authority gate validates parent actor and installed role.
+      operation = "DELEGATE";
+      sideEffectClass = "DELEGATION";
+      target = clean(input?.agent_type || input?.agentType, 120) || null;
+    } else if (AGENT_CONTROL_TOOLS.has(toolName)) {
+      operation = "AGENT_CONTROL";
+      sideEffectClass = "DELEGATION";
+      target = clean(input?.target || input?.agent_id || input?.agentId, 120) || null;
     }
   }
 
