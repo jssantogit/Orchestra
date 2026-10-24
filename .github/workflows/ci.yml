@@ -75,6 +75,9 @@ jobs:
       - name: Verify provider project lifecycles and runtime portability
         run: node --test tests/installers/codex-v2-doctor.test.mjs tests/installers/antigravity-v2-doctor.test.mjs tests/installers/v1-5-uninstall.test.mjs tests/installers/v1-5-worktree.test.mjs tests/leases/v1-5-recovery.test.mjs tests/runtime/runtime-builder.test.mjs tests/runtime/doctor.test.mjs tests/runtime/codex-native-windows-work-lease-diagnostic.test.mjs tests/runtime/codex-work-lease-diagnostic-runtime-errors.test.mjs tests/runtime/windows-delegation-git-fingerprint.test.mjs
 
+      - name: Validate Codex native delegation hooks and Work Lease on this OS
+        run: node --test tests/provider-contract/codex-adapter.test.mjs runtimes/codex/tests/work-lease-authority.test.mjs runtimes/codex/tests/session-hook.test.mjs
+
       - name: Build runtime distributions
         run: npm run build:runtimes
 
