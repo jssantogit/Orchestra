@@ -19,6 +19,13 @@ const AGENT_CONTROL_TOOLS = new Set([
 ]);
 
 
+// Only explicitly known native Codex agent tool names are control-plane tools.
+// Future/unrecognized collaboration names remain fail-closed.
+export function isCodexNativeAgentTool(name) {
+  const normalized = String(name ?? "").trim().toLowerCase();
+  return SPAWN_TOOLS.has(normalized) || AGENT_CONTROL_TOOLS.has(normalized);
+}
+
 function clean(value, max = 500) {
   const text = String(value ?? "").trim();
   return text.length > max ? text.slice(0, max) : text;
