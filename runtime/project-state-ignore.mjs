@@ -6,6 +6,7 @@ const START = "# >>> orchestra managed state >>>";
 const END = "# <<< orchestra managed state <<<";
 const MANAGED_PATTERNS = Object.freeze([
   ".orchestra/state/**",
+  ".orchestra/runtime/delegation/**",
   ".codex/orchestra-state/**",
   ".codex/orchestra-telemetry/**",
   ".codex/orchestra-artifacts/**",
