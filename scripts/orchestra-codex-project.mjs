@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { existsSync, lstatSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -73,6 +75,31 @@ function composedRuntimeResult(providerRuntime, providerResult, delegationResult
   };
 }
 
+function codexHookCheckoutCompatibility(targetDir) {
+  const project = resolve(targetDir);
+  const localHook = join(project, ".codex", "hooks.json");
+  const result = { checkoutType: "UNKNOWN", discoveryCompatibility: "UNVERIFIED",
+    localHookDiscovery: "NOT_VERIFIED", localHookPresent: existsSync(localHook) };
+  try {
+    const dotgit = lstatSync(join(project, ".git"));
+    if (dotgit.isDirectory()) {
+      return { ...result, checkoutType: "INDEPENDENT_CHECKOUT",
+        discoveryCompatibility: "NO_KNOWN_WORKTREE_ROOT_REDIRECT" };
+    }
+    if (!dotgit.isFile()) return result;
+    const gitDir = execFileSync("git", ["-C", project, "rev-parse", "--absolute-git-dir"],
+      { encoding: "utf8", windowsHide: true, timeout: 5_000 }).trim();
+    if (!gitDir.split(/[\\\\/]/).includes("worktrees")) return result;
+    return { ...result, checkoutType: "LINKED_WORKTREE",
+      // This is a known upstream *compatibility* risk for Codex 0.159/0.164,
+      // not a claim that a native process was inspected or that trust is known.
+      discoveryCompatibility: result.localHookPresent
+        ? "KNOWN_UPSTREAM_HOOK_ROOT_REDIRECT" : "UNVERIFIED" };
+  } catch {
+    return result;
+  }
+}
+
 function composedDoctorResult(providerResult, delegationResult) {
   const checks = [...providerResult.checks, ...delegationResult.checks];
   const healthy = providerResult.healthy && delegationResult.healthy;
@@ -87,9 +114,10 @@ function composedDoctorResult(providerResult, delegationResult) {
     // or whether a user reviewed its non-managed hook definitions. This
     // distinction was exposed by the first F6D native 1.5 field test.
     hookActivation: {
+      ...codexHookCheckoutCompatibility(providerResult.targetDir),
       status: "UNVERIFIED",
       requiresUserReview: true,
-      instructions: "Project .codex hooks require project trust and separate /hooks review/trust in an interactive Codex session. After approval, verify a factual SessionStart Work Lease and a protected tool. Do not bypass hook trust.",
+      instructions: "Project .codex hooks require project trust and separate /hooks review/trust in an interactive Codex session. Linked worktrees on Codex 0.159/0.164 may use primary checkout hooks instead of local hooks (upstream #27133). Use an explicitly isolated clone when necessary; never copy hooks to the primary checkout or globally. After discovery and approval, verify native SessionStart/CONTROL. Do not bypass hook trust.",
     },
   };
 }
