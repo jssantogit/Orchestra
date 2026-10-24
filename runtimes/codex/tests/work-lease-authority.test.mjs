@@ -167,3 +167,12 @@ test("runtime image change fences old Codex session while allowing a new factual
     assert.equal(authorizeCodexLeaseCapability(root, { sessionId: "root-b", capability: "CONTROL" }).allowed, true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("native collaboration lifecycle uses CONTROL, not a workspace writer grant", () => {
+  assert.equal(codexCapabilityForTool({ tool_name: "collaborationspawn_agent", tool_input: { agent_type: "luna-max" } }), "CONTROL");
+  assert.equal(codexCapabilityForTool({ tool_name: "collaborationwait_agent", tool_input: { target: "worker-a" } }), "CONTROL");
+  assert.equal(codexCapabilityForTool({ tool_name: "collaborationsend_message", tool_input: { target: "worker-a" } }), "CONTROL");
+  assert.equal(codexCapabilityForTool({ tool_name: "collaborationfollowup_task", tool_input: { target: "worker-a" } }), "CONTROL");
+  assert.equal(codexCapabilityForTool({ tool_name: "other_spawn_tool" }), "WORKSPACE_EDIT");
+});
