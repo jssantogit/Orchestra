@@ -21,6 +21,39 @@ import { authorizeCapability } from "./core/policy/capability-authorization.mjs"
 import { authorizeMutation } from "./core/policy/mutation-authorization.mjs";
 import { createRuntimeEvent } from "./core/events/runtime-event.mjs";
 
+// Project-controlled, installed Codex agents only; Astra is explicitly
+// manual-only and the orchestrator's own Sol Medium runs at the root.
+// Native hook names must first be recognized by normalizeToolEvent.
+const NATIVE_DELEGATION_ROLES = new Set([
+  "luna-max", "luna-high", "luna-medium", "luna-auditor",
+  "sol-high", "sol-xhigh", "sol-max",
+  "sol-review-low", "sol-review-medium",
+]);
+
+function authorizeNativeAgentControl(payload, normalized, lease) {
+  if (normalized.operation !== "DELEGATE" && normalized.operation !== "AGENT_CONTROL") {
+    return { allowed: true, reason: null };
+  }
+  // The root may delegate but workers cannot recursively spawn/control agents.
+  if (payload.agent_id || payload.agentId) {
+    return { allowed: false, reason: "CHILD_DELEGATION_FORBIDDEN" };
+  }
+  if (normalized.operation === "DELEGATE") {
+    const input = payload.tool_input || payload.toolInput || {};
+    const role = input.agent_type ?? input.agentType;
+    if (typeof role !== "string" || !NATIVE_DELEGATION_ROLES.has(role)) {
+      return { allowed: false, reason: "DELEGATION_ROLE_NOT_AUTHORIZED" };
+    }
+    if (input.fork_context === true || input.forkContext === true) {
+      return { allowed: false, reason: "DELEGATION_CONTEXT_FORK_FORBIDDEN" };
+    }
+    if (lease.capabilities.includes("WORKSPACE_EDIT")) {
+      return { allowed: false, reason: "DELEGATION_ACTIVE_WORKSPACE_WRITER" };
+    }
+  }
+  return { allowed: true, reason: null };
+}
+
 function readStdin() {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
 }
@@ -253,6 +286,11 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
   }
   if (normalized.eventType === "UNKNOWN" || normalized.operation === "UNKNOWN") {
     return preToolDeny("CODEX_PROVIDER_EVENT_DENIED:UNKNOWN_OPERATION.");
+  }
+
+  const agentControl = authorizeNativeAgentControl(payload, normalized, control.lease);
+  if (!agentControl.allowed) {
+    return preToolDeny(`CODEX_DELEGATION_DENIED:${agentControl.reason}.`);
   }
 
   const verification = evaluateCodexVerificationTool(repoRoot, payload);
