@@ -89,7 +89,7 @@ function codexHookCheckoutCompatibility(targetDir) {
     if (!dotgit.isFile()) return result;
     const gitDir = execFileSync("git", ["-C", project, "rev-parse", "--absolute-git-dir"],
       { encoding: "utf8", windowsHide: true, timeout: 5_000 }).trim();
-    if (!gitDir.split(/[\\\\/]/).includes("worktrees")) return result;
+    if (!gitDir.split(/[\\/]/).includes("worktrees")) return result;
     return { ...result, checkoutType: "LINKED_WORKTREE",
       // This is a known upstream *compatibility* risk for Codex 0.159/0.164,
       // not a claim that a native process was inspected or that trust is known.
