@@ -251,3 +251,37 @@ test("real issue 155 native Luna handoff is allowed for root CONTROL but unknown
     assert.equal(jsonOut(stale).hookSpecificOutput.permissionDecision, "deny");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("field #155 native root web and user clarification are CONTROL-only; child access and unknown tools denied", () => {
+  const root = project();
+  try {
+    assert.equal(hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, { authorityMode: "lease" }).status, 0);
+    for (const tool_name of ["webrun", "request_user_input_async"]) {
+      const allowed = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name, tool_input: { query: "MangaDex API docs" } }, { authorityMode: "lease" });
+      assert.equal(allowed.status, 0, allowed.stderr);
+      assert.equal(allowed.stdout.trim(), "", tool_name);
+      const child = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "worker-2", tool_name, tool_input: { query: "scope leak" } }, { authorityMode: "lease" });
+      assert.equal(jsonOut(child).hookSpecificOutput.permissionDecision, "deny", tool_name);
+    }
+    const unknown = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "webrun_custom", tool_input: {} }, { authorityMode: "lease" });
+    assert.match(jsonOut(unknown).hookSpecificOutput.permissionDecisionReason, /UNKNOWN_OPERATION/);
+    const lease = JSON.parse(readFileSync(join(root, ".orchestra", "state", "work-lease.json"), "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("field #155 agent communication is distinct from recursive spawn and remains scope bounded", () => {
+  const root = project();
+  try {
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, { authorityMode: "lease" });
+    const rootMessage = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "send_message", tool_input: { target: "worker-2", message: "Continue bounded tests" } }, { authorityMode: "lease" });
+    assert.equal(rootMessage.stdout.trim(), "");
+    const childToParent = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-2", tool_name: "send_message", tool_input: { target: "parent", message: "Test results ready" } }, { authorityMode: "lease" });
+    assert.equal(childToParent.stdout.trim(), "");
+    const childPeer = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-2", tool_name: "send_message", tool_input: { target: "worker-3", message: "Run tests" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(childPeer).hookSpecificOutput.permissionDecision, "deny");
+    const childSpawn = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-2", tool_name: "collaborationspawn_agent", tool_input: { agent_type: "luna-max" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(childSpawn).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
