@@ -24,6 +24,7 @@ function project() {
   mkdirSync(join(root, ".codex", "astra-orchestra"), { recursive: true });
   cpSync(join(runtimeDir, "session-authority.mjs"), join(root, ".codex", "astra-orchestra", "session-authority.mjs"));
   cpSync(join(runtimeDir, "session-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-hook.mjs"));
+  cpSync(join(runtimeDir, "session-post-tool-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs"));
   cpSync(join(runtimeDir, "verification-guard.mjs"), join(root, ".codex", "astra-orchestra", "verification-guard.mjs"));
   cpSync(join(runtimeDir, "work-lease-authority.mjs"), join(root, ".codex", "astra-orchestra", "work-lease-authority.mjs"));
   cpSync(join(runtimeDir, "core"), join(root, ".codex", "astra-orchestra", "core"), { recursive: true });
@@ -283,5 +284,42 @@ test("field #155 agent communication is distinct from recursive spawn and remain
     assert.equal(jsonOut(childPeer).hookSpecificOutput.permissionDecision, "deny");
     const childSpawn = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-2", tool_name: "collaborationspawn_agent", tool_input: { agent_type: "luna-max" } }, { authorityMode: "lease" });
     assert.equal(jsonOut(childSpawn).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("native PostToolUse handler releases factual root writer only after matching terminal callback", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, mode);
+    const edit = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "root-155",
+      tool_name: "apply_patch", tool_call_id: "real-edit-1",
+      tool_input: { command: "*** Begin Patch" },
+    }, mode);
+    assert.equal(edit.status, 0, edit.stderr);
+    assert.equal(edit.stdout.trim(), "");
+    const stateFile = join(root, ".orchestra", "state", "work-lease.json");
+    let lease = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL", "WORKSPACE_EDIT"]);
+
+    function post(sessionId) {
+      return spawnSync(process.execPath, [join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs")], {
+        cwd: root, encoding: "utf8", env: { ...process.env, ORCHESTRA_AUTHORITY_MODE: "lease" },
+        input: JSON.stringify({ cwd: root, hook_event_name: "PostToolUse", session_id: sessionId, tool_name: "apply_patch", tool_call_id: "real-edit-1" }),
+      });
+    }
+    const foreign = post("foreign");
+    assert.equal(foreign.status, 0);
+    lease = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.ok(lease.capabilities.includes("WORKSPACE_EDIT"), "foreign terminal callback cannot release writer");
+
+    const finished = post("root-155");
+    assert.equal(finished.status, 0);
+    assert.equal(finished.stderr.trim(), "");
+    lease = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL"]);
+    assert.equal(lease.state, "CONTROL");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
