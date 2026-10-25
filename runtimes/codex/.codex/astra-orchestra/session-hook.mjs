@@ -31,11 +31,26 @@ const NATIVE_DELEGATION_ROLES = new Set([
 ]);
 
 function authorizeNativeAgentControl(payload, normalized, lease) {
+  const child = Boolean(payload.agent_id || payload.agentId);
+  // Only the factual root may call web and solicit user input. These are
+  // deliberately explicit names, never a generic exemption for unknown tools.
+  if (normalized.operation === "WEB_RESEARCH" || normalized.operation === "USER_CLARIFICATION") {
+    return child
+      ? { allowed: false, reason: "CHILD_CONTROL_TOOL_FORBIDDEN" }
+      : { allowed: true, reason: null };
+  }
+  if (normalized.operation === "AGENT_MESSAGE") {
+    // A worker may report facts to CONTROL. Peer-to-peer orders and arbitrary
+    // destinations would bypass the parent coordinator; fail closed.
+    return child && !["parent", "root"].includes(normalized.target)
+      ? { allowed: false, reason: "CHILD_MESSAGE_TARGET_FORBIDDEN" }
+      : { allowed: true, reason: null };
+  }
   if (normalized.operation !== "DELEGATE" && normalized.operation !== "AGENT_CONTROL") {
     return { allowed: true, reason: null };
   }
   // The root may delegate but workers cannot recursively spawn/control agents.
-  if (payload.agent_id || payload.agentId) {
+  if (child) {
     return { allowed: false, reason: "CHILD_DELEGATION_FORBIDDEN" };
   }
   if (normalized.operation === "DELEGATE") {
