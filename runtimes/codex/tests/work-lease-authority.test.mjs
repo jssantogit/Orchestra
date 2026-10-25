@@ -176,3 +176,11 @@ test("native collaboration lifecycle uses CONTROL, not a workspace writer grant"
   assert.equal(codexCapabilityForTool({ tool_name: "collaborationfollowup_task", tool_input: { target: "worker-a" } }), "CONTROL");
   assert.equal(codexCapabilityForTool({ tool_name: "other_spawn_tool" }), "WORKSPACE_EDIT");
 });
+
+
+test("field #155 web research, clarification and agent message require CONTROL, not writer", () => {
+  for (const tool_name of ["webrun", "request_user_input_async", "send_message"]) {
+    assert.equal(codexCapabilityForTool({ tool_name, tool_input: {} }), "CONTROL", tool_name);
+  }
+  assert.equal(codexCapabilityForTool({ tool_name: "webrun_delete", tool_input: {} }), "WORKSPACE_EDIT");
+});
