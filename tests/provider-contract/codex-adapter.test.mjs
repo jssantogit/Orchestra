@@ -68,3 +68,21 @@ test("Codex native collaboration names classify delegation without classifying a
     assert.equal(normalizeToolEvent({ ...base, tool_name: name }).operation, "UNKNOWN", name);
   }
 });
+
+
+test("native Codex factual web, clarification and message tools have explicit classes; unknown tools remain unknown", () => {
+  const base = { hook_event_name: "PreToolUse", session_id: "root-155", tool_call_id: "field-155" };
+  for (const [tool_name, operation, sideEffectClass] of [
+    ["webrun", "WEB_RESEARCH", "NETWORK_READ"],
+    ["request_user_input_async", "USER_CLARIFICATION", "HUMAN_INTERACTION"],
+    ["send_message", "AGENT_MESSAGE", "DELEGATION"],
+  ]) {
+    const e = normalizeToolEvent({ ...base, tool_name, tool_input: {} });
+    assert.equal(e.operation, operation, tool_name);
+    assert.equal(e.sideEffectClass, sideEffectClass, tool_name);
+    assert.equal(e.factualIds.toolCallId, "field-155");
+  }
+  for (const tool_name of ["webrun_unsafe", "request_user_input_async_custom", "send_message_everyone", "tool_created_later"]) {
+    assert.equal(normalizeToolEvent({ ...base, tool_name }).operation, "UNKNOWN", tool_name);
+  }
+});
