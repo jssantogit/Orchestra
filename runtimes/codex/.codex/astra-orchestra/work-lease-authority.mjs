@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
@@ -8,7 +8,9 @@ import {
   transitionWorkLease,
 } from "./core/leases/work-lease-store.mjs";
 import { authorizeLeaseMutation } from "./core/leases/lease-authorizer.mjs";
-import { isCodexNativeControlTool } from "./provider/codex/adapter/tool-event.mjs";
+import { isCodexNativeControlTool, normalizeToolEvent } from "./provider/codex/adapter/tool-event.mjs";
+import { attachProviderTelemetryReference } from "./provider/codex/adapter/telemetry.mjs";
+import { createRuntimeEvent } from "./core/events/runtime-event.mjs";
 
 const VALID_MODES = new Set(["session", "dual", "lease"]);
 const BINDINGS_SCHEMA = "orchestra.codex-work-lease-bindings.v1";
@@ -201,6 +203,51 @@ function diagnosticSubject(actor) {
     currentSessionVerified: false,
     warning: "No actor identity was supplied; authority for the current Codex session is not evaluated by this diagnostic.",
   };
+}
+
+// This journal is observational: it never grants, denies, upgrades, or releases
+// a lease. Only the actual native PreToolUse/PostToolUse hook caller records an
+// event. No tool arguments, prompt bodies, model context or raw session IDs are
+// written. Provider tool-call references permit request/result correlation.
+export function recordCodexHookToolReceipt(repoRoot, {
+  payload, lease, leaseTransition = null, normalized = null,
+} = {}) {
+  if (!lease || !payload) return { recorded: false, reason: "RECEIPT_INPUT_MISSING" };
+  try {
+    const toolEvent = normalized || normalizeToolEvent(payload);
+    if (toolEvent.eventType !== "TOOL_REQUEST" && toolEvent.eventType !== "TOOL_RESULT") {
+      return { recorded: false, reason: "RECEIPT_EVENT_UNSUPPORTED" };
+    }
+    if (toolEvent.operation === "UNKNOWN") {
+      return { recorded: false, reason: "RECEIPT_OPERATION_UNKNOWN" };
+    }
+    const toolCallId = toolEvent.factualIds.toolCallId || null;
+    // Factual provider ID gives deterministic request/result identity with
+    // the event type included; absent IDs get a unique non-correlatable event.
+    const nonce = toolCallId || randomUUID();
+    const eventId = `event-${createHash("sha256").update(JSON.stringify([
+      toolEvent.eventType, lease.generation, lease.actor,
+      toolEvent.factualIds.actorIdHash, nonce,
+    ])).digest("hex").slice(0, 24)}`;
+    const event = createRuntimeEvent({
+      eventId, type: toolEvent.eventType,
+      generation: lease.generation, taskId: lease.taskId || null,
+      actor: lease.actor,
+    });
+    const base = toolCallId ? attachProviderTelemetryReference(event, payload) : { event };
+    const record = {
+      ...base,
+      operation: toolEvent.operation,
+      actorIdHash: toolEvent.factualIds.actorIdHash,
+      ...(leaseTransition ? { leaseTransition } : {}),
+    };
+    const path = join(repoRoot, ".codex", "orchestra-state", "runtime-events.jsonl");
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+    return { recorded: true, reason: null, eventId };
+  } catch (error) {
+    return { recorded: false, reason: String(error?.code || error?.message || "RECEIPT_WRITE_FAILED") };
+  }
 }
 
 export function resolveCodexAuthorityMode(value = process.env.ORCHESTRA_AUTHORITY_MODE) {
