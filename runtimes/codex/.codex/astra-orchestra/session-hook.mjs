@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import {
@@ -13,13 +13,12 @@ import {
   codexCapabilityForTool,
   enterCodexWorkLease,
   resolveCodexAuthorityMode,
+  recordCodexHookToolReceipt,
 } from "./work-lease-authority.mjs";
 import { evaluateCodexVerificationTool } from "./verification-guard.mjs";
 import { normalizeToolEvent } from "./provider/codex/adapter/tool-event.mjs";
-import { attachProviderTelemetryReference } from "./provider/codex/adapter/telemetry.mjs";
 import { authorizeCapability } from "./core/policy/capability-authorization.mjs";
 import { authorizeMutation } from "./core/policy/mutation-authorization.mjs";
-import { createRuntimeEvent } from "./core/events/runtime-event.mjs";
 
 // Project-controlled, installed Codex agents only; Astra is explicitly
 // manual-only and the orchestrator's own Sol Medium runs at the root.
@@ -118,25 +117,6 @@ function activePacket(repoRoot) {
     || active.directWork?.implementationPacket
     || active.direct_work?.implementation_packet
     || null;
-}
-
-function emitRuntimeEvent(repoRoot, payload, lease, normalized) {
-  if (!lease || !normalized || normalized.eventType === "UNKNOWN") return;
-  try {
-    const event = createRuntimeEvent({
-      type: normalized.eventType,
-      generation: lease.generation,
-      taskId: lease.taskId || null,
-      actor: lease.actor,
-    });
-    let record = { event };
-    if (payload.tool_call_id || payload.toolCallId || payload.tool_call?.id) {
-      record = attachProviderTelemetryReference(event, payload);
-    }
-    const path = join(repoRoot, ".codex", "orchestra-state", "runtime-events.jsonl");
-    mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
-  } catch {}
 }
 
 // Codex 0.159.x has a closed provider-facing hook output schema.
@@ -368,7 +348,16 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
     }
   }
 
-  emitRuntimeEvent(repoRoot, payload, effectiveLease, normalized);
+  const receipt = recordCodexHookToolReceipt(repoRoot, {
+    payload, lease: effectiveLease, normalized,
+    leaseTransition: capability === "WORKSPACE_EDIT"
+      ? (control.lease.capabilities.includes("WORKSPACE_EDIT")
+        ? "WORKSPACE_EDIT_AUTHORIZED" : "WORKSPACE_EDIT_ACQUIRED")
+      : null,
+  });
+  if (!receipt.recorded) {
+    process.stderr.write(`Orchestra Codex hook receipt unavailable: ${receipt.reason}\n`);
+  }
   return null;
 }
 
