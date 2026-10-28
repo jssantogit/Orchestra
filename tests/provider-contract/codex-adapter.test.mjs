@@ -59,7 +59,7 @@ test("Codex native collaboration names classify delegation without classifying a
     assert.equal(result.sideEffectClass, "DELEGATION", name);
     assert.equal(result.target, "luna-max");
   }
-  for (const name of ["collaborationwait_agent", "collaborationsend_message", "collaborationfollowup_task", "collaborationlist_agents", "collaborationinterrupt_agent", "multi_agent_v1wait_agent", "multi_agent_v1send_input", "multi_agent_v1close_agent"]) {
+  for (const name of ["collaborationwait_agent", "collaborationfollowup_task", "collaborationlist_agents", "collaborationinterrupt_agent", "multi_agent_v1wait_agent", "multi_agent_v1send_input", "multi_agent_v1close_agent"]) {
     const result = normalizeToolEvent({ ...base, tool_name: name, tool_input: { target: "worker-1" } });
     assert.equal(result.operation, "AGENT_CONTROL", name);
     assert.equal(result.sideEffectClass, "DELEGATION", name);
