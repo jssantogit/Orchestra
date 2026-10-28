@@ -7,14 +7,14 @@ const COMMAND_TOOLS = new Set(["bash", "shell", "exec", "run_command"]);
 // a prefix (future tools must be reviewed individually).
 const WEB_RESEARCH_TOOLS = new Set(["webrun"]);
 const USER_CLARIFICATION_TOOLS = new Set(["request_user_input_async"]);
-const AGENT_MESSAGE_TOOLS = new Set(["send_message"]);
+const AGENT_MESSAGE_TOOLS = new Set(["send_message", "collaborationsend_message"]);
 
 const SPAWN_TOOLS = new Set([
   "spawn_agent", "collaborationspawn_agent", "multi_agent_v1spawn_agent",
   "multi_agent_v1.spawn_agent",
 ]);
 const AGENT_CONTROL_TOOLS = new Set([
-  "collaborationwait_agent", "collaborationsend_message",
+  "collaborationwait_agent",
   "collaborationfollowup_task", "collaborationlist_agents",
   "collaborationinterrupt_agent",
   "multi_agent_v1wait_agent", "multi_agent_v1send_input",
