@@ -387,3 +387,26 @@ test("field 0.164 tool receipt IDs are unique per call and writer release has an
     assert.deepEqual(finalLease.capabilities, ["CONTROL"]);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("hook receipts without factual tool-call IDs remain distinct but do not falsely claim correlation", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-no-call-id", source: "startup" }, mode);
+    for (let i = 0; i < 2; i += 1) {
+      const read = hook(root, {
+        hook_event_name: "PreToolUse", session_id: "root-no-call-id",
+        tool_name: "read", tool_input: { file_path: "product.txt" },
+      }, mode);
+      assert.equal(read.status, 0, read.stderr);
+      assert.equal(read.stdout.trim(), "");
+    }
+    const journal = readFileSync(join(root, ".codex", "orchestra-state", "runtime-events.jsonl"), "utf8")
+      .trim().split("\n").map(JSON.parse);
+    assert.equal(journal.length, 2);
+    assert.notEqual(journal[0].event.eventId, journal[1].event.eventId);
+    assert.equal(journal[0].providerRef, undefined);
+    assert.equal(journal[1].providerRef, undefined);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
