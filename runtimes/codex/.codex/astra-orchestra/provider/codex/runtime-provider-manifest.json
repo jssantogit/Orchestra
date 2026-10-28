@@ -16,7 +16,7 @@
     },
     {
       "path": "adapter/tool-event.mjs",
-      "sha256": "5a0d83d180d35019e36a8cd5ee86d9f9136058f6298e7e61db6c40e0d15be22c"
+      "sha256": "3ab5cefaea22977dfdbb7a393eff0f383eb96e4a88a49c14df509f49346d7645"
     },
     {
       "path": "model-catalog.mjs",
