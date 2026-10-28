@@ -86,3 +86,20 @@ test("native Codex factual web, clarification and message tools have explicit cl
     assert.equal(normalizeToolEvent({ ...base, tool_name }).operation, "UNKNOWN", tool_name);
   }
 });
+
+
+test("Codex 0.164 collaboration send_message is a bounded message, not child delegation control", () => {
+  const field = normalizeToolEvent({
+    hook_event_name: "PreToolUse", session_id: "real-root", agent_id: "luna-field",
+    tool_name: "collaborationsend_message", tool_call_id: "child-message-1",
+    tool_input: { target: "parent", message: "Finished tests" },
+  });
+  assert.equal(field.operation, "AGENT_MESSAGE");
+  assert.equal(field.sideEffectClass, "DELEGATION");
+  assert.equal(field.target, "parent");
+  assert.equal(field.factualIds.toolCallId, "child-message-1");
+  assert.equal(normalizeToolEvent({
+    hook_event_name: "PreToolUse", session_id: "real-root", agent_id: "luna-field",
+    tool_name: "collaborationwait_agent", tool_input: { target: "parent" },
+  }).operation, "AGENT_CONTROL");
+});
