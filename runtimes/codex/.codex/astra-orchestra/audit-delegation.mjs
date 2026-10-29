@@ -13,6 +13,17 @@ const WORKER = "luna-auditor";
 function hash(value) {
   return "sha256:" + createHash("sha256").update(value).digest("hex");
 }
+function scopeHash(root) {
+  try {
+    const state = JSON.parse(readFileSync(join(root, ".codex", "orchestra-state", "active-state.json"), "utf8"));
+    const packet = state.implementationPacket || state.implementation_packet;
+    const scope = packet?.scopeContract || packet?.scope_contract;
+    if (!scope || !Array.isArray(scope.allowedPaths) || scope.allowedPaths.length === 0
+      || !scope.allowedPaths.every(p => typeof p === "string" && p.trim())
+      || !Array.isArray(scope.forbiddenPaths) || scope.maxDelegations !== 1) return null;
+    return hash(JSON.stringify(scope));
+  } catch { return null; }
+}
 function auditFile(root) {
   return join(root, ".codex", "orchestra-state", "audit-delegation.json");
 }
@@ -20,7 +31,8 @@ function read(root) {
   try {
     const s = JSON.parse(readFileSync(auditFile(root), "utf8"));
     if (s.schema !== SCHEMA || !Number.isSafeInteger(s.generation)
-      || !s.rootActor || typeof s.taskId !== "string"
+      || !s.rootActor || !/^sha256:[0-9a-f]{64}$/.test(s.scopeHash)
+      || typeof s.taskId !== "string"
       || !Number.isInteger(s.usedChildren) || s.usedChildren < 0 || s.usedChildren > 1
       || (s.leadHash !== null && !/^sha256:[0-9a-f]{64}$/.test(s.leadHash))) {
       return { ok: false, reason: "AUDIT_GRANT_INVALID" };
@@ -31,10 +43,11 @@ function read(root) {
       ? "AUDIT_GRANT_MISSING" : "AUDIT_GRANT_UNREADABLE" };
   }
 }
-function isCurrent(s, lease) {
+function isCurrent(s, lease, root) {
   return s.generation === lease.generation
     && s.taskId === lease.taskId
     && s.rootActor === lease.actor?.sessionIdHash
+    && s.scopeHash === scopeHash(root)
     && lease.capabilities?.includes("CONTROL");
 }
 function transact(root, operation) {
@@ -76,6 +89,8 @@ export function armTerraAudit(root, payload, lease) {
   if (!lease.taskId || lease.taskId === "codex:intake") {
     return { allowed: false, reason: "AUDIT_TASK_SCOPE_REQUIRED" };
   }
+  const currentScopeHash = scopeHash(root);
+  if (!currentScopeHash) return { allowed: false, reason: "AUDIT_SCOPE_CONTRACT_REQUIRED" };
   return transact(root, (old) => {
     if (old.ok && old.value.generation === lease.generation) {
       return { allowed: false, reason: "AUDIT_LEAD_ALREADY_ARMED" };
@@ -85,7 +100,8 @@ export function armTerraAudit(root, payload, lease) {
     }
     return { allowed: true, next: {
       schema: SCHEMA, generation: lease.generation, taskId: lease.taskId,
-      rootActor: lease.actor.sessionIdHash, leadHash: null, usedChildren: 0,
+      rootActor: lease.actor.sessionIdHash, scopeHash: currentScopeHash,
+      leadHash: null, usedChildren: 0,
     } };
   });
 }
@@ -101,7 +117,7 @@ export function bindTerraAudit(root, payload, lease) {
   return transact(root, (old) => {
     if (!old.ok) return { allowed: false, reason: old.reason };
     const s = old.value;
-    if (!isCurrent(s, lease)) return { allowed: false, reason: "AUDIT_GRANT_STALE" };
+    if (!isCurrent(s, lease, root)) return { allowed: false, reason: "AUDIT_GRANT_STALE" };
     if (s.leadHash !== null) return { allowed: false, reason: "AUDIT_LEAD_ALREADY_BOUND" };
     return { allowed: true, next: { ...s, leadHash: hash(payload.agent_id) } };
   });
@@ -117,7 +133,7 @@ export function authorizeTerraChildAudit(root, payload, lease) {
   return transact(root, (old) => {
     if (!old.ok) return { allowed: false, reason: old.reason };
     const s = old.value;
-    if (!isCurrent(s, lease) || s.leadHash !== hash(payload.agent_id)) {
+    if (!isCurrent(s, lease, root) || s.leadHash !== hash(payload.agent_id)) {
       return { allowed: false, reason: "AUDIT_LEAD_NOT_BOUND" };
     }
     if (s.usedChildren >= 1) return { allowed: false, reason: "AUDIT_CHILD_BUDGET_EXHAUSTED" };

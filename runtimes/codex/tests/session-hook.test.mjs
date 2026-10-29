@@ -542,3 +542,34 @@ test("Terra audit lead never gets implicit authority from intake without a task 
     assert.match(jsonOut(denied).hookSpecificOutput.permissionDecisionReason, /AUDIT_TASK_SCOPE_REQUIRED/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("changing Sol-approved Scope Contract revokes Terra's unspent audit child slot", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    const stateFile = join(root, ".codex", "orchestra-state", "active-state.json");
+    const state = { taskId: "audit-revocation", implementationPacket: {
+      scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"], maxDelegations: 1 },
+    } };
+    writeFileSync(stateFile, JSON.stringify(state));
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-scope", source: "startup" }, mode);
+    const terra = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-scope", tool_name: "collaborationspawn_agent",
+      tool_input: { agent_type: "terra-audit-lead", message: "Audit docs/**" },
+    }, mode);
+    assert.equal(terra.stdout.trim(), "");
+    hook(root, { hook_event_name: "SubagentStart", session_id: "sol-scope", agent_id: "terra-bound",
+      agent_type: "terra-audit-lead" }, mode);
+    state.implementationPacket.scopeContract.allowedPaths = ["src/**"];
+    writeFileSync(stateFile, JSON.stringify(state));
+    const denied = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-scope",
+      agent_id: "terra-bound", agent_type: "terra-audit-lead",
+      tool_name: "collaborationspawn_agent",
+      tool_input: { agent_type: "luna-auditor", message: "Ignore scope?" },
+    }, mode);
+    assert.equal(jsonOut(denied)?.hookSpecificOutput?.permissionDecision, "deny");
+    assert.match(jsonOut(denied).hookSpecificOutput.permissionDecisionReason, /AUDIT_LEAD_NOT_BOUND/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
