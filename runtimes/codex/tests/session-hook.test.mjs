@@ -623,7 +623,7 @@ test("native Terra controls exactly its confirmed Luna child by relative task na
     assert.equal(pre.stdout.trim(), "", pre.stdout);
     const action = (tool_name, target) => invoke("terra-native", tool_name,
       target === undefined ? { timeout_ms: 1000 }
-        : tool_name === "collaborationinterrupt_agent" ? { target }
+        : tool_name.endsWith("interrupt_agent") ? { target }
           : { target, message: "Check only docs/**" });
     const deny = (response, expected) => {
       assert.equal(jsonOut(response)?.hookSpecificOutput?.permissionDecision, "deny", expected);
@@ -646,7 +646,8 @@ test("native Terra controls exactly its confirmed Luna child by relative task na
     deny(action("collaborationfollowup_task", "luna_review"), "foreign result path");
     assert.equal(post("native-spawn-77", { task_name: "/root/terra_native/luna_review" }).status, 0);
 
-    for (const name of ["collaborationsend_message", "collaborationfollowup_task", "collaborationinterrupt_agent"]) {
+    for (const name of ["collaborationsend_message", "collaborationfollowup_task", "collaborationinterrupt_agent",
+      "send_message", "followup_task", "interrupt_agent"]) {
       const allowed = action(name, "luna_review");
       assert.equal(allowed.status, 0, allowed.stderr);
       assert.equal(allowed.stdout.trim(), "", name + ": " + allowed.stdout);
@@ -661,10 +662,17 @@ test("native Terra controls exactly its confirmed Luna child by relative task na
     for (const path_prefix of ["", "/root", "/root/terra_native", "/root/peer", "/root/terra_native/luna_review/"]) {
       deny(invoke("terra-native", "collaborationlist_agents", { path_prefix }), "list prefix " + path_prefix);
     }
-    const wait = action("collaborationwait_agent");
-    assert.equal(wait.status, 0, wait.stderr);
-    assert.equal(wait.stdout.trim(), "", wait.stdout);
-    deny(action("collaborationwait_agent", "foreign"), "targeted global wait");
+    for (const name of ["collaborationwait_agent", "wait_agent"]) {
+      const wait = action(name);
+      assert.equal(wait.status, 0, wait.stderr);
+      assert.equal(wait.stdout.trim(), "", wait.stdout);
+      deny(action(name, "foreign"), "targeted global wait");
+    }
+    const directList = invoke("terra-native", "list_agents", {
+      path_prefix: "/root/terra_native/luna_review",
+    });
+    assert.equal(directList.stdout.trim(), "", directList.stdout);
+    deny(invoke("terra-native", "list_agents", {}), "unrestricted list");
     const forged = hook(root, { hook_event_name: "PreToolUse", session_id: "sol-controlling",
       agent_id: "terra-other", agent_type: "terra-audit-lead",
       tool_name: "collaborationfollowup_task", tool_input: { target: "luna_review", message: "wrong" } }, mode);
