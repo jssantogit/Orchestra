@@ -56,6 +56,21 @@
           }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "^terra-audit-lead$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/astra-orchestra/session-hook.mjs\"",
+            "commandWindows": "$root = (& git rev-parse --show-toplevel).Trim(); & node (Join-Path $root '.codex/astra-orchestra/session-hook.mjs')",
+            "timeout": 10,
+            "statusMessage": "Binding bounded Terra audit identity",
+            "additionalContextLimit": 700
+          }
+        ]
+      }
     ]
   }
 }

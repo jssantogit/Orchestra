@@ -7,6 +7,24 @@ The control plane and investigators run `gpt-6-sol` through `sol-medium`,
 `sol-high`, `sol-xhigh`, and `sol-max`. Reviewers use the separate
 `sol-review-low` and `sol-review-medium` profiles. Luna workers run `gpt-6-luna`.
 
+## Bounded Terra-led audit (opt-in, pilot)
+
+Sol may select the `terra-audit-lead` profile for a factual task with an
+explicit Scope Contract and Work Lease task identity. The root's authorized
+native spawn arms a generation-bound, read-only audit grant. A factual
+`SubagentStart` for the Terra type must bind the identity before the Terra
+can spawn **one** `luna-auditor`. Any recursive spawn by other children,
+a second Luna, an unknown agent, stale generation or child writer is denied.
+The pilot has at most two subagents per session; it is not PARALLEL_2 writing.
+
+SubagentStart is advisory in upstream Codex. The PreToolUse check is the
+actual enforcement. Native spawn-to-child correlation is not proven for
+0.164: do not infer a parent edge from timestamps or transcripts. Preserve
+the root decision as the only acceptance owner. If native Terra nested tools
+are unavailable, report NOT_SUPPORTED instead of bypassing hooks.
+Hook changes require explicit interactive trust. No release while the native
+gate is unverified.
+
 ## Ownership and safety
 
 Sol Medium classifies canonical `taskAction`/`taskDomain`, writes the
