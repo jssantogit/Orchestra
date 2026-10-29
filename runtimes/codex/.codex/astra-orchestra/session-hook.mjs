@@ -41,7 +41,7 @@ function authorizeNativeAgentControl(payload, normalized, lease) {
   if (normalized.operation === "AGENT_MESSAGE") {
     // A worker may report facts to CONTROL. Peer-to-peer orders and arbitrary
     // destinations would bypass the parent coordinator; fail closed.
-    return child && !["parent", "root"].includes(normalized.target)
+    return child && !["parent", "root", "/root"].includes(normalized.target)
       ? { allowed: false, reason: "CHILD_MESSAGE_TARGET_FORBIDDEN" }
       : { allowed: true, reason: null };
   }
