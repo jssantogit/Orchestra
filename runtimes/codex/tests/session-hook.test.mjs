@@ -652,6 +652,13 @@ test("native Terra controls exactly its confirmed Luna child by relative task na
         deny(action(name, target), name + " foreign target " + target);
       }
     }
+    const list = invoke("terra-native", "collaborationlist_agents", {
+      path_prefix: "/root/terra_native/luna_review",
+    });
+    assert.equal(list.stdout.trim(), "", list.stdout);
+    for (const path_prefix of ["", "/root", "/root/terra_native", "/root/peer", "/root/terra_native/luna_review/"]) {
+      deny(invoke("terra-native", "collaborationlist_agents", { path_prefix }), "list prefix " + path_prefix);
+    }
     const wait = action("collaborationwait_agent");
     assert.equal(wait.status, 0, wait.stderr);
     assert.equal(wait.stdout.trim(), "", wait.stdout);

@@ -42,6 +42,8 @@ function read(root) {
       || (s.leadHash !== null && !/^sha256:[0-9a-f]{64}$/.test(s.leadHash))
       || (s.childTaskName !== null && !/^[a-z][a-z0-9_]{0,63}$/.test(s.childTaskName))
       || (s.childCallHash !== null && !/^sha256:[0-9a-f]{64}$/.test(s.childCallHash))
+      || (s.childPath !== null && (typeof s.childPath !== "string"
+        || !/^\/root\/[a-z][a-z0-9_]{0,63}\/[a-z][a-z0-9_]{0,63}$/.test(s.childPath)))
       || typeof s.childConfirmed !== "boolean") {
       return { ok: false, reason: "AUDIT_GRANT_INVALID" };
     }
@@ -110,7 +112,7 @@ export function armTerraAudit(root, payload, lease) {
       schema: SCHEMA, generation: lease.generation, taskId: lease.taskId,
       rootActor: lease.actor.sessionIdHash, scopeHash: currentScopeHash,
       leadHash: null, usedChildren: 0,
-      childTaskName: null, childCallHash: null, childConfirmed: false,
+      childTaskName: null, childCallHash: null, childPath: null, childConfirmed: false,
     } };
   });
 }
@@ -162,7 +164,7 @@ export function authorizeTerraChildAudit(root, payload, lease) {
     if (s.usedChildren >= 1) return { allowed: false, reason: "AUDIT_CHILD_BUDGET_EXHAUSTED" };
     return { allowed: true, next: {
       ...s, usedChildren: 1, childTaskName: taskName, childCallHash: callId ? hash(callId) : null,
-      childConfirmed: false,
+      childPath: null, childConfirmed: false,
     } };
   });
 }
@@ -208,7 +210,7 @@ export function confirmTerraAuditChild(root, payload, lease) {
       return { allowed: false, reason: "AUDIT_SPAWN_RESULT_OUTSIDE_PARENT" };
     }
     if (s.childConfirmed) return { allowed: true };
-    return { allowed: true, next: { ...s, childConfirmed: true } };
+    return { allowed: true, next: { ...s, childConfirmed: true, childPath: result.task_name } };
   });
 }
 
@@ -226,7 +228,8 @@ export function authorizeTerraAuditControl(root, payload, lease) {
   const directed = new Set(["collaborationsend_message", "send_message",
     "collaborationfollowup_task", "followup_task",
     "collaborationinterrupt_agent", "interrupt_agent"]);
-  if (!wait && !directed.has(name)) return { allowed: false, reason: "AUDIT_CONTROL_TOOL_FORBIDDEN" };
+  const list = name === "collaborationlist_agents" || name === "list_agents";
+  if (!wait && !directed.has(name) && !list) return { allowed: false, reason: "AUDIT_CONTROL_TOOL_FORBIDDEN" };
   const state = read(root);
   if (!state.ok) return { allowed: false, reason: state.reason };
   const s = state.value;
@@ -243,6 +246,14 @@ export function authorizeTerraAuditControl(root, payload, lease) {
       && (timeout === undefined || (Number.isInteger(timeout) && timeout > 0 && timeout <= 300000));
     return valid ? { allowed: true, reason: null } :
       { allowed: false, reason: "AUDIT_WAIT_UNSCOPED" };
+  }
+  if (list) {
+    // Provider list_agents permits a caller-supplied prefix. Only the
+    // confirmed child's canonical prefix is allowed, never the entire tree.
+    return s.childPath && Object.keys(input).length === 1
+      && input.path_prefix === s.childPath
+      ? { allowed: true, reason: null }
+      : { allowed: false, reason: "AUDIT_LIST_PREFIX_FORBIDDEN" };
   }
   const keys = Object.keys(input);
   const message = name.includes("send_message") || name.includes("followup_task");

@@ -12,10 +12,12 @@ If missing or unclear, return BLOCKED to Sol instead of enlarging scope.
 
 You may dispatch at most one luna-auditor via native spawn_agent if the
 Orchestra SubagentStart and PreToolUse hooks authorize it. Instruct the worker to send bounded progress and results to its native
-parent. Do not invoke wait_agent or peer control: those paths remain denied
-until native child identity and target correlation are verified. Inspect and
-cross-check only factual messages received; otherwise report NOT_VERIFIED
-to Sol instead of claiming completion.
+parent. After the native spawn PostToolUse confirms the exact child, use
+relative task_name for send_message, followup_task and interrupt_agent;
+use wait_agent for your own mailbox and list_agents only with the exact
+confirmed child canonical path_prefix. Do not target absolute paths, IDs,
+other workers or the whole team tree. If spawn confirmation fails, do not
+control any child; return NOT_VERIFIED to Sol.
 The Luna auditor cannot recursively delegate. Neither agent may edit files,
 change configurations, publish, run mutating shell commands, or accept work.
 Use child-to-parent factual messaging when available; report through final

@@ -13,7 +13,11 @@ Sol may select the `terra-audit-lead` profile for a factual task with an
 explicit Scope Contract, separate auditDelegation opt-in and Work Lease task identity. The root's authorized
 native spawn arms a generation-bound, read-only audit grant. A factual
 `SubagentStart` for the Terra type must bind the identity before the Terra
-can spawn **one** `luna-auditor`. Any recursive spawn by other children,
+can spawn **one** `luna-auditor`. Native V2 `PostToolUse` must confirm
+the child task_name and originating tool_use_id before the Terra can control
+that child. Send/follow-up/interrupt use only the relative child task_name,
+wait_agent only its own mailbox and list_agents the exact child path_prefix.
+Any recursive spawn by other children,
 a second Luna, an unknown agent, stale generation or child writer is denied.
 The pilot has at most two subagents per session; it is not PARALLEL_2 writing.
 
