@@ -3,7 +3,7 @@
 // SubagentStart binds the Terra agent_id, then Terra may spawn only one
 // read-only luna-auditor. This is not generic recursive delegation.
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, rmdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const SCHEMA = "orchestra.codex-audit-delegation.v1";
@@ -70,7 +70,7 @@ function transact(root, operation) {
   } catch {
     return { allowed: false, reason: "AUDIT_GRANT_IO_FAILURE" };
   } finally {
-    try { rmSync(lock, { recursive: false }); } catch {}
+    try { rmdirSync(lock); } catch {}
   }
 }
 
