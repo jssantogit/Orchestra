@@ -443,3 +443,79 @@ test("replayed factual tool-call ID keeps individual journal event IDs unique wi
     assert.equal(journal[1].providerRef.reference, "tool:native-reused-call-id");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("Sol can arm exactly one native Terra audit lead and Terra may delegate one read-only Luna auditor", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-a", source: "startup" }, mode);
+    const spawn = (agent_id, agent_type, role, message = "Audit only, no edits") => hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      ...(agent_id ? { agent_id, agent_type } : {}),
+      tool_name: "collaborationspawn_agent", tool_use_id: "spawn-" + role,
+      tool_input: { agent_type: role, message, fork_context: false },
+    }, mode);
+
+    const rootTerra = spawn(null, null, "terra-audit-lead");
+    assert.equal(rootTerra.status, 0, rootTerra.stderr);
+    assert.equal(rootTerra.stdout.trim(), "", rootTerra.stdout);
+    const factualStart = hook(root, {
+      hook_event_name: "SubagentStart", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+    }, mode);
+    assert.equal(factualStart.status, 0, factualStart.stderr);
+
+    const luna = spawn("terra-a", "terra-audit-lead", "luna-auditor");
+    assert.equal(luna.status, 0, luna.stderr);
+    assert.equal(luna.stdout.trim(), "", luna.stdout);
+    const repeated = spawn("terra-a", "terra-audit-lead", "luna-auditor");
+    assert.equal(jsonOut(repeated)?.hookSpecificOutput?.permissionDecision, "deny");
+
+    const imposter = spawn("terra-other", "terra-audit-lead", "luna-auditor");
+    assert.equal(jsonOut(imposter)?.hookSpecificOutput?.permissionDecision, "deny");
+    const forbiddenWriter = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+      tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" },
+    }, mode);
+    assert.equal(jsonOut(forbiddenWriter)?.hookSpecificOutput?.permissionDecision, "deny");
+    const budget = JSON.parse(readFileSync(join(root, ".codex", "orchestra-state", "audit-delegation.json"), "utf8"));
+    assert.equal(budget.usedChildren, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("audit subdelegation fails closed without Sol grant/verified SubagentStart or with unapproved roles", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-b", source: "startup" }, mode);
+    const send = (agentId, role, childRole) => hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-b",
+      agent_id: agentId, agent_type: role, tool_name: "collaborationspawn_agent",
+      tool_input: { agent_type: childRole, message: "audit" },
+    }, mode);
+    const first = send("terra-no-grant", "terra-audit-lead", "luna-auditor");
+    assert.equal(jsonOut(first)?.hookSpecificOutput?.permissionDecision, "deny");
+    const forgedStart = hook(root, {
+      hook_event_name: "SubagentStart", session_id: "sol-b",
+      agent_id: "terra-no-grant", agent_type: "terra-audit-lead",
+    }, mode);
+    assert.equal(forgedStart.status, 0);
+    assert.equal(jsonOut(send("terra-no-grant", "terra-audit-lead", "luna-auditor"))?.hookSpecificOutput?.permissionDecision, "deny");
+    const rootTerra = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-b",
+      tool_name: "collaborationspawn_agent", tool_input: { agent_type: "terra-audit-lead", message: "audit" },
+    }, mode);
+    assert.equal(rootTerra.stdout.trim(), "");
+    hook(root, {
+      hook_event_name: "SubagentStart", session_id: "sol-b", agent_id: "terra-verified", agent_type: "terra-audit-lead",
+    }, mode);
+    for (const wrong of ["luna-max", "terra-audit-lead", "sol-high", "unregistered"]) {
+      assert.equal(jsonOut(send("terra-verified", "terra-audit-lead", wrong))?.hookSpecificOutput?.permissionDecision, "deny", wrong);
+    }
+    assert.equal(jsonOut(send("unrelated", "luna-auditor", "luna-auditor"))?.hookSpecificOutput?.permissionDecision, "deny");
+    const permitted = send("terra-verified", "terra-audit-lead", "luna-auditor");
+    assert.equal(permitted.stdout.trim(), "");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
