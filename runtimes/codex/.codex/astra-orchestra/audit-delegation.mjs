@@ -118,13 +118,17 @@ export function bindTerraAudit(root, payload, lease) {
     if (!old.ok) return { allowed: false, reason: old.reason };
     const s = old.value;
     if (!isCurrent(s, lease, root)) return { allowed: false, reason: "AUDIT_GRANT_STALE" };
-    if (s.leadHash !== null) return { allowed: false, reason: "AUDIT_LEAD_ALREADY_BOUND" };
+    if (s.leadHash !== null) return { allowed: s.leadHash === hash(payload.agent_id),
+      reason: s.leadHash === hash(payload.agent_id) ? null : "AUDIT_LEAD_ALREADY_BOUND" };
     return { allowed: true, next: { ...s, leadHash: hash(payload.agent_id) } };
   });
 }
 
 export function authorizeTerraChildAudit(root, payload, lease) {
   const input = payload.tool_input || payload.toolInput || {};
+  if (lease.capabilities?.includes("WORKSPACE_EDIT")) {
+    return { allowed: false, reason: "AUDIT_ACTIVE_WRITER" };
+  }
   if (payload.agent_type !== LEAD || typeof payload.agent_id !== "string"
     || !payload.agent_id || input.agent_type !== WORKER
     || input.fork_context === true || input.forkContext === true) {

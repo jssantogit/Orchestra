@@ -470,6 +470,9 @@ test("Sol can arm exactly one native Terra audit lead and Terra may delegate one
       agent_id: "terra-a", agent_type: "terra-audit-lead",
     }, mode);
     assert.equal(factualStart.status, 0, factualStart.stderr);
+    const duplicate = hook(root, { hook_event_name: "SubagentStart", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead" }, mode);
+    assert.equal(duplicate.stdout.trim(), "");
 
     const luna = spawn("terra-a", "terra-audit-lead", "luna-auditor");
     assert.equal(luna.status, 0, luna.stderr);
