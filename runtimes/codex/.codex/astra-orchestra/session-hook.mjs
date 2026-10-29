@@ -16,7 +16,7 @@ import {
   recordCodexHookToolReceipt,
 } from "./work-lease-authority.mjs";
 import { evaluateCodexVerificationTool } from "./verification-guard.mjs";
-import { armTerraAudit, bindTerraAudit, authorizeTerraChildAudit, isReadOnlyAuditRole } from "./audit-delegation.mjs";
+import { armTerraAudit, bindTerraAudit, authorizeTerraChildAudit, authorizeTerraAuditControl, isReadOnlyAuditRole } from "./audit-delegation.mjs";
 import { normalizeToolEvent } from "./provider/codex/adapter/tool-event.mjs";
 import { authorizeCapability } from "./core/policy/capability-authorization.mjs";
 import { authorizeMutation } from "./core/policy/mutation-authorization.mjs";
@@ -39,6 +39,16 @@ function authorizeNativeAgentControl(repoRoot, payload, normalized, lease) {
     return child
       ? { allowed: false, reason: "CHILD_CONTROL_TOOL_FORBIDDEN" }
       : { allowed: true, reason: null };
+  }
+  if (child && payload.agent_type === "terra-audit-lead") {
+    const toolName = String(payload.tool_name || "").trim().toLowerCase();
+    const input = payload.tool_input || {};
+    const toRoot = normalized.operation === "AGENT_MESSAGE"
+      && ["parent", "root", "/root"].includes(normalized.target);
+    if (!toRoot && (normalized.operation === "AGENT_MESSAGE"
+      || normalized.operation === "AGENT_CONTROL")) {
+      return authorizeTerraAuditControl(repoRoot, payload, lease);
+    }
   }
   if (normalized.operation === "AGENT_MESSAGE") {
     // A worker may report facts to CONTROL. Peer-to-peer orders and arbitrary
