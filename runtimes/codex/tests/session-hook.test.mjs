@@ -622,7 +622,9 @@ test("native Terra controls exactly its confirmed Luna child by relative task na
     const pre = invoke("terra-native", "collaborationspawn_agent", auditSpawn, { tool_use_id: "native-spawn-77" });
     assert.equal(pre.stdout.trim(), "", pre.stdout);
     const action = (tool_name, target) => invoke("terra-native", tool_name,
-      target === undefined ? { timeout_ms: 1000 } : { target, message: "Check only docs/**" });
+      target === undefined ? { timeout_ms: 1000 }
+        : tool_name === "collaborationinterrupt_agent" ? { target }
+          : { target, message: "Check only docs/**" });
     const deny = (response, expected) => {
       assert.equal(jsonOut(response)?.hookSpecificOutput?.permissionDecision, "deny", expected);
     };
