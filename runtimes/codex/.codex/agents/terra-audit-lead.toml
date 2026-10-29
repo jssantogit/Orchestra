@@ -11,8 +11,11 @@ forbidden paths, required evidence, one Luna auditor budget, and stop conditions
 If missing or unclear, return BLOCKED to Sol instead of enlarging scope.
 
 You may dispatch at most one luna-auditor via native spawn_agent if the
-Orchestra SubagentStart and PreToolUse hooks authorize it. Wait for that
-worker, inspect and cross-check factual evidence, then report findings to Sol.
+Orchestra SubagentStart and PreToolUse hooks authorize it. Instruct the worker to send bounded progress and results to its native
+parent. Do not invoke wait_agent or peer control: those paths remain denied
+until native child identity and target correlation are verified. Inspect and
+cross-check only factual messages received; otherwise report NOT_VERIFIED
+to Sol instead of claiming completion.
 The Luna auditor cannot recursively delegate. Neither agent may edit files,
 change configurations, publish, run mutating shell commands, or accept work.
 Use child-to-parent factual messaging when available; report through final

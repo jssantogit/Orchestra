@@ -489,6 +489,27 @@ test("Sol can arm exactly one native Terra audit lead and Terra may delegate one
     }, mode);
     assert.equal(jsonOut(forbiddenWriter)?.hookSpecificOutput?.permissionDecision, "deny");
     const budget = JSON.parse(readFileSync(join(root, ".codex", "orchestra-state", "audit-delegation.json"), "utf8"));
+    const lunaProgress = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "luna-a", agent_type: "luna-auditor",
+      tool_name: "collaborationsend_message",
+      tool_input: { target: "parent", message: "audit evidence ready" },
+    }, mode);
+    assert.equal(lunaProgress.stdout.trim(), "");
+    const terraProgress = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+      tool_name: "collaborationsend_message",
+      tool_input: { target: "/root", message: "consolidated audit status" },
+    }, mode);
+    assert.equal(terraProgress.stdout.trim(), "");
+    const deniedWait = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+      tool_name: "collaborationwait_agent",
+      tool_input: { target: "luna-a" },
+    }, mode);
+    assert.equal(jsonOut(deniedWait)?.hookSpecificOutput?.permissionDecision, "deny");
     assert.equal(budget.usedChildren, 1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
