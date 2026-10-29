@@ -337,6 +337,14 @@ test("field 0.164 child collaboration message to explicit parent is allowed, but
     const toParent = message("collaborationsend_message", { target: "parent", message: "Validated CI" });
     assert.equal(toParent.status, 0, toParent.stderr);
     assert.equal(toParent.stdout.trim(), "", toParent.stdout);
+    // Native 0.164 actually sent the canonical root address "/root", not "root".
+    const toNativeRoot = message("collaborationsend_message", { target: "/root", message: "Progress from Luna" });
+    assert.equal(toNativeRoot.status, 0, toNativeRoot.stderr);
+    assert.equal(toNativeRoot.stdout.trim(), "", toNativeRoot.stdout);
+    for (const target of ["/peer", "/root/child", "/root/", "/Root"]) {
+      const rejected = message("collaborationsend_message", { target, message: "Unauthorized destination" });
+      assert.equal(jsonOut(rejected).hookSpecificOutput.permissionDecision, "deny", target);
+    }
     for (const target of ["worker-other", "", "not-the-parent"]) {
       const rejected = message("collaborationsend_message", { target, message: "Untrusted delegation" });
       assert.equal(jsonOut(rejected).hookSpecificOutput.permissionDecision, "deny", target);
