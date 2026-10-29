@@ -103,3 +103,19 @@ test("Codex 0.164 collaboration send_message is a bounded message, not child del
     tool_name: "collaborationwait_agent", tool_input: { target: "parent" },
   }).operation, "AGENT_CONTROL");
 });
+
+
+test("Codex V2 direct agent lifecycle names normalize as bounded control rather than unknown", () => {
+  const base = { hook_event_name: "PreToolUse", session_id: "native-v2-root",
+    agent_id: "terra-native", agent_type: "terra-audit-lead" };
+  for (const tool_name of ["wait_agent", "followup_task", "interrupt_agent", "list_agents"]) {
+    const event = normalizeToolEvent({ ...base, tool_name,
+      tool_input: tool_name === "wait_agent" ? { timeout_ms: 1000 }
+        : tool_name === "list_agents" ? { path_prefix: "/root/terra/luna" }
+          : { target: "luna", message: "Audit" } });
+    assert.equal(event.operation, "AGENT_CONTROL", tool_name);
+    assert.equal(event.sideEffectClass, "DELEGATION", tool_name);
+  }
+  assert.equal(normalizeToolEvent({ ...base, tool_name: "any_random_agent_control",
+    tool_input: { target: "luna" } }).operation, "UNKNOWN");
+});
