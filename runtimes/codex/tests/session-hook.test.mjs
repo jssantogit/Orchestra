@@ -452,8 +452,8 @@ test("Sol can arm exactly one native Terra audit lead and Terra may delegate one
     const mode = { authorityMode: "lease" };
     writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"),
       JSON.stringify({ taskId: "audit-task-a", implementationPacket: {
-        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"], maxDelegations: 1 },
-      } }));
+        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"] },
+      }, auditDelegation: { enabled: true, leadRole: "terra-audit-lead", workerRole: "luna-auditor", maxChildren: 1 } }));
     hook(root, { hook_event_name: "SessionStart", session_id: "sol-a", source: "startup" }, mode);
     const spawn = (agent_id, agent_type, role, message = "Audit only, no edits") => hook(root, {
       hook_event_name: "PreToolUse", session_id: "sol-a",
@@ -499,8 +499,8 @@ test("audit subdelegation fails closed without Sol grant/verified SubagentStart 
     const mode = { authorityMode: "lease" };
     writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"),
       JSON.stringify({ taskId: "audit-task-b", implementationPacket: {
-        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"], maxDelegations: 1 },
-      } }));
+        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"] },
+      }, auditDelegation: { enabled: true, leadRole: "terra-audit-lead", workerRole: "luna-auditor", maxChildren: 1 } }));
     hook(root, { hook_event_name: "SessionStart", session_id: "sol-b", source: "startup" }, mode);
     const send = (agentId, role, childRole) => hook(root, {
       hook_event_name: "PreToolUse", session_id: "sol-b",
@@ -553,8 +553,8 @@ test("changing Sol-approved Scope Contract revokes Terra's unspent audit child s
     const mode = { authorityMode: "lease" };
     const stateFile = join(root, ".codex", "orchestra-state", "active-state.json");
     const state = { taskId: "audit-revocation", implementationPacket: {
-      scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"], maxDelegations: 1 },
-    } };
+      scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"] },
+    }, auditDelegation: { enabled: true, leadRole: "terra-audit-lead", workerRole: "luna-auditor", maxChildren: 1 } };
     writeFileSync(stateFile, JSON.stringify(state));
     hook(root, { hook_event_name: "SessionStart", session_id: "sol-scope", source: "startup" }, mode);
     const terra = hook(root, {

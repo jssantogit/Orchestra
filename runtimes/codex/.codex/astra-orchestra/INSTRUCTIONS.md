@@ -10,7 +10,7 @@ The control plane and investigators run `gpt-6-sol` through `sol-medium`,
 ## Bounded Terra-led audit (opt-in, pilot)
 
 Sol may select the `terra-audit-lead` profile for a factual task with an
-explicit Scope Contract and Work Lease task identity. The root's authorized
+explicit Scope Contract, separate auditDelegation opt-in and Work Lease task identity. The root's authorized
 native spawn arms a generation-bound, read-only audit grant. A factual
 `SubagentStart` for the Terra type must bind the identity before the Terra
 can spawn **one** `luna-auditor`. Any recursive spawn by other children,

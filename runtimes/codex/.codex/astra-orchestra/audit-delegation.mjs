@@ -18,10 +18,15 @@ function scopeHash(root) {
     const state = JSON.parse(readFileSync(join(root, ".codex", "orchestra-state", "active-state.json"), "utf8"));
     const packet = state.implementationPacket || state.implementation_packet;
     const scope = packet?.scopeContract || packet?.scope_contract;
+    const audit = state.auditDelegation;
     if (!scope || !Array.isArray(scope.allowedPaths) || scope.allowedPaths.length === 0
       || !scope.allowedPaths.every(p => typeof p === "string" && p.trim())
-      || !Array.isArray(scope.forbiddenPaths) || scope.maxDelegations !== 1) return null;
-    return hash(JSON.stringify(scope));
+      || !Array.isArray(scope.forbiddenPaths)
+      || audit?.enabled !== true || audit.leadRole !== LEAD
+      || audit.workerRole !== WORKER || audit.maxChildren !== 1) return null;
+    // Keep audit-specific permission outside the strictly validated
+    // orchestra.scope-contract.v2 (additionalProperties:false).
+    return hash(JSON.stringify({ scope, audit }));
   } catch { return null; }
 }
 function auditFile(root) {
