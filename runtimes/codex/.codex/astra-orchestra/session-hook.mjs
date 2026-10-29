@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import {
@@ -13,13 +13,60 @@ import {
   codexCapabilityForTool,
   enterCodexWorkLease,
   resolveCodexAuthorityMode,
+  recordCodexHookToolReceipt,
 } from "./work-lease-authority.mjs";
 import { evaluateCodexVerificationTool } from "./verification-guard.mjs";
 import { normalizeToolEvent } from "./provider/codex/adapter/tool-event.mjs";
-import { attachProviderTelemetryReference } from "./provider/codex/adapter/telemetry.mjs";
 import { authorizeCapability } from "./core/policy/capability-authorization.mjs";
 import { authorizeMutation } from "./core/policy/mutation-authorization.mjs";
-import { createRuntimeEvent } from "./core/events/runtime-event.mjs";
+
+// Project-controlled, installed Codex agents only; Astra is explicitly
+// manual-only and the orchestrator's own Sol Medium runs at the root.
+// Native hook names must first be recognized by normalizeToolEvent.
+const NATIVE_DELEGATION_ROLES = new Set([
+  "luna-max", "luna-high", "luna-medium", "luna-auditor",
+  "sol-high", "sol-xhigh", "sol-max",
+  "sol-review-low", "sol-review-medium",
+]);
+
+function authorizeNativeAgentControl(payload, normalized, lease) {
+  const child = Boolean(payload.agent_id || payload.agentId);
+  // Only the factual root may call web and solicit user input. These are
+  // deliberately explicit names, never a generic exemption for unknown tools.
+  if (normalized.operation === "WEB_RESEARCH" || normalized.operation === "USER_CLARIFICATION") {
+    return child
+      ? { allowed: false, reason: "CHILD_CONTROL_TOOL_FORBIDDEN" }
+      : { allowed: true, reason: null };
+  }
+  if (normalized.operation === "AGENT_MESSAGE") {
+    // A worker may report facts to CONTROL. Peer-to-peer orders and arbitrary
+    // destinations would bypass the parent coordinator; fail closed.
+    return child && !["parent", "root", "/root"].includes(normalized.target)
+      ? { allowed: false, reason: "CHILD_MESSAGE_TARGET_FORBIDDEN" }
+      : { allowed: true, reason: null };
+  }
+  if (normalized.operation !== "DELEGATE" && normalized.operation !== "AGENT_CONTROL") {
+    return { allowed: true, reason: null };
+  }
+  // The root may delegate but workers cannot recursively spawn/control agents.
+  if (child) {
+    return { allowed: false, reason: "CHILD_DELEGATION_FORBIDDEN" };
+  }
+  if (normalized.operation === "DELEGATE") {
+    const input = payload.tool_input || payload.toolInput || {};
+    const role = input.agent_type ?? input.agentType;
+    if (typeof role !== "string" || !NATIVE_DELEGATION_ROLES.has(role)) {
+      return { allowed: false, reason: "DELEGATION_ROLE_NOT_AUTHORIZED" };
+    }
+    if (input.fork_context === true || input.forkContext === true) {
+      return { allowed: false, reason: "DELEGATION_CONTEXT_FORK_FORBIDDEN" };
+    }
+    if (lease.capabilities.includes("WORKSPACE_EDIT")) {
+      return { allowed: false, reason: "DELEGATION_ACTIVE_WORKSPACE_WRITER" };
+    }
+  }
+  return { allowed: true, reason: null };
+}
 
 function readStdin() {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
@@ -72,41 +119,21 @@ function activePacket(repoRoot) {
     || null;
 }
 
-function emitRuntimeEvent(repoRoot, payload, lease, normalized) {
-  if (!lease || !normalized || normalized.eventType === "UNKNOWN") return;
-  try {
-    const event = createRuntimeEvent({
-      type: normalized.eventType,
-      generation: lease.generation,
-      taskId: lease.taskId || null,
-      actor: lease.actor,
-    });
-    let record = { event };
-    if (payload.tool_call_id || payload.toolCallId || payload.tool_call?.id) {
-      record = attachProviderTelemetryReference(event, payload);
-    }
-    const path = join(repoRoot, ".codex", "orchestra-state", "runtime-events.jsonl");
-    mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
-  } catch {}
-}
-
+// Codex 0.159.x has a closed provider-facing hook output schema.
+ // Rich internal errors stay in the reason/context; never forward custom
+ // top-level control flags that Codex would reject as unknown fields.
 function sessionStartOutput(context, { stop = false, stopReason = null, systemMessage = null } = {}) {
-  const output = {
-    continue: !stop,
+  const message = [context, stopReason, systemMessage].filter(Boolean).join("\n");
+  return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: context,
+      additionalContext: message,
     },
   };
-  if (stopReason) output.stopReason = stopReason;
-  if (systemMessage) output.systemMessage = systemMessage;
-  return output;
 }
 
-function preToolDeny(reason, message = "Orchestra blocked this tool because this Codex session does not own current project orchestration authority.") {
+function preToolDeny(reason, _message = null) {
   return {
-    systemMessage: message,
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -256,6 +283,11 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
     return preToolDeny("CODEX_PROVIDER_EVENT_DENIED:UNKNOWN_OPERATION.");
   }
 
+  const agentControl = authorizeNativeAgentControl(payload, normalized, control.lease);
+  if (!agentControl.allowed) {
+    return preToolDeny(`CODEX_DELEGATION_DENIED:${agentControl.reason}.`);
+  }
+
   const verification = evaluateCodexVerificationTool(repoRoot, payload);
   if (!verification.allowed) {
     return preToolDeny(verification.reason,
@@ -316,7 +348,16 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
     }
   }
 
-  emitRuntimeEvent(repoRoot, payload, effectiveLease, normalized);
+  const receipt = recordCodexHookToolReceipt(repoRoot, {
+    payload, lease: effectiveLease, normalized,
+    leaseTransition: capability === "WORKSPACE_EDIT"
+      ? (control.lease.capabilities.includes("WORKSPACE_EDIT")
+        ? "WORKSPACE_EDIT_AUTHORIZED" : "WORKSPACE_EDIT_ACQUIRED")
+      : null,
+  });
+  if (!receipt.recorded) {
+    process.stderr.write(`Orchestra Codex hook receipt unavailable: ${receipt.reason}\n`);
+  }
   return null;
 }
 
@@ -335,17 +376,12 @@ function handleLegacyUserPromptSubmit(repoRoot, payload) {
   };
 }
 
-function handleLeaseUserPromptSubmit(repoRoot, payload, mode) {
-  const decision = authorizeCodexLeaseCapability(repoRoot, {
-    sessionId: payload.session_id,
-    capability: "CONTROL",
-    mode,
-  });
-  if (decision.allowed) return null;
-  return {
-    decision: "block",
-    reason: `CODEX_WORK_LEASE_AUTHORITY_DENIED:${decision.reason || "UNKNOWN"}. This session does not hold the current Orchestra Work Lease generation.`,
-  };
+// A text prompt never grants side-effect authority. Do not make a Codex chat
+// hostage to another session's Work Lease: keep natural language available
+// so a user can inspect or request recovery. Every actual tool remains gated
+// by PreToolUse and the current generation-fenced Work Lease.
+function handleLeaseUserPromptSubmit(_repoRoot, _payload, _mode) {
+  return null;
 }
 
 function handleUserPromptSubmit(repoRoot, payload) {

@@ -49,3 +49,57 @@ test("Codex adapters fail closed when factual identity or evidence reference is 
   assert.throws(() => normalizeToolEvent({ hook_event_name: "PreToolUse", tool_name: "Read" }), /CODEX_SESSION_ID_REQUIRED/);
   assert.throws(() => normalizeProviderEvidence({ taskId: "task-1", candidateId: "candidate-1", candidateGeneration: 0, kind: "REMOTE_CI", conclusion: "success" }), /CODEX_EVIDENCE_REFERENCE_REQUIRED/);
 });
+
+
+test("Codex native collaboration names classify delegation without classifying arbitrary tools", () => {
+  const base = { hook_event_name: "PreToolUse", session_id: "root-155", tool_call_id: "native-155" };
+  for (const name of ["collaborationspawn_agent", "spawn_agent", "multi_agent_v1spawn_agent"]) {
+    const result = normalizeToolEvent({ ...base, tool_name: name, tool_input: { agent_type: "luna-max" } });
+    assert.equal(result.operation, "DELEGATE", name);
+    assert.equal(result.sideEffectClass, "DELEGATION", name);
+    assert.equal(result.target, "luna-max");
+  }
+  for (const name of ["collaborationwait_agent", "collaborationfollowup_task", "collaborationlist_agents", "collaborationinterrupt_agent", "multi_agent_v1wait_agent", "multi_agent_v1send_input", "multi_agent_v1close_agent"]) {
+    const result = normalizeToolEvent({ ...base, tool_name: name, tool_input: { target: "worker-1" } });
+    assert.equal(result.operation, "AGENT_CONTROL", name);
+    assert.equal(result.sideEffectClass, "DELEGATION", name);
+  }
+  for (const name of ["collaborationdangerous_tool", "spawn_everyone", "unknown_operation"]) {
+    assert.equal(normalizeToolEvent({ ...base, tool_name: name }).operation, "UNKNOWN", name);
+  }
+});
+
+
+test("native Codex factual web, clarification and message tools have explicit classes; unknown tools remain unknown", () => {
+  const base = { hook_event_name: "PreToolUse", session_id: "root-155", tool_call_id: "field-155" };
+  for (const [tool_name, operation, sideEffectClass] of [
+    ["webrun", "WEB_RESEARCH", "NETWORK_READ"],
+    ["request_user_input_async", "USER_CLARIFICATION", "HUMAN_INTERACTION"],
+    ["send_message", "AGENT_MESSAGE", "DELEGATION"],
+  ]) {
+    const e = normalizeToolEvent({ ...base, tool_name, tool_input: {} });
+    assert.equal(e.operation, operation, tool_name);
+    assert.equal(e.sideEffectClass, sideEffectClass, tool_name);
+    assert.equal(e.factualIds.toolCallId, "field-155");
+  }
+  for (const tool_name of ["webrun_unsafe", "request_user_input_async_custom", "send_message_everyone", "tool_created_later"]) {
+    assert.equal(normalizeToolEvent({ ...base, tool_name }).operation, "UNKNOWN", tool_name);
+  }
+});
+
+
+test("Codex 0.164 collaboration send_message is a bounded message, not child delegation control", () => {
+  const field = normalizeToolEvent({
+    hook_event_name: "PreToolUse", session_id: "real-root", agent_id: "luna-field",
+    tool_name: "collaborationsend_message", tool_call_id: "child-message-1",
+    tool_input: { target: "parent", message: "Finished tests" },
+  });
+  assert.equal(field.operation, "AGENT_MESSAGE");
+  assert.equal(field.sideEffectClass, "DELEGATION");
+  assert.equal(field.target, "parent");
+  assert.equal(field.factualIds.toolCallId, "child-message-1");
+  assert.equal(normalizeToolEvent({
+    hook_event_name: "PreToolUse", session_id: "real-root", agent_id: "luna-field",
+    tool_name: "collaborationwait_agent", tool_input: { target: "parent" },
+  }).operation, "AGENT_CONTROL");
+});

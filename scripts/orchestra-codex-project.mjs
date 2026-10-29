@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { existsSync, lstatSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -7,6 +9,7 @@ import { buildRuntime } from "../runtime/runtime-builder.mjs";
 import {
   doctorDelegationProjectRuntime,
   ensureDelegationProjectRuntime,
+  uninstallDelegationProjectRuntime,
 } from "../runtime/delegation/project-runtime-manager.mjs";
 import {
   doctorCodexProjectRuntime,
@@ -14,6 +17,7 @@ import {
   installCodexProjectRuntime,
   rollbackCodexProjectRuntime,
   updateCodexProjectRuntime,
+  uninstallCodexProjectRuntime,
 } from "../providers/codex/project-runtime-manager.mjs";
 import {
   inspectProjectEvidence,
@@ -71,6 +75,31 @@ function composedRuntimeResult(providerRuntime, providerResult, delegationResult
   };
 }
 
+function codexHookCheckoutCompatibility(targetDir) {
+  const project = resolve(targetDir);
+  const localHook = join(project, ".codex", "hooks.json");
+  const result = { checkoutType: "UNKNOWN", discoveryCompatibility: "UNVERIFIED",
+    localHookDiscovery: "NOT_VERIFIED", localHookPresent: existsSync(localHook) };
+  try {
+    const dotgit = lstatSync(join(project, ".git"));
+    if (dotgit.isDirectory()) {
+      return { ...result, checkoutType: "INDEPENDENT_CHECKOUT",
+        discoveryCompatibility: "NO_KNOWN_WORKTREE_ROOT_REDIRECT" };
+    }
+    if (!dotgit.isFile()) return result;
+    const gitDir = execFileSync("git", ["-C", project, "rev-parse", "--absolute-git-dir"],
+      { encoding: "utf8", windowsHide: true, timeout: 5_000 }).trim();
+    if (!gitDir.split(/[\\/]/).includes("worktrees")) return result;
+    return { ...result, checkoutType: "LINKED_WORKTREE",
+      // This is a known upstream *compatibility* risk for Codex 0.159/0.164,
+      // not a claim that a native process was inspected or that trust is known.
+      discoveryCompatibility: result.localHookPresent
+        ? "KNOWN_UPSTREAM_HOOK_ROOT_REDIRECT" : "UNVERIFIED" };
+  } catch {
+    return result;
+  }
+}
+
 function composedDoctorResult(providerResult, delegationResult) {
   const checks = [...providerResult.checks, ...delegationResult.checks];
   const healthy = providerResult.healthy && delegationResult.healthy;
@@ -81,6 +110,15 @@ function composedDoctorResult(providerResult, delegationResult) {
     checks,
     providerRuntime: providerResult.inspection,
     delegationRuntime: delegationResult.inspection,
+    // Byte integrity does not tell us whether Codex loaded the project layer
+    // or whether a user reviewed its non-managed hook definitions. This
+    // distinction was exposed by the first F6D native 1.5 field test.
+    hookActivation: {
+      ...codexHookCheckoutCompatibility(providerResult.targetDir),
+      status: "UNVERIFIED",
+      requiresUserReview: true,
+      instructions: "Project .codex hooks require project trust and separate /hooks review/trust in an interactive Codex session. Linked worktrees on Codex 0.159/0.164 may use primary checkout hooks instead of local hooks (upstream #27133). Use an explicitly isolated clone when necessary; never copy hooks to the primary checkout or globally. After discovery and approval, verify native SessionStart/CONTROL. Do not bypass hook trust.",
+    },
   };
 }
 
@@ -106,6 +144,28 @@ async function installCodexWithDelegation({ targetDir, dryRun }) {
     });
     return composedRuntimeResult("codex", installedProvider, delegationResult);
   });
+}
+
+async function uninstallCodexWithDelegation({ targetDir, dryRun }) {
+  // Complete the validation of *both* runtime images before changing either one.
+  // The manager compares installed bytes against their recorded image hashes,
+  // refuses active Work Leases, and preserves evidence/backup directories.
+  const codexPlan = await uninstallCodexProjectRuntime({ targetDir, dryRun: true });
+  const delegationPlan = await uninstallDelegationProjectRuntime({ targetDir, dryRun: true });
+  if (dryRun) {
+    return {
+      operation: "uninstall", changed: codexPlan.changed || delegationPlan.changed,
+      dryRun: true, targetDir: resolve(targetDir),
+      codex: codexPlan, delegation: delegationPlan,
+    };
+  }
+  const codex = await uninstallCodexProjectRuntime({ targetDir });
+  const delegation = await uninstallDelegationProjectRuntime({ targetDir });
+  return {
+    operation: "uninstall", changed: codex.changed || delegation.changed,
+    targetDir: resolve(targetDir), codex, delegation,
+    statePreserved: true,
+  };
 }
 
 async function updateCodexWithDelegation({ targetDir, dryRun, force }) {
@@ -171,7 +231,7 @@ async function run(args) {
   const force = flag(args, "--force");
 
   if (!command || !targetDir) {
-    console.error("Usage: orchestra-codex-project <install|update|doctor|version|diff-runtime|backups|evidence|rollback> <project> [--dry-run] [--force] [--json]");
+    console.error("Usage: orchestra-codex-project <install|update|uninstall|doctor|version|diff-runtime|backups|evidence|rollback> <project> [--dry-run] [--force] [--json]");
     return 2;
   }
 
@@ -182,6 +242,9 @@ async function run(args) {
       break;
     case "update":
       result = await updateCodexWithDelegation({ targetDir, dryRun, force });
+      break;
+    case "uninstall":
+      result = await uninstallCodexWithDelegation({ targetDir, dryRun });
       break;
     case "doctor":
       result = await doctorCodexWithDelegation({ targetDir });
@@ -259,6 +322,7 @@ async function run(args) {
     console.log("Version:              " + (result.metadata?.version || "unmanaged"));
     console.log("");
     for (const check of result.checks) console.log(" [" + (check.ok ? "PASS" : "FAIL") + "] " + check.id + " — " + check.detail);
+    console.log(" [UNVERIFIED] CODEX_HOOK_ACTIVATION — " + result.hookActivation.instructions);
     return result.healthy ? 0 : 1;
   }
 
@@ -304,11 +368,13 @@ async function run(args) {
     return 0;
   }
 
-  console.log("Orchestra Codex runtime " + (command === "rollback" ? "rolled back" : (result.changed === false ? "already up to date" : "updated")) + ".");
+  console.log("Orchestra Codex runtime " + (command === "rollback" ? "rolled back" : command === "uninstall" ? "uninstalled" : (result.changed === false ? "already up to date" : "updated")) + ".");
   console.log("Target:               " + resolve(targetDir));
   const meta = result.metadata || {};
   if (meta.version) console.log("Version:              " + meta.version);
   if (result.backupId) console.log("Backup:               " + result.backupId);
+  if (command === "uninstall" && result.codex?.backupId) console.log("Codex backup:         " + result.codex.backupId);
+  if (command === "uninstall" && result.delegation?.backupId) console.log("Delegation backup:    " + result.delegation.backupId);
   return 0;
 }
 

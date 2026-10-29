@@ -68,3 +68,14 @@ test("non-git target does not get synthetic .git metadata", () => {
   assert.equal(result.path, null);
   assert.equal(existsSync(join(root, ".git")), false);
 });
+
+test("managed delegation payload is ignored without concealing user .orchestra files", () => {
+  const root = repo();
+  ensureProjectStateIgnored(root);
+  mkdirSync(join(root, ".orchestra", "runtime", "delegation"), { recursive: true });
+  writeFileSync(join(root, ".orchestra", "runtime", "delegation", "cli.mjs"), "managed\n");
+  assert.equal(git(root, "status", "--short", "--", ".orchestra/runtime/delegation"), "");
+  writeFileSync(join(root, ".orchestra", "user-note.txt"), "keep visible\n");
+  assert.match(git(root, "status", "--short", "--", ".orchestra"), /user-note.txt|\.orchestra\//);
+  assert.match(git(root, "status", "--short", "--untracked-files=all"), /user-note\.txt/);
+});

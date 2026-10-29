@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -110,4 +111,57 @@ test("Codex Doctor fails closed on managed runtime drift", () => {
   } finally {
     rmSync(project, { recursive: true, force: true });
   }
+});
+
+test("official 1.5 candidate reports truthful prerelease identity and separates file health from native hook activation", () => {
+  const project = makeProject();
+  try {
+    const install = runNode([installScript, project]);
+    assert.equal(install.status, 0, install.stderr || install.stdout);
+
+    const candidate = "1.5.0-rc.1";
+    const version = parseJsonOutput(runNode([projectCli, "version", project, "--json"]));
+    assert.equal(version.version, candidate);
+    assert.equal(version.orchestraVersion, candidate);
+    const codexMetadata = JSON.parse(readFileSync(join(project, ".orchestra", "state", "runtimes", "codex.json"), "utf8"));
+    const delegationMetadata = JSON.parse(readFileSync(join(project, ".orchestra", "state", "runtimes", "delegation.json"), "utf8"));
+    assert.equal(codexMetadata.version, candidate);
+    assert.equal(delegationMetadata.version, candidate);
+
+    const doctor = parseJsonOutput(runNode([projectCli, "doctor", project, "--json"]));
+    assert.equal(doctor.healthy, true, "Runtime byte integrity remains healthy");
+    assert.equal(doctor.hookActivation.status, "UNVERIFIED");
+    assert.equal(doctor.hookActivation.requiresUserReview, true);
+    assert.match(doctor.hookActivation.instructions, /\/hooks/);
+    assert.match(doctor.hookActivation.instructions, /project.*trust/i);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("Doctor reports known Codex worktree hook-root redirection while retaining byte health", () => {
+  const parent = mkdtempSync(join(tmpdir(), "orchestra-upstream-worktree-"));
+  try {
+    const main = join(parent, "canonical");
+    const linked = join(parent, "linked");
+    mkdirSync(main);
+    const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+    git(main, "init", "-q");
+    writeFileSync(join(main, "work.txt"), "product\n");
+    git(main, "add", "work.txt");
+    git(main, "-c", "user.name=Orchestra Test", "-c", "user.email=orchestra@example.invalid",
+      "commit", "-qm", "start");
+    git(main, "worktree", "add", "-q", "-b", "test/native-hook-root", linked);
+
+    const installed = runNode([installScript, linked]);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    const check = parseJsonOutput(runNode([projectCli, "doctor", linked, "--json"]));
+    assert.equal(check.healthy, true, "static installation is still healthy");
+    assert.equal(check.hookActivation.status, "UNVERIFIED");
+    assert.equal(check.hookActivation.checkoutType, "LINKED_WORKTREE");
+    assert.equal(check.hookActivation.discoveryCompatibility, "KNOWN_UPSTREAM_HOOK_ROOT_REDIRECT");
+    assert.equal(check.hookActivation.localHookDiscovery, "NOT_VERIFIED");
+    assert.equal(existsSync(join(main, ".codex", "hooks.json")), false);
+    assert.equal(existsSync(join(linked, ".codex", "hooks.json")), true);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
 });

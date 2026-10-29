@@ -4,6 +4,7 @@ import {
   installProjectRuntime,
   rollbackProjectRuntime,
   updateProjectRuntime,
+  uninstallProjectRuntime,
 } from "../project-runtime-manager.mjs";
 import { delegationProjectRuntimeAdapter } from "./project-runtime-adapter.mjs";
 
@@ -106,4 +107,8 @@ export async function rollbackDelegationProjectRuntime({
     force,
     runtimeManifest: await manifest(),
   });
+}
+
+export async function uninstallDelegationProjectRuntime({ targetDir, adapter = delegationProjectRuntimeAdapter, dryRun = false }) {
+  return uninstallProjectRuntime({ targetDir, runtimeManifest: await manifest(), adapter, dryRun });
 }

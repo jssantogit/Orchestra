@@ -24,6 +24,7 @@ function project() {
   mkdirSync(join(root, ".codex", "astra-orchestra"), { recursive: true });
   cpSync(join(runtimeDir, "session-authority.mjs"), join(root, ".codex", "astra-orchestra", "session-authority.mjs"));
   cpSync(join(runtimeDir, "session-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-hook.mjs"));
+  cpSync(join(runtimeDir, "session-post-tool-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs"));
   cpSync(join(runtimeDir, "verification-guard.mjs"), join(root, ".codex", "astra-orchestra", "verification-guard.mjs"));
   cpSync(join(runtimeDir, "work-lease-authority.mjs"), join(root, ".codex", "astra-orchestra", "work-lease-authority.mjs"));
   cpSync(join(runtimeDir, "core"), join(root, ".codex", "astra-orchestra", "core"), { recursive: true });
@@ -85,8 +86,11 @@ test("dual mode fresh root advances Work Lease control without prepared handoff 
     assert.doesNotMatch(context, /HANDOFF REQUIRED/);
 
     const formerPrompt = hook(root, { hook_event_name: "UserPromptSubmit", session_id: "root-a", prompt: "keep working" }, { authorityMode: "dual" });
-    assert.equal(jsonOut(formerPrompt).decision, "block");
-    assert.match(jsonOut(formerPrompt).reason, /WORK_LEASE_AUTHORITY_DENIED/);
+    assert.equal(formerPrompt.status, 0, formerPrompt.stderr);
+    assert.equal(formerPrompt.stdout.trim(), ""); // Chat text remains usable; old generation has no tools.
+    const forbiddenEdit = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } }, { authorityMode: "dual" });
+    assert.equal(jsonOut(forbiddenEdit).hookSpecificOutput.permissionDecision, "deny");
+    assert.match(jsonOut(forbiddenEdit).hookSpecificOutput.permissionDecisionReason, /STALE_WORK_LEASE/);
 
     const currentRead = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "Bash", tool_input: { command: "git status --short" } }, { authorityMode: "dual" });
     assert.equal(currentRead.status, 0, currentRead.stderr);
@@ -177,5 +181,265 @@ test("invalid project verification policy blocks shell execution", () => {
     writeFileSync(join(root, ".codex", "orchestra-verification.json"), "{invalid");
     const result = hook(root, { hook_event_name: "PreToolUse", session_id: "root-a", tool_name: "Bash", tool_input: { command: "echo ok" } });
     assert.equal(jsonOut(result)?.hookSpecificOutput.permissionDecisionReason, "VERIFICATION_CONFIG_UNREADABLE");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("blocked new root can submit a prompt but cannot edit while another session holds the writer", () => {
+  const root = project();
+  try {
+    const first = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "writer-a" }, { authorityMode: "lease" });
+    assert.equal(first.status, 0, first.stderr);
+    const edit = hook(root, { hook_event_name: "PreToolUse", session_id: "writer-a", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } }, { authorityMode: "lease" });
+    assert.equal(edit.status, 0);
+    assert.equal(edit.stdout.trim(), "");
+
+    const newcomer = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "new-b" }, { authorityMode: "lease" });
+    assert.match(jsonOut(newcomer).hookSpecificOutput.additionalContext, /WRITE_LEASE_ACTIVE/);
+
+    const prompt = hook(root, { hook_event_name: "UserPromptSubmit", session_id: "new-b", prompt: "Diagnose why another chat is blocking this worktree" }, { authorityMode: "lease" });
+    assert.equal(prompt.status, 0, prompt.stderr);
+    assert.equal(prompt.stdout.trim(), "");
+    const forbidden = hook(root, { hook_event_name: "PreToolUse", session_id: "new-b", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(forbidden).hookSpecificOutput.permissionDecision, "deny");
+    assert.match(jsonOut(forbidden).hookSpecificOutput.permissionDecisionReason, /LEASE_BINDING_MISSING|WRITE_LEASE_ACTIVE/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Codex 0.159 native hook wire contains no unknown top-level fields", () => {
+  const root = project();
+  try {
+    const started = hook(root, { hook_event_name: "SessionStart", source: "startup", session_id: "root-a" }, { authorityMode: "lease" });
+    assert.equal(started.status, 0);
+    assert.deepEqual(Object.keys(jsonOut(started)), ["hookSpecificOutput"]);
+    assert.deepEqual(Object.keys(jsonOut(started).hookSpecificOutput).sort(), ["additionalContext", "hookEventName"]);
+
+    const denied = hook(root, { hook_event_name: "PreToolUse", session_id: "root-b", tool_name: "apply_patch", tool_input: {} }, { authorityMode: "lease" });
+    assert.equal(denied.status, 0, "A semantic deny must exit successfully to be honored by Codex");
+    assert.deepEqual(Object.keys(jsonOut(denied)), ["hookSpecificOutput"]);
+    assert.deepEqual(Object.keys(jsonOut(denied).hookSpecificOutput).sort(), ["hookEventName", "permissionDecision", "permissionDecisionReason"]);
+    assert.equal(jsonOut(denied).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("real issue 155 native Luna handoff is allowed for root CONTROL but unknown/child/unregistered roles stay denied", () => {
+  const root = project();
+  try {
+    const start = hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, { authorityMode: "lease" });
+    assert.equal(start.status, 0, start.stderr);
+    const input = { agent_type: "luna-max", message: "Implement bounded Phase 0 regressions", fork_context: false };
+    const spawn = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationspawn_agent", tool_call_id: "spawn-luna-1", tool_input: input }, { authorityMode: "lease" });
+    assert.equal(spawn.status, 0, spawn.stderr);
+    assert.equal(spawn.stdout.trim(), "", "root delegation does not silently mutate or require workspace edit");
+    const lease = JSON.parse(readFileSync(join(root, ".orchestra", "state", "work-lease.json"), "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL"]);
+
+    const wait = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationwait_agent", tool_input: { target: "worker-1" } }, { authorityMode: "lease" });
+    assert.equal(wait.status, 0, wait.stderr);
+    assert.equal(wait.stdout.trim(), "");
+
+    const nested = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-child", tool_name: "collaborationspawn_agent", tool_input: input }, { authorityMode: "lease" });
+    assert.equal(jsonOut(nested).hookSpecificOutput.permissionDecision, "deny");
+    assert.match(jsonOut(nested).hookSpecificOutput.permissionDecisionReason, /CHILD|DELEGATION/);
+    const missingRole = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationspawn_agent", tool_input: {} }, { authorityMode: "lease" });
+    assert.equal(jsonOut(missingRole).hookSpecificOutput.permissionDecision, "deny");
+    const unknownRole = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationspawn_agent", tool_input: { agent_type: "unregistered-agent" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(unknownRole).hookSpecificOutput.permissionDecision, "deny");
+    const unknown = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "collaborationfuture_unknown", tool_input: {} }, { authorityMode: "lease" });
+    assert.match(jsonOut(unknown).hookSpecificOutput.permissionDecisionReason, /UNKNOWN_OPERATION/);
+
+    const stale = hook(root, { hook_event_name: "PreToolUse", session_id: "wrong-generation", tool_name: "collaborationspawn_agent", tool_input: input }, { authorityMode: "lease" });
+    assert.equal(jsonOut(stale).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("field #155 native root web and user clarification are CONTROL-only; child access and unknown tools denied", () => {
+  const root = project();
+  try {
+    assert.equal(hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, { authorityMode: "lease" }).status, 0);
+    for (const tool_name of ["webrun", "request_user_input_async"]) {
+      const allowed = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name, tool_input: { query: "MangaDex API docs" } }, { authorityMode: "lease" });
+      assert.equal(allowed.status, 0, allowed.stderr);
+      assert.equal(allowed.stdout.trim(), "", tool_name);
+      const child = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "worker-2", tool_name, tool_input: { query: "scope leak" } }, { authorityMode: "lease" });
+      assert.equal(jsonOut(child).hookSpecificOutput.permissionDecision, "deny", tool_name);
+    }
+    const unknown = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "webrun_custom", tool_input: {} }, { authorityMode: "lease" });
+    assert.match(jsonOut(unknown).hookSpecificOutput.permissionDecisionReason, /UNKNOWN_OPERATION/);
+    const lease = JSON.parse(readFileSync(join(root, ".orchestra", "state", "work-lease.json"), "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("field #155 agent communication is distinct from recursive spawn and remains scope bounded", () => {
+  const root = project();
+  try {
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, { authorityMode: "lease" });
+    const rootMessage = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", tool_name: "send_message", tool_input: { target: "worker-2", message: "Continue bounded tests" } }, { authorityMode: "lease" });
+    assert.equal(rootMessage.stdout.trim(), "");
+    const childToParent = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-2", tool_name: "send_message", tool_input: { target: "parent", message: "Test results ready" } }, { authorityMode: "lease" });
+    assert.equal(childToParent.stdout.trim(), "");
+    const childPeer = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-2", tool_name: "send_message", tool_input: { target: "worker-3", message: "Run tests" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(childPeer).hookSpecificOutput.permissionDecision, "deny");
+    const childSpawn = hook(root, { hook_event_name: "PreToolUse", session_id: "root-155", agent_id: "luna-2", tool_name: "collaborationspawn_agent", tool_input: { agent_type: "luna-max" } }, { authorityMode: "lease" });
+    assert.equal(jsonOut(childSpawn).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("native PostToolUse handler releases factual root writer only after matching terminal callback", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-155", source: "startup" }, mode);
+    const edit = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "root-155",
+      tool_name: "apply_patch", tool_call_id: "real-edit-1",
+      tool_input: { command: "*** Begin Patch" },
+    }, mode);
+    assert.equal(edit.status, 0, edit.stderr);
+    assert.equal(edit.stdout.trim(), "");
+    const stateFile = join(root, ".orchestra", "state", "work-lease.json");
+    let lease = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL", "WORKSPACE_EDIT"]);
+
+    function post(sessionId) {
+      return spawnSync(process.execPath, [join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs")], {
+        cwd: root, encoding: "utf8", env: { ...process.env, ORCHESTRA_AUTHORITY_MODE: "lease" },
+        input: JSON.stringify({ cwd: root, hook_event_name: "PostToolUse", session_id: sessionId, tool_name: "apply_patch", tool_call_id: "real-edit-1" }),
+      });
+    }
+    const foreign = post("foreign");
+    assert.equal(foreign.status, 0);
+    lease = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.ok(lease.capabilities.includes("WORKSPACE_EDIT"), "foreign terminal callback cannot release writer");
+
+    const finished = post("root-155");
+    assert.equal(finished.status, 0);
+    assert.equal(finished.stderr.trim(), "");
+    lease = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.deepEqual(lease.capabilities, ["CONTROL"]);
+    assert.equal(lease.state, "CONTROL");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("field 0.164 child collaboration message to explicit parent is allowed, but peers and lifecycle remain denied", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-field", source: "startup" }, mode);
+    const message = (tool_name, tool_input) => hook(root, {
+      hook_event_name: "PreToolUse", session_id: "root-field", agent_id: "luna-field",
+      tool_name, tool_input,
+    }, mode);
+    const toParent = message("collaborationsend_message", { target: "parent", message: "Validated CI" });
+    assert.equal(toParent.status, 0, toParent.stderr);
+    assert.equal(toParent.stdout.trim(), "", toParent.stdout);
+    // Native 0.164 actually sent the canonical root address "/root", not "root".
+    const toNativeRoot = message("collaborationsend_message", { target: "/root", message: "Progress from Luna" });
+    assert.equal(toNativeRoot.status, 0, toNativeRoot.stderr);
+    assert.equal(toNativeRoot.stdout.trim(), "", toNativeRoot.stdout);
+    for (const target of ["/peer", "/root/child", "/root/", "/Root"]) {
+      const rejected = message("collaborationsend_message", { target, message: "Unauthorized destination" });
+      assert.equal(jsonOut(rejected).hookSpecificOutput.permissionDecision, "deny", target);
+    }
+    for (const target of ["worker-other", "", "not-the-parent"]) {
+      const rejected = message("collaborationsend_message", { target, message: "Untrusted delegation" });
+      assert.equal(jsonOut(rejected).hookSpecificOutput.permissionDecision, "deny", target);
+    }
+    for (const tool_name of ["collaborationspawn_agent", "collaborationfollowup_task", "collaborationwait_agent"]) {
+      const rejected = message(tool_name, { target: "parent", agent_type: "luna-max" });
+      assert.equal(jsonOut(rejected).hookSpecificOutput.permissionDecision, "deny", tool_name);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("field 0.164 tool receipt IDs are unique per call and writer release has an actual PostToolUse receipt", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-field", source: "startup" }, mode);
+    const read = (id) => hook(root, {
+      hook_event_name: "PreToolUse", session_id: "root-field", tool_name: "read",
+      tool_call_id: id, tool_input: { file_path: "product.txt" },
+    }, mode);
+    assert.equal(read("call-1").status, 0);
+    assert.equal(read("call-2").status, 0);
+    const edit = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "root-field",
+      tool_name: "apply_patch", tool_call_id: "edit-1",
+      tool_input: { command: "*** Begin Patch" },
+    }, mode);
+    assert.equal(edit.stdout.trim(), "");
+    const eventsPath = join(root, ".codex", "orchestra-state", "runtime-events.jsonl");
+    const before = readFileSync(eventsPath, "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(before.length, 3);
+    assert.equal(new Set(before.map((x) => x.event.eventId)).size, 3, "different factual tool calls must not share eventId");
+    assert.ok(before.some((x) => x.leaseTransition === "WORKSPACE_EDIT_ACQUIRED"));
+
+    const post = spawnSync(process.execPath, [join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs")], {
+      cwd: root, encoding: "utf8", env: { ...process.env, ORCHESTRA_AUTHORITY_MODE: "lease" },
+      input: JSON.stringify({ cwd: root, hook_event_name: "PostToolUse",
+        session_id: "root-field", tool_name: "apply_patch", tool_call_id: "edit-1" }),
+    });
+    assert.equal(post.status, 0, post.stderr);
+    const after = readFileSync(eventsPath, "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(after.length, 4);
+    assert.equal(after[3].event.type, "TOOL_RESULT");
+    assert.equal(after[3].providerRef.reference, "tool:edit-1");
+    assert.equal(after[3].leaseTransition, "WORKSPACE_EDIT_RELEASED");
+    assert.equal(new Set(after.map((x) => x.event.eventId)).size, 4);
+    const finalLease = JSON.parse(readFileSync(join(root, ".orchestra", "state", "work-lease.json"), "utf8"));
+    assert.deepEqual(finalLease.capabilities, ["CONTROL"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("hook receipts without factual tool-call IDs remain distinct but do not falsely claim correlation", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-no-call-id", source: "startup" }, mode);
+    for (let i = 0; i < 2; i += 1) {
+      const read = hook(root, {
+        hook_event_name: "PreToolUse", session_id: "root-no-call-id",
+        tool_name: "read", tool_input: { file_path: "product.txt" },
+      }, mode);
+      assert.equal(read.status, 0, read.stderr);
+      assert.equal(read.stdout.trim(), "");
+    }
+    const journal = readFileSync(join(root, ".codex", "orchestra-state", "runtime-events.jsonl"), "utf8")
+      .trim().split("\n").map(JSON.parse);
+    assert.equal(journal.length, 2);
+    assert.notEqual(journal[0].event.eventId, journal[1].event.eventId);
+    assert.equal(journal[0].providerRef, undefined);
+    assert.equal(journal[1].providerRef, undefined);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("replayed factual tool-call ID keeps individual journal event IDs unique without inventing new provider correlation", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-replay", source: "startup" }, mode);
+    for (let i = 0; i < 2; i += 1) {
+      const observed = hook(root, {
+        hook_event_name: "PreToolUse", session_id: "root-replay",
+        tool_name: "read", tool_call_id: "native-reused-call-id",
+        tool_input: { file_path: "product.txt" },
+      }, mode);
+      assert.equal(observed.status, 0, observed.stderr);
+      assert.equal(observed.stdout.trim(), "");
+    }
+    const journal = readFileSync(join(root, ".codex", "orchestra-state", "runtime-events.jsonl"), "utf8")
+      .trim().split("\n").map(JSON.parse);
+    assert.equal(journal.length, 2);
+    assert.notEqual(journal[0].event.eventId, journal[1].event.eventId,
+      "two hook deliveries must not share a journal event ID");
+    assert.equal(journal[0].providerRef.reference, "tool:native-reused-call-id");
+    assert.equal(journal[1].providerRef.reference, "tool:native-reused-call-id");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

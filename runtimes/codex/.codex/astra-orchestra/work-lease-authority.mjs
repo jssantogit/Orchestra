@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
@@ -8,6 +8,9 @@ import {
   transitionWorkLease,
 } from "./core/leases/work-lease-store.mjs";
 import { authorizeLeaseMutation } from "./core/leases/lease-authorizer.mjs";
+import { isCodexNativeControlTool, normalizeToolEvent } from "./provider/codex/adapter/tool-event.mjs";
+import { attachProviderTelemetryReference } from "./provider/codex/adapter/telemetry.mjs";
+import { createRuntimeEvent } from "./core/events/runtime-event.mjs";
 
 const VALID_MODES = new Set(["session", "dual", "lease"]);
 const BINDINGS_SCHEMA = "orchestra.codex-work-lease-bindings.v1";
@@ -101,6 +104,28 @@ function readActorBinding(repoRoot, actor) {
   };
 }
 
+// A session records the installed runtime image at factual SessionStart.
+// Metadata-only re-stamping does not stale a session if image and manifest
+// are unchanged. A replaced image cannot inherit the previous session's
+// authority even when the old Work Lease generation has not changed.
+function runtimeFingerprint(repoRoot) {
+  const file = join(repoRoot, ".orchestra", "state", "runtimes", "codex.json");
+  if (!existsSync(file)) return "RUNTIME_NOT_INSTALLED";
+  const metadata = readJson(file, null);
+  if (metadata?.schema !== "orchestra.project-runtime.v2"
+    || metadata.runtime !== "codex"
+    || !/^[a-f0-9]{64}$/.test(metadata.runtimeHash ?? "")
+    || !/^[a-f0-9]{64}$/.test(metadata.manifestHash ?? "")) return null;
+  return metadata.runtimeHash + ":" + metadata.manifestHash;
+}
+
+function runtimeBindingValid(repoRoot, binding) {
+  const current = runtimeFingerprint(repoRoot);
+  if (current === null) return { ok: false, reason: "RUNTIME_IDENTITY_UNREADABLE" };
+  if (!binding || binding.runtimeFingerprint !== current) return { ok: false, reason: "SESSION_RUNTIME_STALE" };
+  return { ok: true, reason: null };
+}
+
 function bindActorGeneration(repoRoot, actor, lease) {
   const current = readBindings(repoRoot) || { schema: BINDINGS_SCHEMA, bindings: {} };
   current.bindings[actor.sessionIdHash] = {
@@ -108,6 +133,7 @@ function bindActorGeneration(repoRoot, actor, lease) {
     taskId: lease.taskId,
     workspaceId: lease.workspaceId,
     candidate: lease.candidate ?? null,
+    runtimeFingerprint: runtimeFingerprint(repoRoot),
   };
   writeBindings(repoRoot, current);
 }
@@ -179,6 +205,52 @@ function diagnosticSubject(actor) {
   };
 }
 
+// This journal is observational: it never grants, denies, upgrades, or releases
+// a lease. Only the actual native PreToolUse/PostToolUse hook caller records an
+// event. No tool arguments, prompt bodies, model context or raw session IDs are
+// written. Provider tool-call references permit request/result correlation.
+export function recordCodexHookToolReceipt(repoRoot, {
+  payload, lease, leaseTransition = null, normalized = null,
+} = {}) {
+  if (!lease || !payload) return { recorded: false, reason: "RECEIPT_INPUT_MISSING" };
+  try {
+    const toolEvent = normalized || normalizeToolEvent(payload);
+    if (toolEvent.eventType !== "TOOL_REQUEST" && toolEvent.eventType !== "TOOL_RESULT") {
+      return { recorded: false, reason: "RECEIPT_EVENT_UNSUPPORTED" };
+    }
+    if (toolEvent.operation === "UNKNOWN") {
+      return { recorded: false, reason: "RECEIPT_OPERATION_UNKNOWN" };
+    }
+    const toolCallId = toolEvent.factualIds.toolCallId || null;
+    // Every hook delivery is its own journal event, including repeated
+    // callbacks with the same native call ID. Provider call references, when
+    // factual, remain the separate request/result correlation key.
+    const nonce = randomUUID();
+    const eventId = `event-${createHash("sha256").update(JSON.stringify([
+      toolEvent.eventType, lease.generation, lease.actor,
+      toolEvent.factualIds.actorIdHash, nonce,
+    ])).digest("hex").slice(0, 24)}`;
+    const event = createRuntimeEvent({
+      eventId, type: toolEvent.eventType,
+      generation: lease.generation, taskId: lease.taskId || null,
+      actor: lease.actor,
+    });
+    const base = toolCallId ? attachProviderTelemetryReference(event, payload) : { event };
+    const record = {
+      ...base,
+      operation: toolEvent.operation,
+      actorIdHash: toolEvent.factualIds.actorIdHash,
+      ...(leaseTransition ? { leaseTransition } : {}),
+    };
+    const path = join(repoRoot, ".codex", "orchestra-state", "runtime-events.jsonl");
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
+    return { recorded: true, reason: null, eventId };
+  } catch (error) {
+    return { recorded: false, reason: String(error?.code || error?.message || "RECEIPT_WRITE_FAILED") };
+  }
+}
+
 export function resolveCodexAuthorityMode(value = process.env.ORCHESTRA_AUTHORITY_MODE) {
   if (value === undefined || value === null || String(value).trim() === "") return "lease";
   const normalized = String(value).trim().toLowerCase();
@@ -188,6 +260,7 @@ export function resolveCodexAuthorityMode(value = process.env.ORCHESTRA_AUTHORIT
 export function codexCapabilityForTool(payload = {}) {
   const name = clean(payload.tool_name || payload.toolName, 120).toLowerCase();
   if (READ_ONLY_TOOL_NAMES.has(name)) return "CONTROL";
+  if (isCodexNativeControlTool(name)) return "CONTROL";
   if (name === "bash" || name === "shell" || name === "exec" || name === "run_command") {
     return readOnlyBash(payload.tool_input?.command || payload.toolInput?.command || "")
       ? "CONTROL"
@@ -275,6 +348,10 @@ export function enterCodexWorkLease(repoRoot, { sessionId, mode = undefined } = 
   }
   const current = readWorkLease(repoRoot);
   if (actorBinding.binding) {
+    const runtime = runtimeBindingValid(repoRoot, actorBinding.binding);
+    if (!runtime.ok) {
+      return { handled: true, authoritative: false, reason: runtime.reason, mode: authorityMode, lease: current.lease ?? null };
+    }
     if (!current.exists || !current.valid || !current.lease) {
       return { handled: true, authoritative: false, reason: current.reason || "STALE_WORK_LEASE", mode: authorityMode, lease: current.lease || null };
     }
@@ -295,6 +372,9 @@ export function enterCodexWorkLease(repoRoot, { sessionId, mode = undefined } = 
     };
   }
 
+  if (runtimeFingerprint(repoRoot) === null) {
+    return { handled: true, authoritative: false, reason: "RUNTIME_IDENTITY_UNREADABLE", mode: authorityMode, lease: current.lease ?? null };
+  }
   const context = activeContext(repoRoot);
   const claim = claimWorkLease(repoRoot, {
     workspaceId: "primary",
@@ -330,6 +410,8 @@ export function authorizeCodexLeaseCapability(repoRoot, {
   const actorBinding = readActorBinding(repoRoot, actor);
   if (!actorBinding.valid) return { handled: true, allowed: false, reason: actorBinding.reason, mode: authorityMode, lease: null };
   if (!actorBinding.binding) return { handled: true, allowed: false, reason: "LEASE_BINDING_MISSING", mode: authorityMode, lease: null };
+  const runtime = runtimeBindingValid(repoRoot, actorBinding.binding);
+  if (!runtime.ok) return { handled: true, allowed: false, reason: runtime.reason, mode: authorityMode, lease: null };
 
   const current = readWorkLease(repoRoot);
   if (!current.exists || !current.valid || !current.lease) {
@@ -382,6 +464,8 @@ export function releaseCodexLeaseWrite(repoRoot, { sessionId, mode = undefined }
   if (!actorBinding.valid || !actorBinding.binding) {
     return { handled: true, released: false, reason: actorBinding.reason || "LEASE_BINDING_MISSING", mode: authorityMode, lease: null };
   }
+  const runtime = runtimeBindingValid(repoRoot, actorBinding.binding);
+  if (!runtime.ok) return { handled: true, released: false, reason: runtime.reason, mode: authorityMode, lease: null };
   const current = readWorkLease(repoRoot);
   if (!current.exists || !current.valid || !current.lease) {
     return { handled: true, released: false, reason: current.reason || "WORK_LEASE_NOT_INITIALIZED", mode: authorityMode, lease: current.lease || null };

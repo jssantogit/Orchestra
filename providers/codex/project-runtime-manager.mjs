@@ -4,6 +4,7 @@ import {
   installProjectRuntime,
   rollbackProjectRuntime,
   updateProjectRuntime,
+  uninstallProjectRuntime,
 } from "../../runtime/project-runtime-manager.mjs";
 import { codexProjectRuntimeAdapter } from "./project-runtime-adapter.mjs";
 
@@ -63,4 +64,8 @@ export async function updateCodexProjectRuntime({ targetDir, builtRuntime, adapt
 
 export async function rollbackCodexProjectRuntime({ targetDir, backupId, adapter = codexProjectRuntimeAdapter, force = false }) {
   return rollbackProjectRuntime({ targetDir, backupId, adapter, force, runtimeManifest: await manifest() });
+}
+
+export async function uninstallCodexProjectRuntime({ targetDir, adapter = codexProjectRuntimeAdapter, dryRun = false }) {
+  return uninstallProjectRuntime({ targetDir, runtimeManifest: await manifest(), adapter, dryRun });
 }
