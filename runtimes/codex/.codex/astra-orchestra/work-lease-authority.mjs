@@ -222,9 +222,10 @@ export function recordCodexHookToolReceipt(repoRoot, {
       return { recorded: false, reason: "RECEIPT_OPERATION_UNKNOWN" };
     }
     const toolCallId = toolEvent.factualIds.toolCallId || null;
-    // Factual provider ID gives deterministic request/result identity with
-    // the event type included; absent IDs get a unique non-correlatable event.
-    const nonce = toolCallId || randomUUID();
+    // Every hook delivery is its own journal event, including repeated
+    // callbacks with the same native call ID. Provider call references, when
+    // factual, remain the separate request/result correlation key.
+    const nonce = randomUUID();
     const eventId = `event-${createHash("sha256").update(JSON.stringify([
       toolEvent.eventType, lease.generation, lease.actor,
       toolEvent.factualIds.actorIdHash, nonce,
