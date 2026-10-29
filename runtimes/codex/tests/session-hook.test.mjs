@@ -418,3 +418,28 @@ test("hook receipts without factual tool-call IDs remain distinct but do not fal
     assert.equal(journal[1].providerRef, undefined);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("replayed factual tool-call ID keeps individual journal event IDs unique without inventing new provider correlation", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "root-replay", source: "startup" }, mode);
+    for (let i = 0; i < 2; i += 1) {
+      const observed = hook(root, {
+        hook_event_name: "PreToolUse", session_id: "root-replay",
+        tool_name: "read", tool_call_id: "native-reused-call-id",
+        tool_input: { file_path: "product.txt" },
+      }, mode);
+      assert.equal(observed.status, 0, observed.stderr);
+      assert.equal(observed.stdout.trim(), "");
+    }
+    const journal = readFileSync(join(root, ".codex", "orchestra-state", "runtime-events.jsonl"), "utf8")
+      .trim().split("\n").map(JSON.parse);
+    assert.equal(journal.length, 2);
+    assert.notEqual(journal[0].event.eventId, journal[1].event.eventId,
+      "two hook deliveries must not share a journal event ID");
+    assert.equal(journal[0].providerRef.reference, "tool:native-reused-call-id");
+    assert.equal(journal[1].providerRef.reference, "tool:native-reused-call-id");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
