@@ -54,7 +54,10 @@ SOL MEDIUM (Global Control Plane)
 | bounded deterministic support | `luna-medium` | Luna 6 / medium | Mechanical/docs/support work |
 | `INVESTIGATE` | `sol-high` → `sol-xhigh` → `sol-max` | Sol 6 | Read-only investigation ladder |
 | critical review / specialist | `sol-review-low` / `sol-review-medium` | Sol 6 | Independent review |
+| bounded audit lead (opt-in) | `terra-audit-lead` | Terra 6.1 / medium | One read-only Luna auditor; Sol owns acceptance |
 | approved escalation packet | `astra-manual` | GPT-6 Astra / medium | Manual-only consultation |
+
+Pilot audit delegation uses one root-authorized Terra 6.1 lead and at most one nested read-only Luna auditor per Work Lease generation, conditional on a task-bound Scope Contract plus an explicit `active-state.json` `auditDelegation` opt-in (`enabled: true`, `leadRole: terra-audit-lead`, `workerRole: luna-auditor`, `maxChildren: 1`) and factual Terra `SubagentStart`. Hook state under `.codex/orchestra-state/audit-delegation.json` is preserved, never an independent authority. Child mutations and arbitrary recursive delegation remain blocked, and native compatibility requires field verification. Native V2 child management is now scoped to the confirmed spawn result: Terra may message, follow up or interrupt only its own Luna via the relative task_name; wait_agent listens to the Terra mailbox and list_agents requires the exact confirmed child's canonical path_prefix. Unconfirmed spawns and foreign targets remain denied. PostToolUse trust and native availability still require real field verification. The concurrency cap increases to two subagents only to accommodate this chain.
 
 Sol Medium scopes and accepts work but never writes product code. Luna implements only within the declared Scope Contract and never self-accepts. Reviewers are read-only. Automatic Astra routing is prohibited.
 

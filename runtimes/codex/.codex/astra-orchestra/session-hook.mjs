@@ -16,6 +16,7 @@ import {
   recordCodexHookToolReceipt,
 } from "./work-lease-authority.mjs";
 import { evaluateCodexVerificationTool } from "./verification-guard.mjs";
+import { armTerraAudit, bindTerraAudit, authorizeTerraChildAudit, authorizeTerraAuditControl, isReadOnlyAuditRole } from "./audit-delegation.mjs";
 import { normalizeToolEvent } from "./provider/codex/adapter/tool-event.mjs";
 import { authorizeCapability } from "./core/policy/capability-authorization.mjs";
 import { authorizeMutation } from "./core/policy/mutation-authorization.mjs";
@@ -27,9 +28,10 @@ const NATIVE_DELEGATION_ROLES = new Set([
   "luna-max", "luna-high", "luna-medium", "luna-auditor",
   "sol-high", "sol-xhigh", "sol-max",
   "sol-review-low", "sol-review-medium",
+  "terra-audit-lead",
 ]);
 
-function authorizeNativeAgentControl(payload, normalized, lease) {
+function authorizeNativeAgentControl(repoRoot, payload, normalized, lease) {
   const child = Boolean(payload.agent_id || payload.agentId);
   // Only the factual root may call web and solicit user input. These are
   // deliberately explicit names, never a generic exemption for unknown tools.
@@ -37,6 +39,16 @@ function authorizeNativeAgentControl(payload, normalized, lease) {
     return child
       ? { allowed: false, reason: "CHILD_CONTROL_TOOL_FORBIDDEN" }
       : { allowed: true, reason: null };
+  }
+  if (child && payload.agent_type === "terra-audit-lead") {
+    const toolName = String(payload.tool_name || "").trim().toLowerCase();
+    const input = payload.tool_input || {};
+    const toRoot = normalized.operation === "AGENT_MESSAGE"
+      && ["parent", "root", "/root"].includes(normalized.target);
+    if (!toRoot && (normalized.operation === "AGENT_MESSAGE"
+      || normalized.operation === "AGENT_CONTROL")) {
+      return authorizeTerraAuditControl(repoRoot, payload, lease);
+    }
   }
   if (normalized.operation === "AGENT_MESSAGE") {
     // A worker may report facts to CONTROL. Peer-to-peer orders and arbitrary
@@ -50,6 +62,9 @@ function authorizeNativeAgentControl(payload, normalized, lease) {
   }
   // The root may delegate but workers cannot recursively spawn/control agents.
   if (child) {
+    if (normalized.operation === "DELEGATE" && payload.agent_type === "terra-audit-lead") {
+      return authorizeTerraChildAudit(repoRoot, payload, lease);
+    }
     return { allowed: false, reason: "CHILD_DELEGATION_FORBIDDEN" };
   }
   if (normalized.operation === "DELEGATE") {
@@ -283,7 +298,7 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
     return preToolDeny("CODEX_PROVIDER_EVENT_DENIED:UNKNOWN_OPERATION.");
   }
 
-  const agentControl = authorizeNativeAgentControl(payload, normalized, control.lease);
+  const agentControl = authorizeNativeAgentControl(repoRoot, payload, normalized, control.lease);
   if (!agentControl.allowed) {
     return preToolDeny(`CODEX_DELEGATION_DENIED:${agentControl.reason}.`);
   }
@@ -309,6 +324,9 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
   }
 
   const capability = codexCapabilityForTool(payload);
+  if (isReadOnlyAuditRole(payload) && capability === "WORKSPACE_EDIT") {
+    return preToolDeny("CODEX_AUDIT_READ_ONLY.");
+  }
   let effectiveLease = control.lease;
   if (capability === "WORKSPACE_EDIT") {
     const mutation = authorizeCodexLeaseCapability(repoRoot, {
@@ -346,6 +364,12 @@ function handleLeasePreToolUse(repoRoot, payload, mode) {
         return preToolDeny(`CODEX_CAPABILITY_DENIED:${capabilityDecision.reason}.`);
       }
     }
+  }
+
+  if (!payload.agent_id && !payload.agentId && normalized.operation === "DELEGATE"
+    && normalized.target === "terra-audit-lead") {
+    const armed = armTerraAudit(repoRoot, payload, effectiveLease);
+    if (!armed.allowed) return preToolDeny(`CODEX_AUDIT_DELEGATION_DENIED:${armed.reason}.`);
   }
 
   const receipt = recordCodexHookToolReceipt(repoRoot, {
@@ -404,6 +428,25 @@ function main() {
 
   if (event === "SessionStart") {
     console.log(JSON.stringify(handleSessionStart(repoRoot, payload)));
+    return;
+  }
+  if (event === "SubagentStart") {
+    if (payload.agent_type === "terra-audit-lead") {
+      const control = authorizeCodexLeaseCapability(repoRoot, {
+        sessionId: payload.session_id, capability: "CONTROL",
+        mode: resolveCodexAuthorityMode(),
+      });
+      const bound = control.allowed
+        ? bindTerraAudit(repoRoot, payload, control.lease)
+        : { allowed: false, reason: control.reason || "NO_WORK_LEASE" };
+      if (!bound.allowed) {
+        console.log(JSON.stringify({ hookSpecificOutput: {
+          hookEventName: "SubagentStart",
+          additionalContext: "ORCHESTRA AUDIT DELEGATION DISABLED: " + bound.reason
+            + ". Nested agent dispatch remains denied; report to Sol.",
+        } }));
+      }
+    }
     return;
   }
   if (event === "PreToolUse") {

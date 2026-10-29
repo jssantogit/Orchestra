@@ -24,6 +24,7 @@ function project() {
   mkdirSync(join(root, ".codex", "astra-orchestra"), { recursive: true });
   cpSync(join(runtimeDir, "session-authority.mjs"), join(root, ".codex", "astra-orchestra", "session-authority.mjs"));
   cpSync(join(runtimeDir, "session-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-hook.mjs"));
+  cpSync(join(runtimeDir, "audit-delegation.mjs"), join(root, ".codex", "astra-orchestra", "audit-delegation.mjs"));
   cpSync(join(runtimeDir, "session-post-tool-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs"));
   cpSync(join(runtimeDir, "verification-guard.mjs"), join(root, ".codex", "astra-orchestra", "verification-guard.mjs"));
   cpSync(join(runtimeDir, "work-lease-authority.mjs"), join(root, ".codex", "astra-orchestra", "work-lease-authority.mjs"));
@@ -441,5 +442,250 @@ test("replayed factual tool-call ID keeps individual journal event IDs unique wi
       "two hook deliveries must not share a journal event ID");
     assert.equal(journal[0].providerRef.reference, "tool:native-reused-call-id");
     assert.equal(journal[1].providerRef.reference, "tool:native-reused-call-id");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("Sol can arm exactly one native Terra audit lead and Terra may delegate one read-only Luna auditor", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"),
+      JSON.stringify({ taskId: "audit-task-a", implementationPacket: {
+        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"] },
+      }, auditDelegation: { enabled: true, leadRole: "terra-audit-lead", workerRole: "luna-auditor", maxChildren: 1 } }));
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-a", source: "startup" }, mode);
+    const spawn = (agent_id, agent_type, role, message = "Audit only, no edits") => hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      ...(agent_id ? { agent_id, agent_type } : {}),
+      tool_name: "collaborationspawn_agent", tool_use_id: "spawn-" + role,
+      tool_input: { agent_type: role, message, fork_context: false },
+    }, mode);
+
+    const rootTerra = spawn(null, null, "terra-audit-lead");
+    assert.equal(rootTerra.status, 0, rootTerra.stderr);
+    assert.equal(rootTerra.stdout.trim(), "", rootTerra.stdout);
+    const factualStart = hook(root, {
+      hook_event_name: "SubagentStart", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+    }, mode);
+    assert.equal(factualStart.status, 0, factualStart.stderr);
+    const duplicate = hook(root, { hook_event_name: "SubagentStart", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead" }, mode);
+    assert.equal(duplicate.stdout.trim(), "");
+
+    const luna = spawn("terra-a", "terra-audit-lead", "luna-auditor");
+    assert.equal(luna.status, 0, luna.stderr);
+    assert.equal(luna.stdout.trim(), "", luna.stdout);
+    const repeated = spawn("terra-a", "terra-audit-lead", "luna-auditor");
+    assert.equal(jsonOut(repeated)?.hookSpecificOutput?.permissionDecision, "deny");
+
+    const imposter = spawn("terra-other", "terra-audit-lead", "luna-auditor");
+    assert.equal(jsonOut(imposter)?.hookSpecificOutput?.permissionDecision, "deny");
+    const forbiddenWriter = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+      tool_name: "apply_patch", tool_input: { command: "*** Begin Patch" },
+    }, mode);
+    assert.equal(jsonOut(forbiddenWriter)?.hookSpecificOutput?.permissionDecision, "deny");
+    const budget = JSON.parse(readFileSync(join(root, ".codex", "orchestra-state", "audit-delegation.json"), "utf8"));
+    const lunaProgress = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "luna-a", agent_type: "luna-auditor",
+      tool_name: "collaborationsend_message",
+      tool_input: { target: "parent", message: "audit evidence ready" },
+    }, mode);
+    assert.equal(lunaProgress.stdout.trim(), "");
+    const terraProgress = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+      tool_name: "collaborationsend_message",
+      tool_input: { target: "/root", message: "consolidated audit status" },
+    }, mode);
+    assert.equal(terraProgress.stdout.trim(), "");
+    const deniedWait = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-a",
+      agent_id: "terra-a", agent_type: "terra-audit-lead",
+      tool_name: "collaborationwait_agent",
+      tool_input: { target: "luna-a" },
+    }, mode);
+    assert.equal(jsonOut(deniedWait)?.hookSpecificOutput?.permissionDecision, "deny");
+    assert.equal(budget.usedChildren, 1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("audit subdelegation fails closed without Sol grant/verified SubagentStart or with unapproved roles", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"),
+      JSON.stringify({ taskId: "audit-task-b", implementationPacket: {
+        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"] },
+      }, auditDelegation: { enabled: true, leadRole: "terra-audit-lead", workerRole: "luna-auditor", maxChildren: 1 } }));
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-b", source: "startup" }, mode);
+    const send = (agentId, role, childRole) => hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-b",
+      agent_id: agentId, agent_type: role, tool_name: "collaborationspawn_agent",
+      tool_input: { agent_type: childRole, message: "audit" },
+    }, mode);
+    const first = send("terra-no-grant", "terra-audit-lead", "luna-auditor");
+    assert.equal(jsonOut(first)?.hookSpecificOutput?.permissionDecision, "deny");
+    const forgedStart = hook(root, {
+      hook_event_name: "SubagentStart", session_id: "sol-b",
+      agent_id: "terra-no-grant", agent_type: "terra-audit-lead",
+    }, mode);
+    assert.equal(forgedStart.status, 0);
+    assert.equal(jsonOut(send("terra-no-grant", "terra-audit-lead", "luna-auditor"))?.hookSpecificOutput?.permissionDecision, "deny");
+    const rootTerra = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-b",
+      tool_name: "collaborationspawn_agent", tool_input: { agent_type: "terra-audit-lead", message: "audit" },
+    }, mode);
+    assert.equal(rootTerra.stdout.trim(), "");
+    hook(root, {
+      hook_event_name: "SubagentStart", session_id: "sol-b", agent_id: "terra-verified", agent_type: "terra-audit-lead",
+    }, mode);
+    for (const wrong of ["luna-max", "terra-audit-lead", "sol-high", "unregistered"]) {
+      assert.equal(jsonOut(send("terra-verified", "terra-audit-lead", wrong))?.hookSpecificOutput?.permissionDecision, "deny", wrong);
+    }
+    assert.equal(jsonOut(send("unrelated", "luna-auditor", "luna-auditor"))?.hookSpecificOutput?.permissionDecision, "deny");
+    const permitted = send("terra-verified", "terra-audit-lead", "luna-auditor");
+    assert.equal(permitted.stdout.trim(), "");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Terra audit lead never gets implicit authority from intake without a task scope", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-no-scope", source: "startup" }, mode);
+    const denied = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-no-scope",
+      tool_name: "collaborationspawn_agent", tool_input: { agent_type: "terra-audit-lead", message: "unauthorized" },
+    }, mode);
+    assert.equal(jsonOut(denied)?.hookSpecificOutput?.permissionDecision, "deny");
+    assert.match(jsonOut(denied).hookSpecificOutput.permissionDecisionReason, /AUDIT_TASK_SCOPE_REQUIRED/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("changing Sol-approved Scope Contract revokes Terra's unspent audit child slot", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    const stateFile = join(root, ".codex", "orchestra-state", "active-state.json");
+    const state = { taskId: "audit-revocation", implementationPacket: {
+      scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"] },
+    }, auditDelegation: { enabled: true, leadRole: "terra-audit-lead", workerRole: "luna-auditor", maxChildren: 1 } };
+    writeFileSync(stateFile, JSON.stringify(state));
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-scope", source: "startup" }, mode);
+    const terra = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-scope", tool_name: "collaborationspawn_agent",
+      tool_input: { agent_type: "terra-audit-lead", message: "Audit docs/**" },
+    }, mode);
+    assert.equal(terra.stdout.trim(), "");
+    hook(root, { hook_event_name: "SubagentStart", session_id: "sol-scope", agent_id: "terra-bound",
+      agent_type: "terra-audit-lead" }, mode);
+    state.implementationPacket.scopeContract.allowedPaths = ["src/**"];
+    writeFileSync(stateFile, JSON.stringify(state));
+    const denied = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-scope",
+      agent_id: "terra-bound", agent_type: "terra-audit-lead",
+      tool_name: "collaborationspawn_agent",
+      tool_input: { agent_type: "luna-auditor", message: "Ignore scope?" },
+    }, mode);
+    assert.equal(jsonOut(denied)?.hookSpecificOutput?.permissionDecision, "deny");
+    assert.match(jsonOut(denied).hookSpecificOutput.permissionDecisionReason, /AUDIT_LEAD_NOT_BOUND/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("native Terra controls exactly its confirmed Luna child by relative task name", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    const stateFile = join(root, ".codex", "orchestra-state", "active-state.json");
+    writeFileSync(stateFile, JSON.stringify({
+      taskId: "native-audit-control",
+      implementationPacket: { scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"] } },
+      auditDelegation: { enabled: true, leadRole: "terra-audit-lead", workerRole: "luna-auditor", maxChildren: 1 },
+    }));
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-controlling", source: "startup" }, mode);
+    const invoke = (agent, name, input, extra = {}) => hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-controlling",
+      ...(agent ? { agent_id: agent, agent_type: "terra-audit-lead" } : {}),
+      tool_name: name, tool_input: input, ...extra,
+    }, mode);
+    assert.equal(invoke(null, "collaborationspawn_agent", { agent_type: "terra-audit-lead", message: "Audit" }).stdout.trim(), "");
+    hook(root, { hook_event_name: "SubagentStart", session_id: "sol-controlling",
+      agent_id: "terra-native", agent_type: "terra-audit-lead" }, mode);
+    const auditSpawn = { agent_type: "luna-auditor", task_name: "luna_review", message: "Audit only" };
+    const pre = invoke("terra-native", "collaborationspawn_agent", auditSpawn, { tool_use_id: "native-spawn-77" });
+    assert.equal(pre.stdout.trim(), "", pre.stdout);
+    const action = (tool_name, target) => invoke("terra-native", tool_name,
+      target === undefined ? { timeout_ms: 1000 }
+        : tool_name.endsWith("interrupt_agent") ? { target }
+          : { target, message: "Check only docs/**" });
+    const deny = (response, expected) => {
+      assert.equal(jsonOut(response)?.hookSpecificOutput?.permissionDecision, "deny", expected);
+    };
+    deny(action("collaborationsend_message", "luna_review"), "before result");
+    deny(action("collaborationfollowup_task", "luna_review"), "before result");
+    deny(action("collaborationinterrupt_agent", "luna_review"), "before result");
+
+    const post = (callId, result) => spawnSync(process.execPath,
+      [join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs")], {
+        cwd: root, encoding: "utf8", env: { ...process.env, ORCHESTRA_AUTHORITY_MODE: "lease" },
+        input: JSON.stringify({ cwd: root, hook_event_name: "PostToolUse", session_id: "sol-controlling",
+          agent_id: "terra-native", agent_type: "terra-audit-lead",
+          tool_name: "collaborationspawn_agent", tool_use_id: callId, tool_input: auditSpawn,
+          tool_response: result }),
+      });
+    assert.equal(post("different-call", { task_name: "/root/terra_native/luna_review" }).status, 0);
+    deny(action("collaborationfollowup_task", "luna_review"), "wrong native call id");
+    assert.equal(post("native-spawn-77", { task_name: "/root/unrelated_agent" }).status, 0);
+    deny(action("collaborationfollowup_task", "luna_review"), "foreign result path");
+    assert.equal(post("native-spawn-77", { task_name: "/root/terra_native/luna_review" }).status, 0);
+
+    for (const name of ["collaborationsend_message", "collaborationfollowup_task", "collaborationinterrupt_agent",
+      "send_message", "followup_task", "interrupt_agent"]) {
+      const allowed = action(name, "luna_review");
+      assert.equal(allowed.status, 0, allowed.stderr);
+      assert.equal(allowed.stdout.trim(), "", name + ": " + allowed.stdout);
+      for (const target of ["/root/other_agent", "/root/terra_native", "../other", "/root/terra_native/luna_review", "terra_native"]) {
+        deny(action(name, target), name + " foreign target " + target);
+      }
+    }
+    const list = invoke("terra-native", "collaborationlist_agents", {
+      path_prefix: "/root/terra_native/luna_review",
+    });
+    assert.equal(list.stdout.trim(), "", list.stdout);
+    for (const path_prefix of ["", "/root", "/root/terra_native", "/root/peer", "/root/terra_native/luna_review/"]) {
+      deny(invoke("terra-native", "collaborationlist_agents", { path_prefix }), "list prefix " + path_prefix);
+    }
+    for (const name of ["collaborationwait_agent", "wait_agent"]) {
+      const wait = action(name);
+      assert.equal(wait.status, 0, wait.stderr);
+      assert.equal(wait.stdout.trim(), "", wait.stdout);
+      deny(action(name, "foreign"), "targeted global wait");
+    }
+    const directList = invoke("terra-native", "list_agents", {
+      path_prefix: "/root/terra_native/luna_review",
+    });
+    assert.equal(directList.stdout.trim(), "", directList.stdout);
+    deny(invoke("terra-native", "list_agents", {}), "unrestricted list");
+    const forged = hook(root, { hook_event_name: "PreToolUse", session_id: "sol-controlling",
+      agent_id: "terra-other", agent_type: "terra-audit-lead",
+      tool_name: "collaborationfollowup_task", tool_input: { target: "luna_review", message: "wrong" } }, mode);
+    deny(forged, "different Terra identity");
+    const lunaControl = hook(root, { hook_event_name: "PreToolUse", session_id: "sol-controlling",
+      agent_id: "luna-agent", agent_type: "luna-auditor",
+      tool_name: "collaborationfollowup_task", tool_input: { target: "luna_review", message: "recursive" } }, mode);
+    deny(lunaControl, "Luna cannot control peers");
+
+    const state = JSON.parse(readFileSync(stateFile, "utf8"));
+    state.auditDelegation.enabled = false;
+    writeFileSync(stateFile, JSON.stringify(state));
+    deny(action("collaborationfollowup_task", "luna_review"), "scope revoked");
+    deny(action("collaborationwait_agent"), "scope revoked");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

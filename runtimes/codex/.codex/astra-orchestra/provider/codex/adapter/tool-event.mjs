@@ -14,6 +14,9 @@ const SPAWN_TOOLS = new Set([
   "multi_agent_v1.spawn_agent",
 ]);
 const AGENT_CONTROL_TOOLS = new Set([
+  // Exact public MultiAgentV2 direct names (some hook transports prefix
+  // these with "collaboration"; unknown names remain fail-closed).
+  "wait_agent", "followup_task", "interrupt_agent", "list_agents",
   "collaborationwait_agent",
   "collaborationfollowup_task", "collaborationlist_agents",
   "collaborationinterrupt_agent",

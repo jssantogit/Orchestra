@@ -7,7 +7,9 @@ import {
   releaseCodexLeaseWrite,
   recordCodexHookToolReceipt,
   resolveCodexAuthorityMode,
+  authorizeCodexLeaseCapability,
 } from "./work-lease-authority.mjs";
+import { confirmTerraAuditChild } from "./audit-delegation.mjs";
 
 function readPayload() {
   try {
@@ -44,6 +46,20 @@ function main() {
   if (mode === "session") return;
   const payload = readPayload();
   if (!payload || String(payload.hook_event_name || "") !== "PostToolUse") return;
+  if (payload.agent_type === "terra-audit-lead"
+    && ["collaborationspawn_agent", "spawn_agent"].includes(payload.tool_name)) {
+    const repoRoot = repoRootFrom(payload.cwd);
+    const control = authorizeCodexLeaseCapability(repoRoot, {
+      sessionId: payload.session_id, capability: "CONTROL", mode,
+    });
+    const result = control.allowed
+      ? confirmTerraAuditChild(repoRoot, payload, control.lease)
+      : { allowed: false, reason: control.reason || "NO_CONTROL" };
+    if (!result.allowed) {
+      process.stderr.write(`Orchestra Terra child confirmation denied: ${result.reason}\n`);
+    }
+    return;
+  }
   if (codexCapabilityForTool(payload) !== "WORKSPACE_EDIT") return;
 
   const result = releaseCodexLeaseWrite(repoRootFrom(payload.cwd), {
