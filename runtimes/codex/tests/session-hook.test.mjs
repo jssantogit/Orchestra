@@ -24,6 +24,7 @@ function project() {
   mkdirSync(join(root, ".codex", "astra-orchestra"), { recursive: true });
   cpSync(join(runtimeDir, "session-authority.mjs"), join(root, ".codex", "astra-orchestra", "session-authority.mjs"));
   cpSync(join(runtimeDir, "session-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-hook.mjs"));
+  cpSync(join(runtimeDir, "audit-delegation.mjs"), join(root, ".codex", "astra-orchestra", "audit-delegation.mjs"));
   cpSync(join(runtimeDir, "session-post-tool-hook.mjs"), join(root, ".codex", "astra-orchestra", "session-post-tool-hook.mjs"));
   cpSync(join(runtimeDir, "verification-guard.mjs"), join(root, ".codex", "astra-orchestra", "verification-guard.mjs"));
   cpSync(join(runtimeDir, "work-lease-authority.mjs"), join(root, ".codex", "astra-orchestra", "work-lease-authority.mjs"));
@@ -449,6 +450,10 @@ test("Sol can arm exactly one native Terra audit lead and Terra may delegate one
   const root = project();
   try {
     const mode = { authorityMode: "lease" };
+    writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"),
+      JSON.stringify({ taskId: "audit-task-a", implementationPacket: {
+        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"], maxDelegations: 1 },
+      } }));
     hook(root, { hook_event_name: "SessionStart", session_id: "sol-a", source: "startup" }, mode);
     const spawn = (agent_id, agent_type, role, message = "Audit only, no edits") => hook(root, {
       hook_event_name: "PreToolUse", session_id: "sol-a",
@@ -489,6 +494,10 @@ test("audit subdelegation fails closed without Sol grant/verified SubagentStart 
   const root = project();
   try {
     const mode = { authorityMode: "lease" };
+    writeFileSync(join(root, ".codex", "orchestra-state", "active-state.json"),
+      JSON.stringify({ taskId: "audit-task-b", implementationPacket: {
+        scopeContract: { allowedPaths: ["docs/**"], forbiddenPaths: ["src/**"], maxDelegations: 1 },
+      } }));
     hook(root, { hook_event_name: "SessionStart", session_id: "sol-b", source: "startup" }, mode);
     const send = (agentId, role, childRole) => hook(root, {
       hook_event_name: "PreToolUse", session_id: "sol-b",
@@ -517,5 +526,19 @@ test("audit subdelegation fails closed without Sol grant/verified SubagentStart 
     assert.equal(jsonOut(send("unrelated", "luna-auditor", "luna-auditor"))?.hookSpecificOutput?.permissionDecision, "deny");
     const permitted = send("terra-verified", "terra-audit-lead", "luna-auditor");
     assert.equal(permitted.stdout.trim(), "");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Terra audit lead never gets implicit authority from intake without a task scope", () => {
+  const root = project();
+  try {
+    const mode = { authorityMode: "lease" };
+    hook(root, { hook_event_name: "SessionStart", session_id: "sol-no-scope", source: "startup" }, mode);
+    const denied = hook(root, {
+      hook_event_name: "PreToolUse", session_id: "sol-no-scope",
+      tool_name: "collaborationspawn_agent", tool_input: { agent_type: "terra-audit-lead", message: "unauthorized" },
+    }, mode);
+    assert.equal(jsonOut(denied)?.hookSpecificOutput?.permissionDecision, "deny");
+    assert.match(jsonOut(denied).hookSpecificOutput.permissionDecisionReason, /AUDIT_TASK_SCOPE_REQUIRED/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
